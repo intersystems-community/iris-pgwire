@@ -1,0 +1,194 @@
+# Production Docker Compose for IRIS PostgreSQL Wire Protocol
+# This configuration includes full monitoring, logging, and production-ready settings
+
+services:
+  # IRIS Database
+  iris:
+    image: containers.intersystems.com/intersystems/iris:latest-em
+    container_name: iris-pgwire-prod
+    environment:
+      - ISC_PASSWORD=SYS
+      - ISC_DATA_DIRECTORY=/opt/iris/mgr
+    ports:
+      - "1972:1972"  # IRIS SQL port
+      - "52773:52773"  # Management Portal
+    volumes:
+      - iris_data:/opt/iris/mgr
+      - ./deployment/iris-init:/opt/iris-init:ro
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "qlist", "IRIS"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - iris-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # PostgreSQL Wire Protocol Server
+  pgwire:
+    build: .
+    container_name: iris-pgwire-server-prod
+    depends_on:
+      iris:
+        condition: service_healthy
+    environment:
+      - PGWIRE_HOST=0.0.0.0
+      - PGWIRE_PORT=5432
+      - IRIS_HOST=iris
+      - IRIS_PORT=1972
+      - IRIS_USERNAME=SuperUser
+      - IRIS_PASSWORD=SYS
+      - IRIS_NAMESPACE=USER
+      - PGWIRE_SSL_ENABLED=true
+      - PGWIRE_DEBUG=false
+      - PGWIRE_METRICS_ENABLED=true
+      - PGWIRE_METRICS_PORT=8080
+    ports:
+      - "5432:5432"  # PostgreSQL wire protocol port
+      - "8080:8080"  # Metrics port
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 5432)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - iris-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-prod
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployment/monitoring/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    networks:
+      - iris-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-prod
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/monitoring/grafana:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - iris-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Container metrics (cAdvisor)
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor-prod
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - iris-network
+    restart: unless-stopped
+
+  # Log aggregation with Loki
+  loki:
+    image: grafana/loki:latest
+    container_name: loki-prod
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - iris-network
+    restart: unless-stopped
+
+  # Log shipping with Promtail
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail-prod
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./deployment/monitoring/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - iris-network
+    restart: unless-stopped
+
+  # PostgreSQL client tools for testing
+  pgclient:
+    image: postgres:15-alpine
+    container_name: postgres-client-prod
+    depends_on:
+      pgwire:
+        condition: service_healthy
+    environment:
+      - PGHOST=pgwire
+      - PGPORT=5432
+      - PGUSER=test_user
+      - PGDATABASE=USER
+    command: ["sleep", "infinity"]
+    networks:
+      - iris-network
+    profiles: ["tools"]
+
+volumes:
+  iris_data:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  loki_data:
+    driver: local
+
+networks:
+  iris-network:
+    name: iris-pgwire-prod-network
+    driver: bridge

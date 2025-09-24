@@ -1,0 +1,52 @@
+groups:
+  - name: iris_pgwire_performance
+    interval: 30s
+    rules:
+      # Connection metrics
+      - record: iris_pgwire:connection_rate
+        expr: rate(pgwire_connections_total[5m])
+
+      - record: iris_pgwire:active_connections
+        expr: pgwire_active_connections
+
+      # Query performance metrics
+      - record: iris_pgwire:query_duration_99p
+        expr: histogram_quantile(0.99, rate(pgwire_query_duration_seconds_bucket[5m]))
+
+      - record: iris_pgwire:query_duration_95p
+        expr: histogram_quantile(0.95, rate(pgwire_query_duration_seconds_bucket[5m]))
+
+      - record: iris_pgwire:query_rate
+        expr: rate(pgwire_queries_total[5m])
+
+      # Error rates
+      - record: iris_pgwire:error_rate
+        expr: rate(pgwire_errors_total[5m])
+
+      - record: iris_pgwire:success_rate
+        expr: rate(pgwire_queries_success_total[5m]) / rate(pgwire_queries_total[5m])
+
+      # IRIS construct translation metrics
+      - record: iris_pgwire:construct_translation_rate
+        expr: rate(iris_constructs_translated_total[5m])
+
+      # Vector operation metrics
+      - record: iris_pgwire:vector_query_rate
+        expr: rate(pgwire_vector_queries_total[5m])
+
+      # IntegratedML metrics
+      - record: iris_pgwire:ml_query_rate
+        expr: rate(pgwire_ml_queries_total[5m])
+
+  - name: iris_database_health
+    interval: 60s
+    rules:
+      # IRIS database health
+      - record: iris:cpu_usage
+        expr: rate(iris_cpu_seconds_total[5m])
+
+      - record: iris:memory_usage
+        expr: iris_memory_bytes / iris_memory_limit_bytes
+
+      - record: iris:disk_usage
+        expr: iris_disk_used_bytes / iris_disk_total_bytes

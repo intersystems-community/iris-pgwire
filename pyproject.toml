@@ -1,0 +1,123 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iris-pgwire"
+dynamic = ["version"]
+description = "PostgreSQL Wire Protocol Server for InterSystems IRIS"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "IRIS PGWire Team"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "structlog>=23.0.0",
+    "cryptography>=41.0.0",
+    "intersystems-irispython>=5.1.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "psycopg>=3.1.0",
+    "docker>=6.0.0",
+]
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+]
+iris = [
+    # IRIS embedded Python (when available)
+    # "intersystems-iris>=3.6.0",
+]
+
+[project.scripts]
+iris-pgwire = "iris_pgwire.server:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/iris-pgwire"
+Repository = "https://github.com/your-org/iris-pgwire"
+Issues = "https://github.com/your-org/iris-pgwire/issues"
+
+[tool.hatch.version]
+path = "src/iris_pgwire/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iris_pgwire"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--disable-warnings",
+]
+markers = [
+    "e2e: E2E tests with real PostgreSQL clients",
+    "integration: Integration tests with IRIS",
+    "unit: Unit tests",
+    "requires_iris: Tests that require IRIS connection",
+    "requires_docker: Tests that require Docker",
+]

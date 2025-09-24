@@ -1,0 +1,97 @@
+# IRIS PostgreSQL Wire Protocol - Development Environment
+
+services:
+  # IRIS Database
+  iris:
+    image: containers.intersystems.com/intersystems/iris:latest-em
+    container_name: iris-pgwire
+    environment:
+      - ISC_PASSWORD=SYS
+      - ISC_DATA_DIRECTORY=/opt/iris/mgr
+    ports:
+      - "1972:1972"  # IRIS SQL port
+      - "52773:52773"  # Management Portal
+    volumes:
+      - iris_data:/opt/iris/mgr
+      - ./deployment/iris-init:/opt/iris-init
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "qlist", "IRIS"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # PostgreSQL Wire Protocol Server
+  pgwire:
+    build: .
+    container_name: iris-pgwire-server
+    depends_on:
+      iris:
+        condition: service_healthy
+    environment:
+      - PGWIRE_HOST=0.0.0.0
+      - PGWIRE_PORT=5432
+      - IRIS_HOST=iris
+      - IRIS_PORT=1972
+      - IRIS_USERNAME=SuperUser
+      - IRIS_PASSWORD=SYS
+      - IRIS_NAMESPACE=USER
+      - PGWIRE_SSL_ENABLED=false
+      - PGWIRE_DEBUG=false
+    ports:
+      - "5432:5432"  # PostgreSQL wire protocol port
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 5432)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Optional: PostgreSQL client tools for testing
+  pgclient:
+    image: postgres:15-alpine
+    container_name: postgres-client
+    depends_on:
+      pgwire:
+        condition: service_healthy
+    environment:
+      - PGHOST=pgwire
+      - PGPORT=5432
+      - PGUSER=test_user
+      - PGDATABASE=USER
+    command: ["sleep", "infinity"]
+    profiles: ["tools"]
+
+  # Optional: Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    profiles: ["monitoring"]
+
+  # Optional: Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/monitoring/grafana:/etc/grafana/provisioning
+    profiles: ["monitoring"]
+
+volumes:
+  iris_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  default:
+    name: iris-pgwire-network

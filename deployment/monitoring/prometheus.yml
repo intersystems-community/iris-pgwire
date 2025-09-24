@@ -1,0 +1,51 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # "first_rules.yml"
+  # "second_rules.yml"
+
+scrape_configs:
+  # IRIS PostgreSQL Wire Protocol Server metrics
+  - job_name: 'iris-pgwire'
+    static_configs:
+      - targets: ['pgwire:8080']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    scrape_timeout: 5s
+
+  # IRIS Database metrics (if available)
+  - job_name: 'iris-database'
+    static_configs:
+      - targets: ['iris:52773']
+    scrape_interval: 30s
+    metrics_path: /api/monitor/metrics
+    scrape_timeout: 10s
+    scheme: http
+    basic_auth:
+      username: 'SuperUser'
+      password: 'SYS'
+
+  # Self-monitoring for Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Container metrics (if cAdvisor is enabled)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+
+# Alerting rules (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Recording rules for performance optimization
+rule_files:
+  - "recording_rules.yml"
