@@ -7,8 +7,12 @@ to PostgreSQL equivalents for wire protocol compatibility.
 
 import re
 import logging
+import time
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
+
+from .performance_monitor import get_monitor
+from .debug_tracer import get_tracer, TraceLevel
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +56,9 @@ class IRISSystemFunctionTranslator:
         self.patterns = {}
         for iris_func in self.SYSTEM_FUNCTION_MAP.keys():
             # Create pattern that matches function calls with optional parameters
+            # Use (?<!\w) instead of \b to avoid issues with % character
             escaped_func = re.escape(iris_func)
-            pattern = rf'\b{escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -171,7 +176,7 @@ class IRISFunctionTranslator:
         self.patterns = {}
         for iris_func in self.FUNCTION_MAP.keys():
             escaped_func = re.escape(iris_func)
-            pattern = rf'\b{escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -215,7 +220,7 @@ class IRISDataTypeTranslator:
         for iris_type in self.TYPE_MAP.keys():
             escaped_type = re.escape(iris_type)
             # Match type declarations with optional parameters
-            pattern = rf'\b{escaped_type}(?:\s*\([^)]+\))?\b'
+            pattern = rf'(?<!\w){escaped_type}(?:\s*\([^)]+\))?(?!\w)'
             self.type_patterns[iris_type] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -269,7 +274,7 @@ class IRISJSONFunctionTranslator:
         self.patterns = {}
         for iris_func in self.FUNCTION_MAP.keys():
             escaped_func = re.escape(iris_func)
-            pattern = rf'\b{escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
         # JSON_TABLE pattern - more complex (IRIS standard syntax)
@@ -452,12 +457,16 @@ class IRISJSONFunctionTranslator:
 class IRISConstructTranslator:
     """Main coordinator for all IRIS construct translations"""
 
-    def __init__(self):
+    def __init__(self, debug_mode: bool = False, trace_level: TraceLevel = TraceLevel.STANDARD):
         self.system_function_translator = IRISSystemFunctionTranslator()
         self.sql_extension_translator = IRISSQLExtensionTranslator()
         self.function_translator = IRISFunctionTranslator()
         self.data_type_translator = IRISDataTypeTranslator()
         self.json_function_translator = IRISJSONFunctionTranslator()
+
+        # Constitutional requirements
+        self.debug_mode = debug_mode
+        self.trace_level = trace_level
 
         # Statistics tracking
         self.translation_stats = {
@@ -475,39 +484,202 @@ class IRISConstructTranslator:
         Returns:
             Tuple of (translated_sql, translation_stats)
         """
-        original_sql = sql
+        # Constitutional requirement: Performance monitoring
+        monitor = get_monitor()
+        constructs_detected = 1 if self.needs_iris_translation(sql) else 0
 
-        # Apply translations in order
-        # 1. Data types (affects DDL structure)
-        sql = self.data_type_translator.translate(sql)
-        if sql != original_sql:
-            self.translation_stats['data_types'] += 1
-            original_sql = sql
+        # Constitutional requirement: Debug tracing (optional)
+        tracer = None
+        trace_id = None
+        if self.debug_mode:
+            tracer = get_tracer(self.trace_level)
+            trace_id = tracer.start_trace(sql)
 
-        # 2. SQL extensions (affects query structure)
-        sql = self.sql_extension_translator.translate(sql)
-        if sql != original_sql:
-            self.translation_stats['sql_extensions'] += 1
-            original_sql = sql
+        try:
+            with monitor.measure_translation(sql, constructs_detected) as measurement:
+                original_sql = sql
 
-        # 3. System functions
-        sql = self.system_function_translator.translate(sql)
-        if sql != original_sql:
-            self.translation_stats['system_functions'] += 1
-            original_sql = sql
+                # Reset translation stats for this operation
+                self.translation_stats = {
+                    'system_functions': 0,
+                    'sql_extensions': 0,
+                    'iris_functions': 0,
+                    'data_types': 0,
+                    'json_functions': 0
+                }
 
-        # 4. IRIS functions
-        sql = self.function_translator.translate(sql)
-        if sql != original_sql:
-            self.translation_stats['iris_functions'] += 1
-            original_sql = sql
+                if tracer:
+                    tracer.add_parsing_step(
+                        "pre_translation_analysis",
+                        {"sql": sql, "length": len(sql)},
+                        {"needs_translation": constructs_detected > 0},
+                        0.1,
+                        {"sql_type": "DDL" if "CREATE" in sql.upper() else "DML"}
+                    )
 
-        # 5. JSON functions
-        sql = self.json_function_translator.translate(sql)
-        if sql != original_sql:
-            self.translation_stats['json_functions'] += 1
+                # Apply translations in order
+                # 1. Data types (affects DDL structure)
+                start_time = time.perf_counter()
+                sql = self.data_type_translator.translate(sql)
+                duration_ms = (time.perf_counter() - start_time) * 1000
 
-        return sql, self.translation_stats.copy()
+                if sql != original_sql:
+                    self.translation_stats['data_types'] += 1
+                    if tracer:
+                        tracer.add_mapping_decision(
+                            "data_type_translation",
+                            "DATA_TYPE",
+                            original_sql,
+                            sql,
+                            "DIRECT_MAPPING",
+                            1.0,
+                            "IRIS data types mapped to PostgreSQL equivalents"
+                        )
+                    original_sql = sql
+
+                if tracer:
+                    tracer.add_parsing_step(
+                        "data_type_translation",
+                        original_sql,
+                        sql,
+                        duration_ms
+                    )
+
+                # 2. SQL extensions (affects query structure)
+                start_time = time.perf_counter()
+                sql = self.sql_extension_translator.translate(sql)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+
+                if sql != original_sql:
+                    self.translation_stats['sql_extensions'] += 1
+                    if tracer:
+                        tracer.add_mapping_decision(
+                            "sql_extension_translation",
+                            "SQL_EXTENSION",
+                            original_sql,
+                            sql,
+                            "DIRECT_MAPPING",
+                            1.0,
+                            "IRIS SQL extensions (TOP, JOIN) mapped to PostgreSQL"
+                        )
+                    original_sql = sql
+
+                if tracer:
+                    tracer.add_parsing_step(
+                        "sql_extension_translation",
+                        original_sql,
+                        sql,
+                        duration_ms
+                    )
+
+                # 3. System functions
+                start_time = time.perf_counter()
+                sql = self.system_function_translator.translate(sql)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+
+                if sql != original_sql:
+                    self.translation_stats['system_functions'] += 1
+                    if tracer:
+                        tracer.add_mapping_decision(
+                            "system_function_translation",
+                            "SYSTEM_FUNCTION",
+                            original_sql,
+                            sql,
+                            "DIRECT_MAPPING",
+                            1.0,
+                            "IRIS %SYSTEM.* functions mapped to PostgreSQL equivalents"
+                        )
+                    original_sql = sql
+
+                if tracer:
+                    tracer.add_parsing_step(
+                        "system_function_translation",
+                        original_sql,
+                        sql,
+                        duration_ms
+                    )
+
+                # 4. IRIS functions
+                start_time = time.perf_counter()
+                sql = self.function_translator.translate(sql)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+
+                if sql != original_sql:
+                    self.translation_stats['iris_functions'] += 1
+                    if tracer:
+                        tracer.add_mapping_decision(
+                            "iris_function_translation",
+                            "IRIS_FUNCTION",
+                            original_sql,
+                            sql,
+                            "DIRECT_MAPPING",
+                            1.0,
+                            "IRIS functions (%SQLUPPER, %HOROLOG) mapped to PostgreSQL"
+                        )
+                    original_sql = sql
+
+                if tracer:
+                    tracer.add_parsing_step(
+                        "iris_function_translation",
+                        original_sql,
+                        sql,
+                        duration_ms
+                    )
+
+                # 5. JSON functions
+                start_time = time.perf_counter()
+                sql = self.json_function_translator.translate(sql)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+
+                if sql != original_sql:
+                    self.translation_stats['json_functions'] += 1
+                    if tracer:
+                        tracer.add_mapping_decision(
+                            "json_function_translation",
+                            "JSON_FUNCTION",
+                            original_sql,
+                            sql,
+                            "DIRECT_MAPPING",
+                            1.0,
+                            "IRIS JSON functions mapped to PostgreSQL JSONB equivalents"
+                        )
+
+                if tracer:
+                    tracer.add_parsing_step(
+                        "json_function_translation",
+                        original_sql,
+                        sql,
+                        duration_ms
+                    )
+
+                # Update measurement context for monitoring
+                total_constructs = sum(self.translation_stats.values())
+                measurement['constructs_translated'] = total_constructs
+                measurement['construct_types'] = self.translation_stats.copy()
+                measurement['cache_hit'] = False  # No caching implemented yet
+
+            # Finalize debug trace if enabled
+            if tracer:
+                tracer.finish_trace(
+                    translated_sql=sql,
+                    constructs_detected=constructs_detected,
+                    constructs_translated=total_constructs,
+                    success=True
+                )
+
+            return sql, self.translation_stats.copy()
+
+        except Exception as e:
+            # Handle errors with debug tracing
+            if tracer:
+                tracer.finish_trace(
+                    translated_sql=sql if 'sql' in locals() else "",
+                    constructs_detected=constructs_detected,
+                    constructs_translated=sum(self.translation_stats.values()),
+                    success=False,
+                    error_message=str(e)
+                )
+            raise
 
     def needs_iris_translation(self, sql: str) -> bool:
         """Check if SQL contains any IRIS-specific constructs"""
