@@ -24,6 +24,8 @@ dependencies = [
     "structlog>=23.0.0",
     "cryptography>=41.0.0",
     "intersystems-irispython>=5.1.2",
+    "sqlparse>=0.4.0",
+    "psycopg2-binary>=2.9.10",
 ]
 
 [project.optional-dependencies]
@@ -118,6 +120,8 @@ markers = [
     "e2e: E2E tests with real PostgreSQL clients",
     "integration: Integration tests with IRIS",
     "unit: Unit tests",
+    "contract: Contract tests for API compliance",
     "requires_iris: Tests that require IRIS connection",
     "requires_docker: Tests that require Docker",
+    "iris_integration: Tests that require real IRIS instance",
 ]

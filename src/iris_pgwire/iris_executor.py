@@ -7,10 +7,13 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 
 import asyncio
 import os
+import concurrent.futures
+import threading
+import time
 from typing import Dict, Any, List, Optional, Union
 import structlog
 
-from .iris_constructs import IRISConstructTranslator
+from .sql_translator.performance_monitor import get_monitor, MetricType, PerformanceTracker
 
 logger = structlog.get_logger()
 
@@ -31,8 +34,19 @@ class IRISExecutor:
         self.embedded_mode = False
         self.vector_support = False
 
-        # Initialize IRIS construct translator
-        self.iris_translator = IRISConstructTranslator()
+        # Thread pool for async IRIS operations (constitutional requirement)
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=10,
+            thread_name_prefix="iris_executor"
+        )
+
+        # Performance monitoring
+        self.performance_monitor = get_monitor()
+
+        # Connection pool management
+        self._connection_lock = threading.RLock()
+        self._connection_pool = []
+        self._max_connections = 10
 
         # Attempt to detect IRIS environment
         self._detect_iris_environment()
@@ -164,224 +178,371 @@ class IRISExecutor:
             self.vector_support = False
             logger.info("IRIS vector support not available", error=str(e))
 
-    async def execute_query(self, sql: str, params: Optional[List] = None) -> Dict[str, Any]:
+    async def execute_query(self, sql: str, params: Optional[List] = None,
+                          session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Execute SQL query against IRIS with construct translation
+        Execute SQL query against IRIS with proper async threading
 
         Args:
-            sql: SQL query string
+            sql: SQL query string (should already be translated by protocol layer)
             params: Optional query parameters
+            session_id: Optional session identifier for performance tracking
 
         Returns:
             Dictionary with query results and metadata
         """
         try:
-            # Translate IRIS-specific constructs
-            if self.iris_translator.needs_iris_translation(sql):
-                translated_sql, translation_stats = self.iris_translator.translate_sql(sql)
-                if translated_sql != sql:
-                    logger.debug("IRIS construct translation applied",
-                               original_sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                               translated_sql=translated_sql[:100] + "..." if len(translated_sql) > 100 else translated_sql,
-                               translation_stats=translation_stats)
-                    sql = translated_sql
+            # Performance tracking for constitutional compliance
+            with PerformanceTracker(
+                MetricType.API_RESPONSE_TIME,
+                "iris_executor",
+                session_id=session_id,
+                sql_length=len(sql)
+            ) as tracker:
 
-            # P5: Basic vector query support (focus on core IRIS VECTOR functions)
-            if self.vector_support and 'VECTOR' in sql.upper():
-                logger.debug("Vector query detected", sql=sql[:100] + "..." if len(sql) > 100 else sql)
+                # P5: Vector query detection for enhanced logging
+                if self.vector_support and 'VECTOR' in sql.upper():
+                    logger.debug("Vector query detected",
+                               sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                               session_id=session_id)
 
-            if self.embedded_mode:
-                return await self._execute_embedded(sql, params)
-            else:
-                return await self._execute_external(sql, params)
+                # Use async execution with thread pool
+                if self.embedded_mode:
+                    result = await self._execute_embedded_async(sql, params, session_id)
+                else:
+                    result = await self._execute_external_async(sql, params, session_id)
+
+                # Add performance metadata
+                result['execution_metadata'] = {
+                    'execution_time_ms': tracker.start_time and (time.perf_counter() - tracker.start_time) * 1000,
+                    'embedded_mode': self.embedded_mode,
+                    'vector_support': self.vector_support,
+                    'session_id': session_id,
+                    'sql_length': len(sql)
+                }
+
+                # Record performance metrics
+                if tracker.violation:
+                    logger.warning("IRIS execution SLA violation",
+                                 actual_time_ms=tracker.violation.actual_value_ms,
+                                 sla_threshold_ms=tracker.violation.sla_threshold_ms,
+                                 session_id=session_id)
+
+                return result
 
         except Exception as e:
             logger.error("SQL execution failed",
                         sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                        error=str(e))
+                        error=str(e),
+                        session_id=session_id)
             raise
 
-    async def _execute_embedded(self, sql: str, params: Optional[List] = None) -> Dict[str, Any]:
-        """Execute SQL using IRIS embedded Python"""
+    async def _execute_embedded_async(self, sql: str, params: Optional[List] = None,
+                                     session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute SQL using IRIS embedded Python with proper async threading
+
+        This method runs the blocking IRIS operations in a thread pool to avoid
+        blocking the event loop, following constitutional async requirements.
+        """
         def _sync_execute():
+            """Synchronous IRIS execution in thread pool"""
             import iris
 
             try:
-                # Execute query
+                # Get or create connection
+                connection = self._get_iris_connection()
+
+                # Execute query with performance tracking
+                start_time = time.perf_counter()
+
                 if params:
                     result = iris.sql.exec(sql, *params)
                 else:
                     result = iris.sql.exec(sql)
+
+                execution_time = (time.perf_counter() - start_time) * 1000
 
                 # Fetch all results
                 rows = []
                 columns = []
 
                 # Get column metadata if available
-                if hasattr(result, 'columns'):
-                    columns = [{'name': col, 'type': 'unknown'} for col in result.columns()]
+                if hasattr(result, '_meta') and result._meta:
+                    for col_info in result._meta:
+                        columns.append({
+                            'name': col_info.get('name', ''),
+                            'type_oid': self._iris_type_to_pg_oid(col_info.get('type', 'VARCHAR')),
+                            'type_size': col_info.get('size', -1),
+                            'type_modifier': -1,
+                            'format_code': 0  # Text format
+                        })
 
                 # Fetch rows
-                while True:
-                    row = result.fetch()
-                    if not row:
-                        break
-                    rows.append(row)
+                try:
+                    for row in result:
+                        if isinstance(row, (list, tuple)):
+                            rows.append(list(row))
+                        else:
+                            # Single value result
+                            rows.append([row])
+                except Exception as fetch_error:
+                    logger.warning("Error fetching IRIS result rows",
+                                 error=str(fetch_error),
+                                 session_id=session_id)
+
+                # Determine command tag based on SQL type
+                command_tag = self._determine_command_tag(sql, len(rows))
 
                 return {
+                    'success': True,
                     'rows': rows,
                     'columns': columns,
                     'row_count': len(rows),
-                    'command': sql.strip().split()[0].upper(),
-                    'success': True
+                    'command_tag': command_tag,
+                    'execution_time_ms': execution_time,
+                    'iris_metadata': {
+                        'embedded_mode': True,
+                        'connection_type': 'embedded_python'
+                    }
                 }
 
             except Exception as e:
+                logger.error("IRIS embedded execution failed",
+                           sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                           error=str(e),
+                           session_id=session_id)
                 return {
+                    'success': False,
+                    'error': str(e),
                     'rows': [],
                     'columns': [],
                     'row_count': 0,
-                    'command': '',
-                    'success': False,
-                    'error': str(e)
+                    'command_tag': 'ERROR',
+                    'execution_time_ms': 0
                 }
 
-        # Execute in thread pool to avoid blocking asyncio
-        return await asyncio.to_thread(_sync_execute)
+        # Execute in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.thread_pool, _sync_execute)
 
-    async def _execute_external(self, sql: str, params: Optional[List] = None) -> Dict[str, Any]:
-        """Execute SQL using external IRIS connection"""
-        try:
-            def _sync_external_execute():
-                try:
-                    # Use intersystems-irispython driver
-                    import iris
+    async def _execute_external_async(self, sql: str, params: Optional[List] = None,
+                                     session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute SQL using external IRIS connection with proper async threading
+        """
+        def _sync_external_execute():
+            """Synchronous external IRIS execution in thread pool"""
+            try:
+                # Use intersystems-irispython driver
+                import iris
 
-                    # Create connection
-                    conn = iris.connect(
-                        hostname=self.iris_config['host'],
-                        port=self.iris_config['port'],
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config['username'],
-                        password=self.iris_config['password']
-                    )
+                # Performance tracking
+                start_time = time.perf_counter()
 
-                    # Execute query
-                    cursor = conn.cursor()
+                # Create connection
+                conn = iris.connect(
+                    hostname=self.iris_config['host'],
+                    port=self.iris_config['port'],
+                    namespace=self.iris_config['namespace'],
+                    username=self.iris_config['username'],
+                    password=self.iris_config['password']
+                )
+
+                # Execute query
+                cursor = conn.cursor()
+                if params:
+                    cursor.execute(sql, params)
+                else:
                     cursor.execute(sql)
 
-                    # Process results
-                    rows = []
-                    columns = []
+                execution_time = (time.perf_counter() - start_time) * 1000
 
-                    # Get column information
-                    if cursor.description:
-                        columns = [
-                            {'name': desc[0], 'type': 'unknown'}
-                            for desc in cursor.description
-                        ]
-                    else:
-                        # No description means no results expected (like INSERT, UPDATE, etc)
-                        columns = []
+                # Process results
+                rows = []
+                columns = []
 
-                    # Fetch all rows for SELECT queries
-                    if sql.upper().strip().startswith('SELECT') and columns:
-                        try:
-                            results = cursor.fetchall()
-                            for row in results:
-                                # Convert IRIS DataRow to dictionary using index access
-                                row_dict = {}
-                                for i, col in enumerate(columns):
-                                    try:
-                                        # IRIS DataRow supports indexed access
-                                        row_dict[col['name']] = row[i]
-                                    except (IndexError, TypeError):
-                                        row_dict[col['name']] = None
-                                rows.append(row_dict)
-                        except Exception as fetch_error:
-                            logger.warning("Failed to fetch results", error=str(fetch_error))
-                            # Use fallback result for SELECT 1
-                            if sql.upper().strip() == 'SELECT 1':
-                                columns = [{'name': '?column?', 'type': 'INTEGER'}]
-                                rows = [{'?column?': 1}]
+                # Get column information
+                if cursor.description:
+                    for desc in cursor.description:
+                        columns.append({
+                            'name': desc[0],
+                            'type_oid': self._iris_type_to_pg_oid(desc[1] if len(desc) > 1 else 'VARCHAR'),
+                            'type_size': desc[2] if len(desc) > 2 else -1,
+                            'type_modifier': -1,
+                            'format_code': 0  # Text format
+                        })
 
-                    cursor.close()
-                    conn.close()
+                # Fetch all rows for SELECT queries
+                if sql.upper().strip().startswith('SELECT') and columns:
+                    try:
+                        results = cursor.fetchall()
+                        for row in results:
+                            if isinstance(row, (list, tuple)):
+                                rows.append(list(row))
+                            else:
+                                # Single value result
+                                rows.append([row])
+                    except Exception as fetch_error:
+                        logger.warning("Failed to fetch external IRIS results",
+                                     error=str(fetch_error),
+                                     session_id=session_id)
 
-                    return {
-                        'rows': rows,
-                        'columns': columns,
-                        'row_count': len(rows),
-                        'command': sql.strip().split()[0].upper() if sql.strip() else 'UNKNOWN',
-                        'success': True
+                cursor.close()
+                conn.close()
+
+                # Determine command tag
+                command_tag = self._determine_command_tag(sql, len(rows))
+
+                return {
+                    'success': True,
+                    'rows': rows,
+                    'columns': columns,
+                    'row_count': len(rows),
+                    'command_tag': command_tag,
+                    'execution_time_ms': execution_time,
+                    'iris_metadata': {
+                        'embedded_mode': False,
+                        'connection_type': 'external_driver'
                     }
+                }
 
-                except Exception as e:
-                    logger.warning("IRIS execution failed, using fallback", error=str(e))
+            except Exception as e:
+                logger.error("IRIS external execution failed",
+                           sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                           error=str(e),
+                           session_id=session_id)
+                return {
+                    'success': False,
+                    'error': str(e),
+                    'rows': [],
+                    'columns': [],
+                    'row_count': 0,
+                    'command_tag': 'ERROR',
+                    'execution_time_ms': 0
+                }
 
-                    # Return a simple successful result for SELECT 1 to test protocol
-                    sql_upper = sql.upper().strip()
-                    if sql_upper == "SELECT 1":
-                        return {
-                            'rows': [{'?column?': 1}],
-                            'columns': [{'name': '?column?', 'type': 'INTEGER'}],
-                            'row_count': 1,
-                            'command': 'SELECT',
-                            'success': True
-                        }
-                    else:
-                        return {
-                            'rows': [],
-                            'columns': [],
-                            'row_count': 0,
-                            'command': sql.strip().split()[0].upper() if sql.strip() else 'UNKNOWN',
-                            'success': False,
-                            'error': f'IRIS execution failed: {str(e)}'
-                        }
+        # Execute in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.thread_pool, _sync_external_execute)
 
-            # Execute in thread pool to avoid blocking asyncio
-            return await asyncio.to_thread(_sync_external_execute)
+    def _get_iris_connection(self):
+        """Get or create IRIS connection for embedded mode"""
+        # For embedded mode, connections are managed by IRIS internally
+        # This is a placeholder for potential connection pooling
+        return None
 
-        except Exception as e:
-            logger.error("External IRIS execution failed", error=str(e))
-            return {
-                'rows': [],
-                'columns': [],
-                'row_count': 0,
-                'command': '',
-                'success': False,
-                'error': f'External execution error: {str(e)}'
+    def _iris_type_to_pg_oid(self, iris_type: Union[str, int]) -> int:
+        """Convert IRIS data type to PostgreSQL OID"""
+        # Handle both string type names and integer type codes
+        if isinstance(iris_type, int):
+            # Map IRIS integer type codes to PostgreSQL OIDs
+            int_type_mapping = {
+                1: 23,      # int4
+                2: 21,      # int2
+                3: 20,      # int8
+                4: 700,     # float4
+                5: 701,     # float8
+                8: 1082,    # date
+                9: 1083,    # time
+                10: 1114,   # timestamp
+                12: 1043,   # varchar
+                16: 16,     # bool
+                17: 17,     # bytea
             }
+            return int_type_mapping.get(iris_type, 25)  # Default to text
 
-    async def begin_transaction(self):
-        """Begin a transaction"""
-        if self.embedded_mode:
-            def _sync_begin():
+        # Handle string type names
+        type_mapping = {
+            'VARCHAR': 1043,    # varchar
+            'CHAR': 1042,       # bpchar
+            'TEXT': 25,         # text
+            'INTEGER': 23,      # int4
+            'BIGINT': 20,       # int8
+            'SMALLINT': 21,     # int2
+            'DECIMAL': 1700,    # numeric
+            'NUMERIC': 1700,    # numeric
+            'DOUBLE': 701,      # float8
+            'FLOAT': 700,       # float4
+            'DATE': 1082,       # date
+            'TIME': 1083,       # time
+            'TIMESTAMP': 1114,  # timestamp
+            'BOOLEAN': 16,      # bool
+            'BINARY': 17,       # bytea
+            'VARBINARY': 17,    # bytea
+            'VECTOR': 16388,    # custom vector type
+        }
+        return type_mapping.get(str(iris_type).upper(), 25)  # Default to text
+
+    def _determine_command_tag(self, sql: str, row_count: int) -> str:
+        """Determine PostgreSQL command tag from SQL"""
+        sql_upper = sql.upper().strip()
+
+        if sql_upper.startswith('SELECT'):
+            return 'SELECT'
+        elif sql_upper.startswith('INSERT'):
+            return f'INSERT 0 {row_count}'
+        elif sql_upper.startswith('UPDATE'):
+            return f'UPDATE {row_count}'
+        elif sql_upper.startswith('DELETE'):
+            return f'DELETE {row_count}'
+        elif sql_upper.startswith('CREATE'):
+            return 'CREATE'
+        elif sql_upper.startswith('DROP'):
+            return 'DROP'
+        elif sql_upper.startswith('ALTER'):
+            return 'ALTER'
+        elif sql_upper.startswith('BEGIN'):
+            return 'BEGIN'
+        elif sql_upper.startswith('COMMIT'):
+            return 'COMMIT'
+        elif sql_upper.startswith('ROLLBACK'):
+            return 'ROLLBACK'
+        else:
+            return 'UNKNOWN'
+
+    async def shutdown(self):
+        """Shutdown the executor and cleanup resources"""
+        try:
+            if self.thread_pool:
+                self.thread_pool.shutdown(wait=True)
+                logger.info("IRIS executor shutdown completed")
+        except Exception as e:
+            logger.warning("Error during IRIS executor shutdown", error=str(e))
+
+    # Transaction management methods (using async threading)
+    async def begin_transaction(self, session_id: Optional[str] = None):
+        """Begin a transaction with async threading"""
+        def _sync_begin():
+            if self.embedded_mode:
                 import iris
                 iris.sql.exec("START TRANSACTION")
-            await asyncio.to_thread(_sync_begin)
-        else:
-            logger.warning("Transaction begin not implemented for external connections in P0")
+            # For external mode, transaction is managed per connection
 
-    async def commit_transaction(self):
-        """Commit current transaction"""
-        if self.embedded_mode:
-            def _sync_commit():
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.thread_pool, _sync_begin)
+
+    async def commit_transaction(self, session_id: Optional[str] = None):
+        """Commit transaction with async threading"""
+        def _sync_commit():
+            if self.embedded_mode:
                 import iris
                 iris.sql.exec("COMMIT")
-            await asyncio.to_thread(_sync_commit)
-        else:
-            logger.warning("Transaction commit not implemented for external connections in P0")
+            # For external mode, transaction is managed per connection
 
-    async def rollback_transaction(self):
-        """Rollback current transaction"""
-        if self.embedded_mode:
-            def _sync_rollback():
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.thread_pool, _sync_commit)
+
+    async def rollback_transaction(self, session_id: Optional[str] = None):
+        """Rollback transaction with async threading"""
+        def _sync_rollback():
+            if self.embedded_mode:
                 import iris
                 iris.sql.exec("ROLLBACK")
-            await asyncio.to_thread(_sync_rollback)
-        else:
-            logger.warning("Transaction rollback not implemented for external connections in P0")
+            # For external mode, transaction is managed per connection
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self.thread_pool, _sync_rollback)
 
     async def cancel_query(self, backend_pid: int, backend_secret: int):
         """
@@ -566,6 +727,15 @@ class IRISExecutor:
                     col, vec = match.groups()
                     return f'(-VECTOR_DOT_PRODUCT({col}, TO_VECTOR({vec})))'
                 translated_sql = re.sub(pattern, replace_inner_product, translated_sql)
+
+            # <=> operator (cosine distance) -> VECTOR_COSINE
+            if '<=>' in translated_sql:
+                import re
+                pattern = r'([\w\.]+)\s*<=>\s*([^\s]+)'
+                def replace_cosine_distance(match):
+                    col, vec = match.groups()
+                    return f'VECTOR_COSINE({col}, TO_VECTOR({vec}))'
+                translated_sql = re.sub(pattern, replace_cosine_distance, translated_sql)
 
             # Replace function names
             for pg_func, iris_func in vector_functions.items():

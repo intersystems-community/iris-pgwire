@@ -1,0 +1,66 @@
+{
+  "cache": {
+    "enabled": true,
+    "max_size": 10000,
+    "ttl_seconds": 3600,
+    "cleanup_interval_seconds": 300,
+    "memory_limit_mb": 100,
+    "hit_rate_threshold": 0.8
+  },
+  "debug": {
+    "enabled": false,
+    "trace_all_queries": false,
+    "trace_constructs": true,
+    "trace_mappings": true,
+    "trace_performance": true,
+    "trace_validation": false,
+    "log_level": "INFO",
+    "log_format": "json",
+    "log_file": null,
+    "max_trace_size": 1000,
+    "trace_retention_hours": 24
+  },
+  "performance": {
+    "sla_threshold_ms": 5.0,
+    "validation_sla_ms": 2.0,
+    "enable_async_translation": true,
+    "thread_pool_size": 4,
+    "batch_size": 100,
+    "memory_limit_mb": 512,
+    "enable_profiling": false,
+    "profile_sample_rate": 0.01
+  },
+  "validation": {
+    "enabled": true,
+    "default_level": "SEMANTIC",
+    "confidence_threshold": 0.8,
+    "enable_constitutional_checks": true,
+    "enable_performance_checks": true,
+    "enable_semantic_checks": true,
+    "max_issues_per_query": 50,
+    "validation_timeout_ms": 2000.0
+  },
+  "metrics": {
+    "enabled": true,
+    "enable_otel": false,
+    "enable_prometheus": false,
+    "otel_endpoint": null,
+    "prometheus_port": 8080,
+    "collection_interval_seconds": 30,
+    "retention_days": 7,
+    "export_timeout_ms": 5000,
+    "iris_integration": true
+  },
+  "iris": {
+    "connection_string": null,
+    "embedded_python": true,
+    "namespace": "USER",
+    "timeout_seconds": 30,
+    "pool_size": 10,
+    "enable_vector_support": true,
+    "vector_license_check": true,
+    "version_detection": true
+  },
+  "environment": "development",
+  "config_version": "1.0.0"
+}
