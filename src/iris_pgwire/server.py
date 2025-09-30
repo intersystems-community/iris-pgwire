@@ -170,6 +170,8 @@ class PGWireServer:
 
         except asyncio.CancelledError:
             logger.info("Connection cancelled", connection_id=connection_id)
+        except ConnectionAbortedError as e:
+            logger.debug("Connection aborted by client", connection_id=connection_id, error=str(e))
         except Exception as e:
             logger.error("Connection error", connection_id=connection_id, error=str(e))
         finally:

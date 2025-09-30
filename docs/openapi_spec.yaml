@@ -1,0 +1,668 @@
+openapi: 3.0.3
+info:
+  title: IRIS SQL Translation API
+  description: |
+    REST API for translating InterSystems IRIS SQL constructs to PostgreSQL equivalents.
+
+    ## Constitutional Compliance
+    - **5ms SLA**: All endpoints respond within 5 milliseconds
+    - **95% Compliance Rate**: Maintains high reliability standards
+    - **Real-time Monitoring**: Constitutional compliance tracking
+
+    ## Features
+    - High-performance SQL translation
+    - Comprehensive caching system
+    - Semantic validation
+    - Confidence analysis
+    - Performance monitoring
+    - Debug tracing
+
+  version: 1.0.0
+  contact:
+    name: IRIS PostgreSQL Wire Protocol Team
+    url: https://github.com/your-org/iris-pgwire
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+  - url: https://api.iris-translation.example.com
+    description: Production server
+
+paths:
+  /:
+    get:
+      summary: API Information
+      description: Returns basic API information and available endpoints
+      operationId: getApiInfo
+      responses:
+        '200':
+          description: API information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiInfo'
+
+  /translate:
+    post:
+      summary: Translate IRIS SQL
+      description: |
+        Translates IRIS SQL queries to PostgreSQL equivalents with comprehensive analysis.
+
+        ### Constitutional SLA
+        This endpoint is subject to the 5ms constitutional SLA requirement.
+
+        ### Features
+        - Function mapping (%SQLUPPER → UPPER)
+        - Data type conversion (LONGVARCHAR → TEXT)
+        - JSON operations (JSON_EXTRACT → jsonb operators)
+        - Syntax translation (TOP → LIMIT)
+
+      operationId: translateSql
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranslationRequest'
+            examples:
+              simple_function:
+                summary: Simple function translation
+                value:
+                  sql: "SELECT %SQLUPPER(name) FROM users"
+                  enable_debug: false
+              complex_query:
+                summary: Complex query with multiple constructs
+                value:
+                  sql: "SELECT TOP 10 %SQLUPPER(name), JSON_EXTRACT(data, '$.email') FROM users WHERE JSON_EXISTS(data, '$.active')"
+                  validation_level: "strict"
+                  enable_debug: true
+              ddl_statement:
+                summary: DDL with data types
+                value:
+                  sql: "CREATE TABLE test (id INTEGER, name LONGVARCHAR, data VARBINARY)"
+                  validation_level: "semantic"
+      responses:
+        '200':
+          description: Translation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationResponse'
+              examples:
+                successful_translation:
+                  summary: Successful function translation
+                  value:
+                    success: true
+                    original_sql: "SELECT %SQLUPPER(name) FROM users"
+                    translated_sql: "SELECT UPPER(name) FROM users;"
+                    construct_mappings:
+                      - construct_type: "FUNCTION"
+                        original_syntax: "%SQLUPPER(name)"
+                        translated_syntax: "UPPER(name)"
+                        confidence: 0.95
+                        source_location:
+                          line: 1
+                          column: 8
+                          length: 15
+                        metadata:
+                          function_name: "%SQLUPPER"
+                    performance_stats:
+                      translation_time_ms: 2.45
+                      cache_hit: false
+                      constructs_detected: 1
+                      constructs_translated: 1
+                      is_sla_compliant: true
+                    warnings: []
+                    timestamp: "2024-01-15T10:30:45.123Z"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health Check
+      description: Returns API health status and operational metrics
+      operationId: getHealth
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /stats:
+    get:
+      summary: API Statistics
+      description: Returns comprehensive API and translator performance statistics
+      operationId: getStats
+      responses:
+        '200':
+          description: Performance statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+
+  /cache/stats:
+    get:
+      summary: Cache Statistics
+      description: Returns translation cache performance metrics
+      operationId: getCacheStats
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatsResponse'
+        '503':
+          description: Cache disabled or unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /cache/invalidate:
+    post:
+      summary: Invalidate Cache
+      description: |
+        Invalidates translation cache entries, optionally by pattern.
+
+        ### Security Notice
+        This operation requires confirmation and may impact performance.
+      operationId: invalidateCache
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheInvalidationRequest'
+      responses:
+        '200':
+          description: Cache invalidated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheInvalidationResponse'
+        '400':
+          description: Invalid request or missing confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Cache disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ApiInfo:
+      type: object
+      properties:
+        service:
+          type: string
+          example: "IRIS SQL Translation API"
+        version:
+          type: string
+          example: "1.0.0"
+        description:
+          type: string
+        endpoints:
+          type: object
+          properties:
+            translate:
+              type: string
+              example: "/translate"
+            cache_stats:
+              type: string
+              example: "/cache/stats"
+            cache_invalidate:
+              type: string
+              example: "/cache/invalidate"
+            api_stats:
+              type: string
+              example: "/stats"
+            health:
+              type: string
+              example: "/health"
+            docs:
+              type: string
+              example: "/docs"
+        constitutional_compliance:
+          type: string
+          example: "Sub-5ms response time SLA enforced"
+
+    TranslationRequest:
+      type: object
+      required:
+        - sql
+      properties:
+        sql:
+          type: string
+          minLength: 1
+          maxLength: 50000
+          description: IRIS SQL query to translate
+          example: "SELECT %SQLUPPER(name) FROM users WHERE id = 123"
+        session_id:
+          type: string
+          nullable: true
+          description: Optional session identifier for tracking
+          example: "session_123"
+        enable_caching:
+          type: boolean
+          default: true
+          description: Enable translation result caching
+        enable_validation:
+          type: boolean
+          default: true
+          description: Enable semantic validation
+        enable_debug:
+          type: boolean
+          default: false
+          description: Enable debug tracing
+        validation_level:
+          type: string
+          enum: [basic, semantic, strict, exhaustive]
+          default: semantic
+          description: Validation rigor level
+        parameters:
+          type: object
+          nullable: true
+          description: Optional query parameters
+        metadata:
+          type: object
+          nullable: true
+          description: Additional metadata for tracking
+
+    TranslationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether translation succeeded
+        original_sql:
+          type: string
+          description: Original IRIS SQL
+        translated_sql:
+          type: string
+          description: Translated PostgreSQL SQL
+        construct_mappings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstructMapping'
+          description: Applied construct mappings
+        performance_stats:
+          $ref: '#/components/schemas/PerformanceStats'
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Translation warnings
+        validation_result:
+          $ref: '#/components/schemas/ValidationResult'
+          nullable: true
+        debug_trace:
+          $ref: '#/components/schemas/DebugTrace'
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+          description: Response timestamp
+
+    ConstructMapping:
+      type: object
+      properties:
+        construct_type:
+          type: string
+          enum: [FUNCTION, SYSTEM_FUNCTION, DATA_TYPE, SYNTAX, JSON_FUNCTION, DOCUMENT_FILTER]
+          description: Type of construct that was mapped
+        original_syntax:
+          type: string
+          description: Original IRIS syntax
+        translated_syntax:
+          type: string
+          description: Translated PostgreSQL syntax
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Confidence level of the mapping
+        source_location:
+          $ref: '#/components/schemas/SourceLocation'
+        metadata:
+          type: object
+          description: Additional mapping metadata
+
+    SourceLocation:
+      type: object
+      properties:
+        line:
+          type: integer
+          minimum: 1
+          description: Line number in original SQL
+        column:
+          type: integer
+          minimum: 1
+          description: Column number in original SQL
+        length:
+          type: integer
+          minimum: 0
+          description: Length of the construct
+        original_text:
+          type: string
+          description: Original construct text
+
+    PerformanceStats:
+      type: object
+      properties:
+        translation_time_ms:
+          type: number
+          description: Total translation time in milliseconds
+        cache_hit:
+          type: boolean
+          description: Whether result was retrieved from cache
+        constructs_detected:
+          type: integer
+          description: Number of constructs detected
+        constructs_translated:
+          type: integer
+          description: Number of constructs successfully translated
+        parsing_time_ms:
+          type: number
+          description: Time spent parsing
+        mapping_time_ms:
+          type: number
+          description: Time spent mapping constructs
+        validation_time_ms:
+          type: number
+          description: Time spent validating
+        is_sla_compliant:
+          type: boolean
+          description: Whether translation met constitutional SLA
+        translation_success_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Success rate of construct translation
+
+    ValidationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether validation passed
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Validation confidence
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+        performance_impact:
+          type: string
+          nullable: true
+          description: Performance impact assessment
+        recommendations:
+          type: array
+          items:
+            type: string
+          description: Validation recommendations
+
+    ValidationIssue:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [error, warning, info]
+          description: Issue severity level
+        message:
+          type: string
+          description: Issue description
+        location:
+          $ref: '#/components/schemas/SourceLocation'
+          nullable: true
+        recommendation:
+          type: string
+          nullable: true
+          description: Suggested fix
+
+    DebugTrace:
+      type: object
+      properties:
+        parsing_steps:
+          type: integer
+          description: Number of parsing steps
+        mapping_decisions:
+          type: integer
+          description: Number of mapping decisions
+        warnings:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+        total_parsing_time_ms:
+          type: number
+          description: Total parsing time
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded]
+          description: Overall health status
+        timestamp:
+          type: string
+          format: date-time
+        uptime_seconds:
+          type: number
+          description: API uptime in seconds
+        requests_processed:
+          type: integer
+          description: Total requests processed
+        error_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Current error rate
+        sla_compliance:
+          type: string
+          enum: [compliant, non_compliant]
+          description: Constitutional SLA compliance status
+
+    StatsResponse:
+      type: object
+      properties:
+        api_stats:
+          $ref: '#/components/schemas/ApiStats'
+        translator_stats:
+          $ref: '#/components/schemas/TranslatorStats'
+        constitutional_compliance:
+          $ref: '#/components/schemas/ConstitutionalCompliance'
+
+    ApiStats:
+      type: object
+      properties:
+        total_requests:
+          type: integer
+          description: Total API requests processed
+        total_errors:
+          type: integer
+          description: Total errors encountered
+        error_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Current error rate
+        uptime_seconds:
+          type: number
+          description: API uptime in seconds
+        requests_per_second:
+          type: number
+          description: Current request rate
+        sla_violations:
+          type: integer
+          description: Number of SLA violations
+        sla_compliance_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: SLA compliance rate
+
+    TranslatorStats:
+      type: object
+      properties:
+        total_translations:
+          type: integer
+          description: Total translations performed
+        average_translation_time_ms:
+          type: number
+          description: Average translation time
+        cache_hit_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Cache hit rate
+        sla_compliance_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Translation SLA compliance rate
+        active_sessions:
+          type: integer
+          description: Number of active translation sessions
+
+    ConstitutionalCompliance:
+      type: object
+      properties:
+        api_sla_requirement_ms:
+          type: number
+          description: API SLA requirement in milliseconds
+        api_sla_violations:
+          type: integer
+          description: Number of API SLA violations
+        overall_compliance_status:
+          type: string
+          enum: [compliant, non_compliant]
+          description: Overall constitutional compliance status
+
+    CacheStatsResponse:
+      type: object
+      properties:
+        total_entries:
+          type: integer
+          description: Total cache entries
+        hit_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Cache hit rate
+        average_lookup_ms:
+          type: number
+          description: Average cache lookup time
+        memory_usage_mb:
+          type: number
+          description: Estimated cache memory usage in MB
+        oldest_entry_age_minutes:
+          type: integer
+          description: Age of oldest cache entry in minutes
+        constitutional_compliance:
+          type: object
+          description: Constitutional compliance metrics for cache
+
+    CacheInvalidationRequest:
+      type: object
+      required:
+        - confirm
+      properties:
+        pattern:
+          type: string
+          nullable: true
+          description: SQL pattern for selective invalidation (supports wildcards)
+          example: "SELECT%"
+        confirm:
+          type: boolean
+          description: Required confirmation flag (must be true)
+          example: true
+
+    CacheInvalidationResponse:
+      type: object
+      properties:
+        invalidated_count:
+          type: integer
+          description: Number of entries invalidated
+        pattern:
+          type: string
+          nullable: true
+          description: Pattern used for invalidation
+        timestamp:
+          type: string
+          format: date-time
+          description: Invalidation timestamp
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+        details:
+          type: string
+          nullable: true
+          description: Detailed error information
+        error_code:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - validation_error
+            - translation_error
+            - cache_disabled
+            - cache_stats_error
+            - cache_invalidation_error
+            - confirmation_required
+        timestamp:
+          type: string
+          format: date-time
+          description: Error timestamp
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication (production deployment)
+
+# Security is commented out for development but should be enabled in production
+# security:
+#   - ApiKeyAuth: []
+
+tags:
+  - name: Translation
+    description: SQL translation operations
+  - name: Cache Management
+    description: Cache statistics and invalidation
+  - name: Monitoring
+    description: Health checks and performance metrics
+
+externalDocs:
+  description: Full API Documentation
+  url: https://docs.iris-translation.example.com
