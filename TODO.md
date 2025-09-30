@@ -102,25 +102,36 @@ Based on the embedded Python track from `docs/iris_pgwire_plan.md`, this tracks 
 
 ---
 
-### P3 - Authentication Hardening 🔄 PENDING
+### P3 - Authentication Hardening 🔬 RESEARCHED
 **Goal**: Secure authentication with SCRAM-SHA-256
 
-- [ ] **SASL SCRAM-SHA-256**
-  - [ ] Implement SCRAM challenge-response
+- [x] **SCRAM-SHA-256 Research**
+  - [x] PostgreSQL SASL authentication message flow analysis
+  - [x] SCRAM challenge-response mechanism understanding
+  - [x] Cryptographic operations mapping (HMAC, SHA-256, PBKDF2)
+  - [x] AuthenticationSASL/Continue/Final message types documented
+  - [x] Integration patterns with existing authentication systems
+
+- [ ] **SASL SCRAM-SHA-256 Implementation**
+  - [ ] Implement 5-step SASL authentication message flow
   - [ ] Generate and verify authentication exchanges
-  - [ ] Store password verifiers securely
+  - [ ] Store password verifiers securely (ClientKey, ServerKey, StoredKey)
+  - [ ] Handle nonce generation and verification
+  - [ ] Implement channel binding with tls-server-end-point
 
 - [ ] **TLS Integration**
   - [ ] Require TLS in production mode
   - [ ] Proper certificate handling
   - [ ] Disable legacy MD5 authentication
+  - [ ] Channel binding integration for SCRAM-SHA-256-PLUS
 
 - [ ] **IRIS Authentication**
   - [ ] Delegate to IRIS user authentication if available
   - [ ] Map PostgreSQL users to IRIS users
   - [ ] Handle authentication failures gracefully
+  - [ ] Meet 5ms SLA for authentication flows (constitutional compliance)
 
-**Success Criteria**: Secure connections with proper authentication
+**Success Criteria**: Secure connections with proper SCRAM-SHA-256 authentication
 
 ---
 
