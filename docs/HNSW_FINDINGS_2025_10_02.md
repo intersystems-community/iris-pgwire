@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-HNSW index creation succeeds on IRIS Build 2025.3.0EHAT.127.0 but provides **0% performance improvement** (1.02× speedup) for vector similarity queries. Tested at 1,000 and 10,000 vector scales with multiple query patterns, ACORN-1 configuration, and ORDER BY optimizations. Root cause: IRIS query optimizer not engaging HNSW index for ORDER BY operations despite syntactically correct queries.
+**CRITICAL UPDATE (2025-10-02)**: HNSW index IS being used at 10,000+ vector scale (EXPLAIN plan confirms "Read index map"), and ACORN-1 IS engaging with WHERE clauses (EXPLAIN explicitly states "This plan uses the ACORN-1 algorithm"). However, both provide **0% or negative performance improvement**. At 10,000 vectors: HNSW shows 0.98× (2% slower), ACORN-1 with WHERE clauses shows 0.70-0.53× (30-47% slower). The issue is not index engagement - it's that the indexes are working correctly but provide no speedup over sequential scans.
 
 ## Test Environment
 
@@ -23,15 +23,19 @@ HNSW index creation succeeds on IRIS Build 2025.3.0EHAT.127.0 but provides **0% 
 
 ## Performance Results
 
-### 10,000 Vector Dataset Performance
+### 10,000 Vector Dataset Performance (CORRECTED - 2025-10-02)
 
-| Configuration | Avg Latency | P95 Latency | Throughput | Improvement |
-|--------------|-------------|-------------|------------|-------------|
-| **WITH HNSW index** | 26.59ms | 27.41ms | 37.6 qps | Baseline |
-| **WITHOUT HNSW index** | 27.07ms | 27.60ms | 36.9 qps | **1.02×** |
-| **ACORN-1 enabled** | 25.22ms | 27.41ms | 39.6 qps | **1.00×** |
+**CRITICAL UPDATE**: EXPLAIN plans confirm HNSW index IS being used at 10,000 vector scale.
 
-**Conclusion**: HNSW index provides statistically insignificant performance difference (<2% variance).
+| Configuration | Avg Latency | EXPLAIN Evidence | Improvement |
+|--------------|-------------|------------------|-------------|
+| **WITHOUT HNSW index** | 11.04ms | "Read master map" (sequential scan) | Baseline |
+| **WITH HNSW index** | 11.23ms | "Read index map idx_hnsw_10k" ✅ | **0.98×** (2% slower) |
+| **ACORN-1 + WHERE id >= 0** | 13.60ms | "uses ACORN-1 algorithm" ✅ | **0.70×** (30% slower) |
+| **ACORN-1 + WHERE id < 5000** | 17.97ms | "uses ACORN-1 algorithm" ✅ | **0.53×** (47% slower) |
+| **HNSW no WHERE (baseline)** | 9.54ms | Standard HNSW, ACORN-1 disabled | Reference |
+
+**Conclusion**: HNSW and ACORN-1 ARE being used (EXPLAIN confirms), but both degrade performance. ACORN-1 requires WHERE clauses but makes queries significantly slower despite documentation claims of improvement.
 
 ### 1,000 Vector Dataset Performance
 
@@ -156,42 +160,74 @@ Applied rag-templates patterns to our test:
 |------------|------|--------|------------|
 | **❌ INITIAL ERROR: Missing Distance parameter** | Created index WITHOUT Distance='Cosine' | Initial 1.02× | **Violated documentation requirement!** |
 | **✅ CORRECTED: Added Distance parameter** | `CREATE INDEX ... AS HNSW(Distance='Cosine')` | **Still 1.01× improvement** | **Required but insufficient** |
-| **Dataset too small** | Tested 1,000 and 10,000 vectors | 1.02× at both scales | ❌ Not size-related |
-| **Missing ACORN-1 configuration** | SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 | No performance change | ❌ Not config-related |
+| **Dataset too small** | Tested 1,000 and 10,000 vectors | 0.98× at 10K (worse than 1K) | ✅ **10K engages HNSW but no benefit** |
+| **Missing ACORN-1 configuration** | SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 | ACORN-1 engages but 30-47% slower | ✅ **ACORN-1 works but degrades perf** |
 | **Wrong ORDER BY pattern** | Tested alias vs expression | Alias 4.22× faster, HNSW still 0% | ✅ Pattern helps, HNSW doesn't |
 | **Index parameters needed** | Tested M, efConstruction parameters | Syntax not supported | ❌ Not parameter-related |
-| **Query optimizer limitation** | EXPLAIN + WITH vs WITHOUT comparison | **Full table scan in both cases** | ✅ **Confirmed root cause** |
+| **❌ Query optimizer not engaging** | EXPLAIN at 10K vectors | **"Read index map idx_hnsw_10k"** | ❌ **DISPROVEN - Index IS used** |
+| **✅ Index overhead exceeds benefits** | Compare HNSW (11.23ms) vs sequential (11.04ms) | 0.98× speedup | ✅ **Confirmed actual root cause** |
 
-### EXPLAIN Query Plan Evidence
+### EXPLAIN Query Plan Evidence - CORRECTED (2025-10-02)
 
-**CRITICAL**: EXPLAIN plan shows HNSW index is NOT being used:
+**CRITICAL CORRECTION**: EXPLAIN plans reveal HNSW and ACORN-1 ARE being used at 10,000+ vector scale:
 
+**EXPLAIN at 1,000 vectors** (index NOT used):
 ```xml
-<plan>
-  <sql>SELECT TOP ? id, VECTOR_COSINE(vec, TO_VECTOR(?)) AS score
-       FROM test_1024 ORDER BY score DESC</sql>
-  <cost value="6720"/>
-
-  <!-- CRITICAL: "Read master map" = full table scan -->
-  Read master map SQLUser.test_1024.IDKEY, looping on ID1.
-
-  For each row:
-      Test the TOP condition on the 'VECTOR_COSINE' expression on vec.
-      Add a row to temp-file A, subscripted by the 'VECTOR_COSINE' expression
-</plan>
+Read master map SQLUser.test_1024.IDKEY, looping on ID1.
+For each row:
+    Test the TOP condition on the 'VECTOR_COSINE' expression on vec.
 ```
+❌ "Read master map" = full table scan (index not engaged at small scale)
 
-**Expected if HNSW was used**: Plan would reference `idx_hnsw_vec` index, not "master map" scan.
+**EXPLAIN at 10,000 vectors WITHOUT WHERE** (HNSW used):
+```xml
+Read index map SQLUser.test_10k.idx_hnsw_10k, looping on the 'VECTOR_COSINE' expression on vec and ID1.
+For each row:
+    Read master map SQLUser.test_10k.IDKEY, using the given idkey value.
+    Output the row.
+```
+✅ "Read index map idx_hnsw_10k" = **HNSW index IS being used**
 
-**Actual behavior**: Query optimizer chooses full table scan despite:
-- ✅ HNSW index exists with Distance='Cosine' parameter (per documentation requirement)
-- ✅ Query has TOP clause
-- ✅ Query has ORDER BY ... DESC clause
-- ✅ Query uses VECTOR_COSINE matching Distance parameter
+**EXPLAIN at 10,000 vectors WITH WHERE id >= 0** (ACORN-1 used):
+```xml
+<info>
+This query plan was selected based on the runtime parameter values that led to:
+    Improved selectivity estimation of a >= condition on id.
+    Boolean truth value of a NOT NULL condition on arg3.
+This plan uses the ACORN-1 algorithm for vector search.
+</info>
+```
+✅ **"This plan uses the ACORN-1 algorithm"** = ACORN-1 IS being used
 
-### Confirmed Root Cause
+**Key Discovery**: Dataset size threshold exists:
+- **<10,000 vectors**: EXPLAIN shows "master map" (index not used)
+- **≥10,000 vectors**: EXPLAIN shows "Read index map" (index used)
+- **WHERE clauses**: Enable ACORN-1 (confirmed by EXPLAIN)
 
-**IRIS query optimizer does not engage HNSW index for ORDER BY vector operations** in Build 2025.3.0EHAT.127.0.
+All documentation requirements are met AND the optimizer is using the indexes correctly. The issue is performance degradation despite correct index usage.
+
+### Confirmed Root Cause - CORRECTED UNDERSTANDING
+
+**CRITICAL CORRECTION**: Previous analysis incorrectly concluded HNSW was "not engaging." EXPLAIN plans from 10,000 vector testing prove otherwise:
+
+**HNSW Index Engagement at 10,000 Vectors**:
+```xml
+Read index map SQLUser.test_10k.idx_hnsw_10k, looping on the 'VECTOR_COSINE' expression on vec and ID1.
+```
+✅ **HNSW index IS being used** - "Read index map" confirms optimizer is using the HNSW index.
+
+**ACORN-1 Engagement with WHERE Clauses**:
+```xml
+This plan uses the ACORN-1 algorithm for vector search.
+```
+✅ **ACORN-1 IS being used** when WHERE clauses are present.
+
+**Actual Root Cause**: HNSW and ACORN-1 are working correctly and being used by the query optimizer, but they provide no performance improvement over sequential scans at this dataset size and query pattern. The indexes are functioning as designed, but the overhead of using them exceeds any benefits.
+
+**Performance Reality**:
+- HNSW (10K vectors): 0.98× speedup (2% slower than sequential scan)
+- ACORN-1 + WHERE id >= 0: 0.70× speedup (30% slower than HNSW alone)
+- ACORN-1 + WHERE id < 5000: 0.53× speedup (47% slower than HNSW alone)
 
 **Documentation Requirements Met**:
 1. ✅ VECTOR-typed field with fixed length (1024 dimensions, FLOAT type)
@@ -201,8 +237,7 @@ Applied rag-templates patterns to our test:
 5. ✅ Query has TOP clause
 6. ✅ Query has ORDER BY ... DESC clause
 7. ✅ Query uses matching vector function (VECTOR_COSINE)
-
-**Yet EXPLAIN plan shows**: "Read master map" = full table scan, NOT using HNSW index
+8. ✅ EXPLAIN confirms index usage at 10,000+ vector scale
 
 ## Recommendations
 
@@ -253,15 +288,24 @@ Based on IRIS Vector Search Query Performance internal report:
 
 ## Conclusion
 
-HNSW index **syntax works** but **optimizer doesn't engage it** across multiple IRIS builds:
-- **2025.3.0EHAT.127.0**: HNSW provides 0% improvement (1.02×)
-- **iris:latest-preview**: HNSW is **10% SLOWER** (0.90×) than without index
+**CORRECTED UNDERSTANDING**: HNSW and ACORN-1 indexes ARE functioning and being used by the query optimizer (proven by EXPLAIN plans at 10,000+ vector scale), but they provide negative or zero performance improvement:
 
-The rag-templates ORDER BY alias pattern provides 4.22× speedup over ORDER BY expression, but this is due to query execution optimization, not HNSW index usage. EXPLAIN plans confirm full table scans ("master map") in both builds despite all documentation requirements being met.
+**EHAT.127.0 Build Performance Reality**:
+- **1,000 vectors**: EXPLAIN shows "master map" (full table scan) - index NOT used at small scale
+- **10,000 vectors**: EXPLAIN shows "Read index map idx_hnsw_10k" - index IS being used
+- **10,000 vectors HNSW**: 0.98× speedup (2% slower than without index)
+- **10,000 vectors ACORN-1 + WHERE id >= 0**: 0.70× speedup (30% slower)
+- **10,000 vectors ACORN-1 + WHERE id < 5000**: 0.53× speedup (47% slower)
 
-Current performance (25ms avg, 39.6 qps on EHAT.127.0) is acceptable for embedded Python deployment but falls short of the 433.9 qps target reported for HNSW-optimized queries. The **latest-preview build performs worse**, indicating this is not resolved in newer versions.
+**Key Insight**: Dataset size threshold exists for HNSW engagement (requires 10,000+ vectors), but engagement doesn't guarantee performance benefits. The indexes work correctly but have overhead that exceeds advantages at tested scales.
 
-**Status**: Embedded Python deployment COMPLETE. HNSW investigation COMPLETE across multiple builds. Awaiting IRIS query optimizer enhancement to enable HNSW index engagement.
+**ACORN-1 Discovery**: Requires WHERE clauses (disabled for TOP-only queries per internal developer documentation). EXPLAIN confirms ACORN-1 engages with WHERE clauses, but performance degrades significantly - opposite of documented behavior claiming "especially outperforms regular HNSW for low selectivities."
+
+The rag-templates ORDER BY alias pattern provides 4.22× speedup over ORDER BY expression, but this is due to query execution optimization, not HNSW index usage.
+
+Current performance (25ms avg, 39.6 qps on EHAT.127.0) is acceptable for embedded Python deployment but falls short of the 433.9 qps target reported for HNSW-optimized queries.
+
+**Status**: Embedded Python deployment COMPLETE. HNSW investigation COMPLETE with corrected understanding - indexes ARE working and being used, but provide no performance benefit at tested scales (10,000 vectors with random normalized data).
 
 ---
 

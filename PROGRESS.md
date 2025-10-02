@@ -68,16 +68,18 @@
 
 ### 🔄 In Progress
 
-**HNSW Performance Investigation Complete**
+**HNSW Performance Investigation Complete - CORRECTED UNDERSTANDING**
 
-**Final Results** (2025-10-02):
+**Final Results** (2025-10-02 - CRITICAL UPDATE):
 - ✅ Embedded Python deployment complete (irispython)
 - ✅ VECTOR operations functional (VECTOR_COSINE working)
 - ✅ HNSW index created successfully on 1000 and 10,000 vector datasets
 - ✅ rag-templates query pattern validated: ORDER BY score DESC is 4.22× faster than ORDER BY VECTOR_COSINE(...)
-- ✅ ACORN-1 configuration tested: SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 (no impact)
-- ❌ **CRITICAL**: HNSW provides 0% improvement (1.02×) at both 1000 and 10,000 vector scales
-- ❌ **ROOT CAUSE**: IRIS query optimizer not recognizing HNSW-optimizable pattern despite correct ORDER BY alias syntax
+- ✅ ACORN-1 configuration working: SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 enables ACORN-1 with WHERE clauses
+- ✅ **CRITICAL DISCOVERY**: HNSW IS being used at 10K+ vectors (EXPLAIN: "Read index map idx_hnsw_10k")
+- ✅ **CRITICAL DISCOVERY**: ACORN-1 IS being used with WHERE clauses (EXPLAIN: "uses ACORN-1 algorithm")
+- ❌ **PERFORMANCE REALITY**: HNSW 0.98× (2% slower), ACORN-1 0.70-0.53× (30-47% slower)
+- ✅ **ROOT CAUSE CORRECTED**: Indexes ARE working and being used, but overhead exceeds benefits at this scale
 
 **INFORMATION_SCHEMA varchar Behavior**:
 - VECTOR columns show as 'varchar' type - this is expected IRIS behavior
