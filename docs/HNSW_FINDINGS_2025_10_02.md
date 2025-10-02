@@ -133,21 +133,57 @@ Applied rag-templates patterns to our test:
 
 ### Hypothesis Testing
 
-| Hypothesis | Test | Result |
-|------------|------|--------|
-| **Dataset too small** | Tested 1,000 and 10,000 vectors | ❌ No improvement at any scale |
-| **Missing ACORN-1 configuration** | SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 | ❌ No performance change |
-| **Wrong ORDER BY pattern** | Tested alias vs expression | ✅ Alias 4.22× faster, but HNSW still 0% |
-| **Index parameters needed** | Tested M, efConstruction parameters | ❌ Syntax not supported |
-| **Query optimizer limitation** | WITH vs WITHOUT index comparison | ✅ Confirmed: optimizer not using HNSW |
+| Hypothesis | Test | Result | Conclusion |
+|------------|------|--------|------------|
+| **❌ INITIAL ERROR: Missing Distance parameter** | Created index WITHOUT Distance='Cosine' | Initial 1.02× | **Violated documentation requirement!** |
+| **✅ CORRECTED: Added Distance parameter** | `CREATE INDEX ... AS HNSW(Distance='Cosine')` | **Still 1.01× improvement** | **Required but insufficient** |
+| **Dataset too small** | Tested 1,000 and 10,000 vectors | 1.02× at both scales | ❌ Not size-related |
+| **Missing ACORN-1 configuration** | SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 | No performance change | ❌ Not config-related |
+| **Wrong ORDER BY pattern** | Tested alias vs expression | Alias 4.22× faster, HNSW still 0% | ✅ Pattern helps, HNSW doesn't |
+| **Index parameters needed** | Tested M, efConstruction parameters | Syntax not supported | ❌ Not parameter-related |
+| **Query optimizer limitation** | EXPLAIN + WITH vs WITHOUT comparison | **Full table scan in both cases** | ✅ **Confirmed root cause** |
+
+### EXPLAIN Query Plan Evidence
+
+**CRITICAL**: EXPLAIN plan shows HNSW index is NOT being used:
+
+```xml
+<plan>
+  <sql>SELECT TOP ? id, VECTOR_COSINE(vec, TO_VECTOR(?)) AS score
+       FROM test_1024 ORDER BY score DESC</sql>
+  <cost value="6720"/>
+
+  <!-- CRITICAL: "Read master map" = full table scan -->
+  Read master map SQLUser.test_1024.IDKEY, looping on ID1.
+
+  For each row:
+      Test the TOP condition on the 'VECTOR_COSINE' expression on vec.
+      Add a row to temp-file A, subscripted by the 'VECTOR_COSINE' expression
+</plan>
+```
+
+**Expected if HNSW was used**: Plan would reference `idx_hnsw_vec` index, not "master map" scan.
+
+**Actual behavior**: Query optimizer chooses full table scan despite:
+- ✅ HNSW index exists with Distance='Cosine' parameter (per documentation requirement)
+- ✅ Query has TOP clause
+- ✅ Query has ORDER BY ... DESC clause
+- ✅ Query uses VECTOR_COSINE matching Distance parameter
 
 ### Confirmed Root Cause
 
-**IRIS query optimizer does not engage HNSW index for ORDER BY operations** in Build 2025.3.0EHAT.127.0, regardless of:
-- Query pattern (alias vs expression)
-- Dataset size (1,000 vs 10,000 vectors)
-- Configuration (ACORN-1 enabled/disabled)
-- Index parameters (standard HNSW only syntax supported)
+**IRIS query optimizer does not engage HNSW index for ORDER BY vector operations** in Build 2025.3.0EHAT.127.0.
+
+**Documentation Requirements Met**:
+1. ✅ VECTOR-typed field with fixed length (1024 dimensions, FLOAT type)
+2. ✅ Table has INTEGER PRIMARY KEY (bitmap supported IDs)
+3. ✅ Table uses default storage
+4. ✅ Distance parameter specified: `Distance='Cosine'`
+5. ✅ Query has TOP clause
+6. ✅ Query has ORDER BY ... DESC clause
+7. ✅ Query uses matching vector function (VECTOR_COSINE)
+
+**Yet EXPLAIN plan shows**: "Read master map" = full table scan, NOT using HNSW index
 
 ## Recommendations
 
