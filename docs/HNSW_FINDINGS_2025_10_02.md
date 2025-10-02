@@ -8,11 +8,18 @@ HNSW index creation succeeds on IRIS Build 2025.3.0EHAT.127.0 but provides **0% 
 
 ## Test Environment
 
+### Primary Testing Build
 - **IRIS Build**: 2025.3.0EHAT.127.0-linux-arm64v8
 - **Deployment**: Embedded Python via `irispython` command inside IRIS container
 - **Dataset**: 10,000 vectors × 1024 dimensions (normalized random vectors)
-- **Index**: HNSW index on `test_1024(vec)` column
+- **Index**: HNSW index on `test_1024(vec)` column with `Distance='Cosine'`
 - **merge.cpf**: CallIn service enabled (required for embedded Python)
+
+### Comparison Testing Build (2025-10-02)
+- **IRIS Build**: containers.intersystems.com/intersystems/iris:latest-preview
+- **Purpose**: Verify if HNSW issue exists in newer builds
+- **Dataset**: 1,000 vectors × 1024 dimensions
+- **Result**: **WORSE** - HNSW is 10% SLOWER (0.90×) than without index
 
 ## Performance Results
 
@@ -34,6 +41,18 @@ HNSW index creation succeeds on IRIS Build 2025.3.0EHAT.127.0 but provides **0% 
 | **WITHOUT HNSW index** | 42.39ms | **1.02×** |
 
 **Conclusion**: Consistent 0% improvement across dataset sizes.
+
+### iris:latest-preview Build Comparison (NEW - 2025-10-02)
+
+**Build**: containers.intersystems.com/intersystems/iris:latest-preview
+
+| Configuration | Avg Latency | Min Latency | Max Latency | Improvement |
+|--------------|-------------|-------------|-------------|-------------|
+| **WITH HNSW (Distance='Cosine')** | 7.27ms | 4.57ms | 52.84ms | Baseline |
+| **WITHOUT HNSW** | 6.54ms | 4.36ms | 25.29ms | **0.90×** |
+| **EXPLAIN Plan** | Full table scan | - | - | ❌ Index NOT used |
+
+**Conclusion**: HNSW is **10% SLOWER** than without index in latest-preview build. EXPLAIN confirms "master map" (full table scan) - index not being used. This is **WORSE** than the EHAT.127.0 build.
 
 ## Query Pattern Investigation
 
@@ -234,9 +253,15 @@ Based on IRIS Vector Search Query Performance internal report:
 
 ## Conclusion
 
-HNSW index **syntax works** but **optimizer doesn't engage it** in IRIS Build 2025.3.0EHAT.127.0. The rag-templates ORDER BY alias pattern provides 4.22× speedup over ORDER BY expression, but this is due to query execution optimization, not HNSW index usage. Current performance (25ms avg, 39.6 qps) is acceptable for embedded Python deployment but falls short of the 433.9 qps target reported for HNSW-optimized queries.
+HNSW index **syntax works** but **optimizer doesn't engage it** across multiple IRIS builds:
+- **2025.3.0EHAT.127.0**: HNSW provides 0% improvement (1.02×)
+- **iris:latest-preview**: HNSW is **10% SLOWER** (0.90×) than without index
 
-**Status**: Embedded Python deployment COMPLETE. HNSW investigation COMPLETE. Awaiting IRIS query optimizer enhancement to enable HNSW index engagement.
+The rag-templates ORDER BY alias pattern provides 4.22× speedup over ORDER BY expression, but this is due to query execution optimization, not HNSW index usage. EXPLAIN plans confirm full table scans ("master map") in both builds despite all documentation requirements being met.
+
+Current performance (25ms avg, 39.6 qps on EHAT.127.0) is acceptable for embedded Python deployment but falls short of the 433.9 qps target reported for HNSW-optimized queries. The **latest-preview build performs worse**, indicating this is not resolved in newer versions.
+
+**Status**: Embedded Python deployment COMPLETE. HNSW investigation COMPLETE across multiple builds. Awaiting IRIS query optimizer enhancement to enable HNSW index engagement.
 
 ---
 
