@@ -1,9 +1,28 @@
 # IRIS PGWire Project Status Dashboard
 
 ## 🎯 Project Health Overview
-**Status**: 🟢 **HEALTHY** - Active Development
-**Phase**: P0 - Foundation Setup
-**Last Updated**: 2025-09-29 (P3 Authentication Research Complete)
+**Status**: 🟢 **OPERATIONAL** - Embedded Python Deployment Complete
+**Phase**: P5 - Vector Support (Testing & Validation)
+**Last Updated**: 2025-10-02 (Embedded Python via irispython)
+
+## ✅ Recent Achievements
+1. **✅ Embedded Python Deployment**: PGWire server running INSIDE IRIS via irispython
+   - **merge.cpf**: CallIn service enabled (CRITICAL infrastructure requirement)
+   - **Docker**: Server runs from IRIS container using `irispython -m iris_pgwire.server`
+   - **PostgreSQL Clients**: ✅ psql connection successful, basic queries working
+   - **Constitution Updated**: v1.0.0 → v1.1.0 with validated embedded Python patterns
+
+## 🔍 Active Investigation
+1. **HNSW Index Not Engaging** (CRITICAL FINDING - CONFIRMED)
+   - **1000 vectors WITH HNSW**: 41.68ms avg
+   - **1000 vectors WITHOUT HNSW**: 42.39ms avg
+   - **10,000 vectors WITH HNSW**: 26.59ms avg
+   - **10,000 vectors WITHOUT HNSW**: 27.07ms avg
+   - **Improvement**: 1.02× (0% - HNSW not working at ANY scale)
+   - **Issue**: HNSW index creates successfully but provides no performance benefit
+   - **Key Discovery**: rag-templates ORDER BY pattern (ORDER BY score DESC) is 4.22× faster than ORDER BY VECTOR_COSINE(...) expression
+   - **ACORN-1 Testing**: SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1 shows no performance change
+   - **Conclusion**: HNSW not engaging due to query optimizer limitation, not dataset size or configuration
 
 ---
 
@@ -11,28 +30,35 @@
 
 | Metric | Value | Status | Target |
 |--------|-------|--------|--------|
-| **Implementation Progress** | 18% | 🟡 Early | 100% |
-| **Test Coverage** | 0% | 🔴 None | 85%+ |
-| **Docker Health** | ⏳ Pending | 🟡 Setup | 🟢 Running |
-| **IRIS Connectivity** | ⏳ Pending | 🟡 Setup | 🟢 Connected |
-| **Protocol Compliance** | 5% | 🟡 Research | 95%+ |
+| **Embedded Python Deployment** | ✅ Complete | 🟢 Operational | irispython |
+| **merge.cpf CallIn Service** | ✅ Enabled | 🟢 Active | Required |
+| **PostgreSQL Client Connectivity** | ✅ Working | 🟢 psql success | Protocol v3.0 |
+| **VECTOR Operations** | ✅ Functional | 🟢 VECTOR_COSINE | Working |
+| **Constitution Compliance** | v1.1.0 | 🟢 Updated | Embedded patterns |
+| **HNSW Performance Testing** | ✅ Complete | 🔴 0% improvement | See docs/HNSW_FINDINGS_2025_10_02.md |
 
 ---
 
 ## 🏗️ Current Development Phase
 
-### P0 - Handshake Skeleton
-**Goal**: Basic PostgreSQL wire protocol connection establishment
-**Timeline**: 1-2 weeks
-**Confidence**: 🟢 High
+### P5 - Vector Support (TESTING & VALIDATION)
+**Goal**: Validate embedded Python deployment and HNSW performance
+**Timeline**: Testing phase - progress unblocked
+**Confidence**: 🟢 HIGH - Embedded deployment successful
 
-#### Phase Breakdown
-- **Infrastructure Setup**: 📋 Planned
-- **SSL Probe Handler**: ⏳ Pending
-- **StartupMessage**: ⏳ Pending
-- **ParameterStatus**: ⏳ Pending
-- **BackendKeyData**: ⏳ Pending
-- **ReadyForQuery**: ⏳ Pending
+#### Deployment Status
+- **Embedded Python**: ✅ Complete (irispython -m iris_pgwire.server)
+- **CallIn Service**: ✅ Enabled via merge.cpf (CRITICAL requirement)
+- **PostgreSQL Clients**: ✅ Working (psql connects successfully)
+- **VECTOR Operations**: ✅ Functional (VECTOR_COSINE working)
+- **Constitution v1.1.0**: ✅ Updated with validated patterns
+- **HNSW Testing**: ⏳ Pending larger dataset (10 vectors insufficient)
+
+#### Recent Session Breakthroughs
+- **merge.cpf Discovery**: CallIn service enablement resolves IRIS_ACCESSDENIED
+- **Official Template**: intersystems-community/iris-embedded-python-template patterns validated
+- **Docker Timing**: `-a` flag (after init) required for merge.cpf application
+- **Iterator Pattern**: IRIS results use `for row in result:` not `fetchone()`
 
 ---
 
@@ -73,14 +99,22 @@
 
 ### Phase Progress
 ```
-P0 Handshake    ████████░░░░░░░░░░░░  15% ⏳ IN PROGRESS
-P1 Simple Query ░░░░░░░░░░░░░░░░░░░░   0% ⏳ PENDING
-P2 Extended     ░░░░░░░░░░░░░░░░░░░░   0% ⏳ PENDING
-P3 Auth         █████░░░░░░░░░░░░░░░  25% 🔬 RESEARCH COMPLETE
-P4 Cancel       ░░░░░░░░░░░░░░░░░░░░   0% ⏳ PENDING
-P5 Types/Vector ░░░░░░░░░░░░░░░░░░░░   0% ⏳ PENDING
+P0 Handshake    ████████████████████ 100% ✅ COMPLETE
+P1 Simple Query ████████████████████ 100% ✅ COMPLETE
+P2 Extended     ████████████████████ 100% ✅ COMPLETE
+P3 Auth         ████████████████████ 100% ✅ COMPLETE
+P4 Cancel       ████████████████████ 100% ✅ COMPLETE
+P5 Types/Vector ██████████░░░░░░░░░░  50% 🔴 BLOCKED (HNSW Issue)
 P6 COPY/Perf    ░░░░░░░░░░░░░░░░░░░░   0% ⏳ PENDING
 ```
+
+### P5 Vector Support Breakdown
+- ✅ Vector Query Optimizer (100% - 0.36ms P95)
+- ✅ ACORN-1 Configuration
+- ✅ HNSW Index Creation
+- ❌ HNSW Performance (0% improvement - CRITICAL)
+- ❌ Embedded Python Path (0% - BLOCKING)
+- ❌ Dual-Path Architecture (0% - CONSTITUTIONAL REQUIREMENT)
 
 ### Milestone Timeline
 - **Week 1-2**: P0 Foundation (SSL, Handshake, Basic State)
@@ -95,39 +129,86 @@ P6 COPY/Perf    ░░░░░░░░░░░░░░░░░░░░   0
 
 ## 🔌 IRIS Integration Health
 
-### Connection Status
-- **IRIS Embedded Python**: ⏳ Validation pending
-- **SQL Execution**: ⏳ Testing required
-- **Vector Operations**: ⏳ IRIS VECTOR/EMBEDDING integration
-- **Authentication**: 🔬 SCRAM-SHA-256 research complete, implementation ready
+### Connection Status - Dual-Path Architecture
+#### DBAPI Path (intersystems-iris)
+- **Status**: ✅ Implemented (with limitations)
+- **Connection**: ✅ Working via `iris.createConnection()`
+- **SQL Execution**: ✅ Working via cursor
+- **Vector Type**: 🔴 Shows as varchar in INFORMATION_SCHEMA
+- **HNSW Support**: ❌ Not engaging (0% improvement)
 
-### Known Dependencies
-- kg-ticket-resolver Docker network
-- IRIS build 127 feature compatibility
+#### Embedded Python Path (iris.sql.exec)
+- **Status**: ✅ IMPLEMENTED in iris_executor.py (lines 104, 165, 260-262, 519-541)
+- **API**: ✅ Correctly using `iris.sql.exec()` for embedded execution
+- **Issue**: ✅ Code is correct, but server runs OUTSIDE IRIS (external process)
+- **Solution Required**: Deploy server INSIDE IRIS using `irispython` command
+- **Expected Benefit**: Proper VECTOR type handling, HNSW engagement when running embedded
+
+### Performance Comparison
+| System | Method | Avg Latency | QPS | vs Target |
+|--------|--------|-------------|-----|-----------|
+| IRIS | DBAPI + HNSW | 26.77ms | 37.4 | 12× slower ❌ |
+| PostgreSQL | pgvector + HNSW | 1.07ms | 934.9 | 2.1× faster ✅ |
+| **Target** | IRIS Report | - | **433.9** | Baseline |
+
+### Known Issues
+1. **DBAPI varchar limitation**: VECTOR columns appear as varchar
+2. **HNSW not engaging**: 0% performance improvement with index
+3. **Missing Embedded Python path**: Constitutional requirement not met
+4. **Unknown API**: Correct IRIS Embedded Python interface undocumented
 - Embedded Python module availability
 - Vector type system integration
 
 ---
 
+## 🎯 Immediate Action Items
+
+### Critical Priority (BLOCKING)
+1. **✅ RESOLVED: IRIS Embedded Python API Research**
+   - ✅ `iris.sql.exec()` correctly used in iris_executor.py
+   - ✅ Both DBAPI and Embedded paths properly implemented
+   - ✅ Dual-path architecture complete in code
+
+2. **🔴 NEW CRITICAL: Deploy PGWire Server Inside IRIS**
+   - Modify docker-compose.yml to run server via `irispython` command
+   - Configure environment variables (IRISUSERNAME, IRISPASSWORD, IRISNAMESPACE)
+   - Create startup script: `irispython /app/server.py`
+   - Run from IRIS container, not separate Python container
+
+3. **Test Embedded Deployment Impact on HNSW**
+   - Deploy server inside IRIS using irispython
+   - Verify VECTOR type correct (not varchar) when running embedded
+   - Benchmark HNSW performance with embedded deployment
+   - Compare: external vs embedded server deployment
+
+4. **Update Documentation**
+   - Clarify dual-path architecture: SQL execution paths, not server deployment
+   - Document irispython deployment requirement
+   - Add constitutional requirement for embedded server deployment
+
+### References
+- **Complete Investigation**: [docs/HNSW_FINDINGS_2025_10_02.md](./docs/HNSW_FINDINGS_2025_10_02.md) - Comprehensive findings with rag-templates analysis
+- Architecture Spec: [docs/DUAL_PATH_ARCHITECTURE.md](./docs/DUAL_PATH_ARCHITECTURE.md)
+- Vector Optimizer: [src/iris_pgwire/vector_optimizer.py](./src/iris_pgwire/vector_optimizer.py)
+- rag-templates Patterns: /Users/tdyar/ws/rag-templates/common/vector_sql_utils.py
+
 ## 🚨 Risk Assessment
 
-### 🟢 Low Risk
-- **Protocol Implementation**: Well-documented PostgreSQL wire format
-- **Python Development**: Mature asyncio ecosystem
-- **Docker Integration**: Proven patterns from kg-ticket-resolver
+### 🔴 Critical Risk (ACTIVE)
+- **HNSW Not Working**: Zero performance improvement despite correct configuration
+- **Unknown Root Cause**: DBAPI varchar limitation suspected but not confirmed
+- **Missing Architecture**: Dual-path requirement not implemented
+- **API Documentation Gap**: Correct IRIS Embedded Python API unknown
 
 ### 🟡 Medium Risk
-- **IRIS Embedded Python**: Build 127 compatibility unknown
-- **Performance Scaling**: asyncio + threading model validation needed
-- **Vector Integration**: pgvector compatibility requirements
+- **Performance Gap**: 12× slower than target (37.4 vs 433.9 qps)
+- **PostgreSQL Comparison**: 25× slower than PostgreSQL (37.4 vs 934.9 qps)
+- **Constitutional Compliance**: Dual-path architecture mandate not met
 
-### 🔴 High Risk
-- None currently identified
-
-### Mitigation Strategies
-1. **Early IRIS Testing**: Validate embedded Python immediately
-2. **Incremental Development**: Test each phase thoroughly
-3. **Performance Monitoring**: Benchmark throughout development
+### 🟢 Low Risk
+- **Vector Query Optimizer**: ✅ Production-ready (0.36ms P95, 100% SLA)
+- **ACORN-1 Configuration**: ✅ Correct syntax established
+- **Test Infrastructure**: ✅ Comprehensive benchmarking tools
 
 ---
 
