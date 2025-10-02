@@ -1,61 +1,87 @@
 # IRIS PostgreSQL Wire Protocol - Development Environment
+# CRITICAL: PGWire server runs INSIDE IRIS using irispython (embedded deployment)
 
 services:
-  # IRIS Database - Build 127 EHAT version as specified
+  # IRIS Database with Embedded PGWire Server
+  # Server runs via irispython command inside IRIS process (spec 014-irispython-deployment)
   iris:
     image: docker.iscinternal.com/intersystems/iris:2025.3.0EHAT.127.0-linux-arm64v8
     container_name: iris-pgwire-db
     environment:
+      # IRIS configuration
       - IRISNAMESPACE=USER
       - ISC_DEFAULT_PASSWORD=SYS
+      # Embedded Python environment (required for irispython)
+      - IRISUSERNAME=_SYSTEM
+      - IRISPASSWORD=SYS
+      # PGWire server configuration
+      - PGWIRE_HOST=0.0.0.0
+      - PGWIRE_PORT=5432
+      - PGWIRE_SSL_ENABLED=false
+      - PGWIRE_DEBUG=false
     ports:
-      - "1972:1972"  # IRIS SQL port
-      - "52773:52773"  # Management Portal
+      - "1972:1972"   # IRIS SQL port
+      - "52773:52773" # Management Portal
+      - "5432:5432"   # PostgreSQL wire protocol (served from INSIDE IRIS)
+    volumes:
+      # Mount source code for irispython execution
+      - ./src:/app/src
+      # Mount startup script for embedded PGWire server
+      - ./scripts/start-pgwire-embedded.sh:/app/start-pgwire.sh
+      # Mount merge.cpf for CallIn service (CRITICAL for embedded Python)
+      - ./merge.cpf:/app/merge.cpf
+      # Mount vector licensing key (required for VECTOR operations)
+      - ./iris.key:/usr/irissys/mgr/iris.key
     healthcheck:
       test: ["CMD", "/usr/irissys/bin/iris", "session", "iris", "-U%SYS", "##class(%SYSTEM.Process).CurrentDirectory()"]
       interval: 15s
       timeout: 10s
       retries: 5
       start_period: 60s
-    # Disable password expiration for all accounts using Security.Users.UnExpireUserPasswords()
-    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
-
-  # PostgreSQL Wire Protocol Server
-  pgwire:
-    build: .
-    container_name: iris-pgwire-server
-    depends_on:
-      iris:
-        condition: service_healthy
-    environment:
-      - PGWIRE_HOST=0.0.0.0
-      - PGWIRE_PORT=5432
-      - IRIS_HOST=iris
-      - IRIS_PORT=1972
-      - IRIS_USERNAME=%SYS
-      - IRIS_PASSWORD=SYS
-      - IRIS_NAMESPACE=USER
-      - PGWIRE_SSL_ENABLED=false
-      - PGWIRE_DEBUG=false
-    ports:
-      - "5432:5432"  # PostgreSQL wire protocol port
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 5432)); s.close()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # Start IRIS, apply merge.cpf (enables CallIn for embedded Python), then launch PGWire
+    command: >
+      --check-caps false
+      -a "iris merge IRIS /app/merge.cpf && nohup /bin/bash /app/start-pgwire.sh > /tmp/pgwire.log 2>&1 &"
     restart: unless-stopped
 
+  # Additional IRIS container for HNSW testing (latest preview build)
+  iris-latest:
+    image: containers.intersystems.com/intersystems/iris:latest-preview
+    container_name: iris-latest-test
+    environment:
+      - IRISNAMESPACE=USER
+      - ISC_DEFAULT_PASSWORD=SYS
+      - IRISUSERNAME=_SYSTEM
+      - IRISPASSWORD=SYS
+    ports:
+      - "1973:1972"   # IRIS SQL port (different from main)
+      - "52774:52773" # Management Portal (different from main)
+    volumes:
+      - iris_latest_data:/usr/irissys/mgr
+      - ./iris.key:/usr/irissys/mgr/iris.key
+      - ./merge.cpf:/app/merge.cpf
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "session", "iris", "-U%SYS", "##class(%SYSTEM.Process).CurrentDirectory()"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    command: >
+      --check-caps false
+      -a "iris merge IRIS /app/merge.cpf"
+    restart: unless-stopped
+    profiles: ["hnsw-test"]
+
   # Optional: PostgreSQL client tools for testing
+  # Note: PGWire server now runs inside iris container (embedded deployment)
   pgclient:
     image: postgres:15-alpine
     container_name: postgres-client
     depends_on:
-      pgwire:
+      iris:
         condition: service_healthy
     environment:
-      - PGHOST=pgwire
+      - PGHOST=iris  # Changed from 'pgwire' to 'iris' (embedded deployment)
       - PGPORT=5432
       - PGUSER=test_user
       - PGDATABASE=USER
@@ -87,6 +113,8 @@ services:
 
 volumes:
   iris_data:
+    driver: local
+  iris_latest_data:
     driver: local
   grafana_data:
     driver: local
