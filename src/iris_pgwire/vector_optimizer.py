@@ -66,10 +66,11 @@ class VectorQueryOptimizer:
 
         Pattern to detect:
             ORDER BY VECTOR_COSINE(column, TO_VECTOR(%s)) or TO_VECTOR(?)
-            ORDER BY VECTOR_DOT_PRODUCT(column, TO_VECTOR(%s, FLOAT))
 
         Transform to:
-            ORDER BY VECTOR_COSINE(column, TO_VECTOR('[1.0,2.0,3.0,...]', FLOAT))
+            ORDER BY VECTOR_COSINE(column, TO_VECTOR('1.0,2.0,3.0,...', FLOAT))
+
+        Note: FLOAT must be unquoted keyword, not string literal (confirmed via test_vector_syntax.py)
 
         Args:
             sql: SQL query string
@@ -92,12 +93,19 @@ class VectorQueryOptimizer:
             logger.error(f"optimize_query called with non-string SQL: type={type(sql).__name__}")
             return str(sql), params
 
-        if not self.enabled or not params:
+        if not self.enabled:
             return sql, params
 
         # Check if this is a vector similarity query with ORDER BY
         if 'ORDER BY' not in sql.upper() or 'TO_VECTOR' not in sql.upper():
             return sql, params
+
+        # Handle two cases:
+        # 1. Parameterized queries: TO_VECTOR(%s) with params list
+        # 2. Literal queries: TO_VECTOR('base64:...') already in SQL (client-side interpolation)
+        if not params:
+            # No parameters - check if SQL contains literal base64/vector strings
+            return self._optimize_literal_vectors(sql, start_time)
 
         # Pattern: Find TO_VECTOR calls with parameters in ORDER BY clause
         # Match: VECTOR_FUNCTION(column, TO_VECTOR(?, FLOAT))
@@ -160,7 +168,24 @@ class VectorQueryOptimizer:
 
             logger.debug(f"Converted vector to literal: length={len(vector_literal)}, preview={vector_literal[:50]}...")
 
+            # CRITICAL: Check if literal is too large for IRIS SQL compilation
+            # IRIS cannot compile SQL with string literals >3KB in ORDER BY clauses
+            MAX_LITERAL_SIZE_BYTES = 3000
+            if len(vector_literal) > MAX_LITERAL_SIZE_BYTES:
+                logger.info(
+                    f"Vector too large for literal ({len(vector_literal)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
+                    f"Keeping as parameter but transforming base64 → JSON array for iris.sql.exec() compatibility."
+                )
+                # Don't substitute into SQL, but DO transform the parameter value
+                # iris.sql.exec() accepts JSON array parameters but not base64
+                remaining_params[param_index] = vector_literal
+                # Don't mark as used - keep it as a parameter
+                logger.debug(f"Parameter {param_index} transformed to JSON array (kept as parameter, not substituted)")
+                continue
+
             # Build the replacement - only replace the TO_VECTOR(...) part
+            # CONFIRMED: TO_VECTOR accepts FLOAT as unquoted keyword, not string literal
+            # Both single param and two params (with FLOAT keyword) work
             new_to_vector = f"TO_VECTOR('{vector_literal}', {data_type})"
 
             # Find the TO_VECTOR call within the match and replace just that part
@@ -214,18 +239,28 @@ class VectorQueryOptimizer:
 
     def _convert_vector_to_literal(self, vector_param: str) -> Optional[str]:
         """
-        Convert vector parameter to JSON array literal format.
+        Convert vector parameter to IRIS-compatible format.
+
+        CONFIRMED (test_vector_syntax.py): Both formats work with TO_VECTOR:
+        - Comma-separated: "1.0,2.0,3.0" with TO_VECTOR('...', FLOAT)
+        - JSON array: "[1.0,2.0,3.0]" with TO_VECTOR('[...]', FLOAT)
+
+        CRITICAL: FLOAT must be unquoted keyword, not 'FLOAT' string literal!
+        - ✅ TO_VECTOR('0.1,0.2', FLOAT) works
+        - ❌ TO_VECTOR('0.1,0.2', 'FLOAT') fails
+
+        We use comma-separated format to minimize SQL length.
 
         Supports:
-        - base64:... format → decode and convert to JSON array
-        - [1.0,2.0,3.0] format → pass through
-        - comma-delimited: 1.0,2.0,3.0 → wrap in brackets
+        - base64:... format → decode and convert to comma-separated
+        - [1.0,2.0,3.0] format → strip brackets to comma-separated
+        - comma-delimited: 1.0,2.0,3.0 → pass through
 
         Args:
             vector_param: Vector parameter (string)
 
         Returns:
-            JSON array string like '[1.0,2.0,3.0,...]' or None if conversion fails
+            Comma-separated string like '1.0,2.0,3.0' or None if conversion fails
         """
         # Edge case: Handle None or non-string inputs
         if vector_param is None:
@@ -279,9 +314,9 @@ class VectorQueryOptimizer:
 
                 floats = struct.unpack(f'{num_floats}f', binary_data)
 
-                # Convert to JSON array string
-                result = '[' + ','.join(str(float(v)) for v in floats) + ']'
-                logger.debug(f"Base64 decoded to {num_floats} floats, JSON length={len(result)}")
+                # Convert to comma-separated string (NO brackets for IRIS)
+                result = ','.join(str(float(v)) for v in floats)
+                logger.debug(f"Base64 decoded to {num_floats} floats, CSV length={len(result)}")
                 return result
 
             except base64.binascii.Error as e:
@@ -296,13 +331,98 @@ class VectorQueryOptimizer:
 
         # Comma-delimited format: "1.0,2.0,3.0,..."
         if ',' in vector_param and not vector_param.startswith('['):
-            logger.debug(f"Wrapping comma-delimited vector, length={len(vector_param)}")
-            return '[' + vector_param + ']'
+            logger.debug(f"Vector already in comma-delimited format, length={len(vector_param)}")
+            return vector_param  # Already in correct format for IRIS
 
         # Unknown format
         sample = vector_param[:50] if len(vector_param) > 50 else vector_param
         logger.warning(f"Unknown vector parameter format: {sample}")
         return None
+
+    def _optimize_literal_vectors(self, sql: str, start_time: float) -> Tuple[str, Optional[List]]:
+        """
+        Optimize queries with literal base64 vectors already embedded in SQL.
+
+        Handles case where psycopg2 does client-side parameter interpolation:
+        TO_VECTOR('base64:ABC123...', FLOAT) → TO_VECTOR('[1.0,2.0,...]', FLOAT)
+
+        LIMITATION: IRIS cannot handle very long string literals (>3KB) in SQL.
+        Vectors >256 dimensions will be skipped to avoid IRIS compilation errors.
+
+        Args:
+            sql: SQL with literal vector strings
+            start_time: Performance tracking start time
+
+        Returns:
+            Tuple of (optimized_sql, None) - no params since they're in SQL
+        """
+        # IRIS SQL compilation fails with literals >3KB
+        # Skip optimization for large vectors to avoid errors
+        MAX_LITERAL_SIZE_BYTES = 3000
+
+        # Pattern: TO_VECTOR('base64:...')  or TO_VECTOR('1.0,2.0,...')
+        literal_pattern = re.compile(
+            r"TO_VECTOR\s*\(\s*'(base64:[^']+|[0-9.,\s-]+)'(?:\s*,\s*(\w+))?\s*\)",
+            re.IGNORECASE
+        )
+
+        matches = list(literal_pattern.finditer(sql))
+
+        if not matches:
+            logger.debug("No literal base64/vector strings found in SQL")
+            return sql, None
+
+        logger.info(f"Found {len(matches)} literal vector strings in SQL (client-side interpolation detected)")
+
+        optimized_sql = sql
+        transformations = 0
+
+        # Process in reverse to maintain string positions
+        for match in reversed(matches):
+            vector_literal = match.group(1)  # 'base64:...' or '1.0,2.0,...'
+            data_type = match.group(2) or 'FLOAT'
+
+            # Convert to JSON array format
+            converted = self._convert_vector_to_literal(vector_literal)
+
+            if converted is None:
+                logger.warning(f"Could not convert literal vector: {vector_literal[:50]}...")
+                continue
+
+            # Check if result would be too large for IRIS to handle
+            if len(converted) > MAX_LITERAL_SIZE_BYTES:
+                logger.warning(
+                    f"Skipping literal optimization: vector too large ({len(converted)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
+                    f"IRIS SQL compilation fails with long literals. Vector will be passed as-is (HNSW not used)."
+                )
+                continue
+
+            # Replace the entire TO_VECTOR call
+            # Use FLOAT as unquoted keyword (not string literal)
+            new_call = f"TO_VECTOR('{converted}', {data_type})"
+            optimized_sql = optimized_sql[:match.start()] + new_call + optimized_sql[match.end():]
+            transformations += 1
+
+            logger.debug(f"Transformed literal vector: {vector_literal[:30]}... → {converted[:30]}...")
+
+        if transformations > 0:
+            # Record metrics
+            transformation_time_ms = (time.perf_counter() - start_time) * 1000
+            metrics = OptimizationMetrics(
+                transformation_time_ms=transformation_time_ms,
+                vector_params_found=len(matches),
+                vector_params_transformed=transformations,
+                sql_length_before=len(sql),
+                sql_length_after=len(optimized_sql),
+                params_count_before=0,
+                params_count_after=0,
+                constitutional_sla_compliant=(transformation_time_ms <= self.CONSTITUTIONAL_SLA_MS)
+            )
+            self._record_metrics(metrics)
+
+            logger.info(f"Literal vector optimization complete: {transformations} vectors transformed")
+
+        return optimized_sql, None
 
     def _record_metrics(self, metrics: OptimizationMetrics):
         """Record optimization metrics and track SLA compliance"""
