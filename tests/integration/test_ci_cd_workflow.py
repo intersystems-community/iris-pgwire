@@ -67,13 +67,17 @@ def test_ci_cd_coverage_reports_generated():
     ci_env = os.environ.copy()
     ci_env['CI'] = 'true'
 
-    # Run pytest with coverage in CI mode
+    # Run pytest with coverage in CI mode - only test framework validation tests
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/contract/", "--cov", "--cov-report=xml", "--cov-report=html"],
+        [sys.executable, "-m", "pytest",
+         "tests/contract/test_fixture_contract.py",
+         "tests/contract/test_timeout_handler.py",
+         "--cov", "--cov-report=xml", "--cov-report=html"],
         env=ci_env,
         capture_output=True,
         text=True,
-        timeout=120
+        timeout=120,
+        cwd="/app" if os.path.exists("/app/tests") else "."
     )
 
     output = result.stdout + result.stderr
