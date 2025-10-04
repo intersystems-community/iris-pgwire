@@ -56,22 +56,20 @@ class PGWireExecutor:
         if self.connection is None:
             self.connect()
 
+        cursor = self.connection.cursor()
         try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(query)
+            cursor.execute(query)
 
-                # Check if query returns results (cursor.description is None for non-SELECT)
-                if cursor.description is None:
-                    # Query doesn't return results (e.g., INSERT, UPDATE, DDL)
-                    return []
+            # Check if query returns results (cursor.description is None for non-SELECT)
+            if cursor.description is None:
+                cursor.close()
+                return []
 
-                try:
-                    return cursor.fetchall()
-                except (psycopg.ProgrammingError, psycopg.errors.InternalError):
-                    # Query returned no rows or internal error on fetch
-                    return []
+            results = cursor.fetchall()
+            cursor.close()
+            return results
         except Exception as e:
-            # Re-raise without printing (error logging handled by runner if needed)
+            cursor.close()
             raise
 
     def close(self):
