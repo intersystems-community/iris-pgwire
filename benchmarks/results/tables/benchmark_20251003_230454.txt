@@ -1,0 +1,20 @@
+======================================================================
+3-Way Database Performance Benchmark
+======================================================================
+Report ID: benchmark_20251003_230453
+Timestamp: 2025-10-03T23:04:53.483705
+
+Configuration:
+  Vector Dimensions:  128
+  Dataset Size:       10 rows
+  Iterations:         1
+
+Results:
+Method                   QPS    P50 (ms)    P95 (ms)    P99 (ms)
+-------------------  -------  ----------  ----------  ----------
+iris_pgwire          1760.80        0.57        0.66        0.67
+postgresql_psycopg3  2236.10        0.30        0.80        0.85
+iris_dbapi           6746.30        0.15        0.15        0.15
+
+Benchmark completed in 1.04 seconds.
+======================================================================

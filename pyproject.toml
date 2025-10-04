@@ -25,6 +25,8 @@ dependencies = [
     "cryptography>=41.0.0",
     "intersystems-irispython>=5.1.2",
     "sqlparse>=0.4.0",
+    # NOTE: psycopg2-binary kept for legacy compatibility, but psycopg3 recommended for production
+    # See specs/013-vector-query-optimizer/CLIENT_COMPATIBILITY.md for client recommendations
     "psycopg2-binary>=2.9.10",
 ]
 
@@ -32,6 +34,8 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    # psycopg3 (NOT psycopg2) - uses server-side parameter binding for vector optimization
+    # Required for E2E tests with large vectors (1024+ dimensions)
     "psycopg>=3.1.0",
     "docker>=6.0.0",
 ]
