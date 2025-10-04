@@ -1,0 +1,75 @@
+services:
+  # PostgreSQL with pgvector for baseline comparison
+  postgres-benchmark:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-benchmark
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: benchmark
+      POSTGRES_USER: postgres
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - benchmark-net
+
+  # IRIS database (dedicated instance for benchmarking)
+  iris-benchmark:
+    image: intersystemsdc/iris-community:latest
+    container_name: iris-benchmark
+    hostname: iris-benchmark
+    environment:
+      - ISC_DEFAULT_PASSWORD=SYS
+      - IRISNAMESPACE=USER
+    command: --key /iris.key --check-caps false
+    ports:
+      - "1974:1972"    # SuperServer port (DBAPI)
+      - "52776:52773"  # Management portal
+    volumes:
+      - ../iris.key:/iris.key:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/irissys/dev/Cloud/ICM/waitISC.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - benchmark-net
+
+  # PGWire server (IRIS PostgreSQL wire protocol)
+  pgwire-benchmark:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: pgwire-benchmark
+    environment:
+      - PGWIRE_HOST=0.0.0.0
+      - PGWIRE_PORT=5432
+      - IRIS_HOST=iris-benchmark
+      - IRIS_PORT=1972
+      - IRIS_USERNAME=_SYSTEM
+      - IRIS_PASSWORD=SYS
+      - IRIS_NAMESPACE=USER
+      - PGWIRE_DEBUG=false
+      - ENABLE_VECTOR_OPTIMIZER=true
+      - ENABLE_TRANSLATION=false
+    ports:
+      - "5434:5432"
+    depends_on:
+      iris-benchmark:
+        condition: service_healthy
+    networks:
+      - benchmark-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 5432)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  benchmark-net:
+    driver: bridge

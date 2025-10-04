@@ -13,28 +13,36 @@ import ssl
 import struct
 import sys
 from typing import Optional
+import importlib
 
 import structlog
 
-from .protocol import PGWireProtocol
-from .iris_executor import IRISExecutor
-from .integratedml import enhance_iris_executor_with_integratedml
-
-# Configure structured logging
+# Configure structured logging FIRST so we can log reload diagnostics
+# Use PrintLoggerFactory() to write directly to stdout (structlog.stdlib.LoggerFactory() needs handlers)
 structlog.configure(
     processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.processors.StackInfoRenderer(),
         structlog.dev.ConsoleRenderer()
     ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(),  # Write directly to stdout
     cache_logger_on_first_use=True,
 )
 
 logger = structlog.get_logger()
+
+# Force reload of iris_executor BEFORE importing to bypass Python module cache
+# This ensures code changes are picked up in development without container rebuilds
+import iris_pgwire.iris_executor
+reloaded_module = importlib.reload(iris_pgwire.iris_executor)
+
+# NOW import after reload
+from .protocol import PGWireProtocol
+from .iris_executor import IRISExecutor
+from .integratedml import enhance_iris_executor_with_integratedml
 
 
 class PGWireServer:

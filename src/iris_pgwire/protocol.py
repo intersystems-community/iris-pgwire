@@ -17,6 +17,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import ssl
 import struct
@@ -30,6 +31,90 @@ from .sql_translator import get_translator, TranslationContext, ValidationLevel
 from .sql_translator.performance_monitor import get_monitor, MetricType, PerformanceTracker
 
 logger = structlog.get_logger()
+
+
+def _fix_order_by_aliases(sql: str) -> str:
+    """
+    Fix ORDER BY clauses that reference SELECT clause aliases.
+
+    IRIS doesn't support: SELECT expr AS distance ORDER BY distance
+    Must be: SELECT expr AS distance ORDER BY expr
+
+    This is critical for vector similarity queries where the SQL translator
+    may have parameterized the TO_VECTOR arguments AFTER the vector optimizer
+    already rewritten the operators.
+
+    Args:
+        sql: SQL query string potentially containing ORDER BY with aliases
+
+    Returns:
+        SQL with ORDER BY aliases replaced with actual expressions
+    """
+    logger.info("🔧 Fixing ORDER BY aliases for IRIS compatibility")
+
+    # Extract SELECT clause aliases and their expressions
+    # Pattern matches: expression AS alias_name
+    # NOTE: IRIS SQL translator adds spaces around parentheses!
+    # Example: "VECTOR_COSINE ( embedding , TO_VECTOR ( ... ) )"
+    # We need to handle nested parentheses, so we match everything from
+    # a function name up to " AS alias_name"
+    #
+    # Strategy: Find "AS alias" first, then work backwards to find the expression start
+    # Pattern: capture everything before "AS alias" in the SELECT clause
+
+    # First, split SQL to isolate the SELECT clause
+    select_match = re.search(r'SELECT\s+(.+?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        logger.warning("  No SELECT...FROM clause found")
+        return sql
+
+    select_clause = select_match.group(1)
+    aliases = {}
+
+    # Find all "expression AS alias" patterns in the SELECT clause
+    # This handles nested parentheses by being greedy up to " AS "
+    alias_pattern = r'(.+?)\s+AS\s+(\w+)'
+
+    for match in re.finditer(alias_pattern, select_clause, re.IGNORECASE):
+        expression = match.group(1).strip()
+        alias = match.group(2)
+
+        # Clean up the expression - it might have leading commas or other SELECT items
+        # We want the LAST complete expression before AS
+        # Split by comma and take the last item
+        if ',' in expression:
+            expression = expression.split(',')[-1].strip()
+
+        aliases[alias.lower()] = expression
+        logger.info(f"  Found alias: {alias} -> {expression[:60]}...")
+
+    if not aliases:
+        logger.warning("  No SELECT aliases found in SQL - pattern may need adjustment")
+        logger.info(f"  SQL preview: {sql[:200]}...")
+        return sql
+
+    # Replace "ORDER BY alias" with "ORDER BY expression"
+    order_by_pattern = r'ORDER\s+BY\s+(\w+)(\s+(?:ASC|DESC))?'
+
+    def replace_order_by(match):
+        alias = match.group(1).lower()
+        sort_dir = match.group(2) or ''
+
+        if alias in aliases:
+            expression = aliases[alias]
+            logger.info(f"  Replacing ORDER BY {alias} with ORDER BY {expression[:60]}...")
+            return f'ORDER BY {expression}{sort_dir}'
+        else:
+            return match.group(0)
+
+    result = re.sub(order_by_pattern, replace_order_by, sql, flags=re.IGNORECASE)
+
+    if result != sql:
+        logger.info(f"✅ ORDER BY aliases fixed for IRIS compatibility")
+    else:
+        logger.warning("ℹ️ No ORDER BY alias replacements made - check regex patterns")
+
+    return result
 
 # PostgreSQL protocol constants
 SSL_REQUEST_CODE = 80877103
@@ -190,8 +275,7 @@ class PGWireProtocol:
                            translated_length=len(translation_result.translated_sql),
                            constructs_translated=len(translation_result.construct_mappings),
                            translation_time_ms=translation_result.performance_stats.translation_time_ms,
-                           cache_hit=translation_result.performance_stats.cache_hit,
-                           success=translation_result.success)
+                           cache_hit=translation_result.performance_stats.cache_hit)
 
                 # Check for warnings or validation issues
                 if translation_result.warnings:
@@ -211,10 +295,15 @@ class PGWireProtocol:
                                  actual_time_ms=tracker.violation.actual_value_ms,
                                  sla_threshold_ms=tracker.violation.sla_threshold_ms)
 
+                # CRITICAL: Fix ORDER BY aliases AFTER translation
+                # The SQL translator may have parameterized TO_VECTOR arguments,
+                # so we need to fix ORDER BY aliases on the FINAL translated SQL
+                final_sql = _fix_order_by_aliases(translation_result.translated_sql)
+
                 return {
-                    'success': translation_result.success,
+                    'success': True,
                     'original_sql': original_sql,
-                    'translated_sql': translation_result.translated_sql,
+                    'translated_sql': final_sql,
                     'translation_used': True,
                     'construct_mappings': translation_result.construct_mappings,
                     'performance_stats': translation_result.performance_stats,
@@ -818,22 +907,24 @@ class PGWireProtocol:
 
             # Log translation summary if constructs were translated
             if translation_result.get('translation_used') and translation_result.get('construct_mappings'):
+                perf_stats = translation_result['performance_stats']
                 logger.info("IRIS constructs translated",
                            connection_id=self.connection_id,
                            constructs_count=len(translation_result['construct_mappings']),
-                           translation_time_ms=translation_result['performance_stats'].get('translation_time_ms', 0),
-                           cache_hit=translation_result['performance_stats'].get('cache_hit', False))
+                           translation_time_ms=perf_stats.translation_time_ms if perf_stats else 0,
+                           cache_hit=perf_stats.cache_hit if perf_stats else False)
 
             # Execute translated SQL against IRIS
             result = await self.iris_executor.execute_query(final_sql)
 
             # Add translation metadata to result for debugging/monitoring
             if translation_result.get('translation_used'):
+                perf_stats = translation_result['performance_stats']
                 result['translation_metadata'] = {
                     'original_sql': translation_result['original_sql'],
                     'constructs_translated': len(translation_result.get('construct_mappings', [])),
-                    'translation_time_ms': translation_result['performance_stats'].get('translation_time_ms', 0),
-                    'cache_hit': translation_result['performance_stats'].get('cache_hit', False),
+                    'translation_time_ms': perf_stats.translation_time_ms if perf_stats else 0,
+                    'cache_hit': perf_stats.cache_hit if perf_stats else False,
                     'warnings': translation_result.get('warnings', [])
                 }
 
@@ -1137,8 +1228,8 @@ class PGWireProtocol:
                 'param_types': param_types,
                 'translation_metadata': {
                     'constructs_translated': len(translation_result.get('construct_mappings', [])),
-                    'translation_time_ms': translation_result['performance_stats'].get('translation_time_ms', 0),
-                    'cache_hit': translation_result['performance_stats'].get('cache_hit', False),
+                    'translation_time_ms': translation_result['performance_stats'].translation_time_ms,
+                    'cache_hit': translation_result['performance_stats'].cache_hit,
                     'warnings': translation_result.get('warnings', [])
                 }
             }
@@ -1153,11 +1244,12 @@ class PGWireProtocol:
 
             # Log translation details if constructs were translated
             if translation_result.get('translation_used') and translation_result.get('construct_mappings'):
+                perf_stats = translation_result['performance_stats']
                 logger.info("IRIS constructs translated in prepared statement",
                            connection_id=self.connection_id,
                            statement_name=statement_name,
                            constructs_count=len(translation_result['construct_mappings']),
-                           translation_time_ms=translation_result['performance_stats'].get('translation_time_ms', 0))
+                           translation_time_ms=perf_stats.translation_time_ms if perf_stats else 0)
 
             # Send ParseComplete response
             await self.send_parse_complete()
@@ -1367,36 +1459,19 @@ class PGWireProtocol:
                        cache_hit=translation_metadata.get('cache_hit', False))
 
             # Execute the query with parameters
-            # Proper parameter handling for IRIS SQL (supports both TOP and LIMIT syntax)
+            # IMPORTANT: Pass parameters separately to enable vector query optimizer
+            # The optimizer needs to transform vector parameters BEFORE IRIS execution
+            # Interpolating here would create large SQL literals that exceed IRIS limits
+
+            # Convert PostgreSQL $1, $2 placeholders to IRIS ? placeholders
+            iris_query = query
             if params:
-                # Convert PostgreSQL-style parameters ($1, $2) to proper IRIS parameterization
-                parameterized_query = query
-                iris_params = []
+                # Replace $1, $2, ... with ? for IRIS parameter binding
+                for i in range(len(params), 0, -1):  # Reverse order to avoid replacing $10 when replacing $1
+                    iris_query = iris_query.replace(f'${i}', '?')
 
-                for i, param in enumerate(params):
-                    if param is not None:
-                        # Handle different parameter types properly
-                        if isinstance(param, str):
-                            # String parameters get quoted
-                            parameterized_query = parameterized_query.replace(f'${i+1}', f"'{param}'")
-                        elif isinstance(param, (int, float)):
-                            # Numeric parameters don't need quotes
-                            parameterized_query = parameterized_query.replace(f'${i+1}', str(param))
-                        else:
-                            # Other types converted to string and quoted
-                            parameterized_query = parameterized_query.replace(f'${i+1}', f"'{str(param)}'")
-                    else:
-                        # NULL values
-                        parameterized_query = parameterized_query.replace(f'${i+1}', 'NULL')
-
-                # Convert PostgreSQL syntax to IRIS-compatible syntax if needed
-                # This helps with LIMIT vs TOP issues mentioned by user
-                parameterized_query = self._convert_postgres_to_iris_syntax(parameterized_query)
-            else:
-                parameterized_query = query
-
-            # Execute via IRIS
-            result = await self.iris_executor.execute_query(parameterized_query)
+            # Execute via IRIS with parameters (vector optimizer will transform if needed)
+            result = await self.iris_executor.execute_query(iris_query, params=params if params else None)
 
             if result['success']:
                 await self.send_query_result(result)
@@ -1409,7 +1484,7 @@ class PGWireProtocol:
             logger.info("Executed portal",
                        connection_id=self.connection_id,
                        portal_name=portal_name,
-                       query=parameterized_query[:100] + "..." if len(parameterized_query) > 100 else parameterized_query)
+                       query=iris_query[:100] + "..." if len(iris_query) > 100 else iris_query)
 
         except Exception as e:
             logger.error("Execute message handling failed",
