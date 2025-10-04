@@ -1,0 +1,113 @@
+# GitLab CI/CD Configuration for IRIS PGWire
+#
+# Sequential test execution as specified in:
+# specs/017-correct-testing-framework/tasks.md (T026)
+#
+# Key requirements:
+# - Tests run sequentially (no parallel execution)
+# - Coverage reports generated (terminal + XML)
+# - Artifacts uploaded for debugging
+# - 30-second timeout enforced via pytest configuration
+
+stages:
+  - test
+  - coverage
+
+# Test stage: Run pytest with coverage
+test:
+  stage: test
+  image: python:3.11-slim
+
+  before_script:
+    # Install system dependencies
+    - apt-get update -qq
+    - apt-get install -y -qq git
+
+    # Install Python dependencies
+    - pip install --upgrade pip
+    - pip install -e ".[test]"
+
+  script:
+    # Run tests with sequential execution (--dist=no is default in pyproject.toml)
+    - |
+      pytest tests/ \
+        --verbose \
+        --cov=iris_pgwire \
+        --cov-report=term-missing \
+        --cov-report=xml:coverage.xml \
+        --tb=short \
+        --strict-markers \
+        --junitxml=test-results.xml
+
+  after_script:
+    # Display coverage summary
+    - echo "Coverage report generated - see artifacts"
+
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml
+      - htmlcov/
+      - test-results.xml
+      - test_failures.jsonl
+    reports:
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 30 days
+
+  # Allow tests to fail but report the failure
+  allow_failure: false
+
+  # Run tests on merge requests and main branch
+  only:
+    - merge_requests
+    - main
+    - branches
+
+# Coverage report stage: Display coverage badge info
+coverage:
+  stage: coverage
+  image: python:3.11-slim
+
+  dependencies:
+    - test
+
+  script:
+    # Extract coverage percentage for GitLab badge
+    - |
+      if [ -f coverage.xml ]; then
+        echo "Coverage report available"
+        # Parse coverage.xml and display summary
+        # GitLab will automatically extract coverage from job logs
+      else
+        echo "No coverage report generated"
+      fi
+
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+
+  only:
+    - merge_requests
+    - main
+    - branches
+
+# Variables for CI environment
+variables:
+  # Set CI flag for CI-specific behavior
+  CI: "true"
+
+  # Python-specific settings
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHONUNBUFFERED: "1"
+
+  # Coverage settings
+  COVERAGE_REPORT: "true"
+
+# Cache pip dependencies
+cache:
+  paths:
+    - .cache/pip
+  key:
+    files:
+      - pyproject.toml
