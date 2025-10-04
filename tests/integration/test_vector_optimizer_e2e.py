@@ -5,14 +5,20 @@ End-to-end integration tests for vector query optimizer through PGWire
 These tests validate that the optimizer works through the complete stack:
 PostgreSQL client → PGWire server → Optimizer → IRIS execution
 
+Uses psycopg3 (NOT psycopg2) for server-side parameter binding, which:
+- Sends parameters separately from SQL (Extended Protocol)
+- Allows optimizer to transform parameters before IRIS execution
+- Avoids IRIS literal size limit (no 3KB restriction)
+
 Prerequisites:
 - IRIS running on localhost:1972
 - PGWire server running on localhost:15910
 - test_1024 table with 1000+ vectors and HNSW index
+- psycopg3 installed: pip install psycopg
 """
 
 import pytest
-import psycopg2
+import psycopg  # psycopg3 - uses server-side parameter binding
 import struct
 import base64
 import random
@@ -46,33 +52,34 @@ def vector_to_json_array(vector):
     return '[' + ','.join(str(float(v)) for v in vector) + ']'
 
 
-@pytest.mark.skipif(
-    reason="Requires PGWire server running - enable manually for E2E testing"
-)
+@pytest.mark.e2e
 class TestVectorOptimizerE2E:
-    """End-to-end tests through PGWire protocol"""
+    """End-to-end tests through PGWire protocol using psycopg3"""
 
     @pytest.fixture(scope="class")
     def pgwire_connection(self):
-        """Connect to PGWire server"""
+        """Connect to PGWire server using psycopg3 (server-side parameter binding)"""
         try:
-            conn = psycopg2.connect(
+            # psycopg3 uses server-side parameter binding by default (Extended Protocol)
+            # This allows optimizer to transform parameters, avoiding IRIS literal size limit
+            conn = psycopg.connect(
                 host='127.0.0.1',
                 port=15910,
-                database='USER',
-                user='benchmark'
+                dbname='USER',
+                user='benchmark',
+                autocommit=True
             )
-            conn.autocommit = True
             yield conn
             conn.close()
-        except psycopg2.OperationalError as e:
+        except psycopg.OperationalError as e:
             pytest.skip(f"PGWire server not running: {e}")
 
     def test_base64_vector_e2e(self, pgwire_connection):
         """
-        T009: GIVEN psycopg2 client with base64 vector
-        WHEN execute ORDER BY VECTOR_COSINE query
+        T009: GIVEN psycopg3 client with base64 vector (1024 dims - production size)
+        WHEN execute ORDER BY VECTOR_COSINE query with server-side parameter binding
         THEN query completes with HNSW optimization (<50ms latency)
+        AND no IRIS literal size limit encountered (psycopg3 uses Extended Protocol)
         """
         cur = pgwire_connection.cursor()
 
@@ -84,7 +91,7 @@ class TestVectorOptimizerE2E:
         start = time.perf_counter()
         cur.execute("""
             SELECT id FROM test_1024
-            ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s))
+            ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s, FLOAT))
             LIMIT 5
         """, (vec_base64,))
 
@@ -183,26 +190,24 @@ class TestVectorOptimizerE2E:
 
 
 # Performance validation tests
-@pytest.mark.skipif(
-    reason="Requires PGWire server running - enable manually for E2E testing"
-)
+@pytest.mark.e2e
 class TestVectorOptimizerPerformance:
-    """Performance tests for optimizer throughput and latency"""
+    """Performance tests for optimizer throughput and latency using psycopg3"""
 
     @pytest.fixture(scope="class")
     def pgwire_connection(self):
-        """Connect to PGWire server"""
+        """Connect to PGWire server using psycopg3 (server-side parameter binding)"""
         try:
-            conn = psycopg2.connect(
+            conn = psycopg.connect(
                 host='127.0.0.1',
                 port=15910,
-                database='USER',
-                user='benchmark'
+                dbname='USER',
+                user='benchmark',
+                autocommit=True
             )
-            conn.autocommit = True
             yield conn
             conn.close()
-        except psycopg2.OperationalError as e:
+        except psycopg.OperationalError as e:
             pytest.skip(f"PGWire server not running: {e}")
 
     def test_transformation_overhead(self):

@@ -1,0 +1,36 @@
+{
+  "report_id": "benchmark_20251003_230540",
+  "timestamp": "2025-10-03T23:05:40.363611",
+  "config": {
+    "vector_dimensions": 128,
+    "dataset_size": 10,
+    "iterations": 1
+  },
+  "duration_seconds": 1.06495,
+  "results": {
+    "iris_pgwire": {
+      "qps": 2081.5253145938086,
+      "latency_p50_ms": 0.48041692934930325,
+      "latency_p95_ms": 0.48041692934930325,
+      "latency_p99_ms": 0.48041692934930325,
+      "queries_executed": 8,
+      "queries_failed": 7
+    },
+    "postgresql_psycopg3": {
+      "qps": 2200.355626626265,
+      "latency_p50_ms": 0.25345804169774055,
+      "latency_p95_ms": 0.9091827087104319,
+      "latency_p99_ms": 0.9674693457782269,
+      "queries_executed": 8,
+      "queries_failed": 5
+    },
+    "iris_dbapi": {
+      "qps": 6693.630690725218,
+      "latency_p50_ms": 0.15012500807642937,
+      "latency_p95_ms": 0.1565231883432716,
+      "latency_p99_ms": 0.15723826247267425,
+      "queries_executed": 8,
+      "queries_failed": 4
+    }
+  }
+}

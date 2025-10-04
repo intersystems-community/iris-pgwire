@@ -374,8 +374,13 @@ def enhance_iris_executor_with_integratedml(iris_executor):
     # Store original execute_query method
     original_execute_query = iris_executor.execute_query
 
-    async def execute_query_with_ml_support(sql: str, parameters=None):
-        """Enhanced execute_query with IntegratedML support"""
+    async def execute_query_with_ml_support(sql: str, params=None, session_id=None):
+        """Enhanced execute_query with IntegratedML support
+
+        IMPORTANT: Must match original execute_query signature exactly:
+        - params (not parameters) for vector query optimizer compatibility
+        - session_id for transaction support
+        """
 
         # Check if this is an IntegratedML command
         if parser.is_integratedml_command(sql):
@@ -385,7 +390,7 @@ def enhance_iris_executor_with_integratedml(iris_executor):
             except Exception as e:
                 logger.warning("IntegratedML execution failed, trying fallback", error=str(e))
                 # Try to pass through to IRIS directly as fallback
-                return await original_execute_query(sql, parameters)
+                return await original_execute_query(sql, params=params, session_id=session_id)
 
         # Check for IRIS system functions
         if any(func in sql.upper() for func in ['%SYSTEM.ML.']):
@@ -395,10 +400,10 @@ def enhance_iris_executor_with_integratedml(iris_executor):
             except Exception as e:
                 logger.warning("System function handling failed, trying fallback", error=str(e))
                 # Try to pass through to IRIS directly as fallback
-                return await original_execute_query(sql, parameters)
+                return await original_execute_query(sql, params=params, session_id=session_id)
 
-        # Fall back to original execution
-        return await original_execute_query(sql, parameters)
+        # Fall back to original execution (with vector optimizer support)
+        return await original_execute_query(sql, params=params, session_id=session_id)
 
     # Replace the method
     iris_executor.execute_query = execute_query_with_ml_support

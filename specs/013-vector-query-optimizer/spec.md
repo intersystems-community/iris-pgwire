@@ -183,17 +183,17 @@ The parameter binding (`%s`) prevents IRIS from recognizing the vector pattern n
 
 - **PR-001**: System MUST achieve 335+ queries/second throughput for vector similarity searches (based on DBAPI benchmark baseline)
 - **PR-002**: System MUST maintain <50ms latency for individual vector similarity queries (P95 latency)
-- **PR-003**: System MUST add <10ms transformation overhead to query execution path
+- **PR-003**: System MUST add <5ms transformation overhead to query execution path (constitutional SLA requirement)
 - **PR-004**: System MUST handle concurrent queries from 16 clients without degradation (optimal IRIS connection pool size)
 - **PR-005**: System MUST comply with constitutional 5ms SLA for SQL translation (warn on violations, do not block execution)
 
 ### Success Metrics
 
 #### Performance Targets
-- **Throughput**: 335+ queries/second (82% of Epic hackathon target 433.9 ops/sec)
+- **Throughput**: 335+ queries/second (95% of DBAPI baseline 356.5 qps; 82% of theoretical max 433.9 ops/sec from Epic hackathon)
 - **Latency**: <50ms P95 latency for HNSW-optimized queries
-- **Transformation Overhead**: <10ms added by optimizer (measured via performance monitor)
-- **Constitutional Compliance**: <5% violation rate for 5ms SLA (warning threshold)
+- **Transformation Overhead**: <5ms SLA (constitutional requirement; 10ms warning threshold for monitoring)
+- **Constitutional Compliance**: <5% violation rate for 5ms SLA (measured via performance monitor)
 
 #### Functional Correctness
 - **Query Correctness**: 100% of transformed queries return identical results to DBAPI literal queries

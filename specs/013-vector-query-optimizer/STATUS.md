@@ -2,7 +2,7 @@
 
 **Last Updated**: 2025-10-03
 **Branch**: `013-vector-query-optimizer`
-**Overall Status**: ✅ **IMPLEMENTATION COMPLETE** - TO_VECTOR syntax fixed and E2E validated
+**Overall Status**: ❌ **BLOCKED** - pgvector operator conversion causes IRIS compiler crashes
 
 ---
 
@@ -21,24 +21,40 @@
 
 ---
 
-## 🎯 CRITICAL FIX (2025-10-03)
+## 🚨 CRITICAL ISSUE (2025-10-03)
 
-### TO_VECTOR Syntax Correction
+### pgvector Operator Conversion Causes IRIS Compiler Crashes
 
-**Problem Discovered**: Vector optimizer was generating `TO_VECTOR('...', 'FLOAT')` with FLOAT as quoted string, causing IRIS parser errors.
+**Problem**: Vector similarity queries with pgvector operators (`<=>`, `<->`, `<#>`) cause IRIS SQL compiler to crash.
 
-**Root Cause**: IRIS requires FLOAT as **unquoted keyword**, not string literal.
+**Test Query**:
+```sql
+SELECT id, embedding <=> '[0.1,0.1,0.1,...]' AS distance
+FROM benchmark_vectors
+ORDER BY distance LIMIT 5
+```
 
-**Test Results** (test_vector_syntax.py):
-- ✅ `TO_VECTOR('0.1,0.2', FLOAT)` - **WORKS**
-- ❌ `TO_VECTOR('0.1,0.2', 'FLOAT')` - **FAILS** (parser error)
+**IRIS Error**:
+```
+SQLCODE: -400: Fatal error occurred
+Error compiling cached query class %sqlcq.USER.cls7
+ERROR: <UNDEFINED>main+129^%qaqcasl *mt("top")
+```
 
-**Fix Applied**: Changed optimizer to generate `TO_VECTOR('value', FLOAT)` with unquoted keyword.
+**Root Cause**: Optimizer strips brackets from vector literals during operator conversion:
+- **Generated**: `VECTOR_COSINE(embedding, TO_VECTOR('0.1,0.1,...', FLOAT))` ❌ Missing `[ ]`
+- **Required**: `VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.1,...]', FLOAT))` ✅ Has `[ ]`
 
-**Verification**:
-- ✅ test_optimizer_simple.py - Confirms correct syntax generation
-- ✅ test_e2e_vector_iris.py - Validated against live IRIS database
-- ✅ Both comma-separated and JSON array formats work
+**Impact**:
+- ✅ Simple SELECT queries work fine
+- ❌ Vector similarity queries timeout (IRIS compiler crash)
+- ❌ Benchmark cannot complete
+- ❌ All 3-way comparison blocked
+
+**Evidence**:
+- `diagnose_hanging_queries.py`: vector_cosine query times out after 10s
+- PGWire logs show IRIS external execution failed
+- Simple queries pass, only vector operators fail
 
 ---
 
