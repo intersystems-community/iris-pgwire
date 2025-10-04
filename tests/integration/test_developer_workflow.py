@@ -164,6 +164,7 @@ def test_coverage_report_generated_without_enforcement():
             "Tests should not fail due to coverage threshold (no enforcement)"
 
 
+@pytest.mark.timeout(35)  # Test runs a 35s timeout test, needs more time
 def test_timeout_configuration_active():
     """
     Verify 30-second timeout is configured and active.

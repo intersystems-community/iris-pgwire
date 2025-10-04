@@ -162,6 +162,7 @@ def test_ci_failure_detail():
             os.unlink(test_file_path)
 
 
+@pytest.mark.timeout(40)  # Test runs a 35s timeout test, needs more time
 def test_ci_cd_timeout_enforcement():
     """
     Verify timeout enforcement works in CI/CD environment.
