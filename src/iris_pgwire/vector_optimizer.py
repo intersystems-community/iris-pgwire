@@ -93,11 +93,43 @@ class VectorQueryOptimizer:
             logger.error(f"optimize_query called with non-string SQL: type={type(sql).__name__}")
             return str(sql), params
 
+        print(f"\n{'='*80}")
+        print(f"🚀🚀🚀 OPTIMIZER.OPTIMIZE_QUERY CALLED 🚀🚀🚀")
+        print(f"  Enabled: {self.enabled}")
+        print(f"  SQL Preview: {sql[:150]}...")
+        print(f"  Params Count: {len(params) if params else 0}")
+        print(f"{'='*80}\n", flush=True)
+
+        logger.info(f"🚀 optimize_query CALLED",
+                   enabled=self.enabled,
+                   sql_preview=sql[:150],
+                   params_count=len(params) if params else 0)
+
         if not self.enabled:
+            logger.warning("⚠️ Vector optimizer is DISABLED, returning SQL unchanged")
             return sql, params
 
+        # STEP 1: Rewrite pgvector operators to IRIS vector functions
+        # This must happen BEFORE other optimizations
+        print(f"📝 ABOUT TO CALL _rewrite_pgvector_operators", flush=True)
+        logger.info("📝 About to call _rewrite_pgvector_operators")
+        sql = self._rewrite_pgvector_operators(sql)
+        print(f"✅ RETURNED FROM _rewrite_pgvector_operators: {sql[:150]}...", flush=True)
+        logger.info(f"✅ Returned from _rewrite_pgvector_operators", sql_preview=sql[:150])
+
+        # Handle INSERT/UPDATE statements with TO_VECTOR (different from ORDER BY optimization)
+        sql_upper = sql.upper()
+        if ('INSERT' in sql_upper or 'UPDATE' in sql_upper) and 'TO_VECTOR' in sql_upper:
+            # For INSERT/UPDATE, strip TO_VECTOR wrapper to avoid object reference bug
+            optimized_sql = self._optimize_insert_vectors(sql, start_time)
+
+            # Fix ORDER BY aliases if present
+            optimized_sql = self._fix_order_by_aliases(optimized_sql)
+
+            return optimized_sql, params
+
         # Check if this is a vector similarity query with ORDER BY
-        if 'ORDER BY' not in sql.upper() or 'TO_VECTOR' not in sql.upper():
+        if 'ORDER BY' not in sql_upper or 'TO_VECTOR' not in sql_upper:
             return sql, params
 
         # Handle two cases:
@@ -235,7 +267,241 @@ class VectorQueryOptimizer:
 
         self._record_metrics(metrics)
 
+        # CRITICAL: Fix ORDER BY aliases AFTER all other optimizations
+        # IRIS doesn't support ORDER BY on SELECT clause aliases
+        optimized_sql = self._fix_order_by_aliases(optimized_sql)
+
         return optimized_sql, remaining_params if remaining_params else None
+
+    def _rewrite_pgvector_operators(self, sql: str) -> str:
+        """
+        Rewrite pgvector operators to IRIS vector functions.
+
+        Transforms:
+        - column <=> '[1,2,3]' → VECTOR_COSINE(column, TO_VECTOR('[1,2,3]', FLOAT))
+        - column <-> '[1,2,3]' → VECTOR_L2(column, TO_VECTOR('[1,2,3]', FLOAT))
+        - column <#> '[1,2,3]' → (-VECTOR_DOT_PRODUCT(column, TO_VECTOR('[1,2,3]', FLOAT)))
+
+        CRITICAL: Only rewrite operators in SELECT clause to avoid duplication.
+        ORDER BY will be handled by _fix_order_by_aliases() to use the SELECT expression.
+
+        Args:
+            sql: SQL with pgvector operators
+
+        Returns:
+            SQL with IRIS vector functions in SELECT clause
+        """
+        print(f"\n🔍🔍🔍 _REWRITE_PGVECTOR_OPERATORS CALLED", flush=True)
+        print(f"  Input SQL: {sql[:200]}...", flush=True)
+
+        logger.info(f"🔍 _rewrite_pgvector_operators CALLED", input_sql=sql[:200])
+
+        if not sql:
+            print("⚠️ Empty SQL, returning as-is", flush=True)
+            logger.info("⚠️ Empty SQL received, returning as-is")
+            return sql
+
+        # Split SQL into SELECT and ORDER BY parts to avoid duplication
+        # Handle both "SELECT ... FROM ..." and "SELECT ..." (no FROM)
+        select_match = re.search(r'(SELECT\s+.+?)(?:\s+ORDER\s+BY\s+.+)?$', sql, re.IGNORECASE | re.DOTALL)
+
+        if not select_match:
+            print("⚠️ Could not parse SELECT, rewriting entire SQL", flush=True)
+            logger.warning("⚠️ Could not parse SELECT clause, rewriting entire SQL")
+            return self._rewrite_operators_in_text(sql)
+
+        select_part = select_match.group(1)
+        order_by_part = sql[len(select_part):]
+        print(f"  ✅ Split: SELECT={len(select_part)}chars, ORDER BY={len(order_by_part)}chars", flush=True)
+
+        logger.info(f"  Split SQL: SELECT part {len(select_part)} chars, ORDER BY part {len(order_by_part)} chars")
+
+        # Only rewrite operators in SELECT part
+        rewritten_select = self._rewrite_operators_in_text(select_part)
+
+        # Combine with unchanged ORDER BY
+        result = rewritten_select + order_by_part
+        logger.info(f"✅ Operator rewriting complete (SELECT only)")
+        logger.info(f"   FULL RESULT SQL (len={len(result)}): {result[:500]}...{result[-200:] if len(result) > 700 else ''}")
+
+        return result
+
+    def _rewrite_operators_in_text(self, sql: str) -> str:
+        """Helper to rewrite operators in a given text"""
+        print(f"\n⚙️  _REWRITE_OPERATORS_IN_TEXT CALLED", flush=True)
+        print(f"  Input: {sql[:200]}...", flush=True)
+        original_sql = sql
+        operators_found = []
+
+        # <=> operator (cosine distance) -> VECTOR_COSINE
+        if '<=>' in sql:
+            operators_found.append('<=>')
+            print(f"  Found <=> operator, rewriting...", flush=True)
+            # Match both column AND literal values (quoted strings/arrays) on BOTH sides
+            # Handles: column <=> '[vector]', '[vector]' <=> '[vector]', etc.
+            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<=>\s*('[^']*'|\[[^\]]*\])"
+            def replace_cosine_distance(match):
+                left, right = match.groups()
+                print(f"    Matched: left={left}, right={right}", flush=True)
+                # If either side already has TO_VECTOR, use as-is
+                if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
+                    result = f'VECTOR_COSINE({left}, {right})'
+                # If left is a literal, wrap it in TO_VECTOR
+                elif left.startswith("'") or left.startswith("["):
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'VECTOR_COSINE(TO_VECTOR({left}, FLOAT), {right})'
+                    else:
+                        result = f'VECTOR_COSINE(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT))'
+                # Left is a column name
+                else:
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'VECTOR_COSINE({left}, {right})'
+                    else:
+                        result = f'VECTOR_COSINE({left}, TO_VECTOR({right}, FLOAT))'
+                print(f"    Replacement: {result}", flush=True)
+                return result
+            sql = re.sub(pattern, replace_cosine_distance, sql)
+            print(f"  After <=> rewrite: {sql[:200]}...", flush=True)
+
+        # <-> operator (L2 distance) -> VECTOR_L2
+        if '<->' in sql:
+            operators_found.append('<->')
+            print(f"  Found <-> operator, rewriting...", flush=True)
+            # Match both column AND literal values on BOTH sides
+            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<->\s*('[^']*'|\[[^\]]*\])"
+            def replace_l2(match):
+                left, right = match.groups()
+                print(f"    Matched: left={left}, right={right}", flush=True)
+                if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
+                    result = f'VECTOR_L2({left}, {right})'
+                elif left.startswith("'") or left.startswith("["):
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'VECTOR_L2(TO_VECTOR({left}, FLOAT), {right})'
+                    else:
+                        result = f'VECTOR_L2(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT))'
+                else:
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'VECTOR_L2({left}, {right})'
+                    else:
+                        result = f'VECTOR_L2({left}, TO_VECTOR({right}, FLOAT))'
+                print(f"    Replacement: {result}", flush=True)
+                return result
+            sql = re.sub(pattern, replace_l2, sql)
+            print(f"  After <-> rewrite: {sql[:200]}...", flush=True)
+
+        # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
+        if '<#>' in sql:
+            operators_found.append('<#>')
+            print(f"  Found <#> operator, rewriting...", flush=True)
+            # Match both column AND literal values on BOTH sides
+            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<#>\s*('[^']*'|\[[^\]]*\])"
+            def replace_inner_product(match):
+                left, right = match.groups()
+                print(f"    Matched: left={left}, right={right}", flush=True)
+                if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
+                    result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
+                elif left.startswith("'") or left.startswith("["):
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, FLOAT), {right}))'
+                    else:
+                        result = f'(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT)))'
+                else:
+                    if 'TO_VECTOR' in right.upper():
+                        result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
+                    else:
+                        result = f'(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, FLOAT)))'
+                print(f"    Replacement: {result}", flush=True)
+                return result
+            sql = re.sub(pattern, replace_inner_product, sql)
+            print(f"  After <#> rewrite: {sql[:200]}...", flush=True)
+
+        if operators_found:
+            logger.info(f"  Rewrote operators: {operators_found}")
+
+        return sql
+
+    def _fix_order_by_aliases(self, sql: str) -> str:
+        """
+        Fix ORDER BY clauses that reference SELECT clause aliases.
+
+        IRIS doesn't support: SELECT expr AS distance ORDER BY distance
+        Must be: SELECT expr AS distance ORDER BY expr
+
+        This is critical for vector similarity queries.
+        """
+        logger.info("🔧 Fixing ORDER BY aliases for IRIS compatibility")
+        logger.info(f"  Input SQL: {sql[:200]}...")
+
+        # Extract SELECT clause and find aliases
+        # First, isolate the SELECT clause
+        select_match = re.search(r'SELECT\s+(.+?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+        if not select_match:
+            logger.info("  No SELECT...FROM clause found")
+            return sql
+
+        select_clause = select_match.group(1)
+        logger.info(f"  SELECT clause: {select_clause[:100]}...")
+
+        aliases = {}
+
+        # Find all "expression AS alias" patterns
+        # Use greedy pattern up to " AS " to capture full expressions with nested parentheses
+        alias_pattern = r'(.+?)\s+AS\s+(\w+)'
+
+        for match in re.finditer(alias_pattern, select_clause, re.IGNORECASE):
+            full_match = match.group(1).strip()
+            alias = match.group(2)
+
+            # Clean up: remove everything before the last comma (to get the actual expression for this alias)
+            # Example: "id, VECTOR_COSINE(...)" → "VECTOR_COSINE(...)"
+            # But we need to handle nested function calls with commas inside!
+
+            # Strategy: work backwards from the match to find where the expression for THIS alias starts
+            # The expression starts after the last comma that's NOT inside parentheses
+            paren_depth = 0
+            expression_start = 0
+
+            for i in range(len(full_match) - 1, -1, -1):
+                char = full_match[i]
+                if char == ')':
+                    paren_depth += 1
+                elif char == '(':
+                    paren_depth -= 1
+                elif char == ',' and paren_depth == 0:
+                    expression_start = i + 1
+                    break
+
+            expression = full_match[expression_start:].strip()
+            aliases[alias.lower()] = expression
+            logger.info(f"  Found alias: {alias} -> {expression[:60]}...")
+
+        if not aliases:
+            logger.info("  No SELECT aliases found")
+            return sql
+
+        # Replace "ORDER BY alias" with "ORDER BY expression"
+        order_by_pattern = r'ORDER\s+BY\s+(\w+)(\s+(?:ASC|DESC))?'
+
+        def replace_order_by(match):
+            alias = match.group(1).lower()
+            sort_dir = match.group(2) or ''
+
+            if alias in aliases:
+                expression = aliases[alias]
+                logger.info(f"  Replacing ORDER BY {alias} with ORDER BY {expression[:50]}...")
+                return f'ORDER BY {expression}{sort_dir}'
+            else:
+                return match.group(0)
+
+        result = re.sub(order_by_pattern, replace_order_by, sql, flags=re.IGNORECASE)
+
+        if result != sql:
+            logger.info(f"✅ ORDER BY aliases fixed")
+            logger.info(f"   FINAL SQL AFTER ALIAS FIX (len={len(result)}): {result[:500]}...{result[-200:] if len(result) > 700 else ''}")
+        else:
+            logger.info("ℹ️ No ORDER BY alias replacements needed")
+
+        return result
 
     def _convert_vector_to_literal(self, vector_param: str) -> Optional[str]:
         """
@@ -339,6 +605,76 @@ class VectorQueryOptimizer:
         logger.warning(f"Unknown vector parameter format: {sample}")
         return None
 
+    def _optimize_insert_vectors(self, sql: str, start_time: float) -> str:
+        """
+        Optimize INSERT/UPDATE statements with TO_VECTOR() calls.
+
+        IRIS Bug: When TO_VECTOR() is used in INSERT statements via external connections,
+        IRIS returns an object reference (e.g., '44C4A7AEED68909052D5E9390805E211@$vector')
+        instead of evaluating the vector. This causes validation errors.
+
+        Workaround: Strip the TO_VECTOR wrapper and insert the vector literal directly.
+        IRIS accepts both formats:
+        - TO_VECTOR('[0.1,0.2,0.3]', FLOAT) → works in direct DBAPI
+        - '[0.1,0.2,0.3]' → works everywhere
+
+        Transform:
+            INSERT INTO table VALUES (id, TO_VECTOR('[0.1,0.2,0.3]', FLOAT))
+        To:
+            INSERT INTO table VALUES (id, '[0.1,0.2,0.3]')
+
+        Args:
+            sql: INSERT or UPDATE SQL with TO_VECTOR() calls
+            start_time: Performance tracking start time
+
+        Returns:
+            Optimized SQL with TO_VECTOR wrappers removed
+        """
+        # Pattern: TO_VECTOR('...', FLOAT) or TO_VECTOR('[...]', FLOAT)
+        # We want to extract just the vector literal
+        insert_pattern = re.compile(
+            r"TO_VECTOR\s*\(\s*'([^']+)'\s*,\s*\w+\s*\)",
+            re.IGNORECASE
+        )
+
+        matches = list(insert_pattern.finditer(sql))
+
+        if not matches:
+            logger.debug("No TO_VECTOR calls found in INSERT/UPDATE statement")
+            return sql
+
+        logger.info(f"Optimizing {len(matches)} TO_VECTOR calls in INSERT/UPDATE statement")
+
+        optimized_sql = sql
+        transformations = 0
+
+        # Process in reverse to maintain string positions
+        for match in reversed(matches):
+            vector_literal = match.group(1)  # The vector string between quotes
+
+            # Replace entire TO_VECTOR(...) with just the quoted vector literal
+            replacement = f"'{vector_literal}'"
+            optimized_sql = optimized_sql[:match.start()] + replacement + optimized_sql[match.end():]
+            transformations += 1
+
+            logger.debug(f"Stripped TO_VECTOR wrapper: {match.group(0)[:50]}... → '{vector_literal[:30]}...'")
+
+        # Record metrics
+        transformation_time_ms = (time.perf_counter() - start_time) * 1000
+        sla_compliant = transformation_time_ms <= self.CONSTITUTIONAL_SLA_MS
+
+        if not sla_compliant:
+            logger.warning(
+                f"INSERT optimization SLA violation: {transformation_time_ms:.2f}ms > {self.CONSTITUTIONAL_SLA_MS}ms"
+            )
+
+        logger.info(
+            f"INSERT/UPDATE optimization complete: {transformations} TO_VECTOR calls stripped, "
+            f"time={transformation_time_ms:.2f}ms"
+        )
+
+        return optimized_sql
+
     def _optimize_literal_vectors(self, sql: str, start_time: float) -> Tuple[str, Optional[List]]:
         """
         Optimize queries with literal base64 vectors already embedded in SQL.
@@ -360,9 +696,9 @@ class VectorQueryOptimizer:
         # Skip optimization for large vectors to avoid errors
         MAX_LITERAL_SIZE_BYTES = 3000
 
-        # Pattern: TO_VECTOR('base64:...')  or TO_VECTOR('1.0,2.0,...')
+        # Pattern: TO_VECTOR('base64:...')  or TO_VECTOR('[1.0,2.0,...]')  or TO_VECTOR('1.0,2.0,...')
         literal_pattern = re.compile(
-            r"TO_VECTOR\s*\(\s*'(base64:[^']+|[0-9.,\s-]+)'(?:\s*,\s*(\w+))?\s*\)",
+            r"TO_VECTOR\s*\(\s*'(base64:[^']+|\[[0-9.,\s-]+\]|[0-9.,\s-]+)'(?:\s*,\s*(\w+))?\s*\)",
             re.IGNORECASE
         )
 
@@ -389,12 +725,20 @@ class VectorQueryOptimizer:
                 logger.warning(f"Could not convert literal vector: {vector_literal[:50]}...")
                 continue
 
-            # Check if result would be too large for IRIS to handle
+            # Check if result would be too large for IRIS TO_VECTOR() to handle
             if len(converted) > MAX_LITERAL_SIZE_BYTES:
-                logger.warning(
-                    f"Skipping literal optimization: vector too large ({len(converted)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
-                    f"IRIS SQL compilation fails with long literals. Vector will be passed as-is (HNSW not used)."
+                logger.info(
+                    f"Large vector detected ({len(converted)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
+                    f"Using direct format with TO_VECTOR (no brackets to reduce size)."
                 )
+                # For large vectors, strip brackets but KEEP TO_VECTOR wrapper
+                # VECTOR_COSINE(col, TO_VECTOR('0.1,0.2,0.3', FLOAT))
+                # This reduces size by ~2 bytes while maintaining type safety
+                direct_format = converted.strip('[]')
+                new_call = f"TO_VECTOR('{direct_format}', {data_type})"
+                optimized_sql = optimized_sql[:match.start()] + new_call + optimized_sql[match.end():]
+                transformations += 1
+                logger.debug(f"Transformed large vector (no brackets): {converted[:30]}... → TO_VECTOR('{direct_format[:30]}...', {data_type})")
                 continue
 
             # Replace the entire TO_VECTOR call
@@ -421,6 +765,10 @@ class VectorQueryOptimizer:
             self._record_metrics(metrics)
 
             logger.info(f"Literal vector optimization complete: {transformations} vectors transformed")
+
+        # CRITICAL: Fix ORDER BY aliases AFTER all other optimizations
+        # IRIS doesn't support ORDER BY on SELECT clause aliases
+        optimized_sql = self._fix_order_by_aliases(optimized_sql)
 
         return optimized_sql, None
 
