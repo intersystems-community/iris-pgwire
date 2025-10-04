@@ -29,7 +29,11 @@ PostgreSQL wire protocol server needs reliable, high-performance access to IRIS 
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: System MUST establish reliable connections to IRIS database using embedded Python interface
+- **FR-001**: System MUST run inside IRIS process using `irispython` command for embedded Python deployment
+  - **Rationale**: Running externally causes VECTOR type mapping issues (varchar instead of VECTOR)
+  - **Deployment**: `irispython /path/to/server.py` from IRIS bin directory
+  - **Environment**: IRISUSERNAME, IRISPASSWORD, IRISNAMESPACE must be configured
+- **FR-001a**: System MUST establish reliable connections to IRIS database using embedded Python interface (iris.sql.exec)
 - **FR-002**: System MUST execute SQL queries against IRIS and retrieve results in a format compatible with PostgreSQL wire protocol
 - **FR-003**: System MUST handle concurrent access to IRIS from multiple PostgreSQL client connections with [NEEDS CLARIFICATION: connection pooling strategy - one per client? shared pool? configurable?]
 - **FR-004**: System MUST manage asynchronous execution to prevent blocking PostgreSQL protocol processing during IRIS operations

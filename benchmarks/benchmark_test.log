@@ -1,0 +1,300 @@
+[0;34m=====================================================================[0m
+[0;34m3-Way Database Performance Benchmark - Automated Test Harness[0m
+[0;34m=====================================================================[0m
+
+Configuration:
+  Dataset size:    1000 vectors
+  Vector dims:     1024
+  Iterations:      10
+  Skip setup:      false
+  Skip teardown:   true
+  Skip PGWire:     false
+
+[1;33m[1/5] Starting benchmark infrastructure (PostgreSQL, IRIS, PGWire)...[0m
+ Network benchmarks_benchmark-net  Creating
+ Network benchmarks_benchmark-net  Created
+ Container postgres-benchmark  Creating
+ Container iris-benchmark  Creating
+ Container iris-benchmark  Created
+ Container pgwire-benchmark  Creating
+ Container postgres-benchmark  Created
+ Container pgwire-benchmark  Created
+ Container iris-benchmark  Starting
+ Container postgres-benchmark  Starting
+ Container postgres-benchmark  Started
+ Container iris-benchmark  Started
+ Container iris-benchmark  Waiting
+ Container iris-benchmark  Healthy
+ Container pgwire-benchmark  Starting
+ Container pgwire-benchmark  Started
+
+[1;33m[2/5] Waiting for all services to be healthy...[0m
+  Waiting for PostgreSQL...
+  [0;32m✓ PostgreSQL is ready[0m
+  Enabling pgvector extension...
+  [0;32m✓ pgvector extension enabled[0m
+  Waiting for IRIS...
+  [0;32m✓ IRIS is ready[0m
+  Resetting IRIS password...
+  [0;32m✓ IRIS password configured[0m
+  Waiting for PGWire server...
+  [0;32m✓ PGWire server is ready[0m
+
+[1;33m[3/5] Validating database connections...[0m
+Validating database connections...
+
+✅ IRIS + PGWire connection successful (localhost:5432)
+✅ PostgreSQL + psycopg3 connection successful (localhost:5433)
+✅ IRIS + DBAPI connection successful (localhost:1972)
+
+All three database methods ready for benchmarking.
+
+[1;33m[4/5] Populating databases with test data...[0m
+======================================================================
+3-Way Benchmark: Test Data Setup
+======================================================================
+Dataset size: 1,000 vectors
+Dimensions:   1024
+Random seed:  42
+
+🎲 Generating 1,000 test vectors (1024D)...
+✅ Generated 1,000 vectors in 0.03s
+   Memory: 3.91 MB
+
+📊 Setting up PostgreSQL (localhost:5433)...
+   Dropping existing table...
+   Creating benchmark_vectors table (vector(1024))...
+   Creating benchmark_metadata table...
+   Inserting 1,000 vectors (batch size: 1000)...
+      Progress: 1,000/1,000
+   ✅ Inserted 1,000 vectors in 0.37s
+   ⚠️  Dataset size (1,000) < 100K, skipping HNSW index
+   ✅ PostgreSQL setup complete: 1,000 vectors
+
+📊 Setting up IRIS via PGWire (localhost:5434)...
+   Dropping existing tables...
+   Creating benchmark_vectors table (VECTOR(FLOAT, 1024))...
+   Creating benchmark_metadata table...
+   Inserting 1,000 vectors (individual inserts)...
+      Progress: 10/1,000
+      Progress: 20/1,000
+      Progress: 30/1,000
+      Progress: 40/1,000
+      Progress: 50/1,000
+      Progress: 60/1,000
+      Progress: 70/1,000
+      Progress: 80/1,000
+      Progress: 90/1,000
+      Progress: 100/1,000
+      Progress: 110/1,000
+      Progress: 120/1,000
+      Progress: 130/1,000
+      Progress: 140/1,000
+      Progress: 150/1,000
+      Progress: 160/1,000
+      Progress: 170/1,000
+      Progress: 180/1,000
+      Progress: 190/1,000
+      Progress: 200/1,000
+      Progress: 210/1,000
+      Progress: 220/1,000
+      Progress: 230/1,000
+      Progress: 240/1,000
+      Progress: 250/1,000
+      Progress: 260/1,000
+      Progress: 270/1,000
+      Progress: 280/1,000
+      Progress: 290/1,000
+      Progress: 300/1,000
+      Progress: 310/1,000
+      Progress: 320/1,000
+      Progress: 330/1,000
+      Progress: 340/1,000
+      Progress: 350/1,000
+      Progress: 360/1,000
+      Progress: 370/1,000
+      Progress: 380/1,000
+      Progress: 390/1,000
+      Progress: 400/1,000
+      Progress: 410/1,000
+      Progress: 420/1,000
+      Progress: 430/1,000
+      Progress: 440/1,000
+      Progress: 450/1,000
+      Progress: 460/1,000
+      Progress: 470/1,000
+      Progress: 480/1,000
+      Progress: 490/1,000
+      Progress: 500/1,000
+      Progress: 510/1,000
+      Progress: 520/1,000
+      Progress: 530/1,000
+      Progress: 540/1,000
+      Progress: 550/1,000
+      Progress: 560/1,000
+      Progress: 570/1,000
+      Progress: 580/1,000
+      Progress: 590/1,000
+      Progress: 600/1,000
+      Progress: 610/1,000
+      Progress: 620/1,000
+      Progress: 630/1,000
+      Progress: 640/1,000
+      Progress: 650/1,000
+      Progress: 660/1,000
+      Progress: 670/1,000
+      Progress: 680/1,000
+      Progress: 690/1,000
+      Progress: 700/1,000
+      Progress: 710/1,000
+      Progress: 720/1,000
+      Progress: 730/1,000
+      Progress: 740/1,000
+      Progress: 750/1,000
+      Progress: 760/1,000
+      Progress: 770/1,000
+      Progress: 780/1,000
+      Progress: 790/1,000
+      Progress: 800/1,000
+      Progress: 810/1,000
+      Progress: 820/1,000
+      Progress: 830/1,000
+      Progress: 840/1,000
+      Progress: 850/1,000
+      Progress: 860/1,000
+      Progress: 870/1,000
+      Progress: 880/1,000
+      Progress: 890/1,000
+      Progress: 900/1,000
+      Progress: 910/1,000
+      Progress: 920/1,000
+      Progress: 930/1,000
+      Progress: 940/1,000
+      Progress: 950/1,000
+      Progress: 960/1,000
+      Progress: 970/1,000
+      Progress: 980/1,000
+      Progress: 990/1,000
+      Progress: 1,000/1,000
+   ✅ Inserted 1,000 vectors in 16.54s
+   ✅ IRIS PGWire setup complete: 1,000 vectors
+
+📊 Setting up IRIS via DBAPI (localhost:1974)...
+   Dropping existing tables...
+   Creating benchmark_vectors table (VECTOR(FLOAT, 1024))...
+   Creating benchmark_metadata table...
+   Inserting 1,000 vectors...
+      Progress: 10/1,000
+      Progress: 20/1,000
+      Progress: 30/1,000
+      Progress: 40/1,000
+      Progress: 50/1,000
+      Progress: 60/1,000
+      Progress: 70/1,000
+      Progress: 80/1,000
+      Progress: 90/1,000
+      Progress: 100/1,000
+      Progress: 110/1,000
+      Progress: 120/1,000
+      Progress: 130/1,000
+      Progress: 140/1,000
+      Progress: 150/1,000
+      Progress: 160/1,000
+      Progress: 170/1,000
+      Progress: 180/1,000
+      Progress: 190/1,000
+      Progress: 200/1,000
+      Progress: 210/1,000
+      Progress: 220/1,000
+      Progress: 230/1,000
+      Progress: 240/1,000
+      Progress: 250/1,000
+      Progress: 260/1,000
+      Progress: 270/1,000
+      Progress: 280/1,000
+      Progress: 290/1,000
+      Progress: 300/1,000
+      Progress: 310/1,000
+      Progress: 320/1,000
+      Progress: 330/1,000
+      Progress: 340/1,000
+      Progress: 350/1,000
+      Progress: 360/1,000
+      Progress: 370/1,000
+      Progress: 380/1,000
+      Progress: 390/1,000
+      Progress: 400/1,000
+      Progress: 410/1,000
+      Progress: 420/1,000
+      Progress: 430/1,000
+      Progress: 440/1,000
+      Progress: 450/1,000
+      Progress: 460/1,000
+      Progress: 470/1,000
+      Progress: 480/1,000
+      Progress: 490/1,000
+      Progress: 500/1,000
+      Progress: 510/1,000
+      Progress: 520/1,000
+      Progress: 530/1,000
+      Progress: 540/1,000
+      Progress: 550/1,000
+      Progress: 560/1,000
+      Progress: 570/1,000
+      Progress: 580/1,000
+      Progress: 590/1,000
+      Progress: 600/1,000
+      Progress: 610/1,000
+      Progress: 620/1,000
+      Progress: 630/1,000
+      Progress: 640/1,000
+      Progress: 650/1,000
+      Progress: 660/1,000
+      Progress: 670/1,000
+      Progress: 680/1,000
+      Progress: 690/1,000
+      Progress: 700/1,000
+      Progress: 710/1,000
+      Progress: 720/1,000
+      Progress: 730/1,000
+      Progress: 740/1,000
+      Progress: 750/1,000
+      Progress: 760/1,000
+      Progress: 770/1,000
+      Progress: 780/1,000
+      Progress: 790/1,000
+      Progress: 800/1,000
+      Progress: 810/1,000
+      Progress: 820/1,000
+      Progress: 830/1,000
+      Progress: 840/1,000
+      Progress: 850/1,000
+      Progress: 860/1,000
+      Progress: 870/1,000
+      Progress: 880/1,000
+      Progress: 890/1,000
+      Progress: 900/1,000
+      Progress: 910/1,000
+      Progress: 920/1,000
+      Progress: 930/1,000
+      Progress: 940/1,000
+      Progress: 950/1,000
+      Progress: 960/1,000
+      Progress: 970/1,000
+      Progress: 980/1,000
+      Progress: 990/1,000
+      Progress: 1,000/1,000
+   ✅ Inserted 1,000 vectors in 1.37s
+   ✅ IRIS DBAPI setup complete: 1,000 vectors
+
+======================================================================
+Setup Summary
+======================================================================
+postgresql           ✅ Success
+iris_pgwire          ✅ Success
+iris_dbapi           ✅ Success
+
+✅ All databases setup successfully!
+📊 Identical test data: 1,000 vectors (1024D)
+
+[1;33m[5/5] Running 3-way benchmark...[0m

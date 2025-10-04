@@ -29,7 +29,12 @@ DevOps engineers and system administrators need production-ready deployment and 
 ## Requirements
 
 ### Functional Requirements
-- **FR-001**: System MUST provide Docker containerization with proper base image selection and dependency management for production deployment
+- **FR-001**: System MUST deploy via `irispython` command inside IRIS container for embedded Python execution
+  - **Critical Requirement**: Server runs INSIDE IRIS process, not as separate Python container
+  - **Docker Configuration**: Run server from IRIS container using `irispython /app/server.py`
+  - **Environment Setup**: Configure IRISUSERNAME, IRISPASSWORD, IRISNAMESPACE before execution
+  - **Benefits**: Proper VECTOR type handling, HNSW index optimization, direct process access
+- **FR-001a**: System MUST provide Docker containerization with proper base image selection (IRIS official image) and dependency management for production deployment
 - **FR-002**: System MUST implement comprehensive health checks validating IRIS connectivity, PostgreSQL protocol readiness, and service availability
 - **FR-003**: System MUST collect performance metrics including query latency, throughput, connection counts, and error rates
 - **FR-004**: System MUST integrate with monitoring systems providing [NEEDS CLARIFICATION: monitoring integration requirements - Prometheus? Grafana? custom endpoints? log aggregation?]
