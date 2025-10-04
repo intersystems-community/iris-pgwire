@@ -109,7 +109,11 @@ class VectorQueryOptimizer:
             logger.warning("⚠️ Vector optimizer is DISABLED, returning SQL unchanged")
             return sql, params
 
-        # STEP 1: Rewrite pgvector operators to IRIS vector functions
+        # STEP 1: Convert PostgreSQL LIMIT to IRIS TOP
+        # IRIS bug: ORDER BY aliases don't work with LIMIT, only with TOP
+        sql = self._convert_limit_to_top(sql)
+
+        # STEP 2: Rewrite pgvector operators to IRIS vector functions
         # This must happen BEFORE other optimizations
         print(f"📝 ABOUT TO CALL _rewrite_pgvector_operators", flush=True)
         logger.info("📝 About to call _rewrite_pgvector_operators")
@@ -326,6 +330,26 @@ class VectorQueryOptimizer:
 
         return result
 
+    def _optimize_vector_literal(self, literal: str) -> str:
+        """
+        Optimize vector literal for IRIS compatibility.
+
+        Strips brackets if present and returns comma-separated format.
+        IRIS accepts both '[1,2,3]' and '1,2,3' but the latter is more compact.
+
+        Args:
+            literal: Vector literal like '[1,2,3]' or '1,2,3'
+
+        Returns:
+            Optimized literal without brackets
+        """
+        # Remove quotes if present
+        clean = literal.strip("'\"")
+        # Remove brackets if present
+        if clean.startswith('[') and clean.endswith(']'):
+            clean = clean[1:-1]
+        return clean
+
     def _rewrite_operators_in_text(self, sql: str) -> str:
         """Helper to rewrite operators in a given text"""
         print(f"\n⚙️  _REWRITE_OPERATORS_IN_TEXT CALLED", flush=True)
@@ -342,23 +366,36 @@ class VectorQueryOptimizer:
             pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<=>\s*('[^']*'|\[[^\]]*\])"
             def replace_cosine_distance(match):
                 left, right = match.groups()
-                print(f"    Matched: left={left}, right={right}", flush=True)
+                print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
                 # If either side already has TO_VECTOR, use as-is
                 if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
                     result = f'VECTOR_COSINE({left}, {right})'
                 # If left is a literal, wrap it in TO_VECTOR
                 elif left.startswith("'") or left.startswith("["):
+                    # Optimize the literal (strip brackets)
+                    opt_left = self._optimize_vector_literal(left)
                     if 'TO_VECTOR' in right.upper():
-                        result = f'VECTOR_COSINE(TO_VECTOR({left}, FLOAT), {right})'
+                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', FLOAT), {right})"
                     else:
-                        result = f'VECTOR_COSINE(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT))'
+                        opt_right = self._optimize_vector_literal(right)
+                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT))"
                 # Left is a column name
                 else:
                     if 'TO_VECTOR' in right.upper():
                         result = f'VECTOR_COSINE({left}, {right})'
                     else:
-                        result = f'VECTOR_COSINE({left}, TO_VECTOR({right}, FLOAT))'
-                print(f"    Replacement: {result}", flush=True)
+                        # Optimize the literal (strip brackets)
+                        opt_right = self._optimize_vector_literal(right)
+                        # Check if wrapping in TO_VECTOR would exceed IRIS 3KB limit
+                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
+                        if len(wrapped) > 3000:
+                            # Use direct CSV format without TO_VECTOR wrapper
+                            # IRIS accepts raw CSV: VECTOR_COSINE(col, '0.1,0.2,0.3')
+                            result = f"VECTOR_COSINE({left}, '{opt_right}')"
+                            print(f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV", flush=True)
+                        else:
+                            result = f"VECTOR_COSINE({left}, {wrapped})"
+                print(f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}", flush=True)
                 return result
             sql = re.sub(pattern, replace_cosine_distance, sql)
             print(f"  After <=> rewrite: {sql[:200]}...", flush=True)
@@ -371,20 +408,28 @@ class VectorQueryOptimizer:
             pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<->\s*('[^']*'|\[[^\]]*\])"
             def replace_l2(match):
                 left, right = match.groups()
-                print(f"    Matched: left={left}, right={right}", flush=True)
+                print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
                 if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
                     result = f'VECTOR_L2({left}, {right})'
                 elif left.startswith("'") or left.startswith("["):
+                    opt_left = self._optimize_vector_literal(left)
                     if 'TO_VECTOR' in right.upper():
-                        result = f'VECTOR_L2(TO_VECTOR({left}, FLOAT), {right})'
+                        result = f"VECTOR_L2(TO_VECTOR('{opt_left}', FLOAT), {right})"
                     else:
-                        result = f'VECTOR_L2(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT))'
+                        opt_right = self._optimize_vector_literal(right)
+                        result = f"VECTOR_L2(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT))"
                 else:
                     if 'TO_VECTOR' in right.upper():
                         result = f'VECTOR_L2({left}, {right})'
                     else:
-                        result = f'VECTOR_L2({left}, TO_VECTOR({right}, FLOAT))'
-                print(f"    Replacement: {result}", flush=True)
+                        opt_right = self._optimize_vector_literal(right)
+                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
+                        if len(wrapped) > 3000:
+                            result = f"VECTOR_L2({left}, '{opt_right}')"
+                            print(f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV", flush=True)
+                        else:
+                            result = f"VECTOR_L2({left}, {wrapped})"
+                print(f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}", flush=True)
                 return result
             sql = re.sub(pattern, replace_l2, sql)
             print(f"  After <-> rewrite: {sql[:200]}...", flush=True)
@@ -397,20 +442,28 @@ class VectorQueryOptimizer:
             pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<#>\s*('[^']*'|\[[^\]]*\])"
             def replace_inner_product(match):
                 left, right = match.groups()
-                print(f"    Matched: left={left}, right={right}", flush=True)
+                print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
                 if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
                     result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
                 elif left.startswith("'") or left.startswith("["):
+                    opt_left = self._optimize_vector_literal(left)
                     if 'TO_VECTOR' in right.upper():
-                        result = f'(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, FLOAT), {right}))'
+                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', FLOAT), {right}))"
                     else:
-                        result = f'(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, FLOAT), TO_VECTOR({right}, FLOAT)))'
+                        opt_right = self._optimize_vector_literal(right)
+                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT)))"
                 else:
                     if 'TO_VECTOR' in right.upper():
                         result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
                     else:
-                        result = f'(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, FLOAT)))'
-                print(f"    Replacement: {result}", flush=True)
+                        opt_right = self._optimize_vector_literal(right)
+                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
+                        if len(wrapped) > 3000:
+                            result = f"(-VECTOR_DOT_PRODUCT({left}, '{opt_right}'))"
+                            print(f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV", flush=True)
+                        else:
+                            result = f"(-VECTOR_DOT_PRODUCT({left}, {wrapped}))"
+                print(f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}", flush=True)
                 return result
             sql = re.sub(pattern, replace_inner_product, sql)
             print(f"  After <#> rewrite: {sql[:200]}...", flush=True)
@@ -420,23 +473,96 @@ class VectorQueryOptimizer:
 
         return sql
 
+    def _convert_limit_to_top(self, sql: str) -> str:
+        """
+        Convert PostgreSQL LIMIT syntax to IRIS TOP syntax.
+
+        IRIS Bug: ORDER BY with aliases does NOT work with LIMIT, only with TOP.
+
+        Examples:
+        - ❌ SELECT ... AS distance ORDER BY distance LIMIT 5  (Field 'DISTANCE' not found)
+        - ✅ SELECT TOP 5 ... AS distance ORDER BY distance    (Works correctly)
+
+        Transforms:
+            SELECT ... LIMIT N              → SELECT TOP N ...
+            SELECT ... LIMIT N OFFSET M     → SELECT TOP N ... (with warning - IRIS doesn't support OFFSET with TOP)
+
+        Args:
+            sql: SQL with PostgreSQL LIMIT syntax
+
+        Returns:
+            SQL with IRIS TOP syntax
+        """
+        # Pattern: LIMIT <number> [OFFSET <number>]
+        # Must match at end of query or before semicolon
+        limit_pattern = re.compile(
+            r'\s+LIMIT\s+(\d+)(?:\s+OFFSET\s+(\d+))?\s*(;?)$',
+            re.IGNORECASE
+        )
+
+        match = limit_pattern.search(sql)
+
+        if not match:
+            return sql
+
+        limit_value = match.group(1)
+        offset_value = match.group(2)
+        semicolon = match.group(3)
+
+        if offset_value:
+            logger.warning(
+                f"OFFSET {offset_value} ignored - IRIS TOP does not support OFFSET. "
+                f"Results will start from first row, not row {offset_value}."
+            )
+
+        # Remove the LIMIT clause from the end
+        sql_without_limit = sql[:match.start()] + semicolon
+
+        # Add TOP after SELECT
+        # Pattern: SELECT [DISTINCT] ... → SELECT [DISTINCT] TOP N ...
+        select_pattern = re.compile(r'(SELECT\s+(?:DISTINCT\s+)?)', re.IGNORECASE)
+
+        def add_top(m):
+            return f"{m.group(1)}TOP {limit_value} "
+
+        result = select_pattern.sub(add_top, sql_without_limit, count=1)
+
+        logger.info(f"Converted LIMIT {limit_value} to TOP {limit_value}")
+        print(f"🔄 LIMIT→TOP: {sql[:80]}... → {result[:80]}...", flush=True)
+
+        return result
+
     def _fix_order_by_aliases(self, sql: str) -> str:
         """
-        Fix ORDER BY clauses that reference SELECT clause aliases.
+        DISABLED: IRIS actually REQUIRES aliases in ORDER BY!
 
-        IRIS doesn't support: SELECT expr AS distance ORDER BY distance
-        Must be: SELECT expr AS distance ORDER BY expr
+        Contrary to initial assumptions, IRIS cannot handle complex expressions
+        in ORDER BY when combined with LIMIT. The SQL compiler crashes with:
+        SQLCODE -400: Fatal error occurred - Error compiling cached query class
 
-        This is critical for vector similarity queries.
+        IRIS behavior:
+        ✅ WORKS: SELECT ... AS distance ORDER BY distance LIMIT 5
+        ❌ FAILS: SELECT ... AS distance ORDER BY VECTOR_COSINE(...) LIMIT 5
+
+        Therefore, this function is disabled and just returns SQL unchanged.
         """
+        print(f"\n🔧 _FIX_ORDER_BY_ALIASES BYPASSED (IRIS requires aliases)", flush=True)
+
+        # Return SQL unchanged - IRIS needs the aliases!
+        return sql
+
+        # OLD CODE (disabled):
+        print(f"\n🔧🔧🔧 _FIX_ORDER_BY_ALIASES CALLED", flush=True)
+        print(f"  Input SQL: {sql[:200]}...", flush=True)
+
         logger.info("🔧 Fixing ORDER BY aliases for IRIS compatibility")
         logger.info(f"  Input SQL: {sql[:200]}...")
 
         # Extract SELECT clause and find aliases
-        # First, isolate the SELECT clause
-        select_match = re.search(r'SELECT\s+(.+?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+        # FROM clause is optional (queries may not have FROM)
+        select_match = re.search(r'SELECT\s+(.+?)(?:\s+FROM|\s+ORDER\s+BY|$)', sql, re.IGNORECASE | re.DOTALL)
         if not select_match:
-            logger.info("  No SELECT...FROM clause found")
+            logger.info("  No SELECT clause found")
             return sql
 
         select_clause = select_match.group(1)

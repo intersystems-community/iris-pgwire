@@ -56,6 +56,7 @@ services:
       - IRIS_NAMESPACE=USER
       - PGWIRE_DEBUG=false
       - ENABLE_VECTOR_OPTIMIZER=true
+      - ENABLE_TRANSLATION=false
     ports:
       - "5434:5432"
     depends_on:

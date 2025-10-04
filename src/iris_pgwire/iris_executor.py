@@ -268,6 +268,9 @@ class IRISExecutor:
                        session_id=session_id)
 
             try:
+                # PROFILING: Track detailed timing
+                t_start_total = time.perf_counter()
+
                 # Get or create connection
                 connection = self._get_iris_connection()
 
@@ -275,6 +278,9 @@ class IRISExecutor:
                 optimized_sql = sql
                 optimized_params = params
                 optimization_applied = False
+
+                # PROFILING: Optimization timing
+                t_opt_start = time.perf_counter()
 
                 try:
                     from .vector_optimizer import optimize_vector_query
@@ -311,6 +317,9 @@ class IRISExecutor:
                                  session_id=session_id)
                     optimized_sql, optimized_params = sql, params
 
+                # PROFILING: Optimization complete
+                t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
                 # Execute query with performance tracking
                 start_time = time.perf_counter()
 
@@ -340,12 +349,19 @@ class IRISExecutor:
                           has_params=optimized_params is not None and len(optimized_params) > 0,
                           session_id=session_id)
 
+                # PROFILING: IRIS execution timing
+                t_iris_start = time.perf_counter()
+
                 if optimized_params is not None and len(optimized_params) > 0:
                     result = iris.sql.exec(optimized_sql, *optimized_params)
                 else:
                     result = iris.sql.exec(optimized_sql)
 
+                t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
+
+                # PROFILING: Result processing timing
+                t_fetch_start = time.perf_counter()
 
                 # Fetch all results
                 rows = []
@@ -391,8 +407,21 @@ class IRISExecutor:
                                column_count=len(columns),
                                session_id=session_id)
 
+                # PROFILING: Fetch complete
+                t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
+                t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
+
                 # Determine command tag based on SQL type
                 command_tag = self._determine_command_tag(sql, len(rows))
+
+                # PROFILING: Log detailed breakdown
+                logger.info("⏱️ EMBEDDED EXECUTION TIMING",
+                          total_ms=round(t_total_elapsed, 2),
+                          optimization_ms=round(t_opt_elapsed, 2),
+                          iris_exec_ms=round(t_iris_elapsed, 2),
+                          fetch_ms=round(t_fetch_elapsed, 2),
+                          overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
+                          session_id=session_id)
 
                 return {
                     'success': True,
@@ -404,6 +433,13 @@ class IRISExecutor:
                     'iris_metadata': {
                         'embedded_mode': True,
                         'connection_type': 'embedded_python'
+                    },
+                    'profiling': {
+                        'total_ms': t_total_elapsed,
+                        'optimization_ms': t_opt_elapsed,
+                        'iris_execution_ms': t_iris_elapsed,
+                        'fetch_ms': t_fetch_elapsed,
+                        'overhead_ms': t_total_elapsed - t_iris_elapsed
                     }
                 }
 
@@ -434,6 +470,9 @@ class IRISExecutor:
         def _sync_external_execute():
             """Synchronous external IRIS execution in thread pool"""
             try:
+                # PROFILING: Track detailed timing
+                t_start_total = time.perf_counter()
+
                 # Use intersystems-irispython driver
                 import iris
 
@@ -441,6 +480,9 @@ class IRISExecutor:
                 optimized_sql = sql
                 optimized_params = params
                 optimization_applied = False
+
+                # PROFILING: Optimization timing
+                t_opt_start = time.perf_counter()
 
                 try:
                     from .vector_optimizer import optimize_vector_query
@@ -477,17 +519,22 @@ class IRISExecutor:
                                  session_id=session_id)
                     optimized_sql, optimized_params = sql, params
 
+                # PROFILING: Optimization complete
+                t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
                 # Performance tracking
                 start_time = time.perf_counter()
 
-                # Create connection
-                conn = iris.connect(
-                    hostname=self.iris_config['host'],
-                    port=self.iris_config['port'],
-                    namespace=self.iris_config['namespace'],
-                    username=self.iris_config['username'],
-                    password=self.iris_config['password']
-                )
+                # PROFILING: Connection timing
+                t_conn_start = time.perf_counter()
+
+                # Get connection from pool (or create new one)
+                conn = self._get_pooled_connection()
+
+                t_conn_elapsed = (time.perf_counter() - t_conn_start) * 1000
+
+                # PROFILING: IRIS execution timing
+                t_iris_start = time.perf_counter()
 
                 # Execute query
                 cursor = conn.cursor()
@@ -496,7 +543,11 @@ class IRISExecutor:
                 else:
                     cursor.execute(optimized_sql)
 
+                t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
+
+                # PROFILING: Result processing timing
+                t_fetch_start = time.perf_counter()
 
                 # Process results
                 rows = []
@@ -529,10 +580,25 @@ class IRISExecutor:
                                      session_id=session_id)
 
                 cursor.close()
-                conn.close()
+                # Return connection to pool instead of closing
+                self._return_connection(conn)
+
+                # PROFILING: Fetch complete
+                t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
+                t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
                 # Determine command tag
                 command_tag = self._determine_command_tag(sql, len(rows))
+
+                # PROFILING: Log detailed breakdown
+                logger.info("⏱️ EXTERNAL EXECUTION TIMING",
+                          total_ms=round(t_total_elapsed, 2),
+                          optimization_ms=round(t_opt_elapsed, 2),
+                          connection_ms=round(t_conn_elapsed, 2),
+                          iris_exec_ms=round(t_iris_elapsed, 2),
+                          fetch_ms=round(t_fetch_elapsed, 2),
+                          overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
+                          session_id=session_id)
 
                 return {
                     'success': True,
@@ -544,6 +610,14 @@ class IRISExecutor:
                     'iris_metadata': {
                         'embedded_mode': False,
                         'connection_type': 'external_driver'
+                    },
+                    'profiling': {
+                        'total_ms': t_total_elapsed,
+                        'optimization_ms': t_opt_elapsed,
+                        'connection_ms': t_conn_elapsed,
+                        'iris_execution_ms': t_iris_elapsed,
+                        'fetch_ms': t_fetch_elapsed,
+                        'overhead_ms': t_total_elapsed - t_iris_elapsed
                     }
                 }
 
@@ -571,6 +645,64 @@ class IRISExecutor:
         # For embedded mode, connections are managed by IRIS internally
         # This is a placeholder for potential connection pooling
         return None
+
+    def _get_pooled_connection(self):
+        """
+        Get a connection from the pool or create a new one.
+
+        Implements simple connection pooling for external IRIS connections
+        to avoid the 7ms connection overhead on every query.
+        """
+        import iris
+
+        with self._connection_lock:
+            # Try to get a connection from the pool
+            if self._connection_pool:
+                conn = self._connection_pool.pop()
+
+                # Validate the connection is still alive
+                try:
+                    # Quick test query
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                    cursor.close()
+                    return conn
+                except Exception:
+                    # Connection is dead, create a new one
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+            # No connections available or connection was dead - create new one
+            conn = iris.connect(
+                hostname=self.iris_config['host'],
+                port=self.iris_config['port'],
+                namespace=self.iris_config['namespace'],
+                username=self.iris_config['username'],
+                password=self.iris_config['password']
+            )
+
+            return conn
+
+    def _return_connection(self, conn):
+        """
+        Return a connection to the pool for reuse.
+
+        Args:
+            conn: IRIS connection to return to pool
+        """
+        with self._connection_lock:
+            # Only keep up to max_connections in the pool
+            if len(self._connection_pool) < self._max_connections:
+                self._connection_pool.append(conn)
+            else:
+                # Pool is full, close this connection
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _iris_type_to_pg_oid(self, iris_type: Union[str, int]) -> int:
         """Convert IRIS data type to PostgreSQL OID"""

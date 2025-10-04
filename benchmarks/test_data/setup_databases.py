@@ -278,14 +278,31 @@ class DatabaseSetup:
                 elapsed = time.perf_counter() - start
                 print(f"   ✅ HNSW index created in {elapsed:.2f}s", flush=True)
 
-            conn.commit()
-
+            # Verify data insertion
             cursor.execute("SELECT COUNT(*) FROM benchmark_vectors")
             count = int(cursor.fetchone()[0])
             print(f"   ✅ IRIS PGWire setup complete: {count:,} vectors", flush=True)
 
+            # CRITICAL: Explicitly close cursor and connection to release IRIS locks
             cursor.close()
             conn.close()
+
+            # CRITICAL: Restart PGWire server to force all connections to close
+            # This releases IRIS table locks before DBAPI tries to connect
+            print("   🔒 Releasing IRIS table locks (restarting PGWire)...", flush=True)
+            import subprocess
+            try:
+                subprocess.run(
+                    ["docker", "restart", "pgwire-benchmark"],
+                    capture_output=True,
+                    check=True,
+                    timeout=10
+                )
+                time.sleep(3)  # Wait for PGWire to fully restart
+            except Exception as e:
+                print(f"      Warning: Could not restart PGWire: {e}", flush=True)
+                time.sleep(2)  # Fallback delay
+
             return True
 
         except Exception as e:
@@ -335,76 +352,29 @@ class DatabaseSetup:
 
             cursor = conn.cursor()
 
-            # Drop existing tables (metadata first due to foreign key)
-            print("   Dropping existing tables...", flush=True)
-            cursor.execute("DROP TABLE IF EXISTS benchmark_metadata")
-            cursor.execute("DROP TABLE IF EXISTS benchmark_vectors")
+            # CRITICAL: DBAPI and PGWire share the same IRIS database and tables
+            # PGWire setup already created and populated these tables
+            # DBAPI just verifies they exist and uses them
+            print("   Verifying tables created by PGWire setup...", flush=True)
 
-            # Create vectors table
-            print(f"   Creating benchmark_vectors table (VECTOR(FLOAT, {self.dimensions}))...", flush=True)
-            cursor.execute(f"""
-                CREATE TABLE benchmark_vectors (
-                    id INTEGER PRIMARY KEY,
-                    embedding VECTOR(FLOAT, {self.dimensions})
-                )
-            """)
+            try:
+                cursor.execute("SELECT COUNT(*) FROM benchmark_vectors")
+                vector_count = cursor.fetchone()[0]
+                print(f"   ✅ Found {vector_count:,} vectors in benchmark_vectors", flush=True)
 
-            # Create metadata table
-            print("   Creating benchmark_metadata table...", flush=True)
-            cursor.execute("""
-                CREATE TABLE benchmark_metadata (
-                    vector_id INTEGER PRIMARY KEY,
-                    label VARCHAR(255),
-                    category VARCHAR(50),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT fk_vector FOREIGN KEY (vector_id) REFERENCES benchmark_vectors(id)
-                )
-            """)
+                cursor.execute("SELECT COUNT(*) FROM benchmark_metadata")
+                metadata_count = cursor.fetchone()[0]
+                print(f"   ✅ Found {metadata_count:,} rows in benchmark_metadata", flush=True)
 
-            # Insert vectors (IRIS DBAPI requires individual inserts)
-            print(f"   Inserting {self.dataset_size:,} vectors...", flush=True)
+                if vector_count == self.dataset_size and metadata_count == self.dataset_size:
+                    print(f"   ✅ IRIS DBAPI using existing data from PGWire setup", flush=True)
+                else:
+                    raise ValueError(f"Data mismatch: expected {self.dataset_size} rows, found vectors={vector_count}, metadata={metadata_count}")
 
-            start = time.perf_counter()
-            for i in range(self.dataset_size):
-                vec_text = vector_to_text(self.vectors[i])
-
-                # Insert vector
-                cursor.execute(
-                    f"INSERT INTO benchmark_vectors (id, embedding) VALUES (?, TO_VECTOR(?, FLOAT))",
-                    (i, vec_text)
-                )
-
-                # Insert metadata
-                label = f"vector_{i}"
-                category = f"category_{i % 10}"
-                cursor.execute(
-                    "INSERT INTO benchmark_metadata (vector_id, label, category) VALUES (?, ?, ?)",
-                    (i, label, category)
-                )
-
-                if (i + 1) % 10 == 0 or (i + 1) % 10000 == 0:
-                    print(f"      Progress: {i + 1:,}/{self.dataset_size:,}", flush=True)
-
-            elapsed = time.perf_counter() - start
-            print(f"   ✅ Inserted {self.dataset_size:,} vectors in {elapsed:.2f}s", flush=True)
-
-            # Create HNSW index
-            if self.dataset_size >= 100000:
-                print("   Creating HNSW index (Constitutional Principle VI)...", flush=True)
-                start = time.perf_counter()
-                cursor.execute("""
-                    CREATE INDEX benchmark_vectors_embedding_hnsw_idx
-                    ON benchmark_vectors(embedding)
-                    AS HNSW(Distance='Cosine')
-                """)
-                elapsed = time.perf_counter() - start
-                print(f"   ✅ HNSW index created in {elapsed:.2f}s", flush=True)
-
-            conn.commit()
-
-            cursor.execute("SELECT COUNT(*) FROM benchmark_vectors")
-            count = cursor.fetchone()[0]
-            print(f"   ✅ IRIS DBAPI setup complete: {count:,} vectors", flush=True)
+            except Exception as e:
+                print(f"   ❌ Could not verify existing tables: {e}", flush=True)
+                print("   (Tables may not exist or have wrong data)", flush=True)
+                raise
 
             cursor.close()
             conn.close()

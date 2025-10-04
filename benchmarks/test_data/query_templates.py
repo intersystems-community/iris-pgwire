@@ -73,12 +73,13 @@ SIMPLE_QUERIES = [
 
 
 # Vector similarity query templates (FR-002: Vector operations)
+# NOTE: Using semantically equivalent but syntax-specific queries per database
 VECTOR_QUERIES = [
     QueryTemplate(
         query_id="vector_cosine_similarity",
         category=QueryCategory.VECTOR_SIMILARITY,
         description="Vector similarity with cosine distance",
-        pgwire_template="SELECT id, embedding <=> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
+        pgwire_template="SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
         postgres_template="SELECT id, embedding <=> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
         iris_template="SELECT TOP {k} id, VECTOR_COSINE(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
     ),
@@ -86,15 +87,15 @@ VECTOR_QUERIES = [
         query_id="vector_l2_distance",
         category=QueryCategory.VECTOR_SIMILARITY,
         description="Vector similarity with L2 distance",
-        pgwire_template="SELECT id, embedding <-> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
+        pgwire_template="SELECT id, VECTOR_L2(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
         postgres_template="SELECT id, embedding <-> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
-        iris_template="SELECT TOP {k} id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
+        iris_template="SELECT TOP {k} id, VECTOR_L2(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
     ),
     QueryTemplate(
         query_id="vector_inner_product",
         category=QueryCategory.VECTOR_SIMILARITY,
         description="Vector similarity with inner product",
-        pgwire_template="SELECT id, (embedding <#> '{vector}') * -1 AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT {k}",
+        pgwire_template="SELECT id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT {k}",
         postgres_template="SELECT id, (embedding <#> '{vector}') * -1 AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT {k}",
         iris_template="SELECT TOP {k} id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS similarity FROM benchmark_vectors ORDER BY similarity DESC"
     ),
@@ -133,7 +134,7 @@ COMPLEX_QUERIES = [
         category=QueryCategory.COMPLEX_JOIN,
         description="Vector similarity with metadata filter",
         pgwire_template="""
-            SELECT v.id, v.embedding <=> '{vector}' AS distance, m.label
+            SELECT v.id, VECTOR_COSINE(v.embedding, TO_VECTOR('{vector}', FLOAT)) AS distance, m.label
             FROM benchmark_vectors v
             JOIN benchmark_metadata m ON v.id = m.vector_id
             WHERE m.category = '{category}'
