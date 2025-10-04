@@ -11,6 +11,11 @@ import pytest
 import subprocess
 import time
 import json
+import sys
+import shutil
+
+# Find pytest executable (might be in venv or PATH)
+PYTEST_CMD = shutil.which("pytest") or sys.executable + " -m pytest"
 
 
 def test_local_test_execution_completes_without_hanging():
@@ -26,7 +31,7 @@ def test_local_test_execution_completes_without_hanging():
     # Run pytest programmatically via subprocess
     # This tests the ACTUAL pytest configuration we've set up
     result = subprocess.run(
-        ["pytest", "tests/contract/", "-v", "--tb=short"],
+        [sys.executable, "-m", "pytest", "tests/contract/", "-v", "--tb=short"],
         capture_output=True,
         text=True,
         timeout=120  # 2 minutes max - should complete much faster
@@ -47,7 +52,7 @@ def test_local_test_execution_completes_without_hanging():
     # Verify timeout configuration is active
     # pytest-timeout should be loaded and show in --version or markers
     version_result = subprocess.run(
-        ["pytest", "--version"],
+        [sys.executable, "-m", "pytest", "--version"],
         capture_output=True,
         text=True
     )
@@ -91,7 +96,7 @@ def test_intentional_failure_with_iris_context(iris_clean_namespace):
     try:
         # Run the failing test
         result = subprocess.run(
-            ["pytest", test_file_path, "-v", "--tb=short"],
+            [sys.executable, "-m", "pytest", test_file_path, "-v", "--tb=short"],
             capture_output=True,
             text=True,
             timeout=60
@@ -115,7 +120,7 @@ def test_intentional_failure_with_iris_context(iris_clean_namespace):
             "Fixture name should appear in traceback or setup"
 
         # Verify short traceback mode is working
-        assert "--tb=short" in " ".join(["pytest", test_file_path, "-v", "--tb=short"]), \
+        assert "--tb=short" in " ".join([sys.executable, "-m", "pytest", test_file_path, "-v", "--tb=short"]), \
             "Short traceback mode should be used"
 
     finally:
@@ -135,7 +140,7 @@ def test_coverage_report_generated_without_enforcement():
     """
     # Run pytest with coverage enabled (should be default from pyproject.toml)
     result = subprocess.run(
-        ["pytest", "tests/contract/", "--cov", "--cov-report=term"],
+        [sys.executable, "-m", "pytest", "tests/contract/", "--cov", "--cov-report=term"],
         capture_output=True,
         text=True,
         timeout=120
@@ -171,7 +176,7 @@ def test_timeout_configuration_active():
     """
     # Check pytest configuration
     result = subprocess.run(
-        ["pytest", "--co", "-q"],  # Collect only, quiet mode
+        [sys.executable, "-m", "pytest", "--co", "-q"],  # Collect only, quiet mode
         capture_output=True,
         text=True,
         timeout=30
@@ -203,7 +208,7 @@ def test_verify_timeout_enforcement():
 
         # Run the timeout test
         result = subprocess.run(
-            ["pytest", test_file_path, "-v"],
+            [sys.executable, "-m", "pytest", test_file_path, "-v"],
             capture_output=True,
             text=True,
             timeout=60  # Give subprocess time to timeout the test

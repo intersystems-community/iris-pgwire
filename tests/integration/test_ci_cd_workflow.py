@@ -11,6 +11,7 @@ import pytest
 import subprocess
 import os
 import json
+import sys
 
 
 def test_ci_cd_tests_match_local_execution():
@@ -29,7 +30,7 @@ def test_ci_cd_tests_match_local_execution():
 
     # Run tests in CI mode
     result = subprocess.run(
-        ["pytest", "tests/contract/", "-v", "--tb=short"],
+        [sys.executable, "-m", "pytest", "tests/contract/", "-v", "--tb=short"],
         env=ci_env,
         capture_output=True,
         text=True,
@@ -68,7 +69,7 @@ def test_ci_cd_coverage_reports_generated():
 
     # Run pytest with coverage in CI mode
     result = subprocess.run(
-        ["pytest", "tests/contract/", "--cov", "--cov-report=xml", "--cov-report=html"],
+        [sys.executable, "-m", "pytest", "tests/contract/", "--cov", "--cov-report=xml", "--cov-report=html"],
         env=ci_env,
         capture_output=True,
         text=True,
@@ -130,7 +131,7 @@ def test_ci_failure_detail():
 
         # Run the failing test in CI mode
         result = subprocess.run(
-            ["pytest", test_file_path, "-v"],
+            [sys.executable, "-m", "pytest", test_file_path, "-v"],
             env=ci_env,
             capture_output=True,
             text=True,
@@ -196,7 +197,7 @@ def test_ci_timeout_enforcement():
 
         # Run the timeout test in CI mode
         result = subprocess.run(
-            ["pytest", test_file_path, "-v"],
+            [sys.executable, "-m", "pytest", test_file_path, "-v"],
             env=ci_env,
             capture_output=True,
             text=True,
@@ -239,7 +240,7 @@ def test_ci_cd_sequential_execution_enforced():
 
     # Run tests in CI mode
     result = subprocess.run(
-        ["pytest", "tests/contract/", "-v"],
+        [sys.executable, "-m", "pytest", "tests/contract/", "-v"],
         env=ci_env,
         capture_output=True,
         text=True,
@@ -278,7 +279,7 @@ def test_ci_cd_environment_detection():
     ci_env['CI'] = 'true'
 
     result = subprocess.run(
-        ["pytest", "--version"],
+        [sys.executable, "-m", "pytest", "--version"],
         env=ci_env,
         capture_output=True,
         text=True,
@@ -294,7 +295,7 @@ def test_ci_cd_environment_detection():
         del local_env['CI']
 
     result = subprocess.run(
-        ["pytest", "--version"],
+        [sys.executable, "-m", "pytest", "--version"],
         env=local_env,
         capture_output=True,
         text=True,
