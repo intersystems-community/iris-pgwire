@@ -12,6 +12,7 @@ import time
 import threading
 
 
+@pytest.mark.timeout(35)  # Allow test to run longer than the 30s timeout being tested
 def test_timeout_handler_detects_30s_timeout():
     """
     Verify timeout handler terminates test after 30 seconds.

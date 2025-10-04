@@ -117,6 +117,7 @@ class TimeoutHandler:
         self.timeout_ms = timeout_seconds * 1000.0
         self._monitor_thread = None
         self._stop_event = threading.Event()
+        self._timeout_occurred = False
 
     def monitor_test(self, test_id: str) -> Optional[DiagnosticContext]:
         """
@@ -141,6 +142,7 @@ class TimeoutHandler:
 
         start_time = time.perf_counter()
         diagnostic = None
+        self._timeout_occurred = False
 
         # Start monitoring thread
         self._monitor_thread = threading.Thread(
@@ -155,8 +157,8 @@ class TimeoutHandler:
         # this would be integrated with pytest hooks
         self._monitor_thread.join(timeout=self.timeout_seconds + 1.0)
 
-        if self._monitor_thread.is_alive():
-            # Timeout occurred
+        # Check if timeout occurred during monitoring
+        if self._timeout_occurred:
             elapsed = time.perf_counter() - start_time
             logger.warning(
                 "TimeoutHandler: Timeout detected",
@@ -167,7 +169,7 @@ class TimeoutHandler:
             # Capture diagnostics
             diagnostic = self.capture_diagnostics(test_id, elapsed * 1000.0)
 
-            # Terminate the test
+            # Terminate the test (in real usage would terminate actual test process)
             self.terminate_process()
 
         self._stop_event.set()
@@ -187,6 +189,7 @@ class TimeoutHandler:
                     test_id=test_id,
                     elapsed_ms=f"{elapsed * 1000:.2f}ms"
                 )
+                self._timeout_occurred = True
                 break
 
             # Sleep in small intervals for precise timeout detection (±100ms)
