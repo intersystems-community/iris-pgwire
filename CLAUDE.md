@@ -18,17 +18,38 @@ This file provides guidance to Claude Code when working with the IRIS PostgreSQL
 - **Docker**: Integration with existing kg-ticket-resolver network
 - **TLS**: ssl.SSLContext for secure connections
 
-### Implementation Pattern: Embedded Python Track
+### Implementation Pattern: Embedded Python Track (VALIDATED)
+**Official Pattern from intersystems-community/iris-embedded-python-template**
+
 ```python
-# Core execution pattern
+# CRITICAL: Run via `irispython` command, NOT system python
+# Core execution pattern (from official template)
+import iris  # NO authentication needed when run via irispython!
+
 async def execute_query(sql: str) -> ResultSet:
     # Use asyncio.to_thread() to avoid blocking event loop
     def iris_exec():
-        import iris
-        return iris.sql.exec(sql)
+        # Direct execution - NO connection creation required
+        result = iris.sql.exec(sql)
+        # Iterate results: for row in result: print(row)
+        return result
 
     return await asyncio.to_thread(iris_exec)
+
+# Additional patterns from official template:
+# - Switch namespace: iris.system.Process.SetNamespace("USER")
+# - Set credentials: iris.cls('Security.Users').UnExpireUserPasswords("*")
+# - Direct class calls: iris.cls('%SYSTEM.License').KeyCustomerName()
 ```
+
+**CRITICAL REQUIREMENTS** (from official template):
+1. **merge.cpf REQUIRED**: Must enable CallIn service for embedded Python
+   ```
+   [Actions]
+   ModifyService:Name=%Service_CallIn,Enabled=1,AutheEnabled=48
+   ```
+2. **Run via irispython**: `/usr/irissys/bin/irispython -m your_module`
+3. **NO external authentication**: iris module works directly inside IRIS process
 
 ## 🐳 Docker Integration Strategy
 
@@ -270,6 +291,196 @@ def rewrite_vector_query(sql: str) -> str:
 # PostgreSQL OID for vector type (custom assignment)
 VECTOR_OID = 16388  # Avoid conflicts with standard PostgreSQL OIDs
 ```
+
+## 🚀 HNSW Vector Performance Requirements (Constitutional v1.2.0)
+
+### Constitutional Compliance - Principle VI
+
+**MANDATORY**: All vector similarity operations MUST follow Constitutional Principle VI: Vector Performance Requirements established in constitution v1.2.0.
+
+### HNSW Index Requirements
+
+**Required Syntax** (Distance parameter MANDATORY):
+```sql
+-- CORRECT: Distance parameter specified
+CREATE INDEX idx_vector ON table_name(vector_column) AS HNSW(Distance='Cosine')
+CREATE INDEX idx_vector ON table_name(vector_column) AS HNSW(Distance='DotProduct')
+
+-- INCORRECT: Missing Distance parameter (will fail)
+CREATE INDEX idx_vector ON table_name(vector_column) AS HNSW
+```
+
+### Dataset Scale Thresholds (Empirically Validated)
+
+Based on comprehensive testing with 1024-dimensional vectors across 1K, 10K, and 100K scales:
+
+| Vector Count | HNSW Performance | Recommendation |
+|--------------|------------------|----------------|
+| **< 10,000** | 0.98-1.02× (overhead ≈ benefits) | Sequential scan preferred |
+| **10,000-99,999** | 1.0-2.0× improvement | Consider HNSW with testing |
+| **≥ 100,000** | **5.14× improvement** ✅ | **HNSW strongly recommended** |
+
+**Production Guidance**:
+- Target ≥100K vectors for meaningful HNSW benefits
+- Benchmark your specific dataset and query patterns
+- Use EXPLAIN to verify index usage
+- Monitor P95 latency against constitutional 5ms SLA
+
+### HNSW Index Creation Pattern
+
+```python
+def create_hnsw_index_constitutional(table_name: str, column_name: str,
+                                     index_name: str, distance_metric: str = 'Cosine'):
+    """
+    Create HNSW index following constitutional requirements.
+
+    Constitutional Requirements:
+    - Distance parameter MUST be specified
+    - Dataset SHOULD be ≥100K vectors for optimal performance
+    - EXPLAIN verification SHOULD confirm index usage
+    """
+    ddl = f"""
+    CREATE INDEX {index_name}
+    ON {table_name}({column_name})
+    AS HNSW(Distance='{distance_metric}')
+    """
+
+    try:
+        cursor.execute(ddl)
+        logger.info(f"✅ HNSW index created: {index_name} (Distance={distance_metric})")
+
+        # Constitutional validation: Verify index usage
+        explain_sql = f"""
+        EXPLAIN
+        SELECT TOP 5 id FROM {table_name}
+        ORDER BY VECTOR_COSINE({column_name}, TO_VECTOR('[0.1,0.2,...]'))
+        """
+        explain_result = cursor.execute(explain_sql)
+
+        # Check for "Read index map" in EXPLAIN output
+        plan_text = str(explain_result)
+        if "Read index map" in plan_text and index_name in plan_text:
+            logger.info(f"✅ EXPLAIN confirms HNSW index usage: {index_name}")
+        else:
+            logger.warning(f"⚠️ EXPLAIN shows sequential scan - dataset may be too small")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ HNSW index creation failed: {e}")
+        return False
+```
+
+### ACORN-1 Algorithm Reference (DEPRECATED)
+
+**⚠️ ACORN-1 IS NOT RECOMMENDED FOR PRODUCTION USE**
+
+Empirical testing shows consistent performance degradation (20-72% slower) at all dataset scales.
+
+**Historical Syntax** (for reference only):
+```python
+# DO NOT USE IN PRODUCTION
+cursor.execute('SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1')
+
+# ACORN-1 requires WHERE clauses to engage
+sql = """
+SELECT TOP 5 id, VECTOR_COSINE(vec, TO_VECTOR('[...]')) AS score
+FROM table_name
+WHERE id >= 0  -- Required for ACORN-1 engagement
+ORDER BY score DESC
+"""
+```
+
+**Empirical Performance** (100K vectors):
+- HNSW alone: 10.85ms avg ✅
+- ACORN-1 + WHERE id >= 0: 13.60ms avg (25% slower) ❌
+- ACORN-1 + WHERE id < 5000: 17.97ms avg (62% slower) ❌
+
+**Constitutional Status**: Deprecated in constitution v1.2.0 based on comprehensive investigation findings documented in `docs/HNSW_FINDINGS_2025_10_02.md`.
+
+### Performance Benchmarking Requirements
+
+**Constitutional Mandate**: All vector operations MUST be validated against performance requirements.
+
+```python
+class ConstitutionalVectorPerformance:
+    """Validate vector operations against constitutional requirements"""
+
+    def __init__(self):
+        self.constitutional_sla_ms = 5.0  # Translation SLA
+        self.hnsw_target_improvement = 5.0  # Minimum at 100K+ scale
+
+    def validate_hnsw_performance(self, dataset_size: int,
+                                  with_hnsw_ms: float,
+                                  without_hnsw_ms: float):
+        """
+        Validate HNSW performance against constitutional requirements.
+
+        Constitutional Requirements (Principle VI):
+        - ≥100K vectors: 4-10× improvement expected
+        - <100K vectors: Sequential scan may be faster
+        """
+        improvement_factor = without_hnsw_ms / with_hnsw_ms
+
+        if dataset_size >= 100000:
+            # Constitutional expectation: 4-10× improvement
+            if improvement_factor >= 4.0:
+                return {
+                    'constitutional_compliant': True,
+                    'improvement': f'{improvement_factor:.2f}×',
+                    'status': '✅ HNSW performing as expected'
+                }
+            else:
+                return {
+                    'constitutional_compliant': False,
+                    'improvement': f'{improvement_factor:.2f}×',
+                    'status': '⚠️ HNSW underperforming - investigate dataset/index'
+                }
+        else:
+            # Dataset too small for meaningful HNSW benefits
+            return {
+                'constitutional_compliant': True,  # No requirement at this scale
+                'improvement': f'{improvement_factor:.2f}×',
+                'status': f'ℹ️ Dataset ({dataset_size}) below 100K threshold'
+            }
+```
+
+### EXPLAIN Query Plan Validation
+
+**Required Practice**: Always verify HNSW index usage with EXPLAIN.
+
+```python
+def verify_hnsw_index_usage(table_name: str, vector_column: str, index_name: str):
+    """Verify HNSW index is being used by query optimizer"""
+
+    explain_sql = f"""
+    EXPLAIN
+    SELECT TOP 5 id, VECTOR_COSINE({vector_column}, TO_VECTOR('[0.1,0.2,...]')) AS score
+    FROM {table_name}
+    ORDER BY score DESC
+    """
+
+    result = cursor.execute(explain_sql)
+    plan_text = str(result)
+
+    # Check for index usage indicators
+    if "Read index map" in plan_text and index_name in plan_text:
+        logger.info(f"✅ HNSW index {index_name} IS being used")
+        return True
+    elif "Read master map" in plan_text:
+        logger.warning(f"⚠️ Sequential scan detected - HNSW index NOT used")
+        logger.warning(f"   Possible causes: dataset too small (<10K vectors)")
+        return False
+    else:
+        logger.error(f"❌ Unexpected EXPLAIN output: {plan_text[:200]}")
+        return False
+```
+
+### References
+
+- **Constitution**: `.specify/memory/constitution.md` - Principle VI (Vector Performance Requirements)
+- **Investigation Report**: `docs/HNSW_FINDINGS_2025_10_02.md` - Comprehensive 100K scale testing
+- **IRIS Documentation**: https://docs.intersystems.com/iris20252/csp/docbook/Doc.View.cls?KEY=GSQL_vecsearch#GSQL_vecsearch_index
 
 ## 🔍 Testing Strategy - PRAGMATIC E2E APPROACH
 

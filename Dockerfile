@@ -13,13 +13,15 @@ RUN apt-get update && apt-get install -y \
 # Install uv for fast Python package management
 RUN pip install uv
 
+# Copy application source and build files (needed for version detection)
+COPY src/ ./src/
+COPY examples/ ./examples/
+COPY LICENSE ./
+COPY README.md ./
+
 # Copy requirements and install dependencies
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen
-
-# Copy application source
-COPY src/ ./src/
-COPY examples/ ./examples/
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash pgwire
@@ -44,5 +46,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Expose PostgreSQL port
 EXPOSE 5432
 
-# Run the server
-CMD ["python", "-m", "src.iris_pgwire.server"]
+# Run the server using uv to ensure virtualenv is active
+CMD [".venv/bin/python", "-m", "iris_pgwire.server"]

@@ -81,7 +81,10 @@ class IRISExecutor:
         """Test IRIS connectivity before starting server"""
         try:
             if self.embedded_mode:
-                await self._test_embedded_connection()
+                # In embedded mode, skip connection test at startup
+                # IRIS is already available via iris.sql.exec()
+                logger.info("IRIS embedded mode detected - skipping connection test",
+                           embedded_mode=True)
             else:
                 await self._test_external_connection()
 
@@ -161,13 +164,21 @@ class IRISExecutor:
             if self.embedded_mode:
                 def _sync_vector_test():
                     import iris
-                    # Test query from caretdev implementation
-                    iris.sql.exec("select vector_cosine(to_vector('1'), to_vector('1'))")
-                    return True
+                    try:
+                        # Test query from caretdev implementation
+                        iris.sql.exec("select vector_cosine(to_vector('1'), to_vector('1'))")
+                        return True
+                    except Exception as e:
+                        # Vector support not available (license or feature not enabled)
+                        logger.debug("Vector test query failed", error=str(e))
+                        return False
 
-                await asyncio.to_thread(_sync_vector_test)
-                self.vector_support = True
-                logger.info("IRIS vector support detected")
+                result = await asyncio.to_thread(_sync_vector_test)
+                self.vector_support = result
+                if result:
+                    logger.info("IRIS vector support detected")
+                else:
+                    logger.info("IRIS vector support not available (license or feature disabled)")
 
             else:
                 # For external connections, assume no vector support in P0
@@ -176,7 +187,7 @@ class IRISExecutor:
 
         except Exception as e:
             self.vector_support = False
-            logger.info("IRIS vector support not available", error=str(e))
+            logger.info("IRIS vector support test failed", error=str(e))
 
     async def execute_query(self, sql: str, params: Optional[List] = None,
                           session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -249,17 +260,90 @@ class IRISExecutor:
             """Synchronous IRIS execution in thread pool"""
             import iris
 
+            # DEBUG: Log entry to embedded execution path
+            logger.info("🔍 EXECUTING IN EMBEDDED MODE",
+                       sql_preview=sql[:100],
+                       has_params=params is not None,
+                       param_count=len(params) if params else 0,
+                       session_id=session_id)
+
             try:
                 # Get or create connection
                 connection = self._get_iris_connection()
 
+                # Apply vector query optimization (convert parameterized vectors to literals)
+                optimized_sql = sql
+                optimized_params = params
+                optimization_applied = False
+
+                try:
+                    from .vector_optimizer import optimize_vector_query
+
+                    logger.debug("Vector optimizer: checking query",
+                               sql_preview=sql[:200],
+                               param_count=len(params) if params else 0,
+                               session_id=session_id)
+
+                    optimized_sql, optimized_params = optimize_vector_query(sql, params)
+
+                    optimization_applied = (optimized_sql != sql) or (optimized_params != params)
+
+                    if optimization_applied:
+                        logger.info("Vector optimization applied",
+                                  sql_changed=(optimized_sql != sql),
+                                  params_changed=(optimized_params != params),
+                                  params_before=len(params) if params else 0,
+                                  params_after=len(optimized_params) if optimized_params else 0,
+                                  optimized_sql_preview=optimized_sql[:200],
+                                  session_id=session_id)
+                    else:
+                        logger.debug("Vector optimization not applicable",
+                                   reason="No vector patterns found or params unchanged",
+                                   session_id=session_id)
+
+                except ImportError as e:
+                    logger.warning("Vector optimizer not available",
+                                 error=str(e),
+                                 session_id=session_id)
+                except Exception as opt_error:
+                    logger.warning("Vector optimization failed, using original query",
+                                 error=str(opt_error),
+                                 session_id=session_id)
+                    optimized_sql, optimized_params = sql, params
+
                 # Execute query with performance tracking
                 start_time = time.perf_counter()
 
-                if params:
-                    result = iris.sql.exec(sql, *params)
+                # CRITICAL: Strip trailing semicolon when using parameters
+                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
+                # but works fine with "SELECT ... WHERE id = ?" (no semicolon)
+                if optimized_params and optimized_sql.rstrip().endswith(';'):
+                    original_len = len(optimized_sql)
+                    optimized_sql = optimized_sql.rstrip().rstrip(';')
+                    logger.info("Removed trailing semicolon for parameterized query",
+                               original_sql_len=original_len,
+                               new_sql_len=len(optimized_sql),
+                               sql_preview=optimized_sql[:80],
+                               param_count=len(optimized_params),
+                               session_id=session_id)
+
+                logger.debug("Executing IRIS query",
+                           sql_preview=optimized_sql[:200],
+                           param_count=len(optimized_params) if optimized_params else 0,
+                           optimization_applied=optimization_applied,
+                           session_id=session_id)
+
+                # Log the actual SQL being sent to IRIS for debugging
+                logger.info("About to execute iris.sql.exec",
+                          sql_ends_with_semicolon=optimized_sql.rstrip().endswith(';'),
+                          sql_last_20=optimized_sql.rstrip()[-20:],
+                          has_params=optimized_params is not None and len(optimized_params) > 0,
+                          session_id=session_id)
+
+                if optimized_params is not None and len(optimized_params) > 0:
+                    result = iris.sql.exec(optimized_sql, *optimized_params)
                 else:
-                    result = iris.sql.exec(sql)
+                    result = iris.sql.exec(optimized_sql)
 
                 execution_time = (time.perf_counter() - start_time) * 1000
 
@@ -290,6 +374,22 @@ class IRISExecutor:
                     logger.warning("Error fetching IRIS result rows",
                                  error=str(fetch_error),
                                  session_id=session_id)
+
+                # If we have rows but no column metadata, generate generic column info
+                # iris.sql.exec() doesn't provide column metadata, so infer from first row
+                if rows and not columns:
+                    first_row = rows[0] if rows else []
+                    for i in range(len(first_row)):
+                        columns.append({
+                            'name': f'column{i+1}',  # Generic name
+                            'type_oid': 25,  # TEXT type (most flexible)
+                            'type_size': -1,
+                            'type_modifier': -1,
+                            'format_code': 0  # Text format
+                        })
+                    logger.debug("Generated generic column metadata",
+                               column_count=len(columns),
+                               session_id=session_id)
 
                 # Determine command tag based on SQL type
                 command_tag = self._determine_command_tag(sql, len(rows))
@@ -337,6 +437,46 @@ class IRISExecutor:
                 # Use intersystems-irispython driver
                 import iris
 
+                # Apply vector query optimization (convert parameterized vectors to literals)
+                optimized_sql = sql
+                optimized_params = params
+                optimization_applied = False
+
+                try:
+                    from .vector_optimizer import optimize_vector_query
+
+                    logger.debug("Vector optimizer: checking query (external mode)",
+                               sql_preview=sql[:200],
+                               param_count=len(params) if params else 0,
+                               session_id=session_id)
+
+                    optimized_sql, optimized_params = optimize_vector_query(sql, params)
+
+                    optimization_applied = (optimized_sql != sql) or (optimized_params != params)
+
+                    if optimization_applied:
+                        logger.info("Vector optimization applied (external mode)",
+                                  sql_changed=(optimized_sql != sql),
+                                  params_changed=(optimized_params != params),
+                                  params_before=len(params) if params else 0,
+                                  params_after=len(optimized_params) if optimized_params else 0,
+                                  optimized_sql_preview=optimized_sql[:200],
+                                  session_id=session_id)
+                    else:
+                        logger.debug("Vector optimization not applicable (external mode)",
+                                   reason="No vector patterns found or params unchanged",
+                                   session_id=session_id)
+
+                except ImportError as e:
+                    logger.warning("Vector optimizer not available (external mode)",
+                                 error=str(e),
+                                 session_id=session_id)
+                except Exception as opt_error:
+                    logger.warning("Vector optimization failed, using original query (external mode)",
+                                 error=str(opt_error),
+                                 session_id=session_id)
+                    optimized_sql, optimized_params = sql, params
+
                 # Performance tracking
                 start_time = time.perf_counter()
 
@@ -351,10 +491,10 @@ class IRISExecutor:
 
                 # Execute query
                 cursor = conn.cursor()
-                if params:
-                    cursor.execute(sql, params)
+                if optimized_params is not None and len(optimized_params) > 0:
+                    cursor.execute(optimized_sql, optimized_params)
                 else:
-                    cursor.execute(sql)
+                    cursor.execute(optimized_sql)
 
                 execution_time = (time.perf_counter() - start_time) * 1000
 

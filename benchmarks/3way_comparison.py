@@ -199,7 +199,7 @@ Examples:
 
     # Get connection parameters from environment (for Docker/CI compatibility)
     import os
-    pgwire_port = int(os.environ.get("PGWIRE_PORT", "5432"))
+    pgwire_port = int(os.environ.get("PGWIRE_PORT", "5434"))
     postgres_port = int(os.environ.get("POSTGRES_PORT", "5433"))
     iris_port = int(os.environ.get("IRIS_PORT", "1972"))
 
@@ -240,15 +240,15 @@ Examples:
     all_queries = {}
 
     if not args.skip_pgwire:
-        executors['iris_pgwire'] = PGWireExecutor()
+        executors['iris_pgwire'] = PGWireExecutor(port=pgwire_port)
         all_queries['iris_pgwire'] = create_test_queries('iris_pgwire', args.vector_dims)
 
     if not args.skip_postgres:
-        executors['postgresql_psycopg3'] = PostgresExecutor()
+        executors['postgresql_psycopg3'] = PostgresExecutor(port=postgres_port)
         all_queries['postgresql_psycopg3'] = create_test_queries('postgresql_psycopg3', args.vector_dims)
 
     if not args.skip_dbapi:
-        executors['iris_dbapi'] = DbapiExecutor()
+        executors['iris_dbapi'] = DbapiExecutor(port=iris_port)
         all_queries['iris_dbapi'] = create_test_queries('iris_dbapi', args.vector_dims)
 
     if not executors:
