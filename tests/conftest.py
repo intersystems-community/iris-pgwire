@@ -302,36 +302,32 @@ def embedded_iris(iris_config):
         # CRITICAL: This only works when run via `irispython` command
         import iris
 
-        # Create connection to embedded IRIS
-        # No authentication needed when running via irispython
-        connection = iris.connect(
-            hostname=iris_config['host'],
-            port=iris_config['port'],
-            namespace=iris_config['namespace'],
-            username=iris_config['username'],
-            password=iris_config['password']
-        )
+        # When running via irispython, we're already inside IRIS
+        # No connection needed - use iris.sql.exec() directly
+        # First, switch to the desired namespace
+        iris.system.Process.SetNamespace(iris_config['namespace'])
 
         elapsed = time.perf_counter() - start_time
         logger.info(
-            "embedded_iris: Connection established",
+            "embedded_iris: Embedded Python ready",
             setup_time_ms=f"{elapsed * 1000:.2f}ms",
             namespace=iris_config['namespace']
         )
 
-        # Verify connection is working
-        cursor = connection.cursor()
-        cursor.execute("SELECT 1")
-        result = cursor.fetchone()
-        cursor.close()
+        # Verify IRIS is working
+        result = iris.sql.exec("SELECT 1")
+        first_row = None
+        for row in result:
+            first_row = row
+            break
 
-        if result[0] != 1:
-            raise RuntimeError("IRIS connection verification failed: SELECT 1 returned unexpected result")
+        if not first_row or first_row[0] != 1:
+            raise RuntimeError("IRIS embedded Python verification failed: SELECT 1 returned unexpected result")
 
-        logger.info("embedded_iris: Connection verified")
+        logger.info("embedded_iris: Embedded Python verified")
 
-        # Yield connection for test session
-        yield connection
+        # Yield iris module for test session
+        yield iris
 
     except ImportError as e:
         logger.error(
@@ -364,62 +360,58 @@ def embedded_iris(iris_config):
 # ============================================================================
 
 @pytest.fixture(scope="function")
-def iris_clean_namespace(embedded_iris):
+def iris_clean_namespace(embedded_iris, iris_config):
     """
     Provide clean IRIS namespace for each test function.
 
     Contract (from contracts/pytest-fixtures.md):
-    - Returns: iris.Connection with clean state
+    - Returns: iris module ready for SQL execution
     - Guarantees: No conflicting test data from previous tests
     - Cleanup time: <2 seconds
     - Isolation: Each test gets fresh namespace state
 
     Implementation strategy:
-    - Uses transaction rollback for cleanup (fast, reliable)
+    - Uses iris.sql.exec() for direct SQL execution
     - Tracks tables created during test for cleanup
     - Completes cleanup in <2 seconds per contract
     """
     logger.info("iris_clean_namespace: Setting up clean namespace for test")
     start_time = time.perf_counter()
 
-    # Get cursor for setup
-    cursor = embedded_iris.cursor()
-
     # Query existing tables before test starts
-    cursor.execute("""
+    namespace = iris_config['namespace']
+    result = embedded_iris.sql.exec(f"""
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = CURRENT_SCHEMA
+        WHERE TABLE_SCHEMA = '{namespace}'
     """)
-    existing_tables = {row[0] for row in cursor.fetchall()}
-    cursor.close()
+    existing_tables = {row[0] for row in result}
 
     logger.info(
         "iris_clean_namespace: Baseline established",
         existing_tables_count=len(existing_tables)
     )
 
-    # Yield connection to test
+    # Yield iris module to test
     yield embedded_iris
 
     # Teardown: Clean up test data
     cleanup_start = time.perf_counter()
-    cursor = embedded_iris.cursor()
 
     try:
         # Find tables created during test
-        cursor.execute("""
+        result = embedded_iris.sql.exec(f"""
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = CURRENT_SCHEMA
+            WHERE TABLE_SCHEMA = '{namespace}'
         """)
-        current_tables = {row[0] for row in cursor.fetchall()}
+        current_tables = {row[0] for row in result}
         new_tables = current_tables - existing_tables
 
         # Drop tables created during test
         for table_name in new_tables:
             try:
-                cursor.execute(f"DROP TABLE {table_name}")
+                embedded_iris.sql.exec(f"DROP TABLE {table_name}")
                 logger.debug("iris_clean_namespace: Dropped table", table=table_name)
             except Exception as e:
                 logger.warning(
@@ -428,8 +420,7 @@ def iris_clean_namespace(embedded_iris):
                     error=str(e)
                 )
 
-        # Commit cleanup
-        embedded_iris.commit()
+        # Commits are automatic with iris.sql.exec() in embedded Python
 
         cleanup_elapsed = time.perf_counter() - cleanup_start
         total_elapsed = time.perf_counter() - start_time
@@ -450,14 +441,7 @@ def iris_clean_namespace(embedded_iris):
 
     except Exception as e:
         logger.error("iris_clean_namespace: Cleanup failed", error=str(e))
-        # Rollback on cleanup failure
-        try:
-            embedded_iris.rollback()
-        except Exception:
-            pass
-
-    finally:
-        cursor.close()
+        # Note: rollback not needed with iris.sql.exec() - each statement auto-commits
 
 
 # ============================================================================
