@@ -34,10 +34,14 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-cov>=4.1.0",
+    "pytest-flaky>=3.8.0",
     # psycopg3 (NOT psycopg2) - uses server-side parameter binding for vector optimization
     # Required for E2E tests with large vectors (1024+ dimensions)
     "psycopg>=3.1.0",
     "docker>=6.0.0",
+    "structlog>=23.0.0",
 ]
 dev = [
     "black>=23.0.0",
@@ -113,13 +117,30 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]
+minversion = "7.0"
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 asyncio_mode = "auto"
+
+# Timeout configuration (30 seconds default)
+timeout = 30
+timeout_func_only = false  # Include fixture time in timeout
+
+# Coverage configuration
 addopts = [
+    "--cov=iris_pgwire",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-report=xml:coverage.xml",
+    "--cov-branch",
     "--strict-markers",
     "--strict-config",
-    "--disable-warnings",
+    "--tb=short",
+    "--dist=no",  # Disable parallel execution
 ]
+
 markers = [
     "e2e: E2E tests with real PostgreSQL clients",
     "integration: Integration tests with IRIS",
@@ -128,4 +149,30 @@ markers = [
     "requires_iris: Tests that require IRIS connection",
     "requires_docker: Tests that require Docker",
     "iris_integration: Tests that require real IRIS instance",
+    "timeout: Override default timeout threshold",
+    "flaky: Mark known flaky tests for retry",
+    "slow: Tests requiring >10 seconds",
+]
+
+# Flaky test detection configuration
+# Use @pytest.mark.flaky(reruns=3, reruns_delay=2) for flaky tests
+# Documented in tests/flaky_tests.md
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "benchmarks/*",
+    "specs/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+# Informational only - NO fail_under threshold
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]
