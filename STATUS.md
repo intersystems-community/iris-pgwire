@@ -1,42 +1,46 @@
 # IRIS PGWire Project Status Dashboard
 
 ## 🎯 Project Health Overview
-**Status**: 🟢 **OPERATIONAL** - Embedded Python Deployment Complete
-**Phase**: P5 - Vector Support (Testing & Validation)
-**Last Updated**: 2025-10-02 (Embedded Python via irispython)
+**Status**: 🟡 **IN DEVELOPMENT** - Basic Connectivity Working
+**Phase**: P5 - Vector Support (Testing & Optimization)
+**Last Updated**: 2025-10-04 (Testing Framework Complete)
 
 ## ✅ Recent Achievements
-1. **✅ Embedded Python Deployment**: PGWire server running INSIDE IRIS via irispython
-   - **merge.cpf**: CallIn service enabled (CRITICAL infrastructure requirement)
-   - **Docker**: Server runs from IRIS container using `irispython -m iris_pgwire.server`
-   - **PostgreSQL Clients**: ✅ psql connection successful, basic queries working
-   - **Constitution Updated**: v1.0.0 → v1.1.0 with validated embedded Python patterns
+1. **✅ Testing Framework Modernization** (2025-10-04)
+   - Modern pytest-based framework with 30s timeout detection
+   - Sequential execution (no parallel tests for IRIS stability)
+   - Diagnostic capture on failures (test_failures.jsonl)
+   - 4/21 tests passing with IRIS database (19% pass rate)
+   - Framework validation: 23/23 criteria met
 
-## 🔍 Active Investigation - CORRECTED UNDERSTANDING (2025-10-02)
-1. **HNSW/ACORN-1 Index Performance Reality** (INVESTIGATION COMPLETE)
-   - **CRITICAL CORRECTION**: EXPLAIN plans prove indexes ARE being used at 10K+ vector scale
-   - **10,000 vectors WITHOUT HNSW**: 11.04ms avg (baseline)
-   - **10,000 vectors WITH HNSW**: 11.23ms avg (EXPLAIN confirms "Read index map idx_hnsw_10k" ✅)
-   - **10,000 vectors ACORN-1 + WHERE id >= 0**: 13.60ms avg (EXPLAIN confirms "uses ACORN-1 algorithm" ✅)
-   - **10,000 vectors ACORN-1 + WHERE id < 5000**: 17.97ms avg (EXPLAIN confirms "uses ACORN-1 algorithm" ✅)
-   - **Improvement**: 0.98× (HNSW 2% slower), 0.70-0.53× (ACORN-1 30-47% slower)
-   - **Root Cause**: Indexes ARE working and being used, but overhead exceeds benefits at this scale
-   - **Dataset Threshold**: <10K vectors shows "master map" (not used), ≥10K shows "Read index map" (used)
-   - **ACORN-1 Discovery**: Requires WHERE clauses (disabled for TOP-only queries), but degrades performance
-   - **Conclusion**: HNSW and ACORN-1 functioning correctly per documentation, but no performance benefit at tested scale
+2. **✅ Embedded Python Deployment** (2025-10-02)
+   - merge.cpf: CallIn service enabled
+   - Server runs via `irispython -m iris_pgwire.server`
+   - Basic psql connectivity working
+
+## 🔨 Current Work
+1. **Test Environment Issues**
+   - IRIS fixture tests skipped (6 tests) - import issues in container
+   - Integration tests failing (11 tests) - pytest PATH not configured
+   - Next: Fix container environment for full test suite
+
+2. **Vector Performance Testing**
+   - HNSW indexes working but show minimal benefit at 10K scale
+   - Need larger datasets (100K+) for meaningful performance gains
+   - Query optimizer validated: <1ms overhead
 
 ---
 
 ## 📊 Quick Metrics
 
-| Metric | Value | Status | Target |
-|--------|-------|--------|--------|
-| **Embedded Python Deployment** | ✅ Complete | 🟢 Operational | irispython |
-| **merge.cpf CallIn Service** | ✅ Enabled | 🟢 Active | Required |
-| **PostgreSQL Client Connectivity** | ✅ Working | 🟢 psql success | Protocol v3.0 |
-| **VECTOR Operations** | ✅ Functional | 🟢 VECTOR_COSINE | Working |
-| **Constitution Compliance** | v1.1.0 | 🟢 Updated | Embedded patterns |
-| **HNSW Performance Testing** | ✅ Complete | 🔴 Working but no benefit | EXPLAIN confirms usage at 10K+ scale |
+| Metric | Value | Status |
+|--------|-------|--------|
+| **Basic Connectivity** | psql works | 🟢 Functional |
+| **Test Pass Rate** | 4/21 (19%) | 🟡 In Progress |
+| **Framework Validation** | 23/23 criteria | 🟢 Complete |
+| **Vector Query Optimizer** | <1ms overhead | 🟢 Working |
+| **IRIS Fixtures** | 6/6 skipped | 🔴 Container issues |
+| **Integration Tests** | 0/11 passing | 🔴 Environment setup |
 
 ---
 

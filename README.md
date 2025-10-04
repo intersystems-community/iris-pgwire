@@ -5,70 +5,61 @@
 [![InterSystems IRIS](https://img.shields.io/badge/IRIS-Compatible-green.svg)](https://www.intersystems.com/products/intersystems-iris/)
 [![PostgreSQL Protocol](https://img.shields.io/badge/PostgreSQL-v3%20Protocol-336791.svg)](https://www.postgresql.org/docs/current/protocol.html)
 
-**Transform InterSystems IRIS into a PostgreSQL-compatible database while maintaining all unique IRIS features.**
+PostgreSQL wire protocol server for InterSystems IRIS, enabling PostgreSQL client connectivity to IRIS databases.
 
-Access IRIS through the entire PostgreSQL ecosystem - BI tools, async frameworks, AI/ML libraries, and thousands of PostgreSQL-compatible applications - with **zero code changes**.
+Allows PostgreSQL clients to connect to IRIS using the PostgreSQL wire protocol (v3). Currently in active development.
 
 ---
 
 ## 🚀 **Quick Start**
 
 ```bash
-# Clone and start production deployment
+# Clone repository
 git clone https://gitlab.iscinternal.com/tdyar/iris-pgwire.git
 cd iris-pgwire
-./start-production.sh
 
-# Connect with any PostgreSQL client
+# Start IRIS and PGWire server
+docker-compose up -d
+
+# Test connection (basic queries work)
 psql -h localhost -p 5432 -U test_user -d USER -c "SELECT 1;"
 ```
 
-**🎉 That's it!** Your IRIS database is now accessible through PostgreSQL protocol.
+**Note**: Basic PostgreSQL client connectivity is functional. Advanced features are in development.
 
 ---
 
-## 🌟 **Key Features**
+## 🌟 **Current Status**
 
-### **📡 Complete PostgreSQL Wire Protocol v3**
-- ✅ **P0-P6 Implementation**: SSL, authentication, simple/extended query, SCRAM, cancellation, vector support, COPY
-- ✅ **PostgreSQL Client Compatibility**: Works with psql, pgAdmin, DBeaver, and all PostgreSQL clients
-- ✅ **Async Connection Pooling**: High-performance AsyncIO-based server
+### **Implemented**
+- ✅ **Basic Protocol**: SSL negotiation, authentication, simple queries
+- ✅ **IRIS Connectivity**: Direct connection to IRIS via embedded Python
+- ✅ **Vector Query Optimizer**: Translates pgvector syntax to IRIS VECTOR functions
+- ✅ **Testing Framework**: Modern pytest-based framework with timeout detection
 
-### **🔄 Automatic IRIS SQL Translation**
-- ✅ **87 IRIS-Specific Constructs** automatically translated to PostgreSQL
-- ✅ **System Functions**: `%SYSTEM.*` → PostgreSQL equivalents
-- ✅ **SQL Extensions**: `TOP 10` → `LIMIT 10`, `FOR UPDATE NOWAIT` support
-- ✅ **Data Types**: `SERIAL`, `ROWVERSION`, `%List`, `%Stream` → PostgreSQL types
-- ✅ **JSON Operations**: `JSON_TABLE`, Document Database filters
+### **In Development**
+- 🔨 **Extended Protocol**: Prepared statements, parameter binding
+- 🔨 **SQL Translation**: IRIS-specific constructs to PostgreSQL equivalents
+- 🔨 **Type System**: Full PostgreSQL type mapping
+- 🔨 **Performance**: HNSW index optimization, query caching
 
-### **🤖 AI/ML Integration**
-- ✅ **IntegratedML Support**: `TRAIN MODEL`, `SELECT PREDICT()` through PostgreSQL
-- ✅ **Vector Operations**: `TO_VECTOR`, `VECTOR_COSINE`, 1024+ dimensional vectors
-- ✅ **pgvector Compatibility**: Vector similarity search and AI workloads
-- ✅ **LangChain Integration**: Use IRIS as a vector database
-
-### **🐳 Production-Ready Deployment**
-- ✅ **Docker Containerization**: One-command deployment
-- ✅ **Comprehensive Monitoring**: Prometheus, Grafana, cAdvisor, Loki
-- ✅ **Health Checks**: Service monitoring and auto-restart
-- ✅ **SSL/TLS Security**: Production-grade encryption
+### **Planned**
+- 📋 **IntegratedML**: TRAIN/PREDICT operations through wire protocol
+- 📋 **Production Features**: Connection pooling, monitoring, security hardening
+- 📋 **Client Compatibility**: Testing with major PostgreSQL clients and tools
 
 ---
 
-## 💡 **Why This Matters**
+## 💡 **Project Goals**
 
-### **Before: IRIS Isolation**
-❌ Limited to IRIS-specific drivers and tools
-❌ No async Python support
-❌ Incompatible with PostgreSQL ecosystem
-❌ Custom integration required for every tool
+Enable PostgreSQL clients and tools to connect to InterSystems IRIS databases using the standard PostgreSQL wire protocol, allowing:
 
-### **After: PostgreSQL Ecosystem Access**
-✅ **Instant BI Tool Access**: Tableau, Power BI, Grafana, Metabase
-✅ **Modern Python Frameworks**: Async SQLAlchemy, FastAPI, Django
-✅ **AI/ML Tools**: LangChain, pgvector, vector databases
-✅ **Database Tools**: pgAdmin, DBeaver, DataGrip
-✅ **ORM Support**: SQLAlchemy, Prisma, TypeORM
+- PostgreSQL-compatible clients (psql, pgAdmin, etc.) to query IRIS
+- Modern async Python frameworks to work with IRIS
+- Vector similarity search using pgvector syntax
+- Integration with PostgreSQL ecosystem tools
+
+**Current Limitation**: Project is in development. Basic connectivity works, but many PostgreSQL features are not yet implemented.
 
 ---
 
@@ -632,16 +623,16 @@ def add_custom_function(self):
 No, this provides PostgreSQL protocol access while native IRIS drivers remain available. Use this for PostgreSQL ecosystem compatibility.
 
 ### **Q: What IRIS features are supported?**
-All standard SQL, IntegratedML (TRAIN/PREDICT), vector operations, JSON_TABLE, Document Database filters, and 87 IRIS-specific constructs.
+Basic SQL queries work. Vector operations use IRIS VECTOR functions. SQL translation for IRIS-specific constructs is in development.
 
 ### **Q: Is this production-ready?**
-Yes! Includes comprehensive monitoring, security hardening, health checks, and has been tested with real IRIS workloads.
+No, this is currently a development project. Basic connectivity works but the project is not yet suitable for production use.
 
 ### **Q: What's the performance impact?**
-Minimal - <5ms query overhead for SQL translation, supports 1000+ queries/second sustained throughput.
+Performance testing is ongoing. Vector query optimization shows <1ms overhead. Full performance characterization pending.
 
 ### **Q: Can I use existing PostgreSQL tools?**
-Yes! Works with psql, pgAdmin, DBeaver, Tableau, Power BI, SQLAlchemy, LangChain, and thousands of PostgreSQL-compatible tools.
+Basic connectivity with psql and simple clients works. Support for BI tools, ORMs, and complex PostgreSQL features is in development.
 
 ---
 
@@ -668,10 +659,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-<div align="center">
-
-**🚀 Transform your IRIS database into a PostgreSQL-compatible powerhouse!**
-
-*Built with ❤️ for the IRIS and PostgreSQL communities*
-
-</div>
+**Development Status**: Active development. Contributions and feedback welcome.
