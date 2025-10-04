@@ -337,7 +337,117 @@ translator.add_function_mapping(
 
 ## 🧪 **Testing**
 
-### **Comprehensive Test Suite**
+### **Modern Testing Framework (v1.0)**
+
+The project uses a comprehensive testing framework with:
+- ✅ **30-second timeout detection** with diagnostic capture
+- ✅ **Sequential execution** (no parallel tests for IRIS stability)
+- ✅ **Coverage tracking** (informational, no enforcement)
+- ✅ **Flaky test detection** and retry mechanisms
+- ✅ **IRIS state capture** on failures (SQL history, connection info)
+
+### **Running Tests**
+
+```bash
+# Run all tests (sequential execution, 30s timeout)
+pytest -v
+
+# Run with coverage report
+pytest --cov --cov-report=html
+# Open htmlcov/index.html to view coverage
+
+# Run specific test file
+pytest tests/contract/test_fixture_contract.py -v
+
+# Run individual test
+pytest tests/integration/test_developer_workflow.py::test_local_test_execution_completes_without_hanging -v
+
+# Override timeout for slow tests
+pytest tests/slow_test.py -v --timeout=60
+```
+
+### **Test Categories**
+
+```bash
+# Contract tests (validate framework components)
+pytest tests/contract/ -v
+
+# Integration tests (E2E workflows)
+pytest tests/integration/ -v
+
+# Unit tests (protocol message parsing)
+pytest tests/unit/ -m unit -v
+
+# E2E tests with real PostgreSQL clients
+pytest tests/e2e/ -m e2e -v
+```
+
+### **Timeout Configuration**
+
+```python
+import pytest
+
+# Override default 30-second timeout
+@pytest.mark.timeout(60)
+def test_long_running_operation():
+    # Test that needs more time
+    pass
+
+# Mark test as slow (>10 seconds)
+@pytest.mark.slow
+def test_slow_operation():
+    # Will show in test reports as slow
+    pass
+```
+
+### **Flaky Test Handling**
+
+```python
+import pytest
+
+# Retry flaky tests automatically
+@pytest.mark.flaky(reruns=3, reruns_delay=2)
+def test_occasionally_flaky():
+    # Test with timing issues
+    # Will retry up to 3 times with 2s delay
+    pass
+```
+
+### **Validate Framework**
+
+```bash
+# Run validation script
+python tests/validate_framework.py
+
+# Expected output:
+# ✓ pytest.ini configured with timeout, coverage, sequential execution
+# ✓ embedded_iris fixture implemented
+# ✓ TimeoutHandler class defined
+# ✓ Diagnostic capture hooks implemented
+# 🎉 All validation criteria passed!
+```
+
+### **CI/CD Integration**
+
+Tests run automatically in GitLab CI/CD with:
+- Sequential execution (no parallel workers)
+- Coverage reports (XML + HTML artifacts)
+- Test failure diagnostics (test_failures.jsonl)
+- 30-second timeout enforcement
+
+```yaml
+# .gitlab-ci.yml
+test:
+  script:
+    - pytest tests/ --verbose --cov --junitxml=test-results.xml
+  artifacts:
+    paths:
+      - coverage.xml
+      - htmlcov/
+      - test_failures.jsonl
+```
+
+### **Legacy Tests**
 
 ```bash
 # Run all tests
@@ -354,6 +464,13 @@ sql, stats = translator.translate_sql('SELECT TOP 10 * FROM table')
 print(f'Translated: {sql}')  # SELECT * FROM table LIMIT 10
 "
 ```
+
+### **Comprehensive Documentation**
+
+For detailed testing documentation, see:
+- `docs/testing.md` - Complete testing framework guide
+- `tests/flaky_tests.md` - Flaky test tracking and best practices
+- `specs/017-correct-testing-framework/` - Framework specification
 
 ### **Integration Testing**
 
