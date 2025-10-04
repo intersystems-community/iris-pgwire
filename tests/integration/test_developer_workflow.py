@@ -49,15 +49,14 @@ def test_local_test_execution_completes_without_hanging():
     assert "gw0" not in result.stdout, \
         "Should not see pytest-xdist workers (tests must be sequential)"
 
-    # Verify timeout configuration is active
-    # pytest-timeout should be loaded and show in --version or markers
-    version_result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--version"],
+    # Verify timeout configuration is active by checking markers
+    markers_result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--markers"],
         capture_output=True,
         text=True
     )
-    assert "timeout" in version_result.stdout.lower() or "pytest-timeout" in version_result.stdout.lower(), \
-        "pytest-timeout plugin should be active"
+    assert "timeout" in markers_result.stdout.lower(), \
+        "pytest-timeout plugin should be active (timeout marker should be available)"
 
 
 def test_local_test_failure_provides_actionable_diagnostics():
