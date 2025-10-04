@@ -54,6 +54,7 @@ def test_ci_cd_tests_match_local_execution():
         "CI mode should also run tests sequentially (no parallel workers)"
 
 
+@pytest.mark.timeout(150)  # Subprocess runs tests with coverage, needs time
 def test_ci_cd_coverage_reports_generated():
     """
     Verify coverage reports are generated in CI-compatible formats.

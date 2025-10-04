@@ -124,6 +124,7 @@ def test_intentional_failure_for_diagnostics():
             os.unlink(test_file_path)
 
 
+@pytest.mark.timeout(150)  # Subprocess runs tests with coverage, needs time
 def test_coverage_report_generated_without_enforcement():
     """
     Verify coverage is tracked but not enforced.
