@@ -43,7 +43,7 @@
 | Metric | Value | Status |
 |--------|-------|--------|
 | **Basic Connectivity** | psql works | 🟢 Functional |
-| **Test Pass Rate** | 14/21 (67%) | 🟡 In Progress |
+| **Test Pass Rate** | 16/21 (76%) | 🟡 In Progress |
 | **Framework Validation** | 23/23 criteria | 🟢 Complete |
 | **Vector Query Optimizer** | <1ms overhead | 🟢 Working |
 | **IRIS Fixtures** | 4/4 passing | 🟢 Fixed |
