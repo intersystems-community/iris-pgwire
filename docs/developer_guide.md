@@ -284,6 +284,97 @@ config = TranslationConfig(
 )
 ```
 
+## Package Management
+
+### Local Development: Use `uv`
+
+For local development, use `uv` for fast dependency management:
+
+```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install project dependencies
+uv sync
+
+# Run tests locally
+uv run pytest tests/
+
+# Add a new dependency
+uv add package-name
+
+# Add a development dependency
+uv add --dev package-name
+```
+
+**Why `uv`?**
+- 10-100× faster than `pip` for dependency resolution
+- Automatic lockfile management (`uv.lock`)
+- Better developer experience for local iteration
+
+### Docker/CI: Use `pip`
+
+Docker containers and CI pipelines use standard `pip`:
+
+```dockerfile
+# Dockerfile example
+FROM python:3.11-slim
+WORKDIR /app
+COPY pyproject.toml ./
+RUN pip install -e ".[dev,test]"
+```
+
+**Why `pip` in Docker?**
+- Simpler, more portable (no extra binary needed)
+- Standard across Python ecosystem for CI/CD
+- Containers are ephemeral - reproducibility comes from `pyproject.toml` and `uv.lock`
+
+### Dependency Sources
+
+All dependencies are defined in `pyproject.toml`:
+
+```toml
+[project]
+dependencies = [
+    "structlog>=23.0.0",
+    "intersystems-irispython>=5.1.2",
+    # ... core dependencies
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    # ... test dependencies
+]
+dev = [
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    # ... development tools
+]
+```
+
+**NEVER hardcode dependencies** in shell scripts or Docker commands. Always reference `pyproject.toml`:
+
+```bash
+# ✅ CORRECT
+pip install -e ".[test]"
+
+# ❌ WRONG - duplicates pyproject.toml
+pip install pytest>=7.0.0 pytest-asyncio>=0.21.0
+```
+
+### Integration Test Dependencies
+
+The `docker-compose.yml` pytest-integration service automatically installs test dependencies:
+
+```yaml
+# Automatically uses pyproject.toml [project.optional-dependencies.test]
+command: pip install --quiet -e '.[test]'
+```
+
+This ensures Docker tests use the same dependency versions as local development.
+
 ## Testing Framework
 
 ### Unit Tests

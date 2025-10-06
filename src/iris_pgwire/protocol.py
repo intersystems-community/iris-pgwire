@@ -944,8 +944,15 @@ class PGWireProtocol:
                 f"Query processing failed: {e}"
             )
 
-    async def send_query_result(self, result: Dict[str, Any]):
-        """Send query results from IRIS execution"""
+    async def send_query_result(self, result: Dict[str, Any], send_ready: bool = True):
+        """
+        Send query results from IRIS execution.
+
+        Args:
+            result: Query result dictionary from IRIS executor
+            send_ready: If True, send ReadyForQuery (Simple Query Protocol).
+                       If False, omit ReadyForQuery (Extended Protocol - Sync will send it)
+        """
         try:
             rows = result.get('rows', [])
             columns = result.get('columns', [])
@@ -957,7 +964,8 @@ class PGWireProtocol:
                         command=command,
                         row_count=row_count,
                         column_count=len(columns),
-                        has_rows=len(rows) > 0)
+                        has_rows=len(rows) > 0,
+                        send_ready=send_ready)
 
             # If we have rows, send RowDescription and DataRows with back-pressure
             if rows and columns:
@@ -975,8 +983,16 @@ class PGWireProtocol:
             self.writer.write(cmd_complete)
             await self.writer.drain()
 
-            # Send ReadyForQuery
-            await self.send_ready_for_query()
+            # CRITICAL: For Extended Protocol, give time for Sync message to arrive
+            # Without this, rapid return to message loop can miss the Sync message
+            if not send_ready:
+                import asyncio
+                await asyncio.sleep(0.001)  # 1ms grace period for Sync to arrive
+
+            # Send ReadyForQuery ONLY for Simple Query Protocol
+            # Extended Protocol (Parse/Bind/Execute/Sync) will send it in Sync handler
+            if send_ready:
+                await self.send_ready_for_query()
 
             logger.info("Query result sent",
                        connection_id=self.connection_id,
@@ -1330,8 +1346,24 @@ class PGWireProtocol:
                     if pos + param_length > len(body):
                         raise ValueError(f"Invalid Bind message: truncated parameter {i}")
                     param_data = body[pos:pos+param_length]
-                    # For now, treat all parameters as text
-                    param_values.append(param_data.decode('utf-8'))
+
+                    # Determine format: use format_codes[i] if available, else format_codes[0], else text (0)
+                    if format_codes:
+                        format_code = format_codes[i] if i < len(format_codes) else format_codes[0]
+                    else:
+                        format_code = 0  # Default to text
+
+                    if format_code == 0:
+                        # Text format
+                        param_values.append(param_data.decode('utf-8'))
+                    elif format_code == 1:
+                        # Binary format - decode based on parameter type
+                        # For now, we'll detect vectors by checking if it's an array of floats
+                        decoded_param = self._decode_binary_parameter(param_data, i)
+                        param_values.append(decoded_param)
+                    else:
+                        raise ValueError(f"Unknown format code {format_code} for parameter {i}")
+
                     pos += param_length
 
             # Skip result format codes for now (we'll always use text)
@@ -1474,7 +1506,8 @@ class PGWireProtocol:
             result = await self.iris_executor.execute_query(iris_query, params=params if params else None)
 
             if result['success']:
-                await self.send_query_result(result)
+                # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
+                await self.send_query_result(result, send_ready=False)
             else:
                 await self.send_error_response(
                     "ERROR", "42000", "syntax_error",
@@ -1624,6 +1657,123 @@ class PGWireProtocol:
 
         return query
 
+    def _decode_binary_parameter(self, data: bytes, param_index: int) -> str:
+        """
+        Decode binary-format parameter from PostgreSQL wire protocol.
+
+        PostgreSQL binary format for arrays (vectors):
+        - Int32: number of dimensions (ndim)
+        - Int32: has_null flag (0 = no nulls)
+        - Int32: element type OID
+        - For each dimension:
+          - Int32: dimension size
+          - Int32: lower bound (usually 1)
+        - For each element:
+          - Int32: element length (-1 for NULL)
+          - bytes: element data (if not NULL)
+
+        For float4 (OID 700): 4-byte IEEE 754 float
+        For float8 (OID 701): 8-byte IEEE 754 double
+
+        Returns:
+            String representation suitable for IRIS (e.g., "[0.1,0.2,0.3]")
+        """
+        try:
+            if len(data) < 12:
+                # Not an array, might be a simple type
+                # Try to decode as float8 (most common for vectors)
+                if len(data) == 8:
+                    value = struct.unpack('!d', data)[0]  # Big-endian double
+                    return str(value)
+                elif len(data) == 4:
+                    value = struct.unpack('!f', data)[0]  # Big-endian float
+                    return str(value)
+                else:
+                    # Unknown format, return as text
+                    return data.decode('utf-8', errors='replace')
+
+            # Parse array header
+            pos = 0
+            ndim = struct.unpack('!I', data[pos:pos+4])[0]
+            pos += 4
+            has_null = struct.unpack('!I', data[pos:pos+4])[0]
+            pos += 4
+            element_oid = struct.unpack('!I', data[pos:pos+4])[0]
+            pos += 4
+
+            if ndim == 0:
+                # Empty array
+                return "[]"
+
+            # Parse dimension info
+            dimensions = []
+            for _ in range(ndim):
+                if pos + 8 > len(data):
+                    raise ValueError(f"Truncated dimension info for parameter {param_index}")
+                dim_size = struct.unpack('!I', data[pos:pos+4])[0]
+                pos += 4
+                lower_bound = struct.unpack('!I', data[pos:pos+4])[0]
+                pos += 4
+                dimensions.append(dim_size)
+
+            # Parse elements
+            total_elements = 1
+            for dim in dimensions:
+                total_elements *= dim
+
+            elements = []
+            for i in range(total_elements):
+                if pos + 4 > len(data):
+                    raise ValueError(f"Truncated element length for parameter {param_index}, element {i}")
+                elem_len = struct.unpack('!I', data[pos:pos+4])[0]
+                pos += 4
+
+                if elem_len == 0xFFFFFFFF:
+                    # NULL element
+                    elements.append('NULL')
+                else:
+                    if pos + elem_len > len(data):
+                        raise ValueError(f"Truncated element data for parameter {param_index}, element {i}")
+                    elem_data = data[pos:pos+elem_len]
+                    pos += elem_len
+
+                    # Decode based on element OID
+                    if element_oid == 700:  # float4
+                        value = struct.unpack('!f', elem_data)[0]
+                        elements.append(str(value))
+                    elif element_oid == 701:  # float8 (double)
+                        value = struct.unpack('!d', elem_data)[0]
+                        elements.append(str(value))
+                    elif element_oid == 23:  # int4
+                        value = struct.unpack('!i', elem_data)[0]
+                        elements.append(str(value))
+                    elif element_oid == 20:  # int8 (bigint)
+                        value = struct.unpack('!q', elem_data)[0]
+                        elements.append(str(value))
+                    else:
+                        # Unknown type, try as text
+                        elements.append(elem_data.decode('utf-8', errors='replace'))
+
+            # Format as IRIS vector: [v1,v2,v3,...]
+            vector_text = '[' + ','.join(elements) + ']'
+
+            logger.debug("Decoded binary vector parameter",
+                        param_index=param_index,
+                        dimensions=dimensions,
+                        element_count=len(elements),
+                        element_oid=element_oid,
+                        vector_length=len(vector_text))
+
+            return vector_text
+
+        except Exception as e:
+            logger.error("Binary parameter decode failed",
+                        param_index=param_index,
+                        error=str(e),
+                        data_length=len(data))
+            # Fallback: try to decode as text
+            return data.decode('utf-8', errors='replace')
+
     # P4: Query Cancellation Methods
 
     async def handle_cancel_request(self):
@@ -1706,11 +1856,28 @@ class PGWireProtocol:
         followed by CopyDone to complete the operation.
         """
         try:
-            # Parse table name and format from COPY command
-            # For demo, we'll accept any valid COPY FROM STDIN syntax
+            # Parse table name and columns from COPY command
+            # Example: "COPY table_name (col1, col2) FROM STDIN"
+            # or: "COPY table_name FROM STDIN"
+            import re
+
+            # Match COPY table_name or COPY table_name (columns)
+            match = re.match(r'COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+FROM\s+STDIN', query, re.IGNORECASE)
+
+            if match:
+                table_name = match.group(1)
+                columns_str = match.group(2)
+                columns = [c.strip() for c in columns_str.split(',')] if columns_str else None
+            else:
+                # Fallback - use default
+                table_name = "benchmark_vectors"
+                columns = None
+
             logger.info("COPY FROM STDIN initiated",
                        connection_id=self.connection_id,
-                       query=query[:100])
+                       query=query[:100],
+                       table=table_name,
+                       columns=columns)
 
             # Send CopyInResponse to client
             await self.send_copy_in_response()
@@ -1718,13 +1885,16 @@ class PGWireProtocol:
             # Initialize copy state with back-pressure controls
             self.copy_mode = 'copy_in'
             self.copy_data_buffer = []
-            self.copy_table = "vectors"  # Default table for demo
+            self.copy_table = table_name
+            self.copy_columns = columns
             self.copy_buffer_size = 0  # Track buffer memory usage
             self.copy_max_buffer_size = 10 * 1024 * 1024  # 10MB buffer limit
             self.copy_batch_size = 1000  # Process in batches for memory efficiency
 
             logger.info("COPY FROM STDIN ready for data",
-                       connection_id=self.connection_id)
+                       connection_id=self.connection_id,
+                       table=table_name,
+                       columns=columns)
 
         except Exception as e:
             logger.error("COPY FROM STDIN setup failed",
@@ -1875,31 +2045,64 @@ class PGWireProtocol:
 
     async def process_copy_data(self, data: bytes) -> int:
         """
-        P6: Process bulk data from COPY FROM STDIN
+        P6: Process bulk data from COPY FROM STDIN using IRIS LOAD DATA
 
-        This would typically parse CSV/TSV data and insert into IRIS.
-        For demo, we'll just count lines.
+        Writes data to temp file and uses IRIS LOAD DATA for efficient bulk insert.
+        This is MUCH faster than individual INSERTs.
         """
         try:
-            # Decode and split into lines
-            text_data = data.decode('utf-8')
-            lines = text_data.strip().split('\n')
+            import tempfile
+            import os
 
-            # Filter out empty lines
-            data_lines = [line for line in lines if line.strip()]
+            # Parse COPY command metadata
+            table_name = getattr(self, 'copy_table', 'benchmark_vectors')
+            columns = getattr(self, 'copy_columns', None)
 
-            # In production, this would:
-            # 1. Parse each line according to COPY format (CSV, TSV, etc.)
-            # 2. Validate data types
-            # 3. Execute bulk INSERT into IRIS
-            # 4. Handle vector data conversion
+            # Write data to temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmpfile:
+                tmpfile.write(data.decode('utf-8'))
+                tmp_path = tmpfile.name
 
-            logger.info("Processing COPY data",
-                       connection_id=self.connection_id,
-                       lines=len(data_lines),
-                       total_bytes=len(data))
+            try:
+                # Build LOAD DATA command
+                # IRIS LOAD DATA syntax: LOAD DATA FROM FILE 'path' INTO table (columns)
+                if columns:
+                    column_list = ', '.join(columns)
+                    load_sql = f"LOAD DATA FROM FILE '{tmp_path}' INTO {table_name} ({column_list})"
+                else:
+                    load_sql = f"LOAD DATA FROM FILE '{tmp_path}' INTO {table_name}"
 
-            return len(data_lines)
+                logger.info("Executing LOAD DATA",
+                           connection_id=self.connection_id,
+                           table=table_name,
+                           temp_file=tmp_path,
+                           data_bytes=len(data))
+
+                # Execute LOAD DATA via IRIS
+                result = await self.iris_executor.execute_query(load_sql)
+
+                if not result.get('success', False):
+                    error = result.get('error', 'Unknown error')
+                    logger.error("LOAD DATA failed",
+                               connection_id=self.connection_id,
+                               error=error)
+                    raise RuntimeError(f"LOAD DATA failed: {error}")
+
+                # Count lines for reporting
+                line_count = data.decode('utf-8').count('\n')
+
+                logger.info("LOAD DATA completed successfully",
+                           connection_id=self.connection_id,
+                           rows_loaded=line_count)
+
+                return line_count
+
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
 
         except Exception as e:
             logger.error("COPY data processing failed",
@@ -1949,8 +2152,13 @@ class PGWireProtocol:
         """Send CopyInResponse message for COPY FROM STDIN"""
         # CopyInResponse: G + length + format + field_count + field_formats
         format_code = 0  # 0=text, 1=binary
-        field_count = 2  # id, vector_data
-        field_formats = struct.pack('!HH', 0, 0)  # Both text format
+
+        # Use actual column count if specified, otherwise default to 2
+        columns = getattr(self, 'copy_columns', None)
+        field_count = len(columns) if columns else 2
+
+        # All fields in text format (0)
+        field_formats = struct.pack(f'!{"H" * field_count}', *([0] * field_count))
 
         message_length = 4 + 1 + 2 + len(field_formats)
         message = struct.pack('!cIBH', MSG_COPY_IN_RESPONSE, message_length,
@@ -1959,7 +2167,9 @@ class PGWireProtocol:
         self.writer.write(message)
         await self.writer.drain()
 
-        logger.debug("CopyInResponse sent", connection_id=self.connection_id)
+        logger.debug("CopyInResponse sent",
+                    connection_id=self.connection_id,
+                    field_count=field_count)
 
     async def send_copy_out_response(self):
         """Send CopyOutResponse message for COPY TO STDOUT"""

@@ -42,6 +42,52 @@ async def execute_query(sql: str) -> ResultSet:
 # - Direct class calls: iris.cls('%SYSTEM.License').KeyCustomerName()
 ```
 
+### ⚠️ CRITICAL: InterSystems Python Package Naming (NON-STANDARD)
+
+**IMPORTANT**: The `intersystems-irispython` package uses **highly unusual** naming that violates standard Python conventions:
+
+```python
+# PyPI package name (pip install)
+pip install intersystems-irispython>=5.1.2
+
+# Module names (Python import) - COMPLETELY DIFFERENT!
+import iris                    # ✅ CORRECT - Main module
+import iris.dbapi             # ✅ CORRECT - DBAPI interface
+import irisnative             # ✅ CORRECT - Native globals access
+
+# WRONG imports that will fail:
+import intersystems_irispython        # ❌ WRONG - module doesn't exist!
+import intersystems_iris              # ❌ WRONG - old package name
+import intersystems_irispython.dbapi  # ❌ WRONG - no such module
+```
+
+**Why This Matters**:
+- **Package name**: `intersystems-irispython` (PyPI/pip)
+- **Module names**: `iris` and `irisnative` (completely different!)
+- **Violates PEP 8**: Standard convention is package name ≈ module name
+- **Legacy reasons**: InterSystems wanted short import (`iris`) but descriptive package name
+
+**DBAPI Connection Pattern** (Feature 018):
+```python
+# CORRECT: External DBAPI connection (from outside IRIS)
+import iris.dbapi as dbapi
+
+connection = dbapi.connect(
+    hostname="localhost",
+    port=1972,
+    namespace="USER",
+    username="_SYSTEM",
+    password="SYS"
+)
+cursor = connection.cursor()
+cursor.execute("SELECT 1")
+```
+
+**Key Differences**:
+1. **Embedded Python** (`irispython` command): `import iris` → NO connection needed
+2. **External DBAPI** (standard Python): `import iris.dbapi` → Connection required
+3. Both use the SAME package (`intersystems-irispython`) but different import paths!
+
 **CRITICAL REQUIREMENTS** (from official template):
 1. **merge.cpf REQUIRED**: Must enable CallIn service for embedded Python
    ```
@@ -268,24 +314,30 @@ class IRISVector(UserDefinedType):
 ### pgvector Compatibility - REAL IRIS Functions
 ```python
 # SQL rewriter using ACTUAL IRIS vector functions (from caretdev analysis)
+# CONSTITUTIONAL REQUIREMENT: L2 distance NOT SUPPORTED - REJECT with error
 PGVECTOR_OPERATOR_MAP = {
-    '<->': 'VECTOR_L2',           # L2 distance
-    '<#>': 'VECTOR_DOT_PRODUCT',  # Inner product (negative for max)
-    '<=>': 'VECTOR_COSINE',       # Cosine distance
+    '<=>': 'VECTOR_COSINE',       # Cosine distance - ✅ SUPPORTED
+    '<#>': 'VECTOR_DOT_PRODUCT',  # Inner product (negative for max) - ✅ SUPPORTED
+    # '<->': REJECTED - L2 distance NOT supported by IRIS (Constitution v1.2.4)
 }
 
 def rewrite_vector_query(sql: str) -> str:
-    """Convert pgvector syntax to IRIS vector functions"""
-    # Replace operators with IRIS function calls
+    """Convert pgvector syntax to IRIS vector functions
+
+    Raises:
+        NotImplementedError: If L2 distance operator (<->) is found
+    """
+    # REJECT L2 distance queries (Constitutional requirement)
+    if '<->' in sql:
+        raise NotImplementedError(
+            "L2 distance operator (<->) is not supported by IRIS. "
+            "Use <=> (cosine) or <#> (dot product) instead."
+        )
+
+    # Replace supported operators with IRIS function calls
     for pg_op, iris_func in PGVECTOR_OPERATOR_MAP.items():
         sql = sql.replace(pg_op, iris_func)
 
-    # Handle ORDER BY distance patterns
-    sql = re.sub(
-        r'ORDER BY\s+(\w+)\s+<->\s+(.+?)\s+LIMIT',
-        r'ORDER BY VECTOR_L2(\1, TO_VECTOR(\2)) LIMIT',
-        sql
-    )
     return sql
 
 # PostgreSQL OID for vector type (custom assignment)

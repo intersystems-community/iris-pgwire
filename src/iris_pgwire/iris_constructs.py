@@ -112,7 +112,10 @@ class IRISSQLExtensionTranslator:
             logger.warning("TOP n PERCENT not fully supported, converting to approximate LIMIT")
             sql = self.top_percent_pattern.sub(replace_top_percent, sql)
             # Add LIMIT at the end - this is approximate
-            sql += f" LIMIT {int(re.search(r'TOP\s+(\d+)\s+PERCENT', sql, re.IGNORECASE).group(1))}"
+            percent_pattern = r'TOP\s+(\d+)\s+PERCENT'
+            match = re.search(percent_pattern, sql, re.IGNORECASE)
+            if match:
+                sql += f" LIMIT {int(match.group(1))}"
 
         # Handle regular TOP
         if self.top_pattern.search(sql):
