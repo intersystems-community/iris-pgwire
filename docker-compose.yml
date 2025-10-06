@@ -72,7 +72,71 @@ services:
     restart: unless-stopped
     profiles: ["hnsw-test"]
 
-  # Optional: PostgreSQL client tools for testing
+  # Integration Test Runner - REQUIRED for Constitutional Principle II
+  # Runs pytest integration tests against real IRIS instance
+  pytest-integration:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: iris-pgwire-integration-tests
+    depends_on:
+      iris:
+        condition: service_healthy
+    environment:
+      # IRIS connection for integration tests
+      - IRIS_HOSTNAME=iris
+      - IRIS_PORT=1972
+      - IRIS_NAMESPACE=USER
+      - IRIS_USERNAME=_SYSTEM
+      - IRIS_PASSWORD=SYS
+      # PGWire server connection
+      - PGWIRE_HOST=iris
+      - PGWIRE_PORT=5432
+      # Test configuration
+      - PYTHONPATH=/app/src
+      - PYTEST_ARGS=-v --tb=short
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./LICENSE:/app/LICENSE:ro
+      - ./README.md:/app/README.md:ro
+      - ./ipm:/app/ipm:ro
+      - ./docker:/app/docker:ro
+      - ./test-results:/app/test-results
+    command: >
+      sh -c "
+        echo 'Installing test dependencies...' &&
+        pip install --quiet pytest>=7.0.0 pytest-asyncio>=0.21.0 pytest-timeout>=2.2.0 pytest-cov>=4.1.0 psycopg[binary]>=3.1.0 docker>=6.0.0 sqlparse>=0.4.0 intersystems-irispython>=5.1.2 &&
+        echo 'Waiting for IRIS to be ready...' &&
+        sleep 5 &&
+        echo 'Running ALL integration tests (no marker filter)...' &&
+        pytest tests/integration/ -v --tb=line --junitxml=test-results/integration-results.xml
+      "
+    profiles: ["test"]
+
+  # Contract Test Runner - Tests that don't require IRIS
+  pytest-contract:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: iris-pgwire-contract-tests
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTEST_ARGS=-v --tb=short
+    volumes:
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./test-results:/app/test-results
+    command: >
+      sh -c "
+        echo 'Running contract tests...' &&
+        pytest tests/contract/ -v --tb=short --junitxml=test-results/contract-results.xml
+      "
+    profiles: ["test"]
+
+  # Optional: PostgreSQL client tools for manual testing
   # Note: PGWire server now runs inside iris container (embedded deployment)
   pgclient:
     image: postgres:15-alpine

@@ -1,0 +1,93 @@
+{
+  "benchmark_config": {
+    "iterations": 50,
+    "dimensions": 128,
+    "timestamp": "2025-10-05 17:07:56"
+  },
+  "results": [
+    {
+      "path_name": "1_postgres_pgvector",
+      "query_type": "simple_select",
+      "iterations": 50,
+      "avg_latency_ms": 0.32,
+      "p50_latency_ms": 0.29,
+      "p95_latency_ms": 0.39,
+      "p99_latency_ms": 0.77,
+      "min_latency_ms": 0.26,
+      "max_latency_ms": 0.77,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "2_dbapi_iris_direct",
+      "query_type": "simple_select",
+      "iterations": 50,
+      "avg_latency_ms": 0.21,
+      "p50_latency_ms": 0.2,
+      "p95_latency_ms": 0.25,
+      "p99_latency_ms": 0.73,
+      "min_latency_ms": 0.16,
+      "max_latency_ms": 0.73,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "3_pgwire_dbapi_iris",
+      "query_type": "simple_select",
+      "iterations": 50,
+      "avg_latency_ms": 3.82,
+      "p50_latency_ms": 3.99,
+      "p95_latency_ms": 4.29,
+      "p99_latency_ms": 4.8,
+      "min_latency_ms": 1.96,
+      "max_latency_ms": 4.8,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "4_pgwire_embedded_iris",
+      "query_type": "simple_select",
+      "iterations": 50,
+      "avg_latency_ms": 4.75,
+      "p50_latency_ms": 4.33,
+      "p95_latency_ms": 7.01,
+      "p99_latency_ms": 7.63,
+      "min_latency_ms": 1.99,
+      "max_latency_ms": 7.63,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "1_postgres_pgvector",
+      "query_type": "vector_similarity",
+      "iterations": 50,
+      "avg_latency_ms": 0.59,
+      "p50_latency_ms": 0.43,
+      "p95_latency_ms": 1.21,
+      "p99_latency_ms": 2.4,
+      "min_latency_ms": 0.33,
+      "max_latency_ms": 2.4,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "2_dbapi_iris_direct",
+      "query_type": "vector_similarity",
+      "iterations": 50,
+      "avg_latency_ms": 2.35,
+      "p50_latency_ms": 2.13,
+      "p95_latency_ms": 4.74,
+      "p99_latency_ms": 5.03,
+      "min_latency_ms": 2.01,
+      "max_latency_ms": 5.03,
+      "success_rate": 100.0
+    },
+    {
+      "path_name": "3_pgwire_dbapi_iris",
+      "query_type": "vector_similarity",
+      "iterations": 50,
+      "avg_latency_ms": 6.76,
+      "p50_latency_ms": 6.94,
+      "p95_latency_ms": 8.05,
+      "p99_latency_ms": 8.57,
+      "min_latency_ms": 4.39,
+      "max_latency_ms": 8.57,
+      "success_rate": 100.0
+    }
+  ]
+}
