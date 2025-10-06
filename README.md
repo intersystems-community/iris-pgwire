@@ -64,16 +64,7 @@ with psycopg.connect('host=localhost port=5434 dbname=USER') as conn:
 
 ## 📊 Performance (Verified)
 
-**Benchmark**: 128D vectors with **binary parameter encoding**, 50 iterations, 100% success rate
-**Tested Dimensions**: 128D, 256D, 512D, 1024D (all pass) | **Max Verified**: 188,962D
-
-### Vector Similarity Queries (pgvector `<=>` operator with parameter binding)
-
-| Path | P50 Latency | P95 Latency | vs PostgreSQL |
-|------|-------------|-------------|---------------|
-| PostgreSQL + pgvector | 0.43 ms | 1.21 ms | Baseline |
-| IRIS DBAPI Direct | 2.13 ms | 4.74 ms | 5.0× slower |
-| PGWire → DBAPI → IRIS | 6.94 ms | 8.05 ms | 16.1× slower |
+**Benchmark**: 50 iterations, 100% success rate across all paths
 
 ### Simple SELECT Queries
 
@@ -83,6 +74,16 @@ with psycopg.connect('host=localhost port=5434 dbname=USER') as conn:
 | IRIS DBAPI Direct | 0.20 ms | 0.25 ms | **1.5× faster** ✅ |
 | PGWire → DBAPI → IRIS | 3.99 ms | 4.29 ms | 13.8× slower |
 | PGWire → Embedded IRIS | 4.33 ms | 7.01 ms | 14.9× slower |
+
+### Vector Similarity Queries (pgvector `<=>` with binary parameter encoding)
+
+**Tested Dimensions**: 128D, 256D, 512D, 1024D (all pass) | **Max Verified**: 188,962D
+
+| Path | P50 Latency | P95 Latency | vs PostgreSQL |
+|------|-------------|-------------|---------------|
+| PostgreSQL + pgvector | 0.43 ms | 1.21 ms | Baseline |
+| IRIS DBAPI Direct | 2.13 ms | 4.74 ms | 5.0× slower |
+| PGWire → DBAPI → IRIS | 6.94 ms | 8.05 ms | 16.1× slower |
 
 **Source**: `benchmarks/results/benchmark_4way_results.json` (2025-10-05)
 **Tests**: `tests/test_all_vector_sizes.py` (128D-1024D), `tests/test_vector_limits.py` (max dimension)
