@@ -117,6 +117,8 @@ A system administrator wants to install the PGWire server on their IRIS instance
 
 - **FR-018**: System MUST execute large vector similarity queries (>1000 dimensions) using DBAPI backend with performance within 2× of pgvector PostgreSQL baseline (target: <20ms P95 latency for 100K vectors with HNSW indexing per constitutional Principle VI dataset scale thresholds). Performance measured at ≥100K vector scale where HNSW provides documented 4-10× improvement over sequential scan.
 
+- **FR-019**: System MUST provide Docker Compose test runner services (pytest-integration and pytest-contract) for executing integration tests against real IRIS instances per Constitutional Principle II (Test-First Development). Test runner MUST depend on IRIS service health check, pass IRIS connection parameters via environment variables, and output JUnit XML results. This is MANDATORY for constitutional compliance - integration tests cannot be run manually or via mocks.
+
 ### Key Entities *(include if feature involves data)*
 
 - **Backend Configuration**: Represents the choice between DBAPI and embedded Python execution paths, including connection parameters and performance settings. Used by the server initialization process to establish the SQL execution strategy.
@@ -146,6 +148,8 @@ A system administrator wants to install the PGWire server on their IRIS instance
 - [x] Success criteria are measurable (performance target: comparable to pgvector PostgreSQL)
 - [x] Scope is clearly bounded
 - [x] Dependencies and assumptions identified
+- [x] Test infrastructure requirement documented (FR-019)
+- [ ] Integration tests executed against real IRIS via docker-compose **← CRITICAL**
 
 ---
 
@@ -156,9 +160,10 @@ A system administrator wants to install the PGWire server on their IRIS instance
 - [x] Key concepts extracted
 - [x] Ambiguities marked
 - [x] User scenarios defined
-- [x] Requirements generated
+- [x] Requirements generated (FR-001 through FR-019)
 - [x] Entities identified
-- [ ] Review checklist passed (blocked on clarifications)
+- [x] Test infrastructure requirement added (FR-019)
+- [ ] Review checklist passed (blocked on integration test execution)
 
 ---
 
@@ -183,6 +188,7 @@ A system administrator wants to install the PGWire server on their IRIS instance
 - IRIS instance configured to allow embedded Python execution
 - IRIS OpenTelemetry (OTEL) capability available (IRIS 2024.1+ manages OTEL export; iris-pgwire adds trace context to logs)
 - Network access for pip to download Python dependencies during installation
+- Docker and Docker Compose for running integration tests against real IRIS instances (Constitutional Principle II requirement)
 
 ### Assumptions
 - Users have administrative access to IRIS instance for IPM installation

@@ -283,17 +283,19 @@ class VectorQueryOptimizer:
 
         Transforms:
         - column <=> '[1,2,3]' → VECTOR_COSINE(column, TO_VECTOR('[1,2,3]', FLOAT))
-        - column <-> '[1,2,3]' → VECTOR_L2(column, TO_VECTOR('[1,2,3]', FLOAT))
         - column <#> '[1,2,3]' → (-VECTOR_DOT_PRODUCT(column, TO_VECTOR('[1,2,3]', FLOAT)))
 
-        CRITICAL: Only rewrite operators in SELECT clause to avoid duplication.
-        ORDER BY will be handled by _fix_order_by_aliases() to use the SELECT expression.
+        REJECTS (Constitutional requirement):
+        - column <-> '[1,2,3]' → NotImplementedError (L2 distance not supported by IRIS)
 
         Args:
             sql: SQL with pgvector operators
 
         Returns:
-            SQL with IRIS vector functions in SELECT clause
+            SQL with IRIS vector functions
+
+        Raises:
+            NotImplementedError: If L2 distance operator (<->) is found in query
         """
         print(f"\n🔍🔍🔍 _REWRITE_PGVECTOR_OPERATORS CALLED", flush=True)
         print(f"  Input SQL: {sql[:200]}...", flush=True)
@@ -320,12 +322,15 @@ class VectorQueryOptimizer:
 
         logger.info(f"  Split SQL: SELECT part {len(select_part)} chars, ORDER BY part {len(order_by_part)} chars")
 
-        # Only rewrite operators in SELECT part
+        # Rewrite operators in BOTH SELECT and ORDER BY parts
+        # BUG FIX: Original code only rewrote SELECT, assuming ORDER BY would use aliases
+        # But _fix_order_by_aliases() is disabled, so we need to rewrite ORDER BY too
         rewritten_select = self._rewrite_operators_in_text(select_part)
+        rewritten_order_by = self._rewrite_operators_in_text(order_by_part)
 
-        # Combine with unchanged ORDER BY
-        result = rewritten_select + order_by_part
-        logger.info(f"✅ Operator rewriting complete (SELECT only)")
+        # Combine rewritten parts
+        result = rewritten_select + rewritten_order_by
+        logger.info(f"✅ Operator rewriting complete (SELECT + ORDER BY)")
         logger.info(f"   FULL RESULT SQL (len={len(result)}): {result[:500]}...{result[-200:] if len(result) > 700 else ''}")
 
         return result
@@ -361,24 +366,33 @@ class VectorQueryOptimizer:
         if '<=>' in sql:
             operators_found.append('<=>')
             print(f"  Found <=> operator, rewriting...", flush=True)
-            # Match both column AND literal values (quoted strings/arrays) on BOTH sides
-            # Handles: column <=> '[vector]', '[vector]' <=> '[vector]', etc.
-            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<=>\s*('[^']*'|\[[^\]]*\])"
+            # Match both column AND literal values (quoted strings/arrays) OR parameter placeholders on BOTH sides
+            # Handles: column <=> '[vector]', column <=> ?, '[vector]' <=> '[vector]', etc.
+            # Parameter placeholders: ?, %s, $1, $2, etc.
+            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<=>\s*('[^']*'|\[[^\]]*\]|\?|%s|\$\d+)"
             def replace_cosine_distance(match):
                 left, right = match.groups()
                 print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
+
+                # Check if right side is a parameter placeholder (?, %s, $1, etc.)
+                is_param_placeholder = right in ('?', '%s') or right.startswith('$')
+
                 # If either side already has TO_VECTOR, use as-is
                 if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
                     result = f'VECTOR_COSINE({left}, {right})'
+                # If right is a parameter placeholder, wrap it in TO_VECTOR
+                elif is_param_placeholder:
+                    result = f'VECTOR_COSINE({left}, TO_VECTOR({right}, DOUBLE))'
+                    print(f"    ✅ Wrapped parameter placeholder in TO_VECTOR", flush=True)
                 # If left is a literal, wrap it in TO_VECTOR
                 elif left.startswith("'") or left.startswith("["):
                     # Optimize the literal (strip brackets)
                     opt_left = self._optimize_vector_literal(left)
                     if 'TO_VECTOR' in right.upper():
-                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', FLOAT), {right})"
+                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', DOUBLE), {right})"
                     else:
                         opt_right = self._optimize_vector_literal(right)
-                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT))"
+                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE))"
                 # Left is a column name
                 else:
                     if 'TO_VECTOR' in right.upper():
@@ -387,7 +401,7 @@ class VectorQueryOptimizer:
                         # Optimize the literal (strip brackets)
                         opt_right = self._optimize_vector_literal(right)
                         # Check if wrapping in TO_VECTOR would exceed IRIS 3KB limit
-                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
+                        wrapped = f"TO_VECTOR('{opt_right}', DOUBLE)"
                         if len(wrapped) > 3000:
                             # Use direct CSV format without TO_VECTOR wrapper
                             # IRIS accepts raw CSV: VECTOR_COSINE(col, '0.1,0.2,0.3')
@@ -400,64 +414,49 @@ class VectorQueryOptimizer:
             sql = re.sub(pattern, replace_cosine_distance, sql)
             print(f"  After <=> rewrite: {sql[:200]}...", flush=True)
 
-        # <-> operator (L2 distance) -> VECTOR_L2
+        # <-> operator (L2 distance) - NOT SUPPORTED BY IRIS
+        # Constitutional requirement: REJECT with NOT IMPLEMENTED error
         if '<->' in sql:
-            operators_found.append('<->')
-            print(f"  Found <-> operator, rewriting...", flush=True)
-            # Match both column AND literal values on BOTH sides
-            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<->\s*('[^']*'|\[[^\]]*\])"
-            def replace_l2(match):
-                left, right = match.groups()
-                print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
-                if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
-                    result = f'VECTOR_L2({left}, {right})'
-                elif left.startswith("'") or left.startswith("["):
-                    opt_left = self._optimize_vector_literal(left)
-                    if 'TO_VECTOR' in right.upper():
-                        result = f"VECTOR_L2(TO_VECTOR('{opt_left}', FLOAT), {right})"
-                    else:
-                        opt_right = self._optimize_vector_literal(right)
-                        result = f"VECTOR_L2(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT))"
-                else:
-                    if 'TO_VECTOR' in right.upper():
-                        result = f'VECTOR_L2({left}, {right})'
-                    else:
-                        opt_right = self._optimize_vector_literal(right)
-                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
-                        if len(wrapped) > 3000:
-                            result = f"VECTOR_L2({left}, '{opt_right}')"
-                            print(f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV", flush=True)
-                        else:
-                            result = f"VECTOR_L2({left}, {wrapped})"
-                print(f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}", flush=True)
-                return result
-            sql = re.sub(pattern, replace_l2, sql)
-            print(f"  After <-> rewrite: {sql[:200]}...", flush=True)
+            error_msg = (
+                "L2 distance operator (<->) is not supported by IRIS. "
+                "IRIS only supports VECTOR_COSINE (use <=> operator) and VECTOR_DOT_PRODUCT (use <#> operator). "
+                "Please rewrite your query to use one of these supported distance functions."
+            )
+            logger.error(f"❌ L2 distance operator rejected: {error_msg}")
+            print(f"  ❌ REJECTING L2 operator: {error_msg}", flush=True)
+            raise NotImplementedError(error_msg)
 
         # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
         if '<#>' in sql:
             operators_found.append('<#>')
             print(f"  Found <#> operator, rewriting...", flush=True)
-            # Match both column AND literal values on BOTH sides
-            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<#>\s*('[^']*'|\[[^\]]*\])"
+            # Match both column AND literal values OR parameter placeholders on BOTH sides
+            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<#>\s*('[^']*'|\[[^\]]*\]|\?|%s|\$\d+)"
             def replace_inner_product(match):
                 left, right = match.groups()
                 print(f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}", flush=True)
+
+                # Check if right side is a parameter placeholder
+                is_param_placeholder = right in ('?', '%s') or right.startswith('$')
+
                 if 'TO_VECTOR' in left.upper() or 'TO_VECTOR' in right.upper():
                     result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
+                elif is_param_placeholder:
+                    result = f'(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, DOUBLE)))'
+                    print(f"    ✅ Wrapped parameter placeholder in TO_VECTOR", flush=True)
                 elif left.startswith("'") or left.startswith("["):
                     opt_left = self._optimize_vector_literal(left)
                     if 'TO_VECTOR' in right.upper():
-                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', FLOAT), {right}))"
+                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', DOUBLE), {right}))"
                     else:
                         opt_right = self._optimize_vector_literal(right)
-                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', FLOAT), TO_VECTOR('{opt_right}', FLOAT)))"
+                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
                 else:
                     if 'TO_VECTOR' in right.upper():
                         result = f'(-VECTOR_DOT_PRODUCT({left}, {right}))'
                     else:
                         opt_right = self._optimize_vector_literal(right)
-                        wrapped = f"TO_VECTOR('{opt_right}', FLOAT)"
+                        wrapped = f"TO_VECTOR('{opt_right}', DOUBLE)"
                         if len(wrapped) > 3000:
                             result = f"(-VECTOR_DOT_PRODUCT({left}, '{opt_right}'))"
                             print(f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV", flush=True)
@@ -628,6 +627,48 @@ class VectorQueryOptimizer:
             logger.info("ℹ️ No ORDER BY alias replacements needed")
 
         return result
+
+    def bind_vector_parameter(self, vector: List[float], data_type: str = 'DECIMAL') -> str:
+        """
+        Convert Python list to IRIS TO_VECTOR format for DBAPI backend.
+
+        This method supports the DBAPI backend by converting Python lists
+        directly to IRIS TO_VECTOR() syntax suitable for parameter binding.
+
+        Args:
+            vector: List of floats representing vector dimensions
+            data_type: IRIS vector type ('DECIMAL', 'FLOAT', or 'INT')
+
+        Returns:
+            TO_VECTOR SQL fragment like "TO_VECTOR('[0.1,0.2,0.3]', DECIMAL)"
+
+        Raises:
+            ValueError: If vector is empty or exceeds 2048 dimensions
+            TypeError: If vector contains non-numeric values
+
+        Example:
+            >>> optimizer.bind_vector_parameter([0.1, 0.2, 0.3])
+            "TO_VECTOR('[0.1,0.2,0.3]', DECIMAL)"
+        """
+        # Validate input
+        if not vector:
+            raise ValueError("Vector cannot be empty")
+
+        if len(vector) > 2048:
+            raise ValueError(
+                f"Vector dimensions ({len(vector)}) exceed maximum (2048)"
+            )
+
+        # Validate all elements are numeric
+        try:
+            # Convert to JSON array format
+            vector_json = '[' + ','.join(str(float(v)) for v in vector) + ']'
+        except (TypeError, ValueError) as e:
+            raise TypeError(f"Vector contains non-numeric values: {e}") from e
+
+        # Generate TO_VECTOR syntax with unquoted keyword
+        # CRITICAL: data_type must be unquoted (DECIMAL not 'DECIMAL')
+        return f"TO_VECTOR('{vector_json}', {data_type.upper()})"
 
     def _convert_vector_to_literal(self, vector_param: str) -> Optional[str]:
         """
