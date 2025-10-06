@@ -1,19 +1,21 @@
 <!--
 Sync Impact Report:
-- Version change: 1.2.0 → 1.2.1
+- Version change: 1.2.3 → 1.2.4
 - Modified principles:
-  * IV. IRIS Integration - Added terminology clarification for IRIS DBAPI vs IRIS Native
-- Added sections: None
+  * VI. Vector Performance Requirements - Corrected L2 distance handling strategy
+- Changed sections: "IRIS Vector Function Limitations" - Changed from "must map L2 to cosine" to "must REJECT L2 with NOT IMPLEMENTED error"
 - Removed sections: None
 - Templates requiring updates:
   ✅ plan-template.md - No changes needed (constitution check already present)
   ✅ spec-template.md - No changes needed (requirements validation aligned)
   ✅ tasks-template.md - No changes needed (task categories aligned)
-  ✅ CLAUDE.md - Terminology corrections already completed (2025-10-03)
-- Follow-up TODOs: None
-- Bump Rationale: PATCH version bump - Terminology clarification to prevent
-  confusion between "IRIS native" (low-level globals SDK) and external DBAPI
-  driver connections. Documentation corrections completed 2025-10-03.
+  ✅ CLAUDE.md - Vector limitations documented in existing vector sections
+- Follow-up TODOs: Update vector optimizer to default to DOUBLE instead of FLOAT; implement L2 rejection in vector_optimizer.py
+- Bump Rationale: PATCH version bump - Corrected L2 distance handling strategy based on
+  user feedback. Previous version incorrectly stated server should map <-> to <=>, but
+  correct behavior is to REJECT L2 queries with NOT IMPLEMENTED error. Tests should use
+  cosine (<=>) or dot product (<#>) exclusively. Server now raises NotImplementedError
+  when <-> operator detected. Documentation corrected 2025-10-05.
 -->
 
 # IRIS PostgreSQL Wire Protocol Constitution
@@ -61,7 +63,45 @@ The merge.cpf MUST be applied during IRIS container startup via `iris merge IRIS
 
 **Terminology Clarification**: "IRIS native" refers to the low-level SDK for accessing IRIS globals (multivalue B+-tree storage engine), NOT external DBAPI driver connections. When documenting limitations with external TCP connections using the IRIS DBAPI driver (e.g., vector parameter binding issues), use precise terminology: "external DBAPI connections" or "IRIS DBAPI driver limitations" rather than "native protocol" which has a different technical meaning.
 
-**Rationale**: The CallIn service is the bridge between embedded Python and IRIS internals. Without it, embedded Python cannot access IRIS functionality. The official InterSystems Community template provides battle-tested patterns that eliminate authentication complexity and ensure reliable integration. Async threading is essential for handling concurrent connections without blocking. Clear terminology prevents confusion between IRIS native globals access and DBAPI driver behavior.
+**CRITICAL: Python Package Naming (Non-Standard)**
+
+The `intersystems-irispython` package violates standard Python naming conventions and requires special attention:
+
+```python
+# PyPI Package (pip install)
+pip install intersystems-irispython>=5.1.2
+
+# Module imports (COMPLETELY DIFFERENT from package name!)
+import iris                # ✅ CORRECT - Main embedded Python module
+import iris.dbapi         # ✅ CORRECT - External DBAPI driver
+import irisnative         # ✅ CORRECT - Low-level globals SDK
+
+# WRONG imports that WILL FAIL:
+import intersystems_irispython        # ❌ Module doesn't exist!
+import intersystems_iris              # ❌ Old package name
+import intersystems_irispython.dbapi  # ❌ No such module path
+```
+
+**Why This Matters**:
+- Package name: `intersystems-irispython` (pip/PyPI)
+- Module names: `iris` and `irisnative` (completely different!)
+- Violates PEP 8 convention: package name should approximate module name
+- Caused by legacy design: InterSystems wanted short import name (`iris`) but descriptive package name
+
+**Deployment Pattern Differences**:
+1. **Embedded Python** (runs inside IRIS process via `irispython` command):
+   - Import: `import iris`
+   - NO connection required - direct access to IRIS internals
+   - Use for: PGWire server execution, internal IRIS operations
+
+2. **External DBAPI** (runs in external Python process, connects via TCP):
+   - Import: `import iris.dbapi as dbapi`
+   - Connection required: `dbapi.connect(hostname, port, namespace, username, password)`
+   - Use for: Tests, external applications, connection pooling
+
+Both patterns use the SAME PyPI package (`intersystems-irispython`) but serve different architectural purposes. Always use the correct import path for your deployment pattern.
+
+**Rationale**: The CallIn service is the bridge between embedded Python and IRIS internals. Without it, embedded Python cannot access IRIS functionality. The official InterSystems Community template provides battle-tested patterns that eliminate authentication complexity and ensure reliable integration. Async threading is essential for handling concurrent connections without blocking. Clear terminology prevents confusion between IRIS native globals access and DBAPI driver behavior. The non-standard package naming is a known InterSystems design decision that requires explicit documentation to prevent import errors.
 
 ### V. Production Readiness
 
@@ -85,13 +125,66 @@ CREATE INDEX idx_vector ON table_name(vector_column) AS HNSW(Distance='Cosine')
 
 **ACORN-1 DEPRECATION**: The ACORN-1 algorithm (`SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1`) is NOT RECOMMENDED for production use. Empirical testing shows consistent performance degradation (20-72% slower) at all dataset scales despite correct engagement. ACORN-1 syntax is documented for reference but MUST NOT be used in production deployments.
 
+**IRIS Vector Function Limitations**:
+
+IRIS supports ONLY two vector similarity functions:
+- `VECTOR_COSINE(vec1, vec2)` - Cosine similarity
+- `VECTOR_DOT_PRODUCT(vec1, vec2)` - Dot product
+
+**CRITICAL**: IRIS does NOT support L2 distance (`VECTOR_L2` does not exist). This creates incompatibility with pgvector's default `<->` operator which represents L2/Euclidean distance. The server MUST REJECT any queries using the `<->` operator with a NOT IMPLEMENTED error.
+
+**pgvector Operator Mapping**:
+```sql
+-- pgvector operators and IRIS equivalents:
+<=>  →  VECTOR_COSINE()      ✅ Supported (cosine distance)
+<#>  →  VECTOR_DOT_PRODUCT()  ✅ Supported (negative inner product)
+<->  →  VECTOR_L2()           ❌ NOT SUPPORTED - server must REJECT with error
+```
+
+**Vector Datatype Matching Requirement**:
+
+Vector operations FAIL with "Cannot perform vector operation on vectors of different datatypes" if the table schema datatype (FLOAT/DOUBLE/DECIMAL) does not match the `TO_VECTOR()` call datatype:
+
+```sql
+-- Table created with DOUBLE:
+CREATE TABLE vectors (id INT, embedding VECTOR(DOUBLE, 128))
+
+-- Query MUST use matching DOUBLE type:
+SELECT * FROM vectors
+ORDER BY VECTOR_COSINE(embedding, TO_VECTOR('[...]', DOUBLE))  -- ✅ Works
+
+-- Query with FLOAT type FAILS:
+SELECT * FROM vectors
+ORDER BY VECTOR_COSINE(embedding, TO_VECTOR('[...]', FLOAT))   -- ❌ Datatype error
+```
+
+**Additional pgvector Incompatibilities**:
+
+Beyond L2 distance and datatype matching, IRIS vector search has additional limitations compared to pgvector:
+
+1. **No L1 (Manhattan) distance** - pgvector supports L1 via custom operators, IRIS does not
+2. **No Hamming distance** - Binary vector comparison not supported
+3. **No half-precision vectors** - pgvector supports `halfvec`, IRIS requires FLOAT/DOUBLE/DECIMAL
+4. **No sparse vectors** - pgvector's `sparsevec` type not supported
+5. **Limited index types** - Only HNSW available (no IVFFlat equivalent)
+6. **No vector aggregation functions** - pgvector has `avg(vector)`, IRIS does not
+7. **Parameter binding restrictions** - Vectors in ORDER BY must be literals (server rewrites automatically)
+
+All vector query rewriting MUST:
+1. REJECT queries using `<->` operator (L2 distance) with NOT IMPLEMENTED error
+2. REJECT unsupported pgvector features (L1, Hamming, halfvec, sparsevec, etc.) with clear error messages
+3. Support `<=>` (cosine) and `<#>` (dot product) operators only
+4. Preserve or detect the vector column's datatype (FLOAT/DOUBLE/DECIMAL)
+5. Use matching datatype in all `TO_VECTOR()` calls
+6. Transform parameter-bound vectors to literals for ORDER BY clauses (automatic via optimizer)
+
 **Performance Validation Requirements**:
 - All vector operations MUST be benchmarked against dataset scale thresholds
 - Performance tests MUST include EXPLAIN query plan analysis to verify index usage
 - Vector datasets below 100K scale SHOULD consider alternative optimization strategies
 - Production deployments MUST target ≥100K vector scale for HNSW benefits
 
-**Rationale**: Comprehensive investigation (1K, 10K, 100K vector scales) proved HNSW requires sufficient dataset scale to overcome index overhead. ACORN-1 consistently degrades performance despite documentation claims. These empirically-validated thresholds prevent premature optimization and ensure production deployments achieve expected 4-10× performance improvements.
+**Rationale**: Comprehensive investigation (1K, 10K, 100K vector scales) proved HNSW requires sufficient dataset scale to overcome index overhead. ACORN-1 consistently degrades performance despite documentation claims. These empirically-validated thresholds prevent premature optimization and ensure production deployments achieve expected 4-10× performance improvements. The absence of L2 distance support in IRIS is a fundamental limitation that breaks pgvector's default `<->` operator - the server must explicitly reject these queries rather than attempting automatic mapping to alternative distance functions. Datatype mismatches cause runtime failures that are difficult to debug without understanding IRIS's strict type checking for vector operations.
 
 ## Security Requirements
 
@@ -120,4 +213,4 @@ Constitution violations may be permitted only when:
 3. Production security requirements override development convenience
 4. Performance requirements documented with benchmarks justify the complexity
 
-**Version**: 1.2.1 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-10-03
+**Version**: 1.2.4 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-10-05

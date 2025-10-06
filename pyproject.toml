@@ -28,6 +28,13 @@ dependencies = [
     # NOTE: psycopg2-binary kept for legacy compatibility, but psycopg3 recommended for production
     # See specs/013-vector-query-optimizer/CLIENT_COMPATIBILITY.md for client recommendations
     "psycopg2-binary>=2.9.10",
+    # DBAPI backend support (feature 018-add-dbapi-option)
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-asyncio>=0.41b0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -36,12 +43,13 @@ test = [
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.2.0",
     "pytest-cov>=4.1.0",
-    "pytest-flaky>=3.8.0",
     # psycopg3 (NOT psycopg2) - uses server-side parameter binding for vector optimization
     # Required for E2E tests with large vectors (1024+ dimensions)
-    "psycopg>=3.1.0",
+    # [binary] includes C extension + libpq, no system dependencies needed
+    "psycopg[binary]>=3.1.0",
     "docker>=6.0.0",
-    "structlog>=23.0.0",
+    # Runtime dependencies needed when importing iris_pgwire modules in tests
+    "sqlparse>=0.4.0",
 ]
 dev = [
     "black>=23.0.0",
@@ -138,7 +146,6 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--tb=short",
-    "--dist=no",  # Disable parallel execution
 ]
 
 markers = [
@@ -152,6 +159,9 @@ markers = [
     "timeout: Override default timeout threshold",
     "flaky: Mark known flaky tests for retry",
     "slow: Tests requiring >10 seconds",
+    "document_db: Tests for document database features",
+    "error_handling: Tests for error handling scenarios",
+    "mixed_sql: Tests for mixed SQL query processing",
 ]
 
 # Flaky test detection configuration
