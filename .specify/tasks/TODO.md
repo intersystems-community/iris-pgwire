@@ -9,10 +9,14 @@ These features were claimed in README but have no test verification. Each needs 
   - Test basic query execution
   - Test IRIS-specific features (JSON, PREDICT)
 
-- [ ] **Async SQLAlchemy** - E2E test with SQLAlchemy async engine
-  - Verify `create_async_engine()` works with pgwire
-  - Test query execution
-  - Test connection pooling
+- [x] **Async SQLAlchemy** - ✅ IMPLEMENTED (2025-10-06)
+  - ✅ Created `IRISDialect_psycopg` with async support
+  - ✅ Uses IRIS dialect (INFORMATION_SCHEMA) + psycopg transport (async)
+  - ✅ Connection string: `iris+psycopg://localhost:5432/USER`
+  - ✅ Full test suite created in `tests/test_sqlalchemy_async.py`
+  - ⏸️ E2E testing pending (requires PGWire server running)
+  - 📝 Documentation: `docs/SQLALCHEMY_ASYNC_SUPPORT.md`
+  - 📦 Fork: `/Users/tdyar/ws/sqlalchemy-iris` (ready to push)
 
 - [ ] **LangChain Integration** - Actual LangChain PGVector test
   - Verify PGVector vectorstore initialization
