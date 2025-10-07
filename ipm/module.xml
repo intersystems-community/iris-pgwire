@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25">
+  <Document name="iris-pgwire.ZPM">
+    <Module>
+      <Name>iris-pgwire</Name>
+      <Version>0.1.0</Version>
+      <Description>PostgreSQL wire protocol server for InterSystems IRIS with DBAPI backend and vector support</Description>
+      <Author>InterSystems Community</Author>
+      <Keywords>postgresql,pgwire,vector,iris,dbapi,pgvector</Keywords>
+
+      <!-- System Requirements -->
+      <SystemRequirements>
+        <Version>IRIS>=2024.1</Version>
+      </SystemRequirements>
+
+      <!-- Source Root Directory -->
+      <SourcesRoot>ipm</SourcesRoot>
+
+      <!-- Python Dependencies -->
+      <!-- These will be installed via irispip during Setup phase -->
+      <Resource Name="requirements.txt" SourcePath="requirements.txt" />
+
+      <!-- Python Source Files -->
+      <!-- Copy entire iris_pgwire package to IRIS libdir -->
+      <FileCopy>
+        <Source>../src/iris_pgwire/</Source>
+        <Target>${libdir}iris-pgwire/iris_pgwire/</Target>
+      </FileCopy>
+
+      <!-- ObjectScript Classes -->
+      <Resource Name="IrisPGWire.Installer.cls" />
+      <Resource Name="IrisPGWire.Service.cls" />
+
+      <!-- Lifecycle Hooks -->
+      <!-- CRITICAL: Use TCP server pattern with Invoke hooks, NOT WSGIApplication/ASGIApplication -->
+      <!-- Setup Phase: Install Python dependencies via irispip -->
+      <Invoke Phase="Setup" Class="IrisPGWire.Installer" Method="InstallPythonDeps" CheckStatus="true">
+        <Description>Install Python dependencies from requirements.txt</Description>
+      </Invoke>
+
+      <!-- Activate Phase: Start PGWire TCP server -->
+      <Invoke Phase="Activate" Class="IrisPGWire.Service" Method="Start" CheckStatus="true">
+        <Description>Start iris-pgwire TCP server on port 5432</Description>
+      </Invoke>
+
+      <!-- Deactivate Phase: Stop PGWire TCP server -->
+      <Invoke Phase="Deactivate" Class="IrisPGWire.Service" Method="Stop" CheckStatus="true">
+        <Description>Stop iris-pgwire TCP server gracefully</Description>
+      </Invoke>
+
+    </Module>
+  </Document>
+</Export>

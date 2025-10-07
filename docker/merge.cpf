@@ -1,0 +1,11 @@
+[Actions]
+; Enable CallIn service for embedded Python (required for iris-pgwire)
+ModifyService:Name=%Service_CallIn,Enabled=1,AutheEnabled=48
+
+[Namespaces]
+; Ensure USER namespace exists
+Namespace=USER
+
+[Startup]
+; Auto-install iris-pgwire via IPM on first boot
+; Note: This is a test configuration - production should use manual IPM install
