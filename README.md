@@ -32,6 +32,7 @@ psql -h localhost -p 5432 -U test_user -d USER -c "SELECT 1;"
 - **Binary Encoding**: PostgreSQL binary array format (float4/float8/int4/int8)
 - **DBAPI Backend**: Connection pooling (50+20 connections)
 - **Docker Deployment**: docker-compose setup with IRIS integration
+- **Async SQLAlchemy**: Production-ready async/await support with FastAPI integration
 
 ### Vector Parameter Binding (Verified)
 
@@ -59,6 +60,53 @@ with psycopg.connect('host=localhost port=5434 dbname=USER') as conn:
 ```
 
 **Documentation**: `docs/VECTOR_PARAMETER_BINDING.md`, `tests/README.md`
+
+### Async SQLAlchemy (Production Ready)
+
+**Status**: 12/14 requirements complete (86%) - Ready for production with documented workarounds
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy import text
+
+# Create async engine
+engine = create_async_engine("iris+psycopg://localhost:5432/USER")
+
+# Simple query
+async with engine.connect() as conn:
+    result = await conn.execute(text("SELECT 1"))
+    print(result.scalar())
+
+# FastAPI integration
+from fastapi import FastAPI, Depends
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+app = FastAPI()
+SessionLocal = async_sessionmaker(engine, class_=AsyncSession)
+
+async def get_db():
+    async with SessionLocal() as session:
+        yield session
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(text("SELECT * FROM users WHERE id = :id"), {"id": user_id})
+    return result.fetchone()
+```
+
+**Features**:
+- ✅ Full async/await support
+- ✅ FastAPI integration validated
+- ✅ IRIS VECTOR operations in async mode
+- ✅ Connection pooling with AsyncAdaptedQueuePool
+- ✅ Transaction management (COMMIT/ROLLBACK)
+- ✅ ORM support with AsyncSession
+
+**Workarounds**:
+- Use `checkfirst=False` for table creation (INFORMATION_SCHEMA compatibility)
+- Use batch operations for bulk inserts (recommended practice)
+
+**Documentation**: `specs/019-async-sqlalchemy-based/QUICK_REFERENCE.md`, `specs/019-async-sqlalchemy-based/FINAL_SUMMARY.md`
 
 ---
 
@@ -197,9 +245,18 @@ python3 tests/test_vector_limits.py         # Max dimension tests
 
 ## 📚 Documentation
 
+### Core Features
 - **[Vector Parameter Binding](docs/VECTOR_PARAMETER_BINDING.md)** - Implementation guide (P5)
 - **[Test Suite](tests/README.md)** - Testing framework and validation
 - **[Testing Guide](docs/testing.md)** - Framework documentation
+
+### Async SQLAlchemy
+- **[Quick Reference](specs/019-async-sqlalchemy-based/QUICK_REFERENCE.md)** - One-page developer guide
+- **[Final Summary](specs/019-async-sqlalchemy-based/FINAL_SUMMARY.md)** - Executive summary and deployment guide
+- **[Known Limitations](specs/019-async-sqlalchemy-based/KNOWN_LIMITATIONS.md)** - Limitations with workarounds
+- **[INFORMATION_SCHEMA Workarounds](specs/019-async-sqlalchemy-based/INFORMATION_SCHEMA_WORKAROUNDS.md)** - Detailed workaround guide
+- **[Impact Matrix](specs/019-async-sqlalchemy-based/IMPACT_MATRIX.md)** - What works vs. what breaks
+- **[Implementation Status](specs/019-async-sqlalchemy-based/IMPLEMENTATION_STATUS.md)** - Complete implementation timeline
 
 ---
 
