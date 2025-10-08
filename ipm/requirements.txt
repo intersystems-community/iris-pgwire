@@ -1,0 +1,20 @@
+# Python dependencies for iris-pgwire IPM package
+# Feature: 018-add-dbapi-option
+#
+# These dependencies will be installed via irispip during IPM Setup phase
+# Installation command: irispip install -r requirements.txt
+
+# Core dependencies
+structlog>=23.0.0
+cryptography>=41.0.0
+intersystems-irispython>=5.1.2
+sqlparse>=0.4.0
+psycopg2-binary>=2.9.10
+
+# DBAPI backend support
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-instrumentation-asyncio>=0.41b0
+opentelemetry-exporter-otlp>=1.20.0
+pydantic>=2.0.0
+pyyaml>=6.0.0

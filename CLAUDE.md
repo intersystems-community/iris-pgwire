@@ -894,5 +894,227 @@ healthcheck:
 
 ---
 
+## 🔌 Async SQLAlchemy Integration (Feature 019)
+
+### Overview
+
+**Feature**: 019-async-sqlalchemy-based
+**Status**: Specification and planning complete (2025-10-08)
+**Scope**: Enable async SQLAlchemy ORM usage with IRIS via PGWire protocol
+
+**Connection String**: `iris+psycopg://localhost:5432/USER`
+
+**Key Innovation**: Combines IRIS-specific features (VECTOR types, INFORMATION_SCHEMA) with PostgreSQL async wire protocol via SQLAlchemy's `get_async_dialect_cls()` resolution mechanism.
+
+### Problem Statement
+
+**Current State**: Sync SQLAlchemy works perfectly with IRIS via PGWire:
+```python
+# ✅ Sync works (existing implementation)
+from sqlalchemy import create_engine, text
+engine = create_engine("iris+psycopg://localhost:5432/USER")
+with engine.connect() as conn:
+    result = conn.execute(text("SELECT 1"))
+```
+
+**Broken State**: Async SQLAlchemy fails with AwaitRequired errors:
+```python
+# ❌ Async fails (current problem)
+from sqlalchemy.ext.asyncio import create_async_engine
+engine = create_async_engine("iris+psycopg://localhost:5432/USER")
+async with engine.connect() as conn:
+    result = await conn.execute(text("SELECT 1"))
+    # Raises: sqlalchemy.exc.AwaitRequired
+```
+
+**Root Cause** (confirmed via Perplexity research):
+- psycopg3 driver supports both sync and async modes through same module
+- SQLAlchemy defaults to sync dialect unless `get_async_dialect_cls()` method exists
+- Setting `is_async = True` alone is **insufficient** for async operation
+
+### Solution Architecture
+
+**Implementation Pattern** (from SQLAlchemy PostgreSQL dialect):
+```python
+# Sync dialect (current - in sqlalchemy_iris/psycopg.py)
+class IRISDialect_psycopg(IRISDialect):
+    driver = "psycopg"
+    is_async = True  # ⚠️ Not enough!
+
+    # KEY METHOD: Enables async resolution
+    @classmethod
+    def get_async_dialect_cls(cls, url):
+        """Return async variant for create_async_engine()."""
+        return IRISDialectAsync_psycopg
+
+# Async variant (to be implemented)
+from sqlalchemy.dialects.postgresql.psycopg import PGDialectAsync_psycopg
+
+class IRISDialectAsync_psycopg(IRISDialect, PGDialectAsync_psycopg):
+    """
+    Multiple inheritance combines:
+    - IRISDialect: VECTOR types, INFORMATION_SCHEMA, IRIS functions
+    - PGDialectAsync_psycopg: Async psycopg transport, async pooling
+    """
+    driver = "psycopg"
+    is_async = True
+    supports_statement_cache = True
+    supports_native_boolean = True
+
+    @classmethod
+    def import_dbapi(cls):
+        import psycopg
+        return psycopg  # Same module, async mode handled by parent
+
+    @classmethod
+    def get_pool_class(cls, url):
+        from sqlalchemy.pool import AsyncAdaptedQueuePool
+        return AsyncAdaptedQueuePool
+
+    # Override IRIS-specific methods to skip IRIS DBAPI checks
+    def on_connect(self):
+        def on_connect_impl(conn):
+            self._dictionary_access = False
+            self.vector_cosine_similarity = None
+        return on_connect_impl
+
+    def do_executemany(self, cursor, query, params, context=None):
+        # Use loop-based execution for IRIS compatibility
+        if query.endswith(";"):
+            query = query[:-1]
+        for param_set in params:
+            cursor.execute(query, param_set)
+```
+
+### IRIS Feature Preservation
+
+**Critical Requirement**: Async variant MUST maintain all IRIS-specific features:
+
+1. **VECTOR Types**:
+   - `VECTOR(FLOAT, n)` column type
+   - `VECTOR_COSINE()` and `VECTOR_DOT_PRODUCT()` functions
+   - `TO_VECTOR()` conversion function
+
+2. **INFORMATION_SCHEMA Queries**:
+   - Table metadata via `INFORMATION_SCHEMA.TABLES`
+   - Column metadata via `INFORMATION_SCHEMA.COLUMNS`
+   - Index metadata via `INFORMATION_SCHEMA.INDEXES`
+   - NOT PostgreSQL's `pg_catalog`
+
+3. **Transaction Management**:
+   - Async commit/rollback
+   - Proper isolation level handling
+   - NO two-phase commit (not supported via PGWire)
+
+### Performance Requirements
+
+**Constitutional Compliance** (from clarifications):
+- Async query latency MUST be within **10% of sync SQLAlchemy** performance
+- Measured for single-query operations (not bulk/concurrent)
+
+**Baseline Metrics** (from sync benchmark):
+- Simple SELECT: 1-2ms per query
+- Vector similarity (128D): 5-10ms per query
+- **10% Threshold**: Async ≤2.2ms (simple), ≤11ms (vector)
+
+### FastAPI Integration Requirement
+
+**Validation Scope** (from clarifications):
+- MUST validate compatibility with **FastAPI only**
+- Other frameworks (Django async, aiohttp) excluded
+
+**FastAPI Use Case**:
+```python
+from fastapi import FastAPI, Depends
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+app = FastAPI()
+engine = create_async_engine("iris+psycopg://localhost:5432/USER")
+async_session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+async def get_session():
+    async with async_session_factory() as session:
+        yield session
+
+@app.get("/vectors/search")
+async def search_vectors(query: str, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(text("""
+        SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(:query, FLOAT)) as score
+        FROM vectors ORDER BY score DESC LIMIT 5
+    """), {"query": query})
+    return [{"id": r.id, "score": r.score} for r in result]
+```
+
+### Implementation Artifacts
+
+**Location**: `/Users/tdyar/ws/iris-pgwire/specs/019-async-sqlalchemy-based/`
+
+**Generated Documentation**:
+1. **spec.md** - Feature specification (14 functional requirements, 5 acceptance scenarios)
+2. **plan.md** - Implementation plan with constitutional compliance checks
+3. **tasks.md** - 33 detailed tasks following TDD principles
+4. **research.md** - Research findings and solution patterns
+5. **data-model.md** - Class relationships and state transitions
+6. **contracts/async_dialect_interface.py** - Interface contracts for TDD
+7. **quickstart.md** - Developer usage guide
+
+**Implementation Target**:
+- File: `/Users/tdyar/ws/sqlalchemy-iris/sqlalchemy_iris/psycopg.py`
+- Location: Separate project (sqlalchemy-iris)
+- Changes: Add `get_async_dialect_cls()` and `IRISDialectAsync_psycopg` class
+
+### TDD Workflow
+
+**Phase Sequence** (from tasks.md):
+1. **T001-T002**: Verify sync baseline and document async failures (parallel)
+2. **T003-T009**: Write contract and integration tests (MUST fail initially)
+3. **T010-T018**: Implement async dialect class to make tests pass
+4. **T019-T021**: FastAPI integration testing
+5. **T022-T024**: Performance validation (10% threshold)
+6. **T025-T029**: IRIS feature validation (VECTOR, INFORMATION_SCHEMA)
+7. **T030-T033**: Edge cases and error handling
+
+**Critical Testing Requirements**:
+- Tests MUST be written BEFORE implementation
+- Tests MUST fail initially (no async dialect exists)
+- Implement to make tests pass (Red-Green-Refactor)
+
+### Known Risks
+
+1. **DBAPI Configuration** (Medium Risk)
+   - Ensuring psycopg module properly configured for async mode
+   - Mitigation: Follow `PGDialectAsync_psycopg` patterns exactly
+
+2. **Bulk Insert Performance** (High Risk - Known Issue)
+   - 5-minute bulk insert observed in previous testing
+   - Root cause: Likely connection establishment overhead
+   - Mitigation: T017 validates `do_executemany()` in async mode
+
+3. **Transaction Management** (Medium Risk)
+   - IRIS transaction semantics may differ from PostgreSQL
+   - Mitigation: Extensive transaction testing (T027-T028)
+
+### References
+
+- **Specification**: `specs/019-async-sqlalchemy-based/spec.md`
+- **Implementation Plan**: `specs/019-async-sqlalchemy-based/plan.md`
+- **Task List**: `specs/019-async-sqlalchemy-based/tasks.md` (33 tasks)
+- **Quickstart Guide**: `specs/019-async-sqlalchemy-based/quickstart.md`
+- **Contract Interface**: `specs/019-async-sqlalchemy-based/contracts/async_dialect_interface.py`
+
+### Next Steps
+
+**Implementation Status**: Planning complete, implementation NOT started
+
+**To Begin Implementation**:
+1. Run T001: Verify sync SQLAlchemy benchmark passes (baseline)
+2. Run T002: Document current async failure modes
+3. Execute T003-T033 following TDD principles (tests first, then implementation)
+
+**Expected Outcome**: Async SQLAlchemy working with IRIS via PGWire, within 10% performance of sync baseline, validated with FastAPI integration.
+
+---
+
 **Remember**: This is a foundational infrastructure project. Focus on correctness, security, and PostgreSQL compatibility over premature optimization. The embedded Python approach provides the fastest path to a working system while maintaining the flexibility to optimize hot paths later.
 - use uv for package management
