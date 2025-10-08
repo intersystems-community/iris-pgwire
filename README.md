@@ -148,7 +148,7 @@ python -m iris_pgwire.server
 
 ### Backend Comparison
 
-| Feature | DBAPI Backend (External) | Embedded Backend (Internal) |
+| Feature | DBAPI Backend (External) | Embedded Python Backend (Internal) |
 |---------|-------------------------|----------------------------|
 | **Deployment** | Separate Python process | Inside IRIS via `irispython` |
 | **Connection** | TCP to IRIS SuperServer | Direct in-process calls |
@@ -158,7 +158,7 @@ python -m iris_pgwire.server
 | **Pool Size** | 50 base + 20 overflow | N/A (direct execution) |
 | **Setup** | `python -m iris_pgwire.server` | `irispython -m iris_pgwire.server` |
 
-**Recommendation**: Use DBAPI for development/testing, Embedded for production deployments.
+**Recommendation**: Use DBAPI for development/testing, Embedded Python for production deployments.
 
 ---
 
