@@ -93,58 +93,41 @@ python -m iris_pgwire.server
 
 ### Multi-Path Architecture
 
+**Layer 1: Client Applications**
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                   IRIS PGWire Server Architecture                    │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  CLIENT LAYER                                                        │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌──────────────┐      │
-│  │   psql   │  │ psycopg3 │  │SQLAlchemy │  │  Any PG Tool │      │
-│  └────┬─────┘  └────┬─────┘  └─────┬─────┘  └──────┬───────┘      │
-│       │             │              │                │               │
-│       └─────────────┴──────────────┴────────────────┘               │
-│                             │                                        │
-│  ══════════════════════════════════════════════════════════         │
-│                    PostgreSQL Wire Protocol (TCP:5432)              │
-│  ══════════════════════════════════════════════════════════         │
-│                             │                                        │
-│  PGWIRE SERVER LAYER        │                                        │
-│  ┌──────────────────────────┴─────────────────────────────┐        │
-│  │  PGWire Protocol Server (src/iris_pgwire/server.py)    │        │
-│  │  • Message parsing & encoding                           │        │
-│  │  • Query translation                                    │        │
-│  │  • Vector optimizer (pgvector → IRIS)                  │        │
-│  │  • Connection management                                │        │
-│  └──────────────────┬────────────┬─────────────────────────┘        │
-│                     │            │                                   │
-│         ┌───────────┴───┐    ┌──┴────────────┐                     │
-│         │  DBAPI Path   │    │ Embedded Path │                     │
-│         │  (External)   │    │  (Internal)   │                     │
-│         └───────┬───────┘    └──┬────────────┘                     │
-│                 │               │                                    │
-│  BACKEND LAYER  │               │                                    │
-│  ┌──────────────┴───────┐  ┌──┴──────────────────────┐            │
-│  │ DBAPI Executor       │  │ Embedded Executor       │            │
-│  │ • Connection pool    │  │ • iris.sql.exec()       │            │
-│  │ • intersystems-iris  │  │ • Zero network overhead │            │
-│  │ • TCP to IRIS:1972   │  │ • True VECTOR types     │            │
-│  └──────────┬───────────┘  └──┬──────────────────────┘            │
-│             │                  │                                    │
-│  ═══════════╧══════════════════╧════════════════════════           │
-│                    InterSystems IRIS Database                       │
-│  ═══════════════════════════════════════════════════════           │
-│                             │                                        │
-│  IRIS DATA LAYER            │                                        │
-│  ┌──────────────────────────┴─────────────────────────────┐        │
-│  │  • SQL Tables & Queries                                 │        │
-│  │  • VECTOR columns (DECIMAL/DOUBLE/INT)                 │        │
-│  │  • HNSW vector indexes                                  │        │
-│  │  • Standard IRIS features                               │        │
-│  └─────────────────────────────────────────────────────────┘        │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+psql | psycopg3 | SQLAlchemy | Any PostgreSQL Client
 ```
+
+**Layer 2: PostgreSQL Wire Protocol (TCP:5432)**
+```
+PostgreSQL v3 Protocol Messages
+```
+
+**Layer 3: PGWire Server** (`src/iris_pgwire/server.py`)
+- Message parsing & encoding
+- Query translation
+- Vector optimizer (pgvector → IRIS)
+- Connection management
+
+**Layer 4: Backend Execution (Two Paths)**
+
+*Path A: DBAPI Backend (External)*
+- Connection pool (50+20 connections)
+- `intersystems-iris` package
+- TCP connection to IRIS:1972
+- +1-3ms network overhead
+
+*Path B: Embedded Python Backend (Internal)*
+- Direct `iris.sql.exec()` calls
+- Runs inside IRIS via `irispython`
+- Zero network overhead
+- True VECTOR types
+
+**Layer 5: IRIS Database**
+- SQL Tables & Queries
+- VECTOR columns (DECIMAL/DOUBLE/INT)
+- HNSW vector indexes
+- Standard IRIS features
 
 ### Backend Comparison
 
