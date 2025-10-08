@@ -55,6 +55,10 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.5.0",
+    # iris-devtools: Connection helpers and testing utilities (development only)
+    # Provides IRISConfig, connection managers, retry logic, etc.
+    # Install with: pip install -e '.[dev]'
+    "iris-devtools @ file:///Users/tdyar/ws/iris-devtools",
 ]
 iris = [
     # IRIS embedded Python (when available)
