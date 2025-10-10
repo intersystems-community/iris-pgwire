@@ -175,12 +175,74 @@ services:
       - ./deployment/monitoring/grafana:/etc/grafana/provisioning
     profiles: ["monitoring"]
 
+  # Optional: Apache Superset - Modern BI and data exploration platform
+  superset:
+    image: apache/superset:latest
+    container_name: superset-bi
+    depends_on:
+      iris:
+        condition: service_healthy
+    ports:
+      - "8088:8088"
+    environment:
+      - SUPERSET_SECRET_KEY=superset_secret_key_change_in_production
+      - SUPERSET_LOAD_EXAMPLES=yes
+    volumes:
+      - superset_home:/app/superset_home
+      - ./examples/superset:/app/docker/
+    command: >
+      sh -c "
+        superset db upgrade &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@superset.com --password admin &&
+        superset init &&
+        superset run -h 0.0.0.0 -p 8088 --with-threads --reload --debugger
+      "
+    profiles: ["bi-tools"]
+
+  # Optional: Metabase - Simple, open-source BI tool
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase-bi
+    depends_on:
+      iris:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=metabase
+      - MB_DB_PORT=5432
+      - MB_DB_USER=metabase
+      - MB_DB_PASS=metabase
+      - MB_DB_HOST=metabase-db
+    volumes:
+      - metabase_data:/metabase-data
+    profiles: ["bi-tools"]
+
+  # Metabase internal database
+  metabase-db:
+    image: postgres:15-alpine
+    container_name: metabase-postgres
+    environment:
+      - POSTGRES_DB=metabase
+      - POSTGRES_USER=metabase
+      - POSTGRES_PASSWORD=metabase
+    volumes:
+      - metabase_db:/var/lib/postgresql/data
+    profiles: ["bi-tools"]
+
 volumes:
   iris_data:
     driver: local
   iris_latest_data:
     driver: local
   grafana_data:
+    driver: local
+  superset_home:
+    driver: local
+  metabase_data:
+    driver: local
+  metabase_db:
     driver: local
 
 networks:

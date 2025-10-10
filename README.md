@@ -35,7 +35,8 @@
 ✅ Build FastAPI services with async SQLAlchemy backed by IRIS
 ✅ Use pgvector-compatible RAG applications with IRIS vectors (188K dimensions!)
 ✅ Run psql for ad-hoc IRIS queries and data exploration
-✅ Connect Jupyter notebooks, BI tools, and data pipelines to IRIS
+✅ Connect BI tools (Superset, Metabase, Grafana) to IRIS with zero configuration
+✅ Connect Jupyter notebooks and data pipelines to IRIS
 ✅ Prototype with PostgreSQL, deploy to IRIS without code changes
 
 ---
@@ -97,6 +98,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 | Category | Features | Status |
 |----------|----------|--------|
 | **PostgreSQL Ecosystem** | psql, psycopg3, SQLAlchemy, pgvector tools | ✅ Production ready |
+| **BI Tools** | Apache Superset, Metabase, Grafana (zero config) | ✅ Production ready |
 | **Database Operations** | SELECT, INSERT, UPDATE, DELETE, transactions | ✅ Production ready |
 | **Connection Pooling** | Async pool (50+20 connections), <1ms acquisition | ✅ Production ready |
 | **Vector Operations** | Up to 188,962D vectors, pgvector syntax, HNSW indexes | ✅ Production ready |
@@ -484,6 +486,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 ### Getting Started
 - **[Quick Start Guide](benchmarks/README_4WAY.md)** - Multi-path benchmark setup and usage
 - **[Installation Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
+- **[BI Tools Setup](examples/BI_TOOLS_SETUP.md)** - Apache Superset, Metabase, Grafana integration
 - **[Developer Guide](docs/developer_guide.md)** - Development setup and contribution guidelines
 
 ### Core Features
