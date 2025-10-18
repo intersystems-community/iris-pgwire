@@ -99,6 +99,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 |----------|----------|--------|
 | **PostgreSQL Ecosystem** | psql, psycopg3, SQLAlchemy, pgvector tools | ✅ Production ready |
 | **BI Tools** | Apache Superset, Metabase, Grafana (zero config) | ✅ Production ready |
+| **REST API** | SQL Translation API (FastAPI, <5ms SLA, caching) | ✅ Production ready |
 | **Database Operations** | SELECT, INSERT, UPDATE, DELETE, transactions | ✅ Production ready |
 | **Connection Pooling** | Async pool (50+20 connections), <1ms acquisition | ✅ Production ready |
 | **Vector Operations** | Up to 188,962D vectors, pgvector syntax, HNSW indexes | ✅ Production ready |
@@ -487,6 +488,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 - **[Quick Start Guide](benchmarks/README_4WAY.md)** - Multi-path benchmark setup and usage
 - **[Installation Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
 - **[BI Tools Setup](examples/BI_TOOLS_SETUP.md)** - Apache Superset, Metabase, Grafana integration
+- **[Translation API](docs/TRANSLATION_API.md)** - REST API for SQL translation microservice
 - **[Developer Guide](docs/developer_guide.md)** - Development setup and contribution guidelines
 
 ### Core Features
