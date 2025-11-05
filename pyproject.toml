@@ -5,19 +5,49 @@ build-backend = "hatchling.build"
 [project]
 name = "iris-pgwire"
 dynamic = ["version"]
-description = "PostgreSQL Wire Protocol Server for InterSystems IRIS"
-readme = "README.md"
+description = "PostgreSQL Wire Protocol Server for InterSystems IRIS - Connect BI tools, Python frameworks, and PostgreSQL clients to IRIS databases"
+readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
 authors = [
+    {name = "IRIS PGWire Contributors", email = "iris-pgwire@intersystems.com"},
+]
+maintainers = [
     {name = "IRIS PGWire Team"},
 ]
+keywords = [
+    "intersystems",
+    "iris",
+    "postgresql",
+    "postgres",
+    "wire-protocol",
+    "database",
+    "sql",
+    "pgvector",
+    "vector-database",
+    "rag",
+    "llm",
+    "bi-tools",
+    "sqlalchemy",
+    "async",
+    "fastapi",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Networking",
+    "Framework :: AsyncIO",
+    "Framework :: FastAPI",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.11"
 dependencies = [
@@ -55,10 +85,9 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.5.0",
-    # iris-devtools: Connection helpers and testing utilities (development only)
-    # Provides IRISConfig, connection managers, retry logic, etc.
-    # Install with: pip install -e '.[dev]'
-    "iris-devtools @ file:///Users/tdyar/ws/iris-devtools",
+    # NOTE: iris-devtools is an internal development tool.
+    # For local development, install separately if needed:
+    #   pip install -e /path/to/iris-devtools
 ]
 iris = [
     # IRIS embedded Python (when available)
@@ -69,15 +98,58 @@ iris = [
 iris-pgwire = "iris_pgwire.server:main"
 
 [project.urls]
-Homepage = "https://github.com/your-org/iris-pgwire"
-Repository = "https://github.com/your-org/iris-pgwire"
-Issues = "https://github.com/your-org/iris-pgwire/issues"
+Homepage = "https://github.com/intersystems-community/iris-pgwire"
+Documentation = "https://github.com/intersystems-community/iris-pgwire#readme"
+Repository = "https://github.com/intersystems-community/iris-pgwire"
+Issues = "https://github.com/intersystems-community/iris-pgwire/issues"
+Changelog = "https://github.com/intersystems-community/iris-pgwire/releases"
 
 [tool.hatch.version]
 path = "src/iris_pgwire/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/iris_pgwire"]
+
+[tool.hatch.build.targets.sdist]
+# Include only essential files in source distribution
+include = [
+    "/src",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+    "/examples/*.py",
+    "/examples/BI_TOOLS_SETUP.md",
+    "/docs/TRANSLATION_API.md",
+    "/docs/VECTOR_PARAMETER_BINDING.md",
+    "/docs/DUAL_PATH_ARCHITECTURE.md",
+    "/docs/HNSW_FINDINGS_*.md",
+]
+
+# Explicitly exclude development files
+exclude = [
+    "/.claude",
+    "/.specify",
+    "/.git",
+    "/.github",
+    "/tests",
+    "/benchmarks",
+    "/deployment",
+    "/docker",
+    "/specs",
+    "*.cpf",
+    "*.sh",
+    "/CLAUDE.md",
+    "/PROGRESS.md",
+    "/STATUS.md",
+    "/TODO.md",
+    "/TESTING.md",
+    "/docker-compose*.yml",
+    "/Dockerfile*",
+    "/merge.cpf",
+    "/uv.lock",
+    "/iris_pgwire.json",
+]
 
 [tool.black]
 line-length = 100
