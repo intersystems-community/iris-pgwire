@@ -1,0 +1,53 @@
+# Include ONLY essential documentation and metadata
+include README.md
+include LICENSE
+include CHANGELOG.md
+
+# Include ONLY user-facing examples (NOT development scripts)
+include examples/BI_TOOLS_SETUP.md
+include examples/translation_api_demo.py
+include examples/*.py
+
+# Include ONLY user-facing documentation (NOT specs/planning docs)
+include docs/TRANSLATION_API.md
+include docs/VECTOR_PARAMETER_BINDING.md
+include docs/DUAL_PATH_ARCHITECTURE.md
+include docs/HNSW_FINDINGS_*.md
+
+# Explicitly exclude all development/internal files
+exclude CLAUDE.md
+exclude PROGRESS.md
+exclude STATUS.md
+exclude TODO.md
+exclude TESTING.md
+exclude .gitignore
+exclude .gitlab-ci.yml
+exclude docker-compose*.yml
+exclude Dockerfile*
+exclude .dockerignore
+exclude merge.cpf
+exclude start-production.sh
+exclude test_performance_simple.py
+exclude uv.lock
+exclude iris_pgwire.json
+exclude *.cpf
+exclude *.sh
+
+# Exclude entire development directories
+prune .claude
+prune .specify
+prune .git
+prune .github
+prune tests
+prune benchmarks
+prune deployment
+prune docker
+prune specs
+
+# Exclude build artifacts and cache
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.dylib
