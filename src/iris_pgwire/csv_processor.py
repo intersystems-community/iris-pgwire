@@ -75,9 +75,12 @@ class CSVProcessor:
         column_names = None
         line_number = 0
         rows_yielded = 0
+        chunks_received = 0
 
         async for chunk in csv_stream:
+            chunks_received += 1
             buffer += chunk
+            logger.debug(f"CSV chunk #{chunks_received}: {len(chunk)} bytes, buffer now {len(buffer)} bytes")
 
             # Process complete lines from buffer
             while b'\n' in buffer:
@@ -172,7 +175,7 @@ class CSVProcessor:
             except Exception as e:
                 raise CSVParsingError(str(e), line_number)
 
-        logger.info(f"CSV parsing complete: {rows_yielded} rows yielded")
+        logger.info(f"CSV parsing complete: {chunks_received} chunks received, {rows_yielded} rows yielded")
 
     async def generate_csv_rows(
         self,

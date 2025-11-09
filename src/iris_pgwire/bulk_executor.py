@@ -104,10 +104,15 @@ class BulkExecutor:
         batch: list[dict]
     ) -> int:
         """
-        Execute single batch INSERT.
+        Execute single batch INSERT using individual statements with parameter binding.
 
-        Builds multi-row INSERT statement:
-        INSERT INTO table (col1, col2) VALUES (?, ?), (?, ?), ...
+        IRIS SQL Limitation: Does NOT support PostgreSQL multi-row VALUES syntax:
+            INSERT INTO table (col1, col2) VALUES (?, ?), (?, ?), ...  ❌
+
+        Instead, we execute individual INSERT statements per row.
+        This is slower but compatible with IRIS SQL parser.
+
+        IRIS DATE Handling: Convert ISO date strings to IRIS Horolog format (days since 1840-12-31).
 
         Args:
             table_name: Target table
@@ -120,39 +125,130 @@ class BulkExecutor:
         if not batch:
             return 0
 
-        # Build multi-row INSERT statement
+        # Pre-import datetime for date conversions (avoid import overhead in loop)
+        from datetime import datetime
+
+        # Calculate Horolog epoch once (avoid recalculating in loop)
+        horolog_epoch = datetime(1840, 12, 31).date()
+
+        # Get column data types to handle DATE conversion
+        column_types = await self._get_column_types(table_name, column_names)
+
+        rows_inserted = 0
+
+        # Build parameterized INSERT statement (same for all rows)
         column_list = ', '.join(column_names)
-        value_placeholders = ', '.join(['?' for _ in column_names])
-        row_placeholders = ', '.join([f'({value_placeholders})' for _ in batch])
+        placeholders = ', '.join(['?' for _ in column_names])
+        sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
 
-        sql = f"INSERT INTO {table_name} ({column_list}) VALUES {row_placeholders}"
+        logger.debug(f"Parameterized INSERT: {sql}")
 
-        # Flatten row values into single parameter list
-        params = []
+        # Execute INSERT for each row individually
+        # NOTE: This is less efficient than multi-row INSERT, but IRIS doesn't support that syntax
         for row_dict in batch:
+            # Build SQL with mix of parameters and inline NULL
+            # IRIS embedded Python does NOT handle Python None correctly in parameters
+            value_parts = []
+            params = []
+
             for col_name in column_names:
                 value = row_dict.get(col_name)
-                # Handle empty strings as NULL for dates (IRIS quirk)
+                col_type = column_types.get(col_name, 'VARCHAR')
+
+                # Handle NULL values - use inline NULL, not parameters
                 if value == '' or value is None:
-                    params.append(None)
+                    value_parts.append('NULL')
+                elif col_type.upper() == 'DATE':
+                    # Convert ISO date string to IRIS Horolog format (days since 1840-12-31)
+                    try:
+                        date_obj = datetime.strptime(value, '%Y-%m-%d').date()
+
+                        # Calculate Horolog day number using pre-calculated epoch
+                        horolog_days = (date_obj - horolog_epoch).days
+
+                        # Use parameter for Horolog integer
+                        value_parts.append('?')
+                        params.append(horolog_days)
+                    except ValueError as e:
+                        logger.error(f"Date parsing failed for column '{col_name}', value '{value}': {e}")
+                        logger.error(f"Row data: {row_dict}")
+                        raise ValueError(f"Invalid date format for column {col_name}: {value} - {e}")
                 else:
+                    # Use parameter for non-date, non-null values
+                    value_parts.append('?')
                     params.append(value)
 
-        # Execute via IRIS (non-blocking)
-        try:
-            await asyncio.to_thread(
-                self.iris_executor.execute_sql,
-                sql,
-                params
-            )
-            logger.debug(f"Batch insert: {len(batch)} rows")
-            return len(batch)
+            # Build INSERT with actual placeholders
+            column_list = ', '.join(column_names)
+            value_clause = ', '.join(value_parts)
+            row_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({value_clause})"
 
-        except Exception as e:
-            logger.error(f"Batch insert failed: {e}")
-            logger.error(f"SQL: {sql[:200]}")
-            logger.error(f"Params count: {len(params)}")
-            raise
+            # Execute single-row INSERT
+            try:
+                result = await self.iris_executor.execute_query(row_sql, params)
+
+                # Check if execution succeeded
+                if not result.get('success', False):
+                    error_msg = result.get('error', 'Unknown error')
+                    logger.error(f"IRIS execution failed: {error_msg}")
+                    logger.error(f"SQL: {sql}")
+                    logger.error(f"Params ({len(params)}): {params}")
+                    raise RuntimeError(f"IRIS execution failed: {error_msg}")
+
+                rows_inserted += 1
+
+            except Exception as e:
+                logger.error(f"Single-row insert failed: {e}")
+                logger.error(f"SQL: {sql}")
+                logger.error(f"Params ({len(params)}): {params}")
+                logger.error(f"Row data: {row_dict}")
+                raise
+
+        logger.debug(f"Batch insert complete: {rows_inserted} rows (executed as {rows_inserted} individual INSERTs)")
+        return rows_inserted
+
+    async def _get_column_types(self, table_name: str, column_names: list[str]) -> dict[str, str]:
+        """
+        Get data types for specific columns in a table.
+
+        Args:
+            table_name: Table name
+            column_names: Column names to get types for
+
+        Returns:
+            Dict mapping column name to data type (e.g., {'DateOfBirth': 'DATE'})
+        """
+        # Query INFORMATION_SCHEMA for column types
+        # IRIS stores column names in mixed case, so we need to match case-insensitively
+        placeholders = ', '.join(['?' for _ in column_names])
+        query = f"""
+            SELECT COLUMN_NAME, DATA_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE LOWER(TABLE_NAME) = LOWER(?)
+            AND UPPER(COLUMN_NAME) IN ({', '.join([f'UPPER(?)' for _ in column_names])})
+        """
+
+        params = [table_name] + column_names
+        logger.debug(f"Querying column types with params: {params}")
+        result = await self.iris_executor.execute_query(query, params)
+
+        # Build column type mapping (key by original input column name)
+        column_types = {}
+        if result.get('success') and result.get('rows'):
+            # Create case-insensitive lookup
+            db_columns = {row[0].upper(): row[1] for row in result['rows']}
+            logger.debug(f"Database columns (uppercase keys): {db_columns}")
+
+            # Map back to input column names
+            for col_name in column_names:
+                db_type = db_columns.get(col_name.upper())
+                if db_type:
+                    column_types[col_name] = db_type
+        else:
+            logger.warning(f"Failed to get column types: success={result.get('success')}, rows={result.get('rows')}")
+
+        logger.debug(f"Column types for {table_name}: {column_types}")
+        return column_types
 
     async def stream_query_results(self, query: str) -> AsyncIterator[tuple]:
         """
@@ -171,16 +267,10 @@ class BulkExecutor:
         """
         logger.info(f"Streaming query results: {query[:100]}")
 
-        # Execute query via IRIS (non-blocking)
-        def execute_query():
-            """Execute query in IRIS thread."""
-            # Use IRIS cursor for streaming
-            result = self.iris_executor.execute_sql(query, [])
-            return result
-
+        # Execute query via IRIS (already async)
         try:
-            # Get cursor
-            cursor_result = await asyncio.to_thread(execute_query)
+            # Execute query
+            cursor_result = await self.iris_executor.execute_query(query, [])
 
             # Stream results in batches
             # Note: This is a simplified implementation
@@ -215,10 +305,12 @@ class BulkExecutor:
             ORDER BY ordinal_position
         """
 
-        def execute_query():
-            result = self.iris_executor.execute_sql(query, [])
-            return [row[0] for row in result] if result else []
+        result = await self.iris_executor.execute_query(query, [])
 
-        columns = await asyncio.to_thread(execute_query)
+        # Extract column names from result
+        columns = []
+        if result and 'rows' in result:
+            columns = [row[0] for row in result['rows']]
+
         logger.debug(f"Table {table_name} columns: {columns}")
         return columns

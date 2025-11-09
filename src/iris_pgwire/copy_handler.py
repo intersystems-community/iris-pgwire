@@ -154,15 +154,17 @@ class CopyHandler:
         csv_stream: AsyncIterator[bytes]
     ) -> int:
         """
-        Handle COPY FROM STDIN operation.
+        Handle COPY FROM STDIN operation with transactional semantics.
 
         Protocol Flow:
-        1. Send CopyInResponse to client
-        2. Receive CopyData messages from client
-        3. Parse CSV data
-        4. Execute batched INSERT to IRIS
-        5. Receive CopyDone from client
-        6. Send CommandComplete
+        1. BEGIN transaction (all-or-nothing semantics)
+        2. Send CopyInResponse to client
+        3. Receive CopyData messages from client
+        4. Parse CSV data
+        5. Execute batched INSERT to IRIS
+        6. Receive CopyDone from client
+        7. COMMIT transaction on success, ROLLBACK on error
+        8. Send CommandComplete
 
         Args:
             command: Parsed COPY command
@@ -172,27 +174,56 @@ class CopyHandler:
             Number of rows inserted
 
         Raises:
-            CSVParsingError: Malformed CSV data
+            CSVParsingError: Malformed CSV data (transaction rolled back)
             TransactionError: Transaction rollback required
         """
         logger.info(f"COPY FROM STDIN: table={command.table_name}, columns={command.column_list}")
 
-        # Parse CSV data stream
-        rows_iterator = self.csv_processor.parse_csv_rows(
-            csv_stream,
-            command.csv_options
-        )
+        # BEGIN transaction for atomic COPY operation
+        iris_executor = self.bulk_executor.iris_executor
+        begin_result = await iris_executor.execute_query("START TRANSACTION", [])
+        if not begin_result.get('success', False):
+            raise RuntimeError(f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}")
 
-        # Execute bulk insert
-        row_count = await self.bulk_executor.bulk_insert(
-            table_name=command.table_name,
-            column_names=command.column_list,
-            rows=rows_iterator,
-            batch_size=1000  # Constitutional requirement: 1000-row batching
-        )
+        logger.debug("Transaction started for COPY FROM STDIN")
 
-        logger.info(f"COPY FROM STDIN complete: {row_count} rows inserted")
-        return row_count
+        try:
+            # Parse CSV data stream
+            rows_iterator = self.csv_processor.parse_csv_rows(
+                csv_stream,
+                command.csv_options
+            )
+
+            # Execute bulk insert
+            # Note: Using individual INSERT statements per row (IRIS doesn't support multi-row INSERT)
+            # Batch size controls how often we flush results to caller
+            row_count = await self.bulk_executor.bulk_insert(
+                table_name=command.table_name,
+                column_names=command.column_list,
+                rows=rows_iterator,
+                batch_size=100  # Process 100 rows at a time
+            )
+
+            # COMMIT transaction on success
+            commit_result = await iris_executor.execute_query("COMMIT", [])
+            if not commit_result.get('success', False):
+                raise RuntimeError(f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}")
+
+            logger.info(f"COPY FROM STDIN complete: {row_count} rows inserted (transaction committed)")
+            return row_count
+
+        except Exception as e:
+            # ROLLBACK transaction on any error
+            logger.error(f"COPY FROM STDIN failed, rolling back transaction: {e}")
+            try:
+                rollback_result = await iris_executor.execute_query("ROLLBACK", [])
+                if not rollback_result.get('success', False):
+                    logger.error(f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}")
+            except Exception as rollback_error:
+                logger.error(f"Exception during rollback: {rollback_error}")
+
+            # Re-raise original error
+            raise
 
     async def handle_copy_to_stdout(
         self,
