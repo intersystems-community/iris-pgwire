@@ -43,21 +43,21 @@
 
 ## Phase 3.1: Setup (T001-T003)
 
-- [ ] **T001** [P] Create CSV test data file
+- [x] **T001** [P] Create CSV test data file ✅
   - **File**: `examples/superset-iris-healthcare/data/patients-data.csv`
   - **Action**: Convert existing patients-data.sql (250 INSERT statements) to CSV format with header row
   - **Format**: `PatientID,FirstName,LastName,DateOfBirth,Gender,Status,AdmissionDate,DischargeDate`
   - **Validation**: Verify 250 data rows + 1 header row = 251 lines total
   - **Purpose**: Primary E2E test dataset for Acceptance Scenario 1
 
-- [ ] **T002** [P] Setup E2E test infrastructure
+- [x] **T002** [P] Setup E2E test infrastructure ✅
   - **File**: `tests/e2e/conftest.py`
   - **Action**: Create pytest fixture for psql command execution with stdin/stdout redirection
   - **Pattern**: `psql_command(sql, stdin_file=None, stdout_file=None) → subprocess.CompletedProcess`
   - **Dependencies**: Requires running IRIS container and PGWire server
   - **Purpose**: Reusable test infrastructure for all E2E COPY tests
 
-- [ ] **T003** [P] Configure pytest markers for E2E and performance tests
+- [x] **T003** [P] Configure pytest markers for E2E and performance tests ✅
   - **File**: `pytest.ini`
   - **Action**: Add markers: `@pytest.mark.e2e`, `@pytest.mark.slow`, `@pytest.mark.performance`
   - **Usage**: Allow selective test execution (`pytest -m "not slow"`)
