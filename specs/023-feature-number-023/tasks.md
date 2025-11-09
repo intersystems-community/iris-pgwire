@@ -189,11 +189,12 @@
   - **Batching**: Send CopyData every 8KB or 100 rows (whichever comes first)
   - **Tests Pass**: T005 E2E test receives CSV export
 
-- [ ] **T017** Integrate COPY message routing in protocol.py
+- [x] **T017** Integrate COPY message routing in protocol.py ✅
   - **File**: `src/iris_pgwire/protocol.py`
   - **Action**: Extend `handle_message()` to route COPY commands to CopyHandler
   - **Detection**: Parse incoming 'Q' (Query) message, check if SQL starts with "COPY"
   - **Routing**: If COPY command detected, route to `copy_handler.handle_copy_command()`
+  - **Implementation**: Added CopyCommandParser integration, handle_copy_from_stdin_v2(), handle_copy_to_stdout_v2()
   - **Tests Pass**: T004, T005 E2E tests work end-to-end
 
 ### CSV Processing (T018-T019)
