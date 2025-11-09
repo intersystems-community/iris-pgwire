@@ -1,0 +1,96 @@
+# Docker Compose for Apache Superset 4 with IRIS Backend Example
+# Purpose: Run Superset 4 connected to IRIS via PGWire PostgreSQL wire protocol
+# Usage: docker-compose --profile superset-example up -d
+
+services:
+  superset:
+    image: apache/superset:4.0.2
+    container_name: iris-pgwire-superset
+    ports:
+      - "8088:8088"
+    environment:
+      # Superset configuration
+      - SUPERSET_SECRET_KEY=superset_secret_key_change_in_production
+      - SUPERSET_ENV=production
+      - DATABASE_DIALECT=postgresql
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_DB=superset
+      - DATABASE_USER=superset
+      - DATABASE_PASSWORD=superset
+      # Disable example data loading
+      - SUPERSET_LOAD_EXAMPLES=no
+      # Redis configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Security: Demo credentials only
+      - ADMIN_USERNAME=admin
+      - ADMIN_EMAIL=admin@superset.com
+      - ADMIN_PASSWORD=admin
+    volumes:
+      # Superset configuration
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      # Initialization script
+      - ./superset/init-superset.sh:/app/docker/docker-init.sh:ro
+      # Database connection configuration
+      - ./superset/database-connection.json:/app/imports/database-connection.json:ro
+      # Dashboard exports
+      - ./superset/dashboards:/app/imports/dashboards:ro
+      # Dataset exports
+      - ./superset/datasets:/app/imports/datasets:ro
+    networks:
+      - iris-pgwire
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      iris:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  # PostgreSQL database for Superset metadata
+  postgres:
+    image: postgres:16-alpine
+    container_name: iris-pgwire-superset-db
+    environment:
+      - POSTGRES_DB=superset
+      - POSTGRES_USER=superset
+      - POSTGRES_PASSWORD=superset
+    volumes:
+      - superset-postgres-data:/var/lib/postgresql/data
+    networks:
+      - iris-pgwire
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis for Superset caching and celery
+  redis:
+    image: redis:7-alpine
+    container_name: iris-pgwire-superset-redis
+    networks:
+      - iris-pgwire
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  superset-postgres-data:
+    driver: local
+
+networks:
+  iris-pgwire:
+    external: true

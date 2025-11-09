@@ -1,0 +1,120 @@
+{
+  "datasets": [
+    {
+      "table_name": "LabResults",
+      "main_dttm_col": "TestDate",
+      "description": "IRIS lab test results - 400 synthetic records",
+      "default_endpoint": null,
+      "offset": 0,
+      "cache_timeout": 3600,
+      "sql": null,
+      "params": null,
+      "template_params": null,
+      "filter_select_enabled": true,
+      "fetch_values_predicate": null,
+      "extra": {
+        "resource_type": "table"
+      },
+      "uuid": "00000000-0000-0000-0000-000000000020",
+      "columns": [
+        {
+          "column_name": "ResultID",
+          "verbose_name": "Result ID",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "INTEGER",
+          "groupby": true,
+          "filterable": true,
+          "description": "Unique lab result identifier"
+        },
+        {
+          "column_name": "PatientID",
+          "verbose_name": "Patient ID",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "INTEGER",
+          "groupby": true,
+          "filterable": true,
+          "description": "Foreign key to Patients table"
+        },
+        {
+          "column_name": "TestName",
+          "verbose_name": "Test Name",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(100)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Type of lab test performed"
+        },
+        {
+          "column_name": "TestDate",
+          "verbose_name": "Test Date",
+          "is_dttm": true,
+          "is_active": true,
+          "type": "DATE",
+          "groupby": true,
+          "filterable": true,
+          "description": "Date when test was performed"
+        },
+        {
+          "column_name": "Result",
+          "verbose_name": "Result",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "NUMERIC(10,2)",
+          "groupby": false,
+          "filterable": true,
+          "description": "Numeric test result value"
+        },
+        {
+          "column_name": "Unit",
+          "verbose_name": "Unit",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(20)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Unit of measurement (mg/dL, %, mmHg)"
+        },
+        {
+          "column_name": "ReferenceRange",
+          "verbose_name": "Reference Range",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(50)",
+          "groupby": false,
+          "filterable": false,
+          "description": "Normal reference range for this test"
+        },
+        {
+          "column_name": "Status",
+          "verbose_name": "Status",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(20)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Result status (Normal/Abnormal/Critical)"
+        }
+      ],
+      "metrics": [
+        {
+          "metric_name": "Result Count",
+          "verbose_name": "Result Count",
+          "metric_type": "count",
+          "expression": "COUNT(*)",
+          "description": "Total number of lab results"
+        },
+        {
+          "metric_name": "Average Result",
+          "verbose_name": "Average Result",
+          "metric_type": "avg",
+          "expression": "AVG(Result)",
+          "description": "Average numeric result value"
+        }
+      ],
+      "database_uuid": "00000000-0000-0000-0000-000000000001"
+    }
+  ]
+}

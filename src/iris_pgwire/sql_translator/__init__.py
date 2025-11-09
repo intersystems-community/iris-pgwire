@@ -22,8 +22,17 @@ from .models import (
 )
 from .validator import ValidationLevel, ValidationContext
 
+# Feature 021: PostgreSQL-Compatible SQL Normalization
+from .normalizer import SQLTranslator
+from .identifier_normalizer import IdentifierNormalizer
+from .date_translator import DATETranslator
+
+# Feature 022: PostgreSQL Transaction Verb Compatibility
+from .transaction_translator import TransactionTranslator
+
 __version__ = "1.0.0"
 __all__ = [
+    # IRIS → PostgreSQL translation (existing)
     "IRISSQLTranslator",
     "get_translator",
     "translate_sql",
@@ -34,5 +43,11 @@ __all__ = [
     "PerformanceStats",
     "TranslationError",
     "ValidationLevel",
-    "ValidationContext"
+    "ValidationContext",
+    # PostgreSQL → IRIS normalization (Feature 021)
+    "SQLTranslator",
+    "IdentifierNormalizer",
+    "DATETranslator",
+    # PostgreSQL → IRIS transaction verb translation (Feature 022)
+    "TransactionTranslator"
 ]
