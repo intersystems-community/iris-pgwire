@@ -14,6 +14,8 @@ from typing import Dict, Any, List, Optional, Union
 import structlog
 
 from .sql_translator.performance_monitor import get_monitor, MetricType, PerformanceTracker
+from .sql_translator import SQLTranslator  # Feature 021: PostgreSQL→IRIS normalization
+from .sql_translator import TransactionTranslator  # Feature 022: PostgreSQL transaction verb translation
 
 logger = structlog.get_logger()
 
@@ -76,6 +78,106 @@ class IRISExecutor:
             self.embedded_mode = False
             logger.info("IRIS Python driver not available")
             return False
+
+    def _split_sql_statements(self, sql: str) -> List[str]:
+        """
+        Split SQL string into individual statements, handling semicolons properly.
+
+        CRITICAL FIX for issue: "Input (;) encountered after end of query"
+        IRIS cannot execute multiple statements in a single iris.sql.exec() call.
+
+        This function splits by semicolons while respecting:
+        - String literals (single and double quotes)
+        - Comments (-- and /* */)
+        - Semicolons inside string literals are NOT statement separators
+
+        Args:
+            sql: SQL string potentially containing multiple statements
+
+        Returns:
+            List of individual SQL statements (semicolons removed, whitespace stripped)
+        """
+        statements = []
+        current_stmt = []
+        in_single_quote = False
+        in_double_quote = False
+        in_line_comment = False
+        in_block_comment = False
+        i = 0
+
+        while i < len(sql):
+            char = sql[i]
+
+            # Handle line comments (-- to end of line)
+            if not in_single_quote and not in_double_quote and not in_block_comment:
+                if i < len(sql) - 1 and sql[i:i+2] == '--':
+                    in_line_comment = True
+                    current_stmt.append(char)
+                    i += 1
+                    continue
+
+            # End of line comment
+            if in_line_comment:
+                current_stmt.append(char)
+                if char == '\n':
+                    in_line_comment = False
+                i += 1
+                continue
+
+            # Handle block comments (/* ... */)
+            if not in_single_quote and not in_double_quote and not in_line_comment:
+                if i < len(sql) - 1 and sql[i:i+2] == '/*':
+                    in_block_comment = True
+                    current_stmt.append(char)
+                    i += 1
+                    continue
+                elif i < len(sql) - 1 and sql[i:i+2] == '*/':
+                    in_block_comment = False
+                    current_stmt.append(char)
+                    i += 1
+                    continue
+
+            if in_block_comment:
+                current_stmt.append(char)
+                i += 1
+                continue
+
+            # Toggle quote states
+            if char == "'" and not in_double_quote:
+                # Handle escaped quotes
+                if i > 0 and sql[i-1] == '\\':
+                    current_stmt.append(char)
+                else:
+                    in_single_quote = not in_single_quote
+                    current_stmt.append(char)
+            elif char == '"' and not in_single_quote:
+                if i > 0 and sql[i-1] == '\\':
+                    current_stmt.append(char)
+                else:
+                    in_double_quote = not in_double_quote
+                    current_stmt.append(char)
+            # Statement separator (semicolon outside quotes)
+            elif char == ';' and not in_single_quote and not in_double_quote:
+                # End of statement - save it
+                stmt = ''.join(current_stmt).strip()
+                if stmt:  # Skip empty statements
+                    statements.append(stmt)
+                current_stmt = []
+            else:
+                current_stmt.append(char)
+
+            i += 1
+
+        # Add final statement if any
+        stmt = ''.join(current_stmt).strip()
+        if stmt:
+            statements.append(stmt)
+
+        logger.debug("Split SQL into statements",
+                    total_statements=len(statements),
+                    original_length=len(sql))
+
+        return statements
 
     async def test_connection(self):
         """Test IRIS connectivity before starting server"""
@@ -274,8 +376,45 @@ class IRISExecutor:
                 # Get or create connection
                 connection = self._get_iris_connection()
 
+                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
+                # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
+                transaction_translator = TransactionTranslator()
+                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+
+                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
+                # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
+                translator = SQLTranslator()
+                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="direct")
+
+                # Log transaction translation metrics
+                txn_metrics = transaction_translator.get_translation_metrics()
+                logger.info("Transaction verb translation applied",
+                           total_translations=txn_metrics['total_translations'],
+                           avg_time_ms=txn_metrics['avg_translation_time_ms'],
+                           sla_violations=txn_metrics['sla_violations'],
+                           sql_original_preview=sql[:100],
+                           sql_translated_preview=transaction_translated_sql[:100],
+                           session_id=session_id)
+
+                # Log normalization metrics
+                norm_metrics = translator.get_normalization_metrics()
+                logger.info("SQL normalization applied",
+                           identifiers_normalized=norm_metrics['identifier_count'],
+                           dates_translated=norm_metrics['date_literal_count'],
+                           normalization_time_ms=norm_metrics['normalization_time_ms'],
+                           sla_violated=norm_metrics['sla_violated'],
+                           sql_before_preview=transaction_translated_sql[:100],
+                           sql_after_preview=normalized_sql[:100],
+                           session_id=session_id)
+
+                if norm_metrics['sla_violated']:
+                    logger.warning("SQL normalization exceeded 5ms SLA",
+                                 normalization_time_ms=norm_metrics['normalization_time_ms'],
+                                 session_id=session_id)
+
                 # Apply vector query optimization (convert parameterized vectors to literals)
-                optimized_sql = sql
+                # Use normalized_sql as input instead of original sql
+                optimized_sql = normalized_sql
                 optimized_params = params
                 optimization_applied = False
 
@@ -286,17 +425,18 @@ class IRISExecutor:
                     from .vector_optimizer import optimize_vector_query
 
                     logger.debug("Vector optimizer: checking query",
-                               sql_preview=sql[:200],
+                               sql_preview=normalized_sql[:200],
                                param_count=len(params) if params else 0,
                                session_id=session_id)
 
-                    optimized_sql, optimized_params = optimize_vector_query(sql, params)
+                    # CRITICAL: Pass normalized_sql (not original sql) per FR-012
+                    optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
 
-                    optimization_applied = (optimized_sql != sql) or (optimized_params != params)
+                    optimization_applied = (optimized_sql != normalized_sql) or (optimized_params != params)
 
                     if optimization_applied:
                         logger.info("Vector optimization applied",
-                                  sql_changed=(optimized_sql != sql),
+                                  sql_changed=(optimized_sql != normalized_sql),
                                   params_changed=(optimized_params != params),
                                   params_before=len(params) if params else 0,
                                   params_after=len(optimized_params) if optimized_params else 0,
@@ -312,10 +452,10 @@ class IRISExecutor:
                                  error=str(e),
                                  session_id=session_id)
                 except Exception as opt_error:
-                    logger.warning("Vector optimization failed, using original query",
+                    logger.warning("Vector optimization failed, using normalized query",
                                  error=str(opt_error),
                                  session_id=session_id)
-                    optimized_sql, optimized_params = sql, params
+                    optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
@@ -352,10 +492,38 @@ class IRISExecutor:
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
 
-                if optimized_params is not None and len(optimized_params) > 0:
-                    result = iris.sql.exec(optimized_sql, *optimized_params)
+                # CRITICAL FIX: Split SQL by semicolons to handle multiple statements
+                # IRIS iris.sql.exec() cannot handle "STMT1; STMT2" in a single call
+                statements = self._split_sql_statements(optimized_sql)
+
+                if len(statements) > 1:
+                    logger.info("Executing multiple statements",
+                               statement_count=len(statements),
+                               session_id=session_id)
+
+                    # Execute all statements except the last (don't capture results)
+                    for stmt in statements[:-1]:
+                        logger.debug(f"Executing intermediate statement: {stmt[:80]}...",
+                                   session_id=session_id)
+                        if optimized_params is not None and len(optimized_params) > 0:
+                            iris.sql.exec(stmt, *optimized_params)
+                        else:
+                            iris.sql.exec(stmt)
+
+                    # Execute last statement and capture results
+                    last_stmt = statements[-1]
+                    logger.debug(f"Executing final statement: {last_stmt[:80]}...",
+                               session_id=session_id)
+                    if optimized_params is not None and len(optimized_params) > 0:
+                        result = iris.sql.exec(last_stmt, *optimized_params)
+                    else:
+                        result = iris.sql.exec(last_stmt)
                 else:
-                    result = iris.sql.exec(optimized_sql)
+                    # Single statement - execute normally
+                    if optimized_params is not None and len(optimized_params) > 0:
+                        result = iris.sql.exec(optimized_sql, *optimized_params)
+                    else:
+                        result = iris.sql.exec(optimized_sql)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -476,8 +644,45 @@ class IRISExecutor:
                 # Use intersystems-irispython driver
                 import iris
 
+                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
+                # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
+                transaction_translator = TransactionTranslator()
+                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+
+                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
+                # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
+                translator = SQLTranslator()
+                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="external")
+
+                # Log transaction translation metrics (external mode)
+                txn_metrics = transaction_translator.get_translation_metrics()
+                logger.info("Transaction verb translation applied (external mode)",
+                           total_translations=txn_metrics['total_translations'],
+                           avg_time_ms=txn_metrics['avg_translation_time_ms'],
+                           sla_violations=txn_metrics['sla_violations'],
+                           sql_original_preview=sql[:100],
+                           sql_translated_preview=transaction_translated_sql[:100],
+                           session_id=session_id)
+
+                # Log normalization metrics
+                norm_metrics = translator.get_normalization_metrics()
+                logger.info("SQL normalization applied (external mode)",
+                           identifiers_normalized=norm_metrics['identifier_count'],
+                           dates_translated=norm_metrics['date_literal_count'],
+                           normalization_time_ms=norm_metrics['normalization_time_ms'],
+                           sla_violated=norm_metrics['sla_violated'],
+                           sql_before_preview=transaction_translated_sql[:100],
+                           sql_after_preview=normalized_sql[:100],
+                           session_id=session_id)
+
+                if norm_metrics['sla_violated']:
+                    logger.warning("SQL normalization exceeded 5ms SLA (external mode)",
+                                 normalization_time_ms=norm_metrics['normalization_time_ms'],
+                                 session_id=session_id)
+
                 # Apply vector query optimization (convert parameterized vectors to literals)
-                optimized_sql = sql
+                # Use normalized_sql as input instead of original sql
+                optimized_sql = normalized_sql
                 optimized_params = params
                 optimization_applied = False
 
@@ -488,17 +693,18 @@ class IRISExecutor:
                     from .vector_optimizer import optimize_vector_query
 
                     logger.debug("Vector optimizer: checking query (external mode)",
-                               sql_preview=sql[:200],
+                               sql_preview=normalized_sql[:200],
                                param_count=len(params) if params else 0,
                                session_id=session_id)
 
-                    optimized_sql, optimized_params = optimize_vector_query(sql, params)
+                    # CRITICAL: Pass normalized_sql (not original sql) per FR-012
+                    optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
 
-                    optimization_applied = (optimized_sql != sql) or (optimized_params != params)
+                    optimization_applied = (optimized_sql != normalized_sql) or (optimized_params != params)
 
                     if optimization_applied:
                         logger.info("Vector optimization applied (external mode)",
-                                  sql_changed=(optimized_sql != sql),
+                                  sql_changed=(optimized_sql != normalized_sql),
                                   params_changed=(optimized_params != params),
                                   params_before=len(params) if params else 0,
                                   params_after=len(optimized_params) if optimized_params else 0,
@@ -514,10 +720,10 @@ class IRISExecutor:
                                  error=str(e),
                                  session_id=session_id)
                 except Exception as opt_error:
-                    logger.warning("Vector optimization failed, using original query (external mode)",
+                    logger.warning("Vector optimization failed, using normalized query (external mode)",
                                  error=str(opt_error),
                                  session_id=session_id)
-                    optimized_sql, optimized_params = sql, params
+                    optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000

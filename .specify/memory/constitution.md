@@ -186,6 +186,51 @@ All vector query rewriting MUST:
 
 **Rationale**: Comprehensive investigation (1K, 10K, 100K vector scales) proved HNSW requires sufficient dataset scale to overcome index overhead. ACORN-1 consistently degrades performance despite documentation claims. These empirically-validated thresholds prevent premature optimization and ensure production deployments achieve expected 4-10× performance improvements. The absence of L2 distance support in IRIS is a fundamental limitation that breaks pgvector's default `<->` operator - the server must explicitly reject these queries rather than attempting automatic mapping to alternative distance functions. Datatype mismatches cause runtime failures that are difficult to debug without understanding IRIS's strict type checking for vector operations.
 
+### VII. Development Environment Synchronization
+
+**CRITICAL REQUIREMENT**: Docker containers running the PGWire server DO NOT automatically reload Python code changes. Every code modification MUST be followed by an explicit container restart to ensure the updated code is active:
+
+```bash
+# MANDATORY workflow after ANY code change:
+docker restart iris-pgwire-db
+sleep 3  # Wait for server to initialize
+# THEN verify fix with test query
+```
+
+**Stale Code Detection Patterns**:
+
+When encountering errors that were previously fixed, immediately suspect stale code and check:
+1. **Container uptime**: `docker ps` shows "Up X minutes/hours" - if uptime > time since code change, code is stale
+2. **Error patterns**: Seeing errors that match pre-fix behavior (e.g., "Field 'LastName' not found" when normalization should uppercase it)
+3. **Double normalization**: SQL showing `TO_DATE(TO_DATE(...))` or `UPPERCASE(UPPERCASE(...))` patterns
+4. **Missing functionality**: Features that should work based on code but don't execute
+
+**iris-devtester Integration** (Constitutional Test Requirement):
+
+MUST implement automated stale code detection via iris-devtester:
+```python
+# Required test in iris-devtester suite:
+def test_code_synchronization():
+    """Verify Docker container is running current code version"""
+    # 1. Inject CODE_VERSION constant into server code
+    # 2. Query via PGWire: SELECT current_setting('pgwire.code_version')
+    # 3. Compare against expected CODE_VERSION from Git commit
+    # 4. FAIL if mismatch detected with clear instructions to restart
+```
+
+**Development Workflow Requirements**:
+1. **BEFORE each test run**: Verify `docker ps` uptime vs last code change timestamp
+2. **AFTER code changes**: ALWAYS restart container - NEVER assume hot reload works
+3. **WHEN debugging**: First action is to restart container to eliminate stale code as root cause
+4. **IN CI/CD**: Build fresh containers for each test run (never reuse existing containers)
+
+**Known Trigger Scenarios** (empirically validated during Feature 021 development):
+- Editing Python files in `src/iris_pgwire/` while container is running
+- Server crashes and auto-restarts (Docker restart policy loads original image code, not workspace edits)
+- Long-running development sessions spanning multiple code iterations
+
+**Rationale**: The iris-pgwire server runs embedded Python code loaded at container startup. Python modules are cached in memory and not reloaded unless explicitly triggered. Docker's restart policy can auto-restart crashed containers, but they load the IMAGE's code (from last `docker build`), NOT the workspace's edited files mounted via volumes. This caused three separate debugging incidents during Feature 021 where fixes appeared to fail because the container was running pre-fix code. Automated version checking prevents wasted debugging time and ensures test failures reflect actual code bugs, not deployment synchronization issues.
+
 ## Security Requirements
 
 All network communication MUST use TLS encryption in production environments. Authentication MUST implement SCRAM-SHA-256 with proper salt generation and verification. Input validation MUST sanitize all client inputs to prevent SQL injection and protocol attacks. Error messages MUST NOT leak sensitive information about IRIS internals or database schemas.
@@ -213,4 +258,4 @@ Constitution violations may be permitted only when:
 3. Production security requirements override development convenience
 4. Performance requirements documented with benchmarks justify the complexity
 
-**Version**: 1.2.4 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-10-05
+**Version**: 1.3.0 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-11-08

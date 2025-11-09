@@ -409,10 +409,18 @@ class PGWireProtocol:
         5. Send ReadyForQuery
         """
         try:
-            # Parse startup message
+            # STEP 1: Parse startup message
+            logger.info("🔍 HANDSHAKE STEP 1: About to parse StartupMessage",
+                       connection_id=self.connection_id)
             await self.parse_startup_message()
+            logger.info("✅ HANDSHAKE STEP 1: StartupMessage parsed successfully",
+                       connection_id=self.connection_id,
+                       params=self.startup_params)
 
-            # P3: Enhanced authentication (SCRAM-SHA-256 or trust)
+            # STEP 2: Authentication
+            logger.info("🔍 HANDSHAKE STEP 2: About to send authentication",
+                       connection_id=self.connection_id,
+                       scram_enabled=self.enable_scram)
             if self.enable_scram:
                 await self.start_scram_authentication()
                 # SCRAM requires additional message handling
@@ -421,63 +429,139 @@ class PGWireProtocol:
             else:
                 # P0: Basic authentication (trust)
                 await self.send_authentication_ok()
+            logger.info("✅ HANDSHAKE STEP 2: Authentication sent",
+                       connection_id=self.connection_id)
 
-            # Send parameter status messages
+            # STEP 3: Send parameter status messages
+            logger.info("🔍 HANDSHAKE STEP 3: About to send ParameterStatus",
+                       connection_id=self.connection_id)
             await self.send_parameter_status()
+            logger.info("✅ HANDSHAKE STEP 3: ParameterStatus sent",
+                       connection_id=self.connection_id)
 
-            # Send backend key data for cancel requests
+            # STEP 4: Send backend key data for cancel requests
+            logger.info("🔍 HANDSHAKE STEP 4: About to send BackendKeyData",
+                       connection_id=self.connection_id)
             await self.send_backend_key_data()
+            logger.info("✅ HANDSHAKE STEP 4: BackendKeyData sent",
+                       connection_id=self.connection_id)
 
-            # Send ready for query
+            # STEP 5: Send ready for query
+            logger.info("🔍 HANDSHAKE STEP 5: About to send ReadyForQuery",
+                       connection_id=self.connection_id)
             await self.send_ready_for_query()
+            logger.info("✅ HANDSHAKE STEP 5: ReadyForQuery sent",
+                       connection_id=self.connection_id)
 
             self.authenticated = True
             self.ready = True
 
-            logger.info("Startup sequence completed",
+            logger.info("🎉 Startup sequence completed successfully",
                        connection_id=self.connection_id,
                        user=self.startup_params.get('user'),
                        database=self.startup_params.get('database'))
 
         except asyncio.IncompleteReadError as e:
             # Client closed connection before sending StartupMessage
-            logger.debug("Client disconnected before StartupMessage",
+            logger.error("❌ Client disconnected during handshake (IncompleteReadError)",
                         connection_id=self.connection_id,
                         bytes_read=len(e.partial), expected=e.expected)
             raise ConnectionAbortedError("Client disconnected before StartupMessage")
         except Exception as e:
-            logger.error("Startup sequence failed",
-                        connection_id=self.connection_id, error=str(e))
+            logger.error("❌ Startup sequence failed",
+                        connection_id=self.connection_id,
+                        error=str(e),
+                        error_type=type(e).__name__)
+            import traceback
+            logger.error("Stack trace:", traceback=traceback.format_exc())
             await self.send_error_response("FATAL", "08006", "startup_failed",
                                          f"Startup sequence failed: {e}")
             raise
 
     async def parse_startup_message(self):
         """Parse PostgreSQL StartupMessage"""
+        logger.info("🔍 parse_startup_message: Starting to parse StartupMessage",
+                   connection_id=self.connection_id,
+                   has_buffered_data=hasattr(self, '_buffered_data'))
+
         # Check if we have buffered data from SSL probe
+        already_read = b''
         if hasattr(self, '_buffered_data'):
-            length, code = struct.unpack('!II', self._buffered_data)
+            logger.info("📦 Using buffered data from SSL probe",
+                       connection_id=self.connection_id,
+                       buffered_size=len(self._buffered_data))
+            # The buffered data contains first 8 bytes of StartupMessage:
+            # Bytes 0-3: message length (total size of message including length field)
+            # Bytes 4-7: protocol version (part of message payload)
+            length = struct.unpack('!I', self._buffered_data[:4])[0]
+            # Keep bytes 4-7 (protocol version) as already-read payload
+            already_read = self._buffered_data[4:]
+            logger.info("📦 Buffered data correctly parsed",
+                       connection_id=self.connection_id,
+                       message_length=length,
+                       already_read_bytes=len(already_read))
             delattr(self, '_buffered_data')
         else:
             # Read message length and check for startup
+            logger.info("🔍 About to read 4-byte message length",
+                       connection_id=self.connection_id)
             length_data = await self.reader.readexactly(4)
             length = struct.unpack('!I', length_data)[0]
+            logger.info("📏 Message length read",
+                       connection_id=self.connection_id,
+                       length=length)
 
         # Read remaining message data
+        # Length includes the length field itself (4 bytes), so remaining = length - 4
         remaining = length - 4
-        if remaining > 0:
-            message_data = await self.reader.readexactly(remaining)
+        logger.info("🔍 About to read remaining message data",
+                   connection_id=self.connection_id,
+                   remaining_bytes=remaining,
+                   already_have_bytes=len(already_read))
+
+        # If we already have some bytes from buffered_data, use them
+        if already_read:
+            # We already have 4 bytes (protocol version) from buffered SSL probe read
+            bytes_needed = remaining - len(already_read)
+            if bytes_needed > 0:
+                logger.info("📦 Reading additional bytes",
+                           connection_id=self.connection_id,
+                           bytes_needed=bytes_needed)
+                additional_data = await self.reader.readexactly(bytes_needed)
+                message_data = already_read + additional_data
+            else:
+                # We already have all the data we need
+                message_data = already_read[:remaining]
+            logger.info("📦 Message data assembled from buffered + new reads",
+                       connection_id=self.connection_id,
+                       total_bytes=len(message_data))
         else:
-            message_data = b''
+            # Normal path - read all remaining bytes
+            if remaining > 0:
+                message_data = await self.reader.readexactly(remaining)
+                logger.info("📦 Message data read successfully",
+                           connection_id=self.connection_id,
+                           bytes_read=len(message_data))
+            else:
+                message_data = b''
+                logger.warning("⚠️ No message data to read (remaining=0)",
+                              connection_id=self.connection_id)
 
         # Parse protocol version
         if len(message_data) >= 4:
             protocol_version = struct.unpack('!I', message_data[:4])[0]
+            logger.info("🔍 Protocol version parsed",
+                       connection_id=self.connection_id,
+                       protocol_version=f"{protocol_version:08x}",
+                       expected=f"{PROTOCOL_VERSION:08x}")
             if protocol_version != PROTOCOL_VERSION:
                 raise ValueError(f"Unsupported protocol version: {protocol_version:08x}")
 
             # Parse parameters (null-terminated strings)
             param_data = message_data[4:]
+            logger.info("🔍 About to parse parameters",
+                       connection_id=self.connection_id,
+                       param_data_size=len(param_data))
             params = {}
             i = 0
             while i < len(param_data) - 1:  # -1 for final null terminator
@@ -496,8 +580,13 @@ class PGWireProtocol:
                 i = value_end + 1
 
                 params[key] = value
+                logger.debug(f"📝 Parameter: {key}={value}",
+                            connection_id=self.connection_id)
 
             self.startup_params = params
+            logger.info("✅ All parameters parsed successfully",
+                       connection_id=self.connection_id,
+                       params=params)
             logger.debug("Startup message parsed",
                         connection_id=self.connection_id,
                         params=params)
@@ -870,6 +959,10 @@ class PGWireProtocol:
                        connection_id=self.connection_id,
                        query=query[:100] + "..." if len(query) > 100 else query)
 
+            # DEBUGGING: Log full SQL for CREATE TABLE statements
+            if query.upper().strip().startswith("CREATE TABLE"):
+                logger.warning(f"FULL CREATE TABLE SQL (length={len(query)}): {query}")
+
             # Handle transaction commands first (no IRIS execution needed)
             query_upper = query.upper().strip()
             if query_upper in ("BEGIN", "START TRANSACTION"):
@@ -883,6 +976,12 @@ class PGWireProtocol:
             elif query_upper == "ROLLBACK":
                 await self.iris_executor.rollback_transaction()
                 await self.send_transaction_response("ROLLBACK")
+                return
+
+            # Handle DEALLOCATE commands (PostgreSQL prepared statement cleanup)
+            # IRIS doesn't support DEALLOCATE, so we silently succeed
+            if query_upper.startswith("DEALLOCATE"):
+                await self.send_deallocate_response(query_upper)
                 return
 
             # P6: Handle COPY commands
@@ -935,6 +1034,9 @@ class PGWireProtocol:
                     "ERROR", "42000", "syntax_error",
                     result.get('error', 'Query execution failed')
                 )
+                # CRITICAL: Send ReadyForQuery after error in Simple Query Protocol
+                # PostgreSQL wire protocol requires ReadyForQuery after EVERY query
+                await self.send_ready_for_query()
 
         except Exception as e:
             logger.error("Query handling failed",
@@ -943,6 +1045,8 @@ class PGWireProtocol:
                 "ERROR", "08000", "connection_exception",
                 f"Query processing failed: {e}"
             )
+            # CRITICAL: Send ReadyForQuery after exception in Simple Query Protocol
+            await self.send_ready_for_query()
 
     async def send_query_result(self, result: Dict[str, Any], send_ready: bool = True):
         """
@@ -1184,6 +1288,29 @@ class PGWireProtocol:
                    command=command,
                    status=self.transaction_status.decode())
 
+    async def send_deallocate_response(self, command: str):
+        """Send response for DEALLOCATE commands (PostgreSQL prepared statement cleanup)
+
+        IRIS doesn't support DEALLOCATE, so we silently succeed.
+        This prevents psycopg from failing during connection cleanup.
+        """
+        # CommandComplete: C + length + tag
+        # Use "DEALLOCATE 0" to indicate success (0 statements deallocated)
+        tag = 'DEALLOCATE 0\x00'.encode()
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+
+        # Send message
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+
+        # Send ReadyForQuery
+        await self.send_ready_for_query()
+
+        logger.debug("DEALLOCATE response sent (silently succeeded)",
+                    connection_id=self.connection_id,
+                    command=command)
+
     # P2: Extended Protocol Message Handlers
 
     async def handle_parse_message(self, body: bytes):
@@ -1313,6 +1440,10 @@ class PGWireProtocol:
             if statement_name not in self.prepared_statements:
                 raise ValueError(f"Prepared statement '{statement_name}' does not exist")
 
+            # Get parameter types from prepared statement for binary decoding
+            stmt = self.prepared_statements[statement_name]
+            param_types = stmt.get('param_types', [])
+
             # Parse parameter format codes
             if pos + 2 > len(body):
                 raise ValueError("Invalid Bind message: missing format codes count")
@@ -1357,9 +1488,10 @@ class PGWireProtocol:
                         # Text format
                         param_values.append(param_data.decode('utf-8'))
                     elif format_code == 1:
-                        # Binary format - decode based on parameter type
-                        # For now, we'll detect vectors by checking if it's an array of floats
-                        decoded_param = self._decode_binary_parameter(param_data, i)
+                        # Binary format - decode based on parameter type OID
+                        # Get parameter type OID from prepared statement (0 if not available)
+                        param_type_oid = param_types[i] if i < len(param_types) else 0
+                        decoded_param = self._decode_binary_parameter(param_data, i, param_type_oid)
                         param_values.append(decoded_param)
                     else:
                         raise ValueError(f"Unknown format code {format_code} for parameter {i}")
@@ -1657,7 +1789,7 @@ class PGWireProtocol:
 
         return query
 
-    def _decode_binary_parameter(self, data: bytes, param_index: int) -> str:
+    def _decode_binary_parameter(self, data: bytes, param_index: int, param_type_oid: int = 0):
         """
         Decode binary-format parameter from PostgreSQL wire protocol.
 
@@ -1672,22 +1804,53 @@ class PGWireProtocol:
           - Int32: element length (-1 for NULL)
           - bytes: element data (if not NULL)
 
-        For float4 (OID 700): 4-byte IEEE 754 float
-        For float8 (OID 701): 8-byte IEEE 754 double
+        For simple types:
+        - int2 (OID 21): 2-byte signed integer (big-endian)
+        - int4 (OID 23): 4-byte signed integer (big-endian)
+        - int8 (OID 20): 8-byte signed integer (big-endian)
+        - float4 (OID 700): 4-byte IEEE 754 float
+        - float8 (OID 701): 8-byte IEEE 754 double
+
+        Args:
+            data: Binary parameter data
+            param_index: Parameter index (for logging)
+            param_type_oid: PostgreSQL type OID from prepared statement (0 if unknown)
 
         Returns:
-            String representation suitable for IRIS (e.g., "[0.1,0.2,0.3]")
+            Typed value (int, float, str, or list) suitable for IRIS parameter binding
         """
         try:
             if len(data) < 12:
                 # Not an array, might be a simple type
-                # Try to decode as float8 (most common for vectors)
-                if len(data) == 8:
-                    value = struct.unpack('!d', data)[0]  # Big-endian double
-                    return str(value)
-                elif len(data) == 4:
+                # Decode based on parameter type OID OR data length
+                if param_type_oid == 21 and len(data) == 2:  # int2 (smallint)
+                    value = struct.unpack('!h', data)[0]  # Big-endian signed short
+                    return value  # Return actual int, not string
+                elif param_type_oid == 23 and len(data) == 4:  # int4
+                    value = struct.unpack('!i', data)[0]  # Big-endian signed int
+                    return value  # Return actual int, not string
+                elif param_type_oid == 20 and len(data) == 8:  # int8 (bigint)
+                    value = struct.unpack('!q', data)[0]  # Big-endian signed long
+                    return value  # Return actual int, not string
+                elif param_type_oid == 700 and len(data) == 4:  # float4 explicit
                     value = struct.unpack('!f', data)[0]  # Big-endian float
-                    return str(value)
+                    return value  # Return actual float, not string
+                elif param_type_oid == 701 and len(data) == 8:  # float8 explicit
+                    value = struct.unpack('!d', data)[0]  # Big-endian double
+                    return value  # Return actual float, not string
+                # Fallback: Infer type from data length when OID not specified
+                elif len(data) == 2:
+                    # Assume int2 (smallint)
+                    value = struct.unpack('!h', data)[0]
+                    return value
+                elif len(data) == 4:
+                    # Assume int4 (psycopg may not specify OID for integers)
+                    value = struct.unpack('!i', data)[0]
+                    return value
+                elif len(data) == 8:
+                    # Assume int8 (prefer int over float for 8-byte values)
+                    value = struct.unpack('!q', data)[0]
+                    return value
                 else:
                     # Unknown format, return as text
                     return data.decode('utf-8', errors='replace')

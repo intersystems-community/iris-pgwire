@@ -1,0 +1,25 @@
+{
+  "databases": [
+    {
+      "database_name": "IRIS Healthcare",
+      "sqlalchemy_uri": "postgresql://test_user@iris:5432/USER",
+      "expose_in_sqllab": true,
+      "allow_ctas": true,
+      "allow_cvas": true,
+      "allow_dml": true,
+      "allow_run_async": true,
+      "cache_timeout": 3600,
+      "extra": {
+        "metadata_params": {},
+        "engine_params": {
+          "connect_args": {
+            "sslmode": "disable"
+          }
+        },
+        "metadata_cache_timeout": {},
+        "schemas_allowed_for_csv_upload": []
+      },
+      "uuid": "00000000-0000-0000-0000-000000000001"
+    }
+  ]
+}
