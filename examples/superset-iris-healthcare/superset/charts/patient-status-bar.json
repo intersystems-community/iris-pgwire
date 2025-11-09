@@ -1,0 +1,32 @@
+{
+  "slices": [
+    {
+      "slice_name": "Patient Count by Status",
+      "viz_type": "dist_bar",
+      "params": {
+        "datasource": "10__table",
+        "viz_type": "dist_bar",
+        "slice_id": 101,
+        "metrics": ["Patient Count"],
+        "groupby": ["Status"],
+        "columns": [],
+        "row_limit": 10000,
+        "color_scheme": "supersetColors",
+        "show_legend": true,
+        "y_axis_format": ",d",
+        "bottom_margin": "auto",
+        "x_axis_label": "Status",
+        "y_axis_label": "Patient Count",
+        "show_bar_value": true,
+        "bar_stacked": false,
+        "order_bars": true,
+        "y_axis_bounds": [null, null],
+        "show_controls": false,
+        "order_desc": true
+      },
+      "description": "Distribution of patients by current status (Active/Discharged/Deceased)",
+      "cache_timeout": 3600,
+      "dataset_uuid": "00000000-0000-0000-0000-000000000010"
+    }
+  ]
+}

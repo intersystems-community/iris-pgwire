@@ -1,0 +1,26 @@
+{
+  "databases": [
+    {
+      "database_name": "IRIS Healthcare (Native Driver - Scenario B)",
+      "sqlalchemy_uri": "iris://_SYSTEM:SYS@iris:1972/USER",
+      "expose_in_sqllab": true,
+      "allow_ctas": true,
+      "allow_cvas": true,
+      "allow_dml": true,
+      "allow_file_upload": false,
+      "cache_timeout": 3600,
+      "extra": {
+        "metadata_params": {},
+        "engine_params": {
+          "connect_args": {
+            "timeout": 30
+          }
+        },
+        "metadata_cache_timeout": {},
+        "schemas_allowed_for_file_upload": []
+      },
+      "configuration_method": "sqlalchemy_form",
+      "description": "Native IRIS connection using official sqlalchemy-intersystems-iris driver. Direct connection to port 1972 without PGWire translation layer."
+    }
+  ]
+}

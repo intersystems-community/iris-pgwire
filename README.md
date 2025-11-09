@@ -14,21 +14,24 @@
 
 ### Zero-Configuration BI Integration
 
-| Tool | Setup | Features | Port |
-|------|-------|----------|------|
-| **Apache Superset** | `docker-compose --profile bi-tools up` | Modern dashboards, SQL Lab, data exploration | 8088 |
+| Tool | Setup | Features | Example Port |
+|------|-------|----------|--------------|
+| **Apache Superset 4** | `docker-compose --profile superset-example up` | Healthcare demo with sample data, dashboards, SQL Lab | [8088](http://localhost:8088) |
+| **Apache Superset** | `docker-compose --profile bi-tools up` | Modern dashboards, data exploration | 8088 |
 | **Metabase** | `docker-compose --profile bi-tools up` | Visual query builder, automated insights | 3001 |
 | **Grafana** | `docker-compose --profile bi-tools up` | Real-time monitoring, time-series visualization | 3000 |
 
 **Connection details for all BI tools**:
 ```
-Host: localhost
+Host: localhost (or 'iris' inside Docker network)
 Port: 5432
 Database: USER
 Driver: PostgreSQL (standard)
 ```
 
-That's it. No IRIS-specific drivers needed. See [BI Tools Setup Guide](examples/BI_TOOLS_SETUP.md) for complete walkthrough.
+That's it. No IRIS-specific drivers needed.
+
+**Try the Healthcare Demo**: Complete working example with Apache Superset 4 connecting to IRIS healthcare data (250 patient records, 400 lab results) - see [Superset Healthcare Example](examples/superset-iris-healthcare/README.md) for <10 minute setup.
 
 ### Data Science & Python Ecosystem
 
@@ -503,11 +506,20 @@ LIMIT 10
 
 ## ⚠️ Known Limitations
 
+### 🎉 Recently Fixed
+
+**v0.2.0 (2025-11-06)**: DDL Semicolon Parsing Bug
+- **Issue**: CREATE/DROP/ALTER TABLE failed with `"Input (;) encountered after end of query"` error
+- **Status**: ✅ **FIXED** - All DDL operations now work with standard PostgreSQL semicolon syntax
+- **Test Coverage**: 15 comprehensive E2E tests added
+- **Details**: See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md#-critical-ddl-semicolon-parsing-fixed-in-v020)
+
 ### Protocol Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Simple Queries | ✅ Complete | SELECT, INSERT, UPDATE, DELETE working |
+| DDL Statements | ✅ Complete | CREATE/DROP/ALTER TABLE with semicolons (fixed v0.2.0) |
 | Extended Protocol | 🚧 Partial | Prepared statements work, some advanced features missing |
 | Authentication | ⚠️ Basic | SCRAM-SHA-256 placeholder, no production-ready auth |
 | SSL/TLS | ❌ Not implemented | Plain text connections only |

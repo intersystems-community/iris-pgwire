@@ -23,6 +23,110 @@ import structlog
 logger = structlog.get_logger()
 
 
+# ============================================================================
+# Feature 019: Register IRIS SQLAlchemy Dialect
+# ============================================================================
+# Register the IRIS dialect for async SQLAlchemy support tests
+# This ensures create_async_engine("iris+psycopg://...") resolves correctly
+# using the caretdev sqlalchemy-iris implementation (v0.18.0)
+from sqlalchemy.dialects import registry
+registry.register("iris.psycopg", "sqlalchemy_iris.psycopg", "IRISDialect_psycopg")
+logger.info("SQLAlchemy IRIS dialect registered (caretdev sqlalchemy-iris)")
+
+# NOTE: There is also a Perforce/InterSystems SQLAlchemy implementation.
+# This registration uses the caretdev version which already has async support built in.
+# ============================================================================
+
+
+# ============================================================================
+# Feature 019: Monkey-Patch Async Dialect Bug Fix
+# ============================================================================
+# CRITICAL BUG FIX: sqlalchemy-iris v0.18.0 async dialect is missing `await`
+# keywords in do_executemany(), causing bulk inserts to timeout.
+#
+# Root cause: IRISDialectAsync_psycopg.do_executemany() calls cursor.execute()
+# without await, creating unawaited coroutines that never execute.
+#
+# This monkey-patch adds the missing await keywords until fixed upstream.
+# Issue to be reported to caretdev/sqlalchemy-iris GitHub.
+try:
+    from sqlalchemy_iris.psycopg import IRISDialectAsync_psycopg
+
+    # Store original method for reference
+    _original_do_executemany = IRISDialectAsync_psycopg.do_executemany
+
+    def patched_do_executemany(self, cursor, query, params, context=None):
+        """
+        Patched version of do_executemany() for greenlet-based async execution.
+
+        FIXES: Incorrect implementation in sqlalchemy-iris v0.18.0
+
+        NOTE: This is a SYNC function that calls async cursor methods.
+        SQLAlchemy's greenlet integration automatically wraps cursor.execute()
+        calls in await when used with async engine.
+
+        Do NOT make this async def - greenlet expects sync functions.
+        """
+        # Strip trailing semicolon (from original implementation)
+        if query.endswith(";"):
+            query = query[:-1]
+
+        # Execute each parameter set
+        # Greenlet automatically handles async wrapping
+        for param_set in params:
+            cursor.execute(query, param_set)
+
+    # Apply monkey-patch for do_executemany
+    IRISDialectAsync_psycopg.do_executemany = patched_do_executemany
+
+    # CRITICAL BUG FIX #2: Strip IRIS-specific DDL extensions
+    # sqlalchemy-iris adds "WITH %CLASSPARAMETER ALLOWIDENTITYINSERT = 1" to DDL
+    # psycopg rejects this because %C looks like a parameter placeholder
+    _original_do_execute = IRISDialectAsync_psycopg.do_execute
+
+    def patched_do_execute(self, cursor, query, params, context=None):
+        """
+        Patched version of do_execute() to strip IRIS DDL extensions.
+
+        FIXES: psycopg parameter validation rejecting %CLASSPARAMETER
+
+        Strips "WITH %CLASSPARAMETER ALLOWIDENTITYINSERT = 1" from CREATE TABLE
+        statements to make them compatible with PostgreSQL wire protocol.
+        """
+        # Strip IRIS-specific DDL extensions that confuse psycopg
+        if query and "WITH %CLASSPARAMETER" in query:
+            query = query.replace("WITH %CLASSPARAMETER ALLOWIDENTITYINSERT = 1", "").strip()
+            # Clean up extra whitespace
+            while "  " in query:
+                query = query.replace("  ", " ")
+
+        # Call original do_execute
+        return _original_do_execute(self, cursor, query, params, context)
+
+    # Apply DDL monkey-patch
+    IRISDialectAsync_psycopg.do_execute = patched_do_execute
+
+    logger.info(
+        "✅ Applied monkey-patch to IRISDialectAsync_psycopg.do_executemany()",
+        reason="Missing await keywords in sqlalchemy-iris v0.18.0",
+        impact="Fixes bulk insert timeout (test_async_bulk_insert)"
+    )
+
+    logger.info(
+        "✅ Applied monkey-patch to IRISDialectAsync_psycopg.do_execute()",
+        reason="Strip IRIS DDL extensions incompatible with psycopg",
+        impact="Fixes CREATE TABLE with %CLASSPARAMETER error"
+    )
+
+except ImportError as e:
+    logger.warning(
+        "⚠️ Could not apply async dialect monkey-patch",
+        error=str(e),
+        hint="sqlalchemy-iris not installed or version mismatch"
+    )
+# ============================================================================
+
+
 def wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
     """Wait for a port to become available"""
     start_time = time.time()
