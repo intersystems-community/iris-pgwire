@@ -173,7 +173,7 @@ PatientID,FirstName,LastName,DateOfBirth,Gender,Status,AdmissionDate,DischargeDa
 172,Kayla,Harper,1988-01-20,F,Discharged,2023-06-22,2023-08-30
 173,Zachary,Burke,1976-05-04,M,Active,2023-07-18,
 174,Madison,Owens,1992-10-17,F,Active,2023-08-25,
-175,Curtis,Reynolds,1962-02-29,M,Active,2023-09-30,
+175,Curtis,Reynolds,1962-02-28,M,Active,2023-09-30,
 176,Gabriella,Ellis,1987-07-13,F,Active,2023-11-05,
 177,Tyler,Bates,1974-11-27,M,Discharged,2023-12-12,2024-02-18
 178,Arianna,Song,1998-03-11,F,Active,2024-01-20,
