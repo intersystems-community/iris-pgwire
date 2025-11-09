@@ -29,6 +29,10 @@ import structlog
 from .iris_executor import IRISExecutor
 from .sql_translator import get_translator, TranslationContext, ValidationLevel
 from .sql_translator.performance_monitor import get_monitor, MetricType, PerformanceTracker
+from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
+from .copy_handler import CopyHandler
+from .csv_processor import CSVProcessor, CSVParsingError
+from .bulk_executor import BulkExecutor
 
 logger = structlog.get_logger()
 
@@ -220,6 +224,12 @@ class PGWireProtocol:
         self.performance_monitor = get_monitor()
         self.enable_translation = True  # Enable IRIS SQL translation
         self.translation_debug = False  # Enable translation debug mode
+
+        # P6: COPY Protocol Integration
+        self.csv_processor = CSVProcessor()
+        self.bulk_executor = BulkExecutor(self.iris_executor)
+        self.copy_handler = CopyHandler(self.csv_processor, self.bulk_executor)
+        self.copy_state = None  # Track ongoing COPY operation state
 
         logger.info("Protocol handler initialized",
                    connection_id=connection_id,
@@ -1983,25 +1993,56 @@ class PGWireProtocol:
 
     async def handle_copy_command(self, query: str):
         """
-        P6: Handle COPY command parsing and response
+        P6: Handle COPY command parsing and execution (T017 Implementation)
 
-        COPY commands initiate bulk data transfer operations.
-        Supports both COPY FROM STDIN and COPY TO STDOUT.
+        Uses CopyCommandParser to parse SQL and CopyHandler for execution.
+        Implements proper PostgreSQL wire protocol message flow.
         """
         try:
-            query_upper = query.upper().strip()
+            # Parse COPY command using CopyCommandParser (T012-T013)
+            command = CopyCommandParser.parse(query)
 
-            if " FROM STDIN" in query_upper:
+            logger.info("COPY command parsed",
+                       connection_id=self.connection_id,
+                       table=command.table_name,
+                       direction=command.direction.value,
+                       columns=command.column_list,
+                       csv_format=command.csv_options.format)
+
+            if command.direction == CopyDirection.FROM_STDIN:
                 # COPY FROM STDIN - bulk data import
-                await self.handle_copy_from_stdin(query)
-            elif " TO STDOUT" in query_upper:
+                await self.handle_copy_from_stdin_v2(command)
+            elif command.direction == CopyDirection.TO_STDOUT:
                 # COPY TO STDOUT - bulk data export
-                await self.handle_copy_to_stdout(query)
+                await self.handle_copy_to_stdout_v2(command)
             else:
                 await self.send_error_response(
                     "ERROR", "42601", "syntax_error",
-                    f"Unsupported COPY variant: {query}"
+                    f"Unsupported COPY direction: {command.direction}"
                 )
+
+        except CSVParsingError as e:
+            # CSV parsing errors include line numbers (FR-007)
+            logger.error("CSV parsing failed",
+                        connection_id=self.connection_id,
+                        error=str(e),
+                        line_number=e.line_number)
+            await self.send_error_response(
+                "ERROR", "22P04", "bad_copy_file_format",
+                str(e)
+            )
+            # Send ReadyForQuery after error
+            await self.send_ready_for_query()
+
+        except ValueError as e:
+            # Parse errors (invalid COPY syntax)
+            logger.error("COPY command parse failed",
+                        connection_id=self.connection_id, error=str(e))
+            await self.send_error_response(
+                "ERROR", "42601", "syntax_error",
+                f"Invalid COPY command: {e}"
+            )
+            await self.send_ready_for_query()
 
         except Exception as e:
             logger.error("COPY command handling failed",
@@ -2010,6 +2051,157 @@ class PGWireProtocol:
                 "ERROR", "08000", "connection_exception",
                 f"COPY command failed: {e}"
             )
+            await self.send_ready_for_query()
+
+    async def handle_copy_from_stdin_v2(self, command):
+        """
+        P6: Handle COPY FROM STDIN with CopyHandler integration (T017)
+
+        Protocol Flow:
+        1. Send CopyInResponse to client
+        2. Collect CopyData messages via async iterator
+        3. Execute CopyHandler.handle_copy_from_stdin()
+        4. Wait for CopyDone message
+        5. Send CommandComplete and ReadyForQuery
+        """
+        try:
+            # Determine column count for CopyInResponse
+            if command.column_list:
+                column_count = len(command.column_list)
+            else:
+                # Get column count from table metadata
+                column_count = len(await self.bulk_executor.get_table_columns(command.table_name))
+
+            # Send CopyInResponse message (T014)
+            copy_in_response = self.copy_handler.build_copy_in_response(column_count)
+            self.writer.write(copy_in_response)
+            await self.writer.drain()
+
+            logger.info("CopyInResponse sent, awaiting CopyData messages",
+                       connection_id=self.connection_id,
+                       table=command.table_name,
+                       column_count=column_count)
+
+            # Collect CopyData messages as async iterator
+            async def csv_stream():
+                """Async iterator yielding CSV bytes from CopyData messages"""
+                while True:
+                    # Read next message
+                    header = await self.reader.readexactly(5)
+                    msg_type, length = struct.unpack('!cI', header)
+
+                    body_length = length - 4
+                    if body_length > 0:
+                        body = await self.reader.readexactly(body_length)
+                    else:
+                        body = b''
+
+                    if msg_type == MSG_COPY_DATA:
+                        # Yield CSV data payload
+                        yield body
+                    elif msg_type == MSG_COPY_DONE:
+                        # End of stream
+                        logger.info("CopyDone received",
+                                   connection_id=self.connection_id)
+                        break
+                    elif msg_type == MSG_COPY_FAIL:
+                        # Client aborted
+                        error_msg = body.decode('utf-8') if body else "Client aborted"
+                        raise RuntimeError(f"COPY aborted by client: {error_msg}")
+                    else:
+                        raise ValueError(f"Unexpected message type during COPY: {msg_type}")
+
+            # Execute COPY FROM STDIN via CopyHandler (T015, T018, T020)
+            row_count = await self.copy_handler.handle_copy_from_stdin(command, csv_stream())
+
+            # Send CommandComplete with row count
+            tag = f'COPY {row_count}\x00'.encode()
+            cmd_complete_length = 4 + len(tag)
+            cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+            self.writer.write(cmd_complete)
+            await self.writer.drain()
+
+            # Send ReadyForQuery
+            await self.send_ready_for_query()
+
+            logger.info("COPY FROM STDIN completed successfully",
+                       connection_id=self.connection_id,
+                       table=command.table_name,
+                       rows_inserted=row_count)
+
+        except Exception as e:
+            logger.error("COPY FROM STDIN failed",
+                        connection_id=self.connection_id, error=str(e))
+            raise
+
+    async def handle_copy_to_stdout_v2(self, command):
+        """
+        P6: Handle COPY TO STDOUT with CopyHandler integration (T017)
+
+        Protocol Flow:
+        1. Send CopyOutResponse to client
+        2. Execute query via CopyHandler.handle_copy_to_stdout()
+        3. Stream CopyData messages to client
+        4. Send CopyDone
+        5. Send CommandComplete and ReadyForQuery
+        """
+        try:
+            # Determine column count for CopyOutResponse
+            if command.column_list:
+                column_count = len(command.column_list)
+            elif command.table_name:
+                # Get column count from table metadata
+                column_count = len(await self.bulk_executor.get_table_columns(command.table_name))
+            else:
+                # Query-based COPY - default to unknown
+                column_count = 0  # Will be determined by query execution
+
+            # Send CopyOutResponse message (T014)
+            copy_out_response = self.copy_handler.build_copy_out_response(column_count)
+            self.writer.write(copy_out_response)
+            await self.writer.drain()
+
+            logger.info("CopyOutResponse sent, starting data export",
+                       connection_id=self.connection_id,
+                       table=command.table_name,
+                       query=command.query[:100] if command.query else None)
+
+            # Execute COPY TO STDOUT via CopyHandler (T016, T019, T021)
+            row_count = 0
+            async for csv_chunk in self.copy_handler.handle_copy_to_stdout(command):
+                # Send CopyData message (T016)
+                copy_data = self.copy_handler.build_copy_data(csv_chunk)
+                self.writer.write(copy_data)
+                await self.writer.drain()
+
+                # Approximate row count
+                row_count += csv_chunk.count(b'\n')
+
+            # Send CopyDone message
+            copy_done = self.copy_handler.build_copy_done()
+            self.writer.write(copy_done)
+            await self.writer.drain()
+
+            logger.info("CopyDone sent", connection_id=self.connection_id)
+
+            # Send CommandComplete with row count
+            tag = f'COPY {row_count}\x00'.encode()
+            cmd_complete_length = 4 + len(tag)
+            cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+            self.writer.write(cmd_complete)
+            await self.writer.drain()
+
+            # Send ReadyForQuery
+            await self.send_ready_for_query()
+
+            logger.info("COPY TO STDOUT completed successfully",
+                       connection_id=self.connection_id,
+                       rows_exported=row_count)
+
+        except Exception as e:
+            logger.error("COPY TO STDOUT failed",
+                        connection_id=self.connection_id, error=str(e))
+            raise
 
     async def handle_copy_from_stdin(self, query: str):
         """
