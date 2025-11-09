@@ -248,3 +248,12 @@ volumes:
 networks:
   default:
     name: iris-pgwire-network
+  iris-pgwire:
+    external: false
+    name: iris-pgwire-network
+
+# Profile-based compose file includes
+# Usage: docker-compose --profile superset-example up -d
+# This will include services from examples/superset-iris-healthcare/docker-compose.superset.yml
+# Note: You must manually specify the compose file:
+#   docker-compose -f docker-compose.yml -f examples/superset-iris-healthcare/docker-compose.superset.yml --profile superset-example up -d

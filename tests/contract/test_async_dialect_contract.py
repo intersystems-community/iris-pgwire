@@ -118,19 +118,27 @@ async def test_async_bulk_insert():
     engine = create_async_engine("iris+psycopg://localhost:5432/USER")
     metadata = MetaData()
     test_table = Table('async_bulk_test', metadata,
-        Column('id', Integer, primary_key=True),
+        Column('id', Integer, primary_key=True, autoincrement=False),
         Column('name', String(16))
     )
 
     async with engine.begin() as conn:
-        # Drop and create table
-        await conn.run_sync(metadata.drop_all)
-        await conn.run_sync(metadata.create_all)
+        # Drop and create table (handle first-run case where table doesn't exist)
+        try:
+            await conn.run_sync(metadata.drop_all)
+        except Exception as e:
+            # Ignore "table does not exist" errors on first run
+            if "does not exist" not in str(e).lower():
+                raise
+
+        # Force CREATE TABLE without existence check (checkfirst=False)
+        # This prevents SQLAlchemy from skipping CREATE due to stale metadata
+        await conn.run_sync(lambda sync_conn: metadata.create_all(sync_conn, checkfirst=False))
 
         # Bulk insert with timing
         start = time.time()
         await conn.execute(test_table.insert(), [
-            {'name': f'record_{i}'} for i in range(100)
+            {'id': i, 'name': f'record_{i}'} for i in range(100)
         ])
         elapsed = time.time() - start
 

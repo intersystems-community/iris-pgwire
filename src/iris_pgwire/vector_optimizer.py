@@ -14,6 +14,9 @@ from typing import Tuple, List, Optional, Dict, Any
 from dataclasses import dataclass, field
 import logging
 
+# Feature 021: PostgreSQL→IRIS SQL normalization
+from .sql_translator import SQLTranslator
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +111,12 @@ class VectorQueryOptimizer:
         if not self.enabled:
             logger.warning("⚠️ Vector optimizer is DISABLED, returning SQL unchanged")
             return sql, params
+
+        # STEP 0: Strip trailing semicolons from incoming SQL
+        # PostgreSQL clients send queries with semicolons, but IRIS expects them without
+        # This is critical since protocol.py bypasses the translator where this was fixed
+        sql = sql.rstrip(';').strip()
+        logger.debug(f"Stripped semicolons from SQL", sql_preview=sql[:150])
 
         # STEP 1: Convert PostgreSQL LIMIT to IRIS TOP
         # IRIS bug: ORDER BY aliases don't work with LIMIT, only with TOP
@@ -305,6 +314,15 @@ class VectorQueryOptimizer:
         if not sql:
             print("⚠️ Empty SQL, returning as-is", flush=True)
             logger.info("⚠️ Empty SQL received, returning as-is")
+            return sql
+
+        # CRITICAL FIX: Skip vector optimization for DDL statements (CREATE/DROP/ALTER TABLE)
+        # DDL doesn't contain vector operators, and multi-statement SQL breaks the regex parsing
+        sql_upper = sql.upper()
+        ddl_keywords = ['CREATE TABLE', 'DROP TABLE', 'ALTER TABLE', 'CREATE INDEX', 'DROP INDEX']
+        if any(keyword in sql_upper for keyword in ddl_keywords):
+            print(f"✅ DDL detected, skipping vector optimization", flush=True)
+            logger.info("✅ DDL detected, skipping vector operator rewriting")
             return sql
 
         # Split SQL into SELECT and ORDER BY parts to avoid duplication
@@ -1004,13 +1022,28 @@ def optimize_vector_query(sql: str, params: Optional[List] = None) -> Tuple[str,
     """
     Convenience function to optimize vector queries.
 
+    Feature 022 Note: PostgreSQL transaction verb translation (BEGIN → START TRANSACTION)
+    is applied by iris_executor.py BEFORE Feature 021 normalization, per FR-010.
+
+    Feature 021 Note: SQL normalization is applied by iris_executor.py BEFORE calling
+    this function. We should NOT normalize again here to avoid double-wrapping DATE literals
+    and other normalization issues (FR-012 compliance is achieved at executor layer).
+
+    Pipeline order in iris_executor.py:
+    1. Transaction translation (Feature 022) - BEGIN → START TRANSACTION
+    2. SQL normalization (Feature 021) - Identifiers/DATE literals
+    3. Vector optimization (this function) - Parameter optimization
+
     Args:
-        sql: SQL query string
+        sql: SQL query string (already transaction-translated and normalized by executor)
         params: Query parameters
 
     Returns:
         Tuple of (optimized_sql, remaining_params)
     """
+    # Feature 022: Transaction translation already applied by iris_executor
+    # Feature 021: SQL normalization already applied by iris_executor
+    # Do NOT translate or normalize again - just apply vector optimization
     return _optimizer.optimize_query(sql, params)
 
 
