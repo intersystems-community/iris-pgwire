@@ -152,14 +152,14 @@
 
 ### Parsing (T012-T013)
 
-- [ ] **T012** Implement COPY SQL command parser
+- [x] **T012** Implement COPY SQL command parser ✅
   - **File**: `src/iris_pgwire/sql_translator/copy_parser.py`
   - **Action**: Parse `COPY table FROM STDIN WITH (...)` and `COPY table TO STDOUT WITH (...)`
   - **Output**: `CopyCommand` dataclass (table_name, column_list, direction, csv_options)
   - **Pattern**: Regex parsing similar to transaction_translator.py
   - **Tests Pass**: T009 contract tests for command parsing
 
-- [ ] **T013** Implement CSVOptions parser
+- [x] **T013** Implement CSVOptions parser ✅
   - **File**: `src/iris_pgwire/sql_translator/copy_parser.py` (same file as T012)
   - **Action**: Parse `WITH (FORMAT CSV, DELIMITER ',', HEADER, ...)` clause
   - **Output**: `CSVOptions` dataclass (format, delimiter, null_string, header, quote, escape)
@@ -168,21 +168,21 @@
 
 ### Protocol Messages (T014-T017)
 
-- [ ] **T014** Implement CopyInResponse and CopyOutResponse message generation
+- [x] **T014** Implement CopyInResponse and CopyOutResponse message generation ✅
   - **File**: `src/iris_pgwire/copy_handler.py`
   - **Action**: Generate PostgreSQL wire protocol messages (research.md lines 16-44)
   - **Format**: Message type ('G' or 'H') + Int32 length + Int8 format + Int16 column count + Int16[] format codes
   - **Pattern**: Similar to existing protocol.py message builders
   - **Tests Pass**: T004 E2E test receives CopyInResponse
 
-- [ ] **T015** Implement CopyData message handling (FROM STDIN)
+- [x] **T015** Implement CopyData message handling (FROM STDIN) ✅
   - **File**: `src/iris_pgwire/copy_handler.py`
   - **Action**: Receive CopyData messages ('d') from client, extract CSV payload
   - **Output**: Async iterator of CSV bytes for CSVProcessor
   - **Pattern**: Async generator yielding message payloads
   - **Tests Pass**: T004 E2E test receives CSV data
 
-- [ ] **T016** Implement CopyData message handling (TO STDOUT)
+- [x] **T016** Implement CopyData message handling (TO STDOUT) ✅
   - **File**: `src/iris_pgwire/copy_handler.py`
   - **Action**: Stream CSV bytes from CSVProcessor as CopyData messages ('d')
   - **Format**: Message type 'd' + Int32 length + CSV bytes
@@ -198,14 +198,14 @@
 
 ### CSV Processing (T018-T019)
 
-- [ ] **T018** [P] Implement CSV parsing with batching
+- [x] **T018** [P] Implement CSV parsing with batching ✅
   - **File**: `src/iris_pgwire/csv_processor.py`
   - **Action**: Parse CSV bytes using Python `csv.reader()`, yield dicts
   - **Batching**: Accumulate 1000 rows or 10MB before yielding batch (research.md lines 64-73)
   - **Validation**: Check column count, data types, report line numbers on error (FR-007)
   - **Tests Pass**: T010 contract tests, T007 error handling tests
 
-- [ ] **T019** [P] Implement CSV generation
+- [x] **T019** [P] Implement CSV generation ✅
   - **File**: `src/iris_pgwire/csv_processor.py` (same file as T018)
   - **Action**: Generate CSV bytes from IRIS result tuples using Python `csv.writer()`
   - **Options**: Apply CSVOptions (delimiter, null_string, header, quote, escape)
@@ -214,14 +214,14 @@
 
 ### IRIS Integration (T020-T022)
 
-- [ ] **T020** Implement batched bulk insert executor
+- [x] **T020** Implement batched bulk insert executor ✅
   - **File**: `src/iris_pgwire/bulk_executor.py`
   - **Action**: Execute batched INSERT statements using `iris.sql.exec()` (research.md lines 88-99)
   - **Pattern**: Build multi-row INSERT with 1000 rows per batch
   - **Threading**: Use `asyncio.to_thread()` for non-blocking execution (Constitutional Principle IV)
   - **Tests Pass**: T011 contract tests, T004 performance tests (<1 second for 250 rows)
 
-- [ ] **T021** Implement query result streaming for COPY TO STDOUT
+- [x] **T021** Implement query result streaming for COPY TO STDOUT ✅
   - **File**: `src/iris_pgwire/bulk_executor.py` (same file as T020)
   - **Action**: Execute SELECT query via `iris.sql.exec()`, stream results as async iterator
   - **Batching**: Fetch 1000 rows at a time from IRIS cursor
