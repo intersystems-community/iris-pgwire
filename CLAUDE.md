@@ -213,6 +213,366 @@ async def safe_iris_call(query: str):
     )
 ```
 
+## 🔍 IRIS-Specific Quirks and Learnings
+
+**Purpose**: This section documents IRIS-specific behaviors discovered during development that differ from standard PostgreSQL. These learnings are critical for MCP tool development and troubleshooting.
+
+### 1. Semicolon Handling - CRITICAL DISCOVERY
+
+**Issue**: PostgreSQL clients send queries with trailing semicolons (`;`), but IRIS rejects them during SQL parsing.
+
+**Root Cause**: The SQL translator bypass in `protocol.py` (lines 897-910) passes queries directly to IRIS without translation, bypassing the v0.2.0 fix in `translator.py`.
+
+**Error Message**:
+```
+ERROR: Input (;) encountered after end of query^CREATE TABLE test (id INT PRIMARY KEY);
+```
+
+**Execution Path** (Critical Understanding):
+```
+PostgreSQL Client → protocol.py → vector_optimizer.py → IRIS Executor
+                                   ↑
+                              (translator.py BYPASSED!)
+```
+
+**Fix Location**: `src/iris_pgwire/vector_optimizer.py:112-116`
+```python
+# STEP 0: Strip trailing semicolons from incoming SQL
+# PostgreSQL clients send queries with semicolons, but IRIS expects them without
+# This is critical since protocol.py bypasses the translator where this was fixed
+sql = sql.rstrip(';').strip()
+logger.debug(f"Stripped semicolons from SQL", sql_preview=sql[:150])
+```
+
+**Testing Reference**: See `tests/test_ddl_semicolon_fix.sh` for comprehensive validation framework.
+
+### 2. Date Format Validation Issues
+
+**Issue**: IRIS DATE columns reject PostgreSQL ISO date format (`'1990-01-01'`) during INSERT operations.
+
+**Error Message**:
+```
+ERROR: Field 'SQLUser.Patients.DateOfBirth' (value '1990-01-01') failed validation
+ERROR: Field 'SQLUser.Patients.AdmissionDate' (value '2024-01-01') failed validation
+```
+
+**Investigation Status**: 🚧 **ONGOING**
+
+**Attempted Solutions**:
+```sql
+-- ❌ FAILED: Direct ISO format
+INSERT INTO Patients VALUES (1, 'John', 'Doe', '1990-01-01', 'M', 'Active', '2024-01-01', NULL);
+
+-- ❓ UNCLEAR: TO_DATE() conversion (error visibility issue hides result)
+INSERT INTO Patients VALUES (999, 'Test', 'Patient', TO_DATE('1990-01-01', 'YYYY-MM-DD'), 'M', 'Active', TO_DATE('2024-01-01', 'YYYY-MM-DD'), NULL);
+```
+
+**Potential Solutions** (Not Yet Validated):
+1. Use IRIS Horolog format: `datetime.date(1840, 12, 31).toordinal()` conversion
+2. Use `iris-devtester` DAT fixture loading (bypasses SQL INSERT entirely)
+3. Investigate IRIS-specific date literal syntax
+
+**Reference**: See `examples/superset-iris-healthcare/data/patients-data.sql` for blocked dataset (250 patient records).
+
+### 3. DROP TABLE Syntax Limitations
+
+**Issue**: IRIS does NOT support PostgreSQL's comma-separated DROP TABLE syntax.
+
+**PostgreSQL Syntax** (doesn't work):
+```sql
+DROP TABLE IF EXISTS table1, table2, table3 CASCADE;
+```
+
+**Error Message**:
+```
+ERROR: Input (,) encountered after end of query^DROP TABLE IF EXISTS test1,
+```
+
+**Workaround** (use individual statements):
+```bash
+# In bash scripts
+for table in test1 test2 test3; do
+    psql -c "DROP TABLE IF EXISTS $table"
+done
+```
+
+**Or in SQL**:
+```sql
+DROP TABLE IF EXISTS table1;
+DROP TABLE IF EXISTS table2;
+DROP TABLE IF EXISTS table3;
+```
+
+**Impact**: Test cleanup scripts must loop over individual DROP statements instead of bulk operations.
+
+### 4. Error Visibility Challenges
+
+**Issue**: IRIS query failures sometimes return "SELECT 0" with exit code 0, hiding actual errors from shell scripts.
+
+**Example** (demonstrating the problem):
+```bash
+# This command may return "SELECT 0" even if it fails
+psql -c "CREATE TABLE ..."
+echo $?  # Returns 0 even on failure!
+```
+
+**Workaround** - Comprehensive Error Capture:
+```bash
+# Capture both stdout and stderr
+if output=$(docker run ... psql ... -c "$sql" 2>&1); then
+    # Command succeeded - verify actual result
+    if [ "$expect_success" = "true" ]; then
+        echo "✅ PASS: Command succeeded as expected"
+        echo "Output: $output"
+    else
+        echo "❌ FAIL: Command succeeded but was expected to fail"
+    fi
+else
+    # Command failed - capture exit code and logs
+    exit_code=$?
+    echo "❌ FAIL: Command failed unexpectedly (exit code: $exit_code)"
+    echo "Error output: $output"
+
+    # Tail PGWire logs for additional context
+    docker exec iris-pgwire-db tail -30 /tmp/pgwire.log 2>/dev/null
+fi
+```
+
+**Best Practice**: Always use `2>&1` redirection and check actual output content, not just exit codes.
+
+**Reference**: `tests/test_ddl_semicolon_fix.sh` implements this pattern throughout.
+
+### 5. Mixed Case Column Names
+
+**Issue**: IRIS stores column names with their original case (e.g., `PatientID`, `LastName`, `DateOfBirth`), unlike PostgreSQL which lowercases unquoted identifiers.
+
+**INFORMATION_SCHEMA Behavior**:
+```sql
+-- PostgreSQL expectation: columns lowercase
+SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name = 'patients';
+-- Expected (PostgreSQL): patientid, lastname, dateofbirth
+
+-- IRIS reality: columns preserve original case
+SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(table_name) = 'patients';
+-- Actual (IRIS): PatientID, LastName, DateOfBirth
+```
+
+**Workaround for Case-Insensitive Queries**:
+```sql
+-- Use LOWER() for case-insensitive table name matching
+SELECT column_name
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE LOWER(table_name) = LOWER('Patients')
+ORDER BY ordinal_position;
+```
+
+**Impact**:
+- Schema introspection queries must account for mixed case
+- Column references in queries are case-sensitive
+- PostgreSQL clients expecting lowercase may fail
+
+### 6. Protocol Translator Bypass (Architecture Critical)
+
+**Critical Discovery**: `src/iris_pgwire/protocol.py` lines 897-910 contain a **hardcoded bypass** of the SQL translator:
+
+```python
+# For now, bypass SQL translation to test core query execution
+# TODO: Fix SQL translation issue with TranslationResult
+translation_result = {
+    'success': True,
+    'original_sql': query,
+    'translated_sql': query,  # ❌ PASSTHROUGH - no translation!
+    'translation_used': False,
+    'construct_mappings': [],
+    'performance_stats': {'translation_time_ms': 0.0},
+    'warnings': []
+}
+
+# Use original SQL for execution (no translation for now)
+final_sql = query
+```
+
+**Implications**:
+- ALL SQL fixes must be applied in `vector_optimizer.py`, NOT `translator.py`
+- The v0.2.0 semicolon fix in `translator.py` was ineffective due to this bypass
+- Vector query optimization is the ACTUAL entry point for SQL preprocessing
+
+**Why It Matters**: When debugging SQL issues:
+1. ❌ DON'T add fixes to `translator.py` (it's bypassed!)
+2. ✅ DO add fixes to `vector_optimizer.py` (actual execution path)
+3. ✅ DO verify fixes with real psql client testing
+
+**Reference Files**:
+- `src/iris_pgwire/protocol.py:897-910` - Bypass location
+- `src/iris_pgwire/vector_optimizer.py:112-116` - Where semicolon fix was actually needed
+- `src/iris_pgwire/sql_translator/translator.py:240-244` - Ineffective fix location
+
+### 7. INFORMATION_SCHEMA Compatibility Notes
+
+**IRIS Uses INFORMATION_SCHEMA, NOT pg_catalog**:
+```python
+# ✅ CORRECT: Query IRIS metadata
+cursor.execute("""
+    SELECT column_name, data_type
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE table_name = 'MyTable'
+""")
+
+# ❌ WRONG: PostgreSQL catalog queries
+cursor.execute("""
+    SELECT column_name, data_type
+    FROM pg_catalog.pg_attribute
+    WHERE relname = 'MyTable'
+""")
+```
+
+**Key INFORMATION_SCHEMA Tables**:
+- `INFORMATION_SCHEMA.TABLES` - Table metadata
+- `INFORMATION_SCHEMA.COLUMNS` - Column metadata
+- `INFORMATION_SCHEMA.INDEXES` - Index metadata
+- `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` - Constraint metadata
+
+**Case Sensitivity**: Use `LOWER()` for case-insensitive matching:
+```sql
+WHERE LOWER(table_name) = LOWER('MyTable')
+```
+
+### 8. Testing Best Practices for IRIS Integration
+
+**Pattern 1: Comprehensive Error Capture**
+```bash
+# From tests/test_ddl_semicolon_fix.sh
+run_test() {
+    local test_name="$1"
+    local test_sql="$2"
+    local expect_success="${3:-true}"
+
+    # Capture stdout AND stderr (2>&1)
+    if output=$(psql ... -c "$test_sql" 2>&1); then
+        # Verify actual success
+        if [ "$expect_success" = "true" ]; then
+            echo "✅ PASS"
+        else
+            echo "❌ FAIL: Should have failed"
+        fi
+    else
+        # On failure, show logs for debugging
+        exit_code=$?
+        echo "❌ FAIL: exit_code=$exit_code"
+        echo "Output: $output"
+        docker exec iris-pgwire-db tail -30 /tmp/pgwire.log
+    fi
+}
+```
+
+**Pattern 2: Column Count Validation**
+```bash
+# Validate CREATE TABLE preserved all columns
+validate_columns() {
+    local table_name="$1"
+    local expected_count="$2"
+
+    actual_count=$(psql ... -t -c "
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE LOWER(table_name) = LOWER('$table_name')
+    " | tr -d ' ')
+
+    if [ "$actual_count" = "$expected_count" ]; then
+        echo "✅ PASS: $expected_count columns preserved"
+    else
+        echo "❌ FAIL: Expected $expected_count, got $actual_count"
+        # Show actual columns for debugging
+        psql ... -c "
+            SELECT column_name, data_type
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE LOWER(table_name) = LOWER('$table_name')
+        "
+    fi
+}
+```
+
+**Pattern 3: PGWire Log Inspection**
+```bash
+# Always check PGWire logs when debugging
+docker exec iris-pgwire-db tail -50 /tmp/pgwire.log
+
+# Look for specific error patterns
+docker exec iris-pgwire-db grep "ERROR" /tmp/pgwire.log | tail -20
+```
+
+### 9. iris-devtester Integration Recommendations
+
+**Tool Capabilities** (from `/Users/tdyar/ws/iris-devtester/`):
+- **Automatic Password Management**: Detects and fixes "Password change required" errors
+- **Testcontainers Integration**: Isolated IRIS instances per test suite
+- **DBAPI-First Performance**: 3× faster than JDBC connections
+- **DAT Fixture Loading**: 10-100× faster than programmatic INSERT statements
+- **Zero Configuration**: No manual setup required
+- **Medical-Grade Reliability**: 94%+ test coverage
+
+**Zero-Config Example**:
+```python
+from iris_devtools.containers import IRISContainer
+
+# That's it - no configuration needed!
+with IRISContainer.community() as iris:
+    conn = iris.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT $ZVERSION")
+    print(cursor.fetchone())
+```
+
+**Potential Solutions for Current Blockers**:
+1. **Date Format Issues**: Use DAT fixtures instead of SQL INSERT
+2. **Container State Management**: Automatic cleanup and isolation
+3. **Performance Testing**: Built-in benchmarking utilities
+
+**Next Steps**: Integrate `iris-devtester` into PGWire test framework to leverage DAT fixture loading and container management.
+
+### 10. DDL Statement Quirks Summary
+
+**Working** (after v0.2.0 semicolon fix):
+- ✅ CREATE TABLE with semicolons
+- ✅ DROP TABLE (individual statements)
+- ✅ ALTER TABLE operations
+- ✅ CREATE INDEX with semicolons
+- ✅ Multiple columns, constraints, data types
+
+**Not Working** / Requires Workarounds:
+- ❌ Comma-separated DROP TABLE statements
+- ❌ Direct ISO date format in DATE columns
+- ⚠️ Error visibility (requires stderr redirection)
+
+**Testing Coverage**:
+- 15 comprehensive E2E tests in `tests/test_ddl_semicolon_fix.sh`
+- Validates column preservation, error handling, edge cases
+- Full PGWire log integration for debugging
+
+### References
+
+**Primary Files**:
+- `src/iris_pgwire/vector_optimizer.py:112-116` - Semicolon fix (ACTUAL execution path)
+- `src/iris_pgwire/protocol.py:897-910` - Translator bypass (why translator.py doesn't work)
+- `tests/test_ddl_semicolon_fix.sh` - Comprehensive testing framework
+- `BUG_FIX_SUMMARY.md` - Complete DDL semicolon bug documentation
+- `KNOWN_LIMITATIONS.md` - Production-ready limitation catalog
+
+**Integration Examples**:
+- `examples/superset-iris-healthcare/data/init-healthcare-schema.sql` - Working DDL
+- `examples/superset-iris-healthcare/data/patients-data.sql` - Blocked by date issue
+
+**External Tools**:
+- `/Users/tdyar/ws/iris-devtester/` - Container and state management tool
+- `/Users/tdyar/ws/iris-devtester/docs/examples/sql_vs_objectscript_examples.py` - DBAPI patterns
+
+**Constitutional References**:
+- Translation SLA: <5ms (maintained for DDL operations)
+- PostgreSQL Compatibility: Full DDL support required
+- Test Coverage: E2E validation mandatory
+
+---
+
 ## 📡 Protocol Implementation Guidelines
 
 ### Message Processing Pattern
@@ -1118,3 +1478,154 @@ async def search_vectors(query: str, session: AsyncSession = Depends(get_session
 
 **Remember**: This is a foundational infrastructure project. Focus on correctness, security, and PostgreSQL compatibility over premature optimization. The embedded Python approach provides the fastest path to a working system while maintaining the flexibility to optimize hot paths later.
 - use uv for package management
+
+## 🔄 PostgreSQL→IRIS SQL Translation (Features 021-022)
+
+### Feature 022: Transaction Verb Compatibility
+
+**Status**: ✅ Implemented (2025-11-08)
+**Location**: `src/iris_pgwire/sql_translator/transaction_translator.py`
+
+**Problem**: PostgreSQL clients send `BEGIN` to start transactions, but IRIS SQL uses `START TRANSACTION`. Without translation, PostgreSQL clients cannot use standard transaction syntax.
+
+**Solution**: Translate PostgreSQL transaction commands to IRIS equivalents before SQL execution.
+
+#### Translation Rules
+
+```python
+# PostgreSQL → IRIS translations
+BEGIN                     → START TRANSACTION
+BEGIN TRANSACTION         → START TRANSACTION
+BEGIN WORK               → START TRANSACTION
+BEGIN [modifiers]        → START TRANSACTION [modifiers]
+
+# Normalized (unchanged)
+COMMIT                   → COMMIT
+COMMIT WORK              → COMMIT
+ROLLBACK                 → ROLLBACK
+```
+
+#### Integration Point (FR-010: Critical Ordering)
+
+**Execution Pipeline Order** (in `iris_executor.py`):
+```python
+# 1. Transaction Translation (Feature 022) - MUST occur FIRST
+transaction_translator = TransactionTranslator()
+transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+
+# 2. SQL Normalization (Feature 021) - Identifiers, DATE literals
+translator = SQLTranslator()
+normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="direct")
+
+# 3. Vector Optimization - Parameter optimization
+optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
+```
+
+**Why This Order Matters**:
+- Transaction translation happens on original SQL before normalization
+- Normalization applies to transaction-translated SQL
+- Vector optimizer receives fully normalized SQL
+
+#### Performance Requirements
+
+**Constitutional SLA**: <0.1ms translation overhead per query (PR-001)
+
+```python
+# Example usage with performance tracking
+translator = TransactionTranslator()
+
+# Translate transaction command
+result = translator.translate_transaction_command("BEGIN ISOLATION LEVEL READ COMMITTED")
+# Returns: "START TRANSACTION ISOLATION LEVEL READ COMMITTED"
+
+# Get performance metrics
+metrics = translator.get_translation_metrics()
+# {
+#     'total_translations': 1,
+#     'avg_translation_time_ms': 0.02,  # < 0.1ms requirement
+#     'sla_violations': 0,
+#     'sla_compliance_rate': 100.0
+# }
+```
+
+#### Usage Examples
+
+```python
+# Direct usage
+from iris_pgwire.sql_translator import TransactionTranslator
+
+translator = TransactionTranslator()
+
+# Basic translation
+assert translator.translate_transaction_command("BEGIN") == "START TRANSACTION"
+assert translator.translate_transaction_command("BEGIN WORK") == "START TRANSACTION"
+
+# Modifier preservation
+result = translator.translate_transaction_command("BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY")
+assert result == "START TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY"
+
+# Detection
+assert translator.is_transaction_command("BEGIN") is True
+assert translator.is_transaction_command("SELECT 1") is False
+
+# Parsing
+cmd = translator.parse_transaction_command("BEGIN READ ONLY")
+assert cmd.command_type == CommandType.BEGIN
+assert cmd.modifiers == "READ ONLY"
+assert cmd.translated_text == "START TRANSACTION READ ONLY"
+```
+
+#### E2E Testing with PostgreSQL Clients
+
+**psql client validation**:
+```bash
+# PostgreSQL client sends BEGIN - should work transparently
+psql -h localhost -p 5432 -U test_user -d USER -c "
+BEGIN;
+INSERT INTO Patients VALUES (1, 'John', 'Smith', '1985-03-15');
+COMMIT;
+SELECT * FROM Patients WHERE PatientID = 1;
+"
+# ✅ Works because PGWire translates BEGIN → START TRANSACTION
+```
+
+**psycopg driver validation**:
+```python
+import psycopg
+
+with psycopg.connect("host=localhost port=5432 user=test_user dbname=USER") as conn:
+    with conn.cursor() as cur:
+        cur.execute("BEGIN")  # Translated to START TRANSACTION
+        cur.execute("INSERT INTO Patients VALUES (%s, %s, %s)", (1, 'John', 'Smith'))
+        cur.execute("COMMIT")
+        # ✅ Transaction succeeds
+```
+
+#### Implementation Files
+
+- **Core**: `src/iris_pgwire/sql_translator/transaction_translator.py` (237 lines)
+- **Integration**: `src/iris_pgwire/iris_executor.py` (lines 379-408, 647-676)
+- **Tests**: 
+  - `tests/unit/test_transaction_translator.py` (38 unit tests)
+  - `tests/unit/test_transaction_edge_cases.py` (40 edge case tests)
+  - `tests/integration/test_transaction_e2e.py` (E2E with psql/psycopg)
+  - `tests/contract/test_transaction_translator_contract.py` (11 contract tests)
+
+#### Edge Cases Handled
+
+1. **String Literals**: `SELECT 'BEGIN'` → unchanged (BEGIN not translated inside strings)
+2. **Comments**: `-- BEGIN transaction\nSELECT 1` → unchanged
+3. **Whitespace**: `   BEGIN   ` → `START TRANSACTION`
+4. **Case Sensitivity**: `begin`, `BEGIN`, `BeGiN` all work
+5. **COMMIT/ROLLBACK variants**: `COMMIT WORK` → `COMMIT`, `ROLLBACK TRANSACTION` → `ROLLBACK`
+6. **Empty inputs**: `""` → `""` (no crash)
+
+#### References
+
+- **Specification**: `specs/022-postgresql-transaction-verb/spec.md`
+- **Implementation Plan**: `specs/022-postgresql-transaction-verb/plan.md`
+- **Task List**: `specs/022-postgresql-transaction-verb/tasks.md` (54 tasks, 49 complete)
+- **Contract Interface**: `specs/022-postgresql-transaction-verb/contracts/transaction_translator_interface.py`
+
+---
+

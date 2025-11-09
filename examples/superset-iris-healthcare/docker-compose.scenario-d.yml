@@ -1,0 +1,79 @@
+# Scenario D: Native IRIS Driver for Both Metadata and Data
+#
+# What this demonstrates:
+# - Superset metadata stored in IRIS SUPERSET_META namespace (native driver)
+# - Data source also in IRIS USER namespace (native driver)
+# - Direct IRIS connection (no PGWire overhead)
+# - Pure IRIS deployment with optimal performance
+#
+# Key Differences from All Scenarios:
+# - NO PGWire (direct IRIS connection on port 1972)
+# - NO PostgreSQL container
+# - Metadata URI: iris://_SYSTEM:SYS@iris:1972/SUPERSET_META
+# - Data URI: iris://_SYSTEM:SYS@iris:1972/USER
+# - Requires sqlalchemy-intersystems-iris driver
+#
+# Usage:
+#   docker-compose -f docker-compose.yml \
+#                  -f examples/superset-iris-healthcare/docker-compose.scenario-d.yml \
+#                  up -d
+
+services:
+  superset-scenario-d:
+    image: apache/superset:4.0.2
+    container_name: iris-pgwire-superset-scenario-d
+    ports:
+      - "8091:8088"  # Different port to avoid conflict
+    environment:
+      - SUPERSET_SECRET_KEY=superset_secret_key_scenario_d
+      # CRITICAL: Metadata uses IRIS native driver
+      - DATABASE_DIALECT=iris
+      - DATABASE_HOST=iris
+      - DATABASE_PORT=1972
+      - DATABASE_DB=SUPERSET_META
+      - DATABASE_USER=_SYSTEM
+      - DATABASE_PASSWORD=SYS
+      - REDIS_HOST=redis-scenario-d
+      - REDIS_PORT=6379
+    volumes:
+      - ./scenario-d/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./scenario-d/install-iris-driver.sh:/app/docker/install-iris-driver.sh:ro
+      - ./scenario-d/init-superset-scenario-d.sh:/app/docker/docker-init.sh:ro
+      - ./scenario-d/setup-iris-namespaces-native.sh:/app/docker/setup-iris-namespaces.sh:ro
+      - ./data:/app/data:ro
+    networks:
+      - iris-pgwire
+    depends_on:
+      redis-scenario-d:
+        condition: service_healthy
+      # NOTE: Depends on IRIS from main docker-compose.yml
+      # IRIS must be accessible on port 1972
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s  # Longer startup due to driver installation
+    command: >
+      bash -c "
+      /app/docker/install-iris-driver.sh &&
+      /app/docker/setup-iris-namespaces.sh &&
+      /app/docker/docker-init.sh &&
+      gunicorn --bind 0.0.0.0:8088 --workers 4 --timeout 120 --limit-request-line 0 --limit-request-field_size 0 'superset.app:create_app()'
+      "
+
+  redis-scenario-d:
+    image: redis:7-alpine
+    container_name: iris-pgwire-redis-scenario-d
+    networks:
+      - iris-pgwire
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  iris-pgwire:
+    external: true
+    name: iris-pgwire-network
