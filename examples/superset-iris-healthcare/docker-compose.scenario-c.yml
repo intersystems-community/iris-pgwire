@@ -1,0 +1,76 @@
+# Scenario C: IRIS via PGWire for Both Metadata and Data
+#
+# What this demonstrates:
+# - Superset metadata stored in IRIS (via PGWire) in SUPERSET_META namespace
+# - Data source also in IRIS (via PGWire) in USER namespace
+# - Single database system (IRIS for everything)
+# - No separate PostgreSQL container needed
+# - STRESS TEST: PGWire must handle complex ORM operations
+#
+# Key Differences from Scenario A:
+# - NO PostgreSQL service (IRIS hosts everything)
+# - Metadata URI: postgresql://superset_user@iris:5432/SUPERSET_META
+# - Data URI: postgresql://test_user@iris:5432/USER
+# - Requires IRIS namespace setup: CREATE DATABASE SUPERSET_META
+#
+# Usage:
+#   docker-compose -f docker-compose.yml \
+#                  -f examples/superset-iris-healthcare/docker-compose.scenario-c.yml \
+#                  up -d
+
+services:
+  superset-scenario-c:
+    image: apache/superset:4.0.2
+    container_name: iris-pgwire-superset-scenario-c
+    ports:
+      - "8090:8088"  # Different port to avoid conflict
+    environment:
+      - SUPERSET_SECRET_KEY=superset_secret_key_scenario_c
+      # CRITICAL: Metadata points to IRIS via PGWire
+      - DATABASE_DB=SUPERSET_META
+      - DATABASE_HOST=iris
+      - DATABASE_PORT=5432
+      - DATABASE_USER=superset_user
+      - DATABASE_PASSWORD=
+      - REDIS_HOST=redis-scenario-c
+      - REDIS_PORT=6379
+    volumes:
+      - ./scenario-c/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./scenario-c/init-superset-scenario-c.sh:/app/docker/docker-init.sh:ro
+      - ./scenario-c/setup-iris-namespaces.sh:/app/docker/setup-iris-namespaces.sh:ro
+      - ./data:/app/data:ro
+    networks:
+      - iris-pgwire
+    depends_on:
+      redis-scenario-c:
+        condition: service_healthy
+      # NOTE: Depends on IRIS + PGWire from main docker-compose.yml
+      # PGWire must be running on port 5432
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s  # Longer startup due to IRIS schema creation
+    command: >
+      bash -c "
+      /app/docker/setup-iris-namespaces.sh &&
+      /app/docker/docker-init.sh &&
+      gunicorn --bind 0.0.0.0:8088 --workers 4 --timeout 120 --limit-request-line 0 --limit-request-field_size 0 'superset.app:create_app()'
+      "
+
+  redis-scenario-c:
+    image: redis:7-alpine
+    container_name: iris-pgwire-redis-scenario-c
+    networks:
+      - iris-pgwire
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  iris-pgwire:
+    external: true
+    name: iris-pgwire-network

@@ -1,0 +1,113 @@
+{
+  "datasets": [
+    {
+      "table_name": "Patients",
+      "main_dttm_col": "AdmissionDate",
+      "description": "IRIS patient demographics - 250 synthetic records",
+      "default_endpoint": null,
+      "offset": 0,
+      "cache_timeout": 3600,
+      "sql": null,
+      "params": null,
+      "template_params": null,
+      "filter_select_enabled": true,
+      "fetch_values_predicate": null,
+      "extra": {
+        "resource_type": "table"
+      },
+      "uuid": "00000000-0000-0000-0000-000000000010",
+      "columns": [
+        {
+          "column_name": "PatientID",
+          "verbose_name": "Patient ID",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "INTEGER",
+          "groupby": true,
+          "filterable": true,
+          "description": "Unique patient identifier"
+        },
+        {
+          "column_name": "FirstName",
+          "verbose_name": "First Name",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(50)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Patient first name"
+        },
+        {
+          "column_name": "LastName",
+          "verbose_name": "Last Name",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(50)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Patient last name"
+        },
+        {
+          "column_name": "DateOfBirth",
+          "verbose_name": "Date of Birth",
+          "is_dttm": true,
+          "is_active": true,
+          "type": "DATE",
+          "groupby": true,
+          "filterable": true,
+          "description": "Patient date of birth"
+        },
+        {
+          "column_name": "Gender",
+          "verbose_name": "Gender",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(10)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Patient gender (M/F/Other)"
+        },
+        {
+          "column_name": "Status",
+          "verbose_name": "Status",
+          "is_dttm": false,
+          "is_active": true,
+          "type": "VARCHAR(20)",
+          "groupby": true,
+          "filterable": true,
+          "description": "Patient status (Active/Discharged/Deceased)"
+        },
+        {
+          "column_name": "AdmissionDate",
+          "verbose_name": "Admission Date",
+          "is_dttm": true,
+          "is_active": true,
+          "type": "DATE",
+          "groupby": true,
+          "filterable": true,
+          "description": "Hospital admission date"
+        },
+        {
+          "column_name": "DischargeDate",
+          "verbose_name": "Discharge Date",
+          "is_dttm": true,
+          "is_active": true,
+          "type": "DATE",
+          "groupby": true,
+          "filterable": true,
+          "description": "Hospital discharge date (NULL for active patients)"
+        }
+      ],
+      "metrics": [
+        {
+          "metric_name": "Patient Count",
+          "verbose_name": "Patient Count",
+          "metric_type": "count",
+          "expression": "COUNT(*)",
+          "description": "Total number of patients"
+        }
+      ],
+      "database_uuid": "00000000-0000-0000-0000-000000000001"
+    }
+  ]
+}

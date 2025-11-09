@@ -236,12 +236,17 @@ class IRISSQLTranslator:
         with PerformanceTimer() as total_timer:
             construct_mappings = []
             warnings = []
-            translated_sql = context.original_sql
+
+            # Strip trailing semicolons from incoming SQL before translation
+            # PostgreSQL clients send queries with semicolons, but IRIS expects them without
+            # We'll add them back in _finalize_translation() if needed
+            original_sql = context.original_sql.rstrip(';').strip()
+            translated_sql = original_sql
 
             # Step 1: Parse SQL to identify IRIS constructs
             with PerformanceTimer() as parse_timer:
                 parsed_constructs, parse_debug = self.parser.parse(
-                    context.original_sql,
+                    original_sql,  # Use cleaned SQL without trailing semicolon
                     debug_mode=self.enable_debug
                 )
 
