@@ -40,6 +40,27 @@ class CSVOptions:
     quote: str = '"'
     escape: str = '\\'
 
+    @staticmethod
+    def _unescape_string(s: str) -> str:
+        """
+        Unescape PostgreSQL escape sequences.
+
+        Handles: \\t (tab), \\n (newline), \\r (carriage return), \\\\ (backslash)
+        """
+        # Handle common PostgreSQL escape sequences
+        escape_map = {
+            '\\t': '\t',
+            '\\n': '\n',
+            '\\r': '\r',
+            '\\\\': '\\',
+        }
+
+        result = s
+        for escaped, unescaped in escape_map.items():
+            result = result.replace(escaped, unescaped)
+
+        return result
+
     @classmethod
     def from_with_clause(cls, with_clause: str) -> 'CSVOptions':
         """
@@ -61,29 +82,36 @@ class CSVOptions:
             if format_match:
                 options.format = format_match.group(1)
 
-        # DELIMITER option
-        delimiter_match = re.search(r"DELIMITER\s+'([^']*)'", with_clause, re.IGNORECASE)
+        # DELIMITER option (handle E'...' escape sequences)
+        delimiter_match = re.search(r"DELIMITER\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
         if delimiter_match:
-            options.delimiter = delimiter_match.group(1)
+            has_e_prefix = delimiter_match.group(1) is not None
+            value = delimiter_match.group(2)
+            options.delimiter = cls._unescape_string(value) if has_e_prefix else value
 
-        # NULL option
-        null_match = re.search(r"NULL\s+'([^']*)'", with_clause, re.IGNORECASE)
+        # NULL option (handle E'...' escape sequences)
+        null_match = re.search(r"NULL\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
         if null_match:
-            options.null_string = null_match.group(1)
+            has_e_prefix = null_match.group(1) is not None
+            value = null_match.group(2)
+            options.null_string = cls._unescape_string(value) if has_e_prefix else value
 
         # HEADER option (boolean flag)
         if re.search(r'\bHEADER\b', with_clause_upper):
             options.header = True
 
-        # QUOTE option
-        quote_match = re.search(r"QUOTE\s+'([^']*)'", with_clause, re.IGNORECASE)
+        # QUOTE option (handle doubled single quotes '')
+        quote_match = re.search(r"QUOTE\s+'((?:''|[^'])*)'", with_clause, re.IGNORECASE)
         if quote_match:
-            options.quote = quote_match.group(1)
+            # Replace '' with ' (SQL standard escape)
+            options.quote = quote_match.group(1).replace("''", "'")
 
-        # ESCAPE option
-        escape_match = re.search(r"ESCAPE\s+'([^']*)'", with_clause, re.IGNORECASE)
+        # ESCAPE option (handle E'...' escape sequences)
+        escape_match = re.search(r"ESCAPE\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
         if escape_match:
-            options.escape = escape_match.group(1)
+            has_e_prefix = escape_match.group(1) is not None
+            value = escape_match.group(2)
+            options.escape = cls._unescape_string(value) if has_e_prefix else value
 
         return options
 

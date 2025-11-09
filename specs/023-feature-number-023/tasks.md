@@ -270,11 +270,12 @@
   - **Tests**: 10+ test cases covering CSVOptions variations
   - **Purpose**: Isolate CSV logic from protocol and IRIS
 
-- [ ] **T027** [P] Unit tests for COPY command parser
+- [x] **T027** [P] Unit tests for COPY command parser ✅
   - **File**: `tests/unit/test_copy_parser.py`
   - **Coverage**: All COPY syntax variations (column lists, WITH options, TO STDOUT vs FROM STDIN)
-  - **Tests**: 15+ test cases covering PostgreSQL COPY SQL syntax
+  - **Tests**: 39 test cases covering PostgreSQL COPY SQL syntax (100% pass)
   - **Purpose**: Ensure robust parsing before protocol integration
+  - **Note**: Fixed PostgreSQL escape sequence handling (`E'\t'`) and SQL quote escaping (`''''`)
 
 - [ ] **T028** [P] Integration tests for COPY error scenarios
   - **File**: `tests/integration/test_copy_error_handling.py`
