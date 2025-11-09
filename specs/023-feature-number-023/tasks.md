@@ -71,7 +71,7 @@
 
 ### E2E Tests (T004-T008)
 
-- [ ] **T004** [P] E2E test: COPY FROM STDIN - 250 patient records
+- [x] **T004** [P] E2E test: COPY FROM STDIN - 250 patient records ✅
   - **File**: `tests/e2e/test_copy_healthcare_250.py`
   - **Scenario**: Acceptance Scenario 1 from spec.md
   - **Test**: Load patients-data.csv via `COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)`
@@ -81,7 +81,7 @@
     - Elapsed time < 1 second (FR-005 performance requirement)
   - **Expected**: FAIL (no COPY protocol implementation exists)
 
-- [ ] **T005** [P] E2E test: COPY TO STDOUT - 250 patient export
+- [x] **T005** [P] E2E test: COPY TO STDOUT - 250 patient export ✅
   - **File**: `tests/e2e/test_copy_to_stdout.py`
   - **Scenario**: Acceptance Scenario 2 from spec.md
   - **Test**: Export Patients table via `COPY Patients TO STDOUT WITH (FORMAT CSV, HEADER)`
@@ -91,7 +91,7 @@
     - Header line contains "PatientID,FirstName,LastName"
   - **Expected**: FAIL (no COPY TO STDOUT implementation)
 
-- [ ] **T006** [P] E2E test: Transaction integration with Feature 022
+- [x] **T006** [P] E2E test: Transaction integration with Feature 022 ✅
   - **File**: `tests/e2e/test_copy_transaction_integration.py`
   - **Scenario**: Acceptance Scenario 4 from spec.md
   - **Test**: Execute `BEGIN; COPY Patients FROM STDIN; COMMIT;` sequence
@@ -100,7 +100,7 @@
     - Rollback test: `BEGIN; COPY (malformed CSV); ROLLBACK;` leaves table unchanged
   - **Expected**: FAIL (no transaction integration)
 
-- [ ] **T007** [P] E2E test: Error handling for malformed CSV
+- [x] **T007** [P] E2E test: Error handling for malformed CSV ✅
   - **File**: `tests/e2e/test_copy_error_handling.py`
   - **Scenario**: Edge case from spec.md (malformed rows)
   - **Test**: Send CSV with missing quotes, extra columns, wrong data types
@@ -110,7 +110,7 @@
     - No partial data inserted (transaction rolled back)
   - **Expected**: FAIL (no CSV validation)
 
-- [ ] **T008** [P] E2E test: Memory efficiency for 1M rows
+- [x] **T008** [P] E2E test: Memory efficiency for 1M rows ✅
   - **File**: `tests/e2e/test_copy_memory_efficiency.py`
   - **Scenario**: Acceptance Scenario 5 from spec.md
   - **Test**: Execute `COPY (SELECT * FROM LargeDataset) TO STDOUT` for 1M rows
@@ -122,7 +122,7 @@
 
 ### Contract Tests (T009-T011)
 
-- [ ] **T009** [P] Contract test: CopyHandler interface
+- [x] **T009** [P] Contract test: CopyHandler interface ✅
   - **File**: `tests/contract/test_copy_handler_contract.py`
   - **Contract**: CopyHandler Protocol from plan.md (lines 278-318)
   - **Tests**:
@@ -130,7 +130,7 @@
     - `test_handle_copy_to_stdout_contract()` - Yields CSV bytes
   - **Expected**: FAIL (CopyHandler class doesn't exist)
 
-- [ ] **T010** [P] Contract test: CSVProcessor interface
+- [x] **T010** [P] Contract test: CSVProcessor interface ✅
   - **File**: `tests/contract/test_csv_processor_contract.py`
   - **Contract**: CSVProcessor Protocol from plan.md (lines 320-343)
   - **Tests**:
@@ -138,7 +138,7 @@
     - `test_generate_csv_rows_contract()` - Accepts tuples, yields CSV bytes
   - **Expected**: FAIL (CSVProcessor class doesn't exist)
 
-- [ ] **T011** [P] Contract test: BulkExecutor interface
+- [x] **T011** [P] Contract test: BulkExecutor interface ✅
   - **File**: `tests/contract/test_bulk_executor_contract.py`
   - **Contract**: BulkExecutor Protocol from plan.md (lines 345-360)
   - **Tests**:
