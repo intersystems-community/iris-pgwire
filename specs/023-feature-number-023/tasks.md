@@ -264,11 +264,12 @@
 
 ## Phase 3.4: Integration & Unit Tests (T026-T028)
 
-- [ ] **T026** [P] Unit tests for CSV processor
+- [x] **T026** [P] Unit tests for CSV processor ✅
   - **File**: `tests/unit/test_csv_processor.py`
   - **Coverage**: Edge cases (empty CSV, single row, special characters, null values)
-  - **Tests**: 10+ test cases covering CSVOptions variations
+  - **Tests**: 25 test cases covering CSVOptions variations (100% pass)
   - **Purpose**: Isolate CSV logic from protocol and IRIS
+  - **Note**: Comprehensive edge case coverage including batching, unicode, malformed CSV
 
 - [x] **T027** [P] Unit tests for COPY command parser ✅
   - **File**: `tests/unit/test_copy_parser.py`
@@ -277,11 +278,12 @@
   - **Purpose**: Ensure robust parsing before protocol integration
   - **Note**: Fixed PostgreSQL escape sequence handling (`E'\t'`) and SQL quote escaping (`''''`)
 
-- [ ] **T028** [P] Integration tests for COPY error scenarios
+- [x] **T028** [P] Integration tests for COPY error scenarios ✅
   - **File**: `tests/integration/test_copy_error_handling.py`
   - **Coverage**: Network disconnects, partial CSV data, IRIS connection failures
-  - **Tests**: 8+ test cases for error paths
+  - **Tests**: 14 test cases for error paths (10 pass, 4 reveal implementation gaps)
   - **Purpose**: Validate cleanup and rollback behavior
+  - **Note**: TDD approach - some tests fail revealing areas for future error handling improvements
 
 ---
 
