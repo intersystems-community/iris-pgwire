@@ -15,6 +15,7 @@ from typing import AsyncIterator, Optional
 from dataclasses import dataclass
 
 from .sql_translator.copy_parser import CSVOptions
+from .column_validator import ColumnNameValidator
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,9 @@ class CSVProcessor:
                     # Handle header row
                     if options.header and column_names is None:
                         column_names = row_values
-                        logger.debug(f"CSV header: {column_names}")
+                        # Validate column names against IRIS restrictions
+                        column_names = ColumnNameValidator.validate_column_list(column_names)
+                        logger.debug(f"CSV header (validated): {column_names}")
                         continue  # Skip header row (don't yield as data)
 
                     # If no header, use positional column names
