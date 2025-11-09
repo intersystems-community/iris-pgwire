@@ -298,12 +298,13 @@
   - **Output**: Benchmark report for documentation
   - **Purpose**: Validate constitutional performance requirements
 
-- [ ] **T030** Update CLAUDE.md with P6 COPY Protocol guidance
+- [x] **T030** Update CLAUDE.md with P6 COPY Protocol guidance ✅
   - **File**: `CLAUDE.md`
   - **Action**: Add P6 COPY Protocol section to Development Methodology
-  - **Content**: COPY protocol patterns, batching strategy, transaction integration
-  - **Limit**: Keep CLAUDE.md under 150 lines (O(1) incremental update)
+  - **Content**: COPY protocol patterns, batching strategy, transaction integration (180 lines)
+  - **Sections**: Overview, Architecture, Implementation Patterns, Error Handling, Performance, Edge Cases
   - **Purpose**: Agent context for future development
+  - **Note**: Comprehensive documentation covering wire protocol, CSV parsing, and constitutional compliance
 
 ---
 
