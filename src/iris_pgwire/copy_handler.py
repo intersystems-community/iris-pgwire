@@ -148,6 +148,141 @@ class CopyHandler:
         logger.debug("Built CopyDone message")
         return message
 
+    async def handle_copy_from_stdin_load_data(
+        self,
+        command: CopyCommand,
+        csv_stream: AsyncIterator[bytes]
+    ) -> int:
+        """
+        Handle COPY FROM STDIN using IRIS LOAD DATA for high performance.
+
+        Strategy:
+        1. Write CSV stream to temporary file on IRIS server
+        2. Use LOAD BULK DATA for fast bulk loading (potentially 10,000+ rows/sec)
+        3. Clean up temporary file (guaranteed even on errors)
+
+        CAUTION: This is experimental! LOAD DATA has specific requirements:
+        - Requires Java-based engine (JVM must be available)
+        - DATE columns may need different format handling
+        - Column names must match exactly (case-sensitive)
+
+        Args:
+            command: Parsed COPY command
+            csv_stream: Async iterator of CopyData message payloads
+
+        Returns:
+            Number of rows inserted
+
+        Raises:
+            RuntimeError: LOAD DATA not available or failed
+            CSVParsingError: Malformed CSV data
+        """
+        import tempfile
+        import os
+
+        logger.info(f"COPY FROM STDIN (LOAD DATA): table={command.table_name}, columns={command.column_list}")
+
+        temp_path = None
+        iris_executor = self.bulk_executor.iris_executor
+
+        try:
+            # BEGIN transaction for atomic COPY operation
+            begin_result = await iris_executor.execute_query("START TRANSACTION", [])
+            if not begin_result.get('success', False):
+                raise RuntimeError(f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}")
+
+            logger.debug("Transaction started for COPY FROM STDIN (LOAD DATA)")
+
+            # PHASE 1: Write CSV stream to temporary file
+            logger.info("Phase 1: Writing CSV stream to temporary file...")
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.csv') as temp_file:
+                temp_path = temp_file.name
+                bytes_written = 0
+                chunk_count = 0
+
+                async for csv_chunk in csv_stream:
+                    temp_file.write(csv_chunk)
+                    bytes_written += len(csv_chunk)
+                    chunk_count += 1
+
+                logger.info(f"Wrote {bytes_written} bytes ({chunk_count} chunks) to {temp_path}")
+
+            # PHASE 2: Use LOAD BULK DATA for fast loading
+            logger.info("Phase 2: Loading data using IRIS LOAD BULK DATA...")
+
+            # Build LOAD DATA command with BULK optimizations
+            # IRIS LOAD DATA syntax:
+            # - LOAD BULK supports %NOINDEX only (skips index building during load)
+            # - %NOCHECK requires non-BULK mode
+            # We use BULK %NOINDEX for maximum throughput
+            load_sql = f"LOAD BULK %NOINDEX DATA FROM FILE '{temp_path}' INTO {command.table_name}"
+
+            # Add column list if specified
+            if command.column_list:
+                columns_str = ', '.join(command.column_list)
+                load_sql += f" ({columns_str})"
+
+            # Add USING clause for CSV options
+            using_options = {
+                "from": {
+                    "file": {
+                        "header": command.csv_options.header,
+                        "columnseparator": command.csv_options.delimiter
+                    }
+                }
+            }
+
+            # Add charset if needed
+            if command.csv_options.encoding:
+                using_options["charset"] = command.csv_options.encoding
+
+            import json
+            load_sql += f" USING {json.dumps(using_options)}"
+
+            logger.debug(f"Executing LOAD DATA: {load_sql[:200]}...")
+
+            # Execute LOAD DATA command
+            result = await iris_executor.execute_query(load_sql, [])
+
+            if not result.get('success', False):
+                error_msg = result.get('error', 'Unknown LOAD DATA error')
+                logger.error(f"LOAD DATA failed: {error_msg}")
+                raise RuntimeError(f"LOAD DATA failed: {error_msg}")
+
+            # Get row count - IRIS LOAD DATA sets %ROWCOUNT
+            row_count = result.get('rows_affected', 0)
+            logger.info(f"LOAD DATA complete: {row_count} rows loaded")
+
+            # COMMIT transaction on success
+            commit_result = await iris_executor.execute_query("COMMIT", [])
+            if not commit_result.get('success', False):
+                raise RuntimeError(f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}")
+
+            logger.info(f"COPY FROM STDIN (LOAD DATA) complete: {row_count} rows inserted (transaction committed)")
+            return row_count
+
+        except Exception as e:
+            # ROLLBACK transaction on any error
+            logger.error(f"COPY FROM STDIN (LOAD DATA) failed: {e}")
+            try:
+                rollback_result = await iris_executor.execute_query("ROLLBACK", [])
+                if not rollback_result.get('success', False):
+                    logger.error(f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}")
+            except Exception as rollback_error:
+                logger.error(f"Exception during rollback: {rollback_error}")
+
+            # Re-raise original error
+            raise
+
+        finally:
+            # PHASE 3: Clean up temporary file (guaranteed execution)
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                    logger.debug(f"Cleaned up temporary file: {temp_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temporary file {temp_path}: {cleanup_error}")
+
     async def handle_copy_from_stdin(
         self,
         command: CopyCommand,
