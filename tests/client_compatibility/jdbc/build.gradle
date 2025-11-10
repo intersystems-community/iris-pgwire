@@ -1,0 +1,42 @@
+plugins {
+    id 'java'
+}
+
+group = 'com.intersystems.iris.pgwire'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // PostgreSQL JDBC Driver
+    implementation 'org.postgresql:postgresql:42.7.1'
+
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+
+    // Pass connection properties as system properties
+    systemProperty 'pgwire.host', System.getProperty('pgwire.host', 'localhost')
+    systemProperty 'pgwire.port', System.getProperty('pgwire.port', '5432')
+    systemProperty 'pgwire.database', System.getProperty('pgwire.database', 'USER')
+    systemProperty 'pgwire.username', System.getProperty('pgwire.username', 'test_user')
+    systemProperty 'pgwire.password', System.getProperty('pgwire.password', 'test')
+
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+        showStandardStreams = true
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "pgwire-compatibility-tests",
+  "version": "1.0.0",
+  "description": "Client compatibility tests for IRIS PGWire using node-postgres",
+  "type": "module",
+  "scripts": {
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest"
+  },
+  "keywords": ["pgwire", "postgresql", "iris", "compatibility"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.11",
+    "@types/pg": "^8.10.9"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/__tests__/**/*.test.js", "**/?(*.)+(spec|test).js"],
+    "transform": {},
+    "moduleFileExtensions": ["js"],
+    "collectCoverage": false
+  }
+}
