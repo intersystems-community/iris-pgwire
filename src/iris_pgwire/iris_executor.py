@@ -447,6 +447,9 @@ class IRISExecutor:
                        batch_size=len(params_list),
                        session_id=session_id)
 
+            connection = None
+            cursor = None
+
             try:
                 # Get or create connection
                 connection = self._get_iris_connection()
@@ -504,6 +507,19 @@ class IRISExecutor:
                            batch_size=len(params_list),
                            session_id=session_id)
                 raise
+
+            finally:
+                # Clean up resources
+                if cursor:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
 
         # Execute in thread pool to avoid blocking event loop
         return await asyncio.to_thread(_sync_execute_many)
@@ -1031,10 +1047,28 @@ class IRISExecutor:
         return await loop.run_in_executor(self.thread_pool, _sync_external_execute)
 
     def _get_iris_connection(self):
-        """Get or create IRIS connection for embedded mode"""
-        # For embedded mode, connections are managed by IRIS internally
-        # This is a placeholder for potential connection pooling
-        return None
+        """
+        Get or create IRIS connection for embedded mode.
+
+        For executemany() operations, we need a real DBAPI connection
+        even in embedded mode, since executemany() requires a cursor interface.
+        """
+        import iris
+
+        # Create IRIS DBAPI connection for batch operations
+        # In embedded mode, we still use iris.connect() for DBAPI compatibility
+        try:
+            conn = iris.connect(
+                hostname=self.iris_config.get('host', 'localhost'),
+                port=self.iris_config.get('port', 1972),
+                namespace=self.iris_config.get('namespace', 'USER'),
+                username=self.iris_config.get('username', '_SYSTEM'),
+                password=self.iris_config.get('password', 'SYS')
+            )
+            return conn
+        except Exception as e:
+            logger.error(f"Failed to create IRIS connection for executemany(): {e}")
+            raise
 
     def _get_pooled_connection(self):
         """
