@@ -1048,26 +1048,36 @@ class IRISExecutor:
 
     def _get_iris_connection(self):
         """
-        Get or create IRIS connection for embedded mode.
+        Get or create IRIS connection for embedded mode batch operations.
 
-        For executemany() operations, we need a real DBAPI connection
-        even in embedded mode, since executemany() requires a cursor interface.
+        CRITICAL: For executemany() in embedded mode, we need DBAPI connection.
+        In embedded mode (irispython), iris.connect() doesn't work - we must use
+        iris.dbapi.connect() to get a proper cursor interface.
+
+        This creates a network connection to localhost IRIS even though we're
+        running inside IRIS. This is required for DBAPI executemany() support.
         """
-        import iris
-
-        # Create IRIS DBAPI connection for batch operations
-        # In embedded mode, we still use iris.connect() for DBAPI compatibility
         try:
-            conn = iris.connect(
+            # Use iris.dbapi for DBAPI connection (works in both embedded and external)
+            import iris.dbapi as dbapi
+
+            conn = dbapi.connect(
                 hostname=self.iris_config.get('host', 'localhost'),
                 port=self.iris_config.get('port', 1972),
                 namespace=self.iris_config.get('namespace', 'USER'),
                 username=self.iris_config.get('username', '_SYSTEM'),
                 password=self.iris_config.get('password', 'SYS')
             )
+
+            logger.debug("Created IRIS DBAPI connection for executemany()",
+                        host=self.iris_config.get('host'),
+                        port=self.iris_config.get('port'),
+                        namespace=self.iris_config.get('namespace'))
+
             return conn
         except Exception as e:
-            logger.error(f"Failed to create IRIS connection for executemany(): {e}")
+            logger.error(f"Failed to create IRIS DBAPI connection for executemany(): {e}",
+                        error_type=type(e).__name__)
             raise
 
     def _get_pooled_connection(self):
