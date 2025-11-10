@@ -1790,6 +1790,24 @@ ROLLBACK;
   - AsyncIO overhead: ~34ms (8%) - coroutine switching
 - **Alternative**: IRIS DAT fixtures are 10-100× faster but incompatible with COPY protocol
 
+**IRIS LOAD DATA Investigation** (2025-11-09):
+- **Discovery**: IRIS has `LOAD DATA` command for bulk loading (Java-based engine)
+- **Syntax**: `LOAD BULK %NOINDEX DATA FROM FILE 'path' INTO table USING {...}`
+- **Test Results** (250 patients):
+  - LOAD DATA: **155 rows/sec** ❌ (1.6s total)
+  - Individual INSERTs: **600 rows/sec** ✅ (0.4s total)
+  - **CONCLUSION**: LOAD DATA is 4× SLOWER for small datasets!
+- **Root Cause**: High initialization overhead (JVM startup, CSV parsing, date conversions)
+  - LOAD DATA designed for "thousands or millions of records per second"
+  - Optimization pays off only at large scale (10K+ rows estimated)
+  - 250-row dataset dominated by startup costs
+- **Optimization Flags**:
+  - ✅ `LOAD BULK %NOINDEX` - Skips index building (valid)
+  - ❌ `%NOLOCK`, `%NOJOURN` - NOT compatible with BULK keyword
+  - Non-BULK mode supports `%NOCHECK`, `%NOLOCK`, `%NOJOURN` but loses parallelism
+- **Recommendation**: Use individual INSERTs for COPY protocol (better performance at small scale)
+- **Reference**: `tests/e2e_isolated/test_load_data_optimization.py`
+
 ### Edge Cases Handled
 
 1. **PostgreSQL String Literals**: `E'\t'` (escape sequences) vs `'\t'` (literal backslash-t)
