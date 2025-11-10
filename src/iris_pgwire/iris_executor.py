@@ -350,6 +350,190 @@ class IRISExecutor:
                         session_id=session_id)
             raise
 
+    async def execute_many(self, sql: str, params_list: List[List],
+                          session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute SQL with multiple parameter sets using executemany() for batch operations.
+
+        This method provides SIGNIFICANT performance improvements for bulk INSERT operations:
+        - Community benchmark: IRIS 1.48s vs PostgreSQL 4.58s (4× faster)
+        - Projected throughput: 2,400-10,000+ rows/sec (vs 600 rows/sec with individual INSERTs)
+        - Leverages IRIS "Fast Insert" optimization (client-side normalization)
+
+        Args:
+            sql: SQL statement with parameter placeholders (e.g., "INSERT INTO table VALUES (?, ?)")
+            params_list: List of parameter tuples, one per execution
+                        Example: [(1, 'a'), (2, 'b'), (3, 'c')]
+            session_id: Optional session identifier for performance tracking
+
+        Returns:
+            Dictionary with:
+                - success: True if all executions succeeded
+                - rows_affected: Total number of rows affected
+                - execution_metadata: Performance timing information
+
+        Raises:
+            Exception: If any execution in the batch fails
+
+        Constitutional Compliance:
+            - Uses asyncio.to_thread() for non-blocking execution (Principle IV)
+            - Applies transaction translation and SQL normalization (Features 021-022)
+            - Performance tracking for constitutional SLA compliance
+
+        References:
+            - Community benchmark: community.intersystems.com/post/performance-tests-iris-postgresql-mysql-using-python
+            - COPY Performance Investigation: docs/COPY_PERFORMANCE_INVESTIGATION.md
+        """
+        try:
+            # Performance tracking for constitutional compliance
+            with PerformanceTracker(
+                MetricType.API_RESPONSE_TIME,
+                "iris_executor_many",
+                session_id=session_id,
+                sql_length=len(sql)
+            ) as tracker:
+
+                logger.info("execute_many() called",
+                          sql_preview=sql[:100],
+                          batch_size=len(params_list),
+                          session_id=session_id)
+
+                # Use async execution with thread pool
+                if self.embedded_mode:
+                    result = await self._execute_many_embedded_async(sql, params_list, session_id)
+                else:
+                    result = await self._execute_many_external_async(sql, params_list, session_id)
+
+                # Add performance metadata
+                result['execution_metadata'] = {
+                    'execution_time_ms': tracker.start_time and (time.perf_counter() - tracker.start_time) * 1000,
+                    'embedded_mode': self.embedded_mode,
+                    'batch_size': len(params_list),
+                    'session_id': session_id,
+                    'sql_length': len(sql)
+                }
+
+                # Record performance metrics
+                if tracker.violation:
+                    logger.warning("execute_many() SLA violation",
+                                 actual_time_ms=tracker.violation.actual_value_ms,
+                                 sla_threshold_ms=tracker.violation.sla_threshold_ms,
+                                 batch_size=len(params_list),
+                                 session_id=session_id)
+
+                return result
+
+        except Exception as e:
+            logger.error("execute_many() failed",
+                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                        batch_size=len(params_list),
+                        error=str(e),
+                        session_id=session_id)
+            raise
+
+    async def _execute_many_embedded_async(self, sql: str, params_list: List[List],
+                                          session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute batch SQL using IRIS embedded Python executemany() with proper async threading.
+
+        This method leverages IRIS's native batch execution capabilities for maximum performance.
+        """
+        def _sync_execute_many():
+            """Synchronous IRIS batch execution in thread pool"""
+            import iris
+
+            logger.info("🚀 EXECUTING BATCH IN EMBEDDED MODE",
+                       sql_preview=sql[:100],
+                       batch_size=len(params_list),
+                       session_id=session_id)
+
+            try:
+                # Get or create connection
+                connection = self._get_iris_connection()
+
+                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
+                # CRITICAL: Transaction translation MUST occur BEFORE normalization (FR-010)
+                transaction_translator = TransactionTranslator()
+                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+
+                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
+                translator = SQLTranslator()
+                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="batch")
+
+                # Strip trailing semicolon (IRIS executemany() doesn't like it)
+                if normalized_sql.rstrip().endswith(';'):
+                    normalized_sql = normalized_sql.rstrip().rstrip(';')
+                    logger.debug("Removed trailing semicolon for executemany()",
+                               sql_preview=normalized_sql[:80],
+                               session_id=session_id)
+
+                logger.info("Executing executemany() batch",
+                          sql_preview=normalized_sql[:100],
+                          batch_size=len(params_list),
+                          session_id=session_id)
+
+                # Execute batch using IRIS cursor.executemany()
+                # This is the KEY optimization - uses IRIS "Fast Insert" feature
+                start_time = time.perf_counter()
+
+                cursor = connection.cursor()
+                cursor.executemany(normalized_sql, params_list)
+
+                execution_time = (time.perf_counter() - start_time) * 1000
+                rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else len(params_list)
+
+                logger.info("✅ executemany() COMPLETE",
+                          rows_affected=rows_affected,
+                          execution_time_ms=execution_time,
+                          throughput_rows_per_sec=int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0,
+                          session_id=session_id)
+
+                return {
+                    'success': True,
+                    'rows_affected': rows_affected,
+                    'execution_time_ms': execution_time,
+                    'batch_size': len(params_list),
+                    'rows': [],  # executemany() doesn't return rows
+                    'columns': []
+                }
+
+            except Exception as e:
+                logger.error("executemany() failed in IRIS",
+                           error=str(e),
+                           error_type=type(e).__name__,
+                           batch_size=len(params_list),
+                           session_id=session_id)
+                raise
+
+        # Execute in thread pool to avoid blocking event loop
+        return await asyncio.to_thread(_sync_execute_many)
+
+    async def _execute_many_external_async(self, sql: str, params_list: List[List],
+                                          session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute batch SQL using external DBAPI connection (not yet implemented).
+
+        For now, this falls back to individual executions.
+        Future: Implement proper DBAPI executemany() via iris.dbapi connection.
+        """
+        logger.warning("External DBAPI executemany() not yet implemented, using fallback",
+                      batch_size=len(params_list),
+                      session_id=session_id)
+
+        # Fallback: Execute individual queries (inefficient but functional)
+        rows_affected = 0
+        for params in params_list:
+            result = await self._execute_external_async(sql, params, session_id)
+            rows_affected += result.get('rows_affected', 0)
+
+        return {
+            'success': True,
+            'rows_affected': rows_affected,
+            'batch_size': len(params_list),
+            'rows': [],
+            'columns': []
+        }
+
     async def _execute_embedded_async(self, sql: str, params: Optional[List] = None,
                                      session_id: Optional[str] = None) -> Dict[str, Any]:
         """
