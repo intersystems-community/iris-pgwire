@@ -338,6 +338,84 @@ class PGWireProtocol:
                 'performance_stats': {'translation_time_ms': 0.0}
             }
 
+    def translate_postgres_parameters(self, sql: str) -> str:
+        """
+        Translate PostgreSQL parameter placeholders and type casts to IRIS syntax.
+
+        PostgreSQL uses $1, $2, $3 for parameter placeholders.
+        PostgreSQL uses :: for type casting (e.g., '42'::int).
+        IRIS SQL uses ? for parameter placeholders.
+        IRIS SQL uses CAST() function for type casting.
+
+        This translation is CRITICAL for P2 Extended Protocol (prepared statements)
+        to work with standard PostgreSQL clients.
+
+        Args:
+            sql: SQL query with PostgreSQL $1, $2, $3 placeholders and :: type casts
+
+        Returns:
+            SQL query with IRIS ? placeholders and CAST() expressions
+
+        Constitutional Requirement:
+            - Translation SLA: <0.1ms (FR-011)
+            - PostgreSQL Compatibility: Full P2 protocol support required
+
+        Examples:
+            >>> translate_postgres_parameters("SELECT * FROM users WHERE id = $1")
+            "SELECT * FROM users WHERE id = ?"
+
+            >>> translate_postgres_parameters("SELECT $1::int, $2::text")
+            "SELECT CAST(? AS INTEGER), CAST(? AS VARCHAR)"
+
+            >>> translate_postgres_parameters("SELECT '42'::int")
+            "SELECT CAST('42' AS INTEGER)"
+        """
+        if '$' not in sql and '::' not in sql:
+            # Fast path: no parameters or type casts to translate
+            return sql
+
+        # Step 1: Replace $1, $2, $3, ... with ? for IRIS parameter binding
+        # Pattern: \$\d+ matches $1, $2, $3, etc.
+        if '$' in sql:
+            sql = re.sub(r'\$\d+', '?', sql)
+
+        # Step 2: Translate PostgreSQL :: type cast to IRIS CAST() function
+        # Pattern: expr::type → CAST(expr AS type)
+        # Type mapping: PostgreSQL → IRIS
+        if '::' in sql:
+            # Simple type mappings for common cases
+            type_map = {
+                'int': 'INTEGER',
+                'int4': 'INTEGER',
+                'int8': 'BIGINT',
+                'text': 'VARCHAR',
+                'varchar': 'VARCHAR',
+                'float': 'DOUBLE',
+                'float8': 'DOUBLE',
+                'bool': 'BIT',
+                'boolean': 'BIT',
+            }
+
+            # Replace ::type with CAST() - handles simple cases like ?::int or 'value'::text
+            # This regex matches: (?) :: (type) OR ('value') :: (type) OR (number) :: (type)
+            def replace_typecast(match):
+                expr = match.group(1)
+                pg_type = match.group(2).lower()
+                iris_type = type_map.get(pg_type, pg_type.upper())
+                return f"CAST({expr} AS {iris_type})"
+
+            # Pattern: (?) or ('...') or (number) followed by ::type
+            sql = re.sub(r"(\?|'[^']*'|\d+)::([\w]+)", replace_typecast, sql)
+
+        logger.debug(
+            "Translated PostgreSQL syntax",
+            connection_id=self.connection_id,
+            had_parameters='$' in sql,
+            had_typecasts='::' in sql
+        )
+
+        return sql
+
     async def handle_ssl_probe(self, ssl_context: Optional[ssl.SSLContext]):
         """
         P0: Handle SSL probe (first 8 bytes of connection)
@@ -969,6 +1047,10 @@ class PGWireProtocol:
                        connection_id=self.connection_id,
                        query=query[:100] + "..." if len(query) > 100 else query)
 
+            # CRITICAL: Translate PostgreSQL syntax (:: type casts, $1 parameters if present)
+            # This enables Simple Query protocol to work with PostgreSQL-specific syntax
+            query = self.translate_postgres_parameters(query)
+
             # DEBUGGING: Log full SQL for CREATE TABLE statements
             if query.upper().strip().startswith("CREATE TABLE"):
                 logger.warning(f"FULL CREATE TABLE SQL (length={len(query)}): {query}")
@@ -1350,6 +1432,10 @@ class PGWireProtocol:
             query = body[pos:query_end].decode('utf-8')
             pos = query_end + 1
 
+            # CRITICAL: Translate PostgreSQL $1, $2, $3 parameters to IRIS ? syntax
+            # This must happen BEFORE translation to avoid IRIS SQL errors with $1 syntax
+            query = self.translate_postgres_parameters(query)
+
             # Parse parameter types count
             if pos + 2 > len(body):
                 raise ValueError("Invalid Parse message: missing parameter count")
@@ -1637,15 +1723,11 @@ class PGWireProtocol:
             # The optimizer needs to transform vector parameters BEFORE IRIS execution
             # Interpolating here would create large SQL literals that exceed IRIS limits
 
-            # Convert PostgreSQL $1, $2 placeholders to IRIS ? placeholders
-            iris_query = query
-            if params:
-                # Replace $1, $2, ... with ? for IRIS parameter binding
-                for i in range(len(params), 0, -1):  # Reverse order to avoid replacing $10 when replacing $1
-                    iris_query = iris_query.replace(f'${i}', '?')
+            # NOTE: PostgreSQL $1, $2 parameters were already translated to IRIS ? syntax
+            # in handle_parse_message(), so query already has correct parameter placeholders
 
             # Execute via IRIS with parameters (vector optimizer will transform if needed)
-            result = await self.iris_executor.execute_query(iris_query, params=params if params else None)
+            result = await self.iris_executor.execute_query(query, params=params if params else None)
 
             if result['success']:
                 # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
@@ -1659,7 +1741,7 @@ class PGWireProtocol:
             logger.info("Executed portal",
                        connection_id=self.connection_id,
                        portal_name=portal_name,
-                       query=iris_query[:100] + "..." if len(iris_query) > 100 else iris_query)
+                       query=query[:100] + "..." if len(query) > 100 else query)
 
         except Exception as e:
             logger.error("Execute message handling failed",

@@ -98,7 +98,7 @@ describe('Basic Connection Tests', () => {
 
       // THEN: Each connection should succeed
       const result = await client.query('SELECT $1::int', [i + 1]);
-      expect(result.rows[0].int4]).toBe(i + 1);
+      expect(result.rows[0].int4).toBe(i + 1);
 
       await client.end();
     }
