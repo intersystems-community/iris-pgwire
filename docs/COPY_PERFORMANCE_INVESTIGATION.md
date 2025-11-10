@@ -725,5 +725,28 @@ throughput_rows_per_sec=3008
 
 **FR-005 Compliance**: ❌ NO (>10,000 rows/sec requirement not met)
 - Root cause: IRIS SQL limitation (no multi-row INSERT support)
-- Current performance: ~685 rows/sec (acceptable for small-to-medium datasets)
+- Current performance: ~692 rows/sec overall (250 rows in 0.361s)
+- Batch performance: ~3,167 rows/sec (50 rows in 15.8ms)
 - Recommendation: Accept current performance or revise FR-005 requirement
+
+### E2E Validation (2025-11-10)
+
+**Test**: `test_copy_from_stdin_250_patients_performance`
+
+**Results**:
+```
+Overall Performance: 692 rows/sec (250 rows loaded in 0.361s)
+Batch Performance: 3,167 rows/sec (50 rows in 15.8ms)
+Architecture: Try/catch working correctly
+Execution Flow:
+  1. DBAPI executemany() attempted
+  2. Failed: "Cannot call an iris.package wrapper... Given name was: connect"
+  3. Fell back to loop-based execution (inline SQL)
+  4. All 250 patients loaded successfully
+```
+
+**Architecture Validation**: ✅ CONFIRMED
+- DBAPI fast path is attempted first
+- Automatic fallback to inline SQL works reliably
+- Execution path metadata correctly logged (`'loop_fallback'`)
+- Parameter binding issues completely avoided
