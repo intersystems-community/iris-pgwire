@@ -398,16 +398,33 @@ class IRISExecutor:
                           batch_size=len(params_list),
                           session_id=session_id)
 
-                # Use async execution with thread pool
-                if self.embedded_mode:
-                    result = await self._execute_many_embedded_async(sql, params_list, session_id)
-                else:
+                # ARCHITECTURE FIX: ALWAYS try DBAPI executemany() first (fast path)
+                # Even in embedded mode (irispython), we can connect to localhost via DBAPI
+                # This leverages connection independence: execution mode ≠ connection mode
+                # Fall back to loop-based execution only if DBAPI fails
+                try:
+                    logger.debug("Attempting DBAPI executemany() fast path",
+                               session_id=session_id)
                     result = await self._execute_many_external_async(sql, params_list, session_id)
+                    logger.info("✅ DBAPI executemany() succeeded (fast path)",
+                              rows_affected=result.get('rows_affected', 0),
+                              session_id=session_id)
+                except Exception as dbapi_error:
+                    logger.warning("DBAPI executemany() failed, falling back to loop-based execution",
+                                 error=str(dbapi_error)[:200],
+                                 error_type=type(dbapi_error).__name__,
+                                 session_id=session_id)
+                    # Fallback to loop-based execution (slower but reliable)
+                    result = await self._execute_many_embedded_async(sql, params_list, session_id)
+                    logger.info("✅ Loop-based execution succeeded (fallback path)",
+                              rows_affected=result.get('rows_affected', 0),
+                              session_id=session_id)
 
-                # Add performance metadata
+                # Add performance metadata (including which path was actually used)
                 result['execution_metadata'] = {
                     'execution_time_ms': tracker.start_time and (time.perf_counter() - tracker.start_time) * 1000,
                     'embedded_mode': self.embedded_mode,
+                    'execution_path': result.get('_execution_path', 'unknown'),  # 'dbapi_executemany' or 'loop_fallback'
                     'batch_size': len(params_list),
                     'session_id': session_id,
                     'sql_length': len(sql)
@@ -471,23 +488,43 @@ class IRISExecutor:
                 if normalized_sql.rstrip().endswith(';'):
                     normalized_sql = normalized_sql.rstrip().rstrip(';')
 
-                logger.info("Executing batch with loop (embedded mode)",
+                logger.info("Executing batch with loop (embedded mode - inline SQL values)",
                           sql_preview=normalized_sql[:100],
                           batch_size=len(params_list),
                           session_id=session_id)
 
-                # Execute batch using loop with iris.sql.exec()
-                # This is the fallback for embedded mode (no executemany() available)
+                # Execute batch using loop with iris.sql.exec() - INLINE SQL VALUES
+                # CRITICAL: Cannot use parameter binding in embedded mode (values become '15@%SYS.Python')
+                # Must build inline SQL with values directly in the SQL string
                 start_time = time.perf_counter()
 
                 rows_affected = 0
                 for params in params_list:
                     try:
-                        iris.sql.exec(normalized_sql, *params)
+                        # Build inline SQL by replacing ? placeholders with actual values
+                        inline_sql = normalized_sql
+                        for param_value in params:
+                            # Convert value to SQL literal
+                            if param_value is None:
+                                sql_literal = 'NULL'
+                            elif isinstance(param_value, (int, float)):
+                                # Numbers can be used directly
+                                sql_literal = str(param_value)
+                            else:
+                                # Strings need quoting and escaping
+                                escaped_value = str(param_value).replace("'", "''")
+                                sql_literal = f"'{escaped_value}'"
+
+                            # Replace first occurrence of ? with the value
+                            inline_sql = inline_sql.replace('?', sql_literal, 1)
+
+                        logger.debug(f"Executing inline SQL: {inline_sql[:150]}...")
+                        iris.sql.exec(inline_sql)
                         rows_affected += 1
                     except Exception as row_error:
                         logger.error(f"Failed to execute row {rows_affected + 1}: {row_error}",
-                                   params=params[:3] if len(params) > 3 else params)
+                                   params=params[:3] if len(params) > 3 else params,
+                                   inline_sql_preview=inline_sql[:200] if 'inline_sql' in locals() else 'N/A')
                         raise
 
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -504,7 +541,8 @@ class IRISExecutor:
                     'execution_time_ms': execution_time,
                     'batch_size': len(params_list),
                     'rows': [],  # Batch operations don't return rows
-                    'columns': []
+                    'columns': [],
+                    '_execution_path': 'loop_fallback'  # Tag for metadata
                 }
 
             except Exception as e:
@@ -584,7 +622,8 @@ class IRISExecutor:
                     'execution_time_ms': execution_time,
                     'batch_size': len(params_list),
                     'rows': [],
-                    'columns': []
+                    'columns': [],
+                    '_execution_path': 'dbapi_executemany'  # Tag for metadata
                 }
 
             except Exception as e:

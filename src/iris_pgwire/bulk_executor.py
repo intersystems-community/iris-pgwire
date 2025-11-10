@@ -104,17 +104,17 @@ class BulkExecutor:
         batch: list[dict]
     ) -> int:
         """
-        Execute single batch INSERT using inline SQL values.
+        Execute single batch INSERT with try/catch architecture.
 
-        ARCHITECTURE DECISION (2025-11-09):
-        - Uses inline SQL values instead of parameter binding
-        - Avoids parameter binding issues in embedded mode (DATE values → Python object refs)
-        - ONE implementation works reliably in both embedded and external modes
-        - Simpler architecture per user feedback ("2 methods instead of 1!")
+        ARCHITECTURE (2025-11-10):
+        - TRY: DBAPI executemany() (fast path - 4-10× improvement expected)
+        - CATCH: Inline SQL values (fallback - ~600 rows/sec)
+        - Leverages connection independence: execution mode ≠ connection mode
+        - Even in irispython, we can connect to localhost via DBAPI
 
-        Performance:
-        - Current: ~600-800 rows/sec with individual execute() calls
-        - Note: executemany() optimization blocked by embedded mode limitations
+        Performance Targets:
+        - DBAPI executemany(): 2,400-10,000+ rows/sec (FR-005 requirement)
+        - Inline SQL fallback: ~600 rows/sec (current baseline)
 
         IRIS DATE Handling: Convert ISO date strings to IRIS Horolog format (days since 1840-12-31).
 
@@ -132,77 +132,117 @@ class BulkExecutor:
         if not batch:
             return 0
 
-        # Pre-import datetime for date conversions (avoid import overhead in loop)
         from datetime import datetime
         import time
 
-        # Calculate Horolog epoch once (avoid recalculating in loop)
+        # Calculate Horolog epoch once
         horolog_epoch = datetime(1840, 12, 31).date()
 
         # Get column data types to handle DATE conversion
         column_types = await self._get_column_types(table_name, column_names)
 
-        # Build column list for INSERT statement
+        # Build INSERT SQL template
         column_list = ', '.join(column_names)
+        placeholders = ', '.join(['?' for _ in column_names])
+        sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
 
-        logger.info(f"🚀 Batch INSERT with inline SQL values",
+        logger.info(f"🚀 Batch INSERT with try/catch architecture",
                    table=table_name,
                    batch_size=len(batch))
 
-        # Execute individual INSERTs with inline values (works in both modes)
         start_time = time.perf_counter()
-        rows_inserted = 0
 
-        for row_dict in batch:
-            # Build VALUES clause with inline SQL values
-            value_parts = []
+        # TRY: DBAPI executemany() (fast path)
+        try:
+            logger.debug("Preparing params_list for executemany()")
 
-            for col_name in column_names:
-                value = row_dict.get(col_name)
-                col_type = column_types.get(col_name, 'VARCHAR')
+            # Build params_list with proper DATE conversion
+            params_list = []
+            for row_dict in batch:
+                params = []
+                for col_name in column_names:
+                    value = row_dict.get(col_name)
+                    col_type = column_types.get(col_name, 'VARCHAR')
 
-                # Handle NULL values
-                if value == '' or value is None:
-                    value_parts.append('NULL')
-                elif col_type.upper() == 'DATE':
-                    # Convert ISO date string to IRIS Horolog format (days since 1840-12-31)
-                    try:
+                    # Handle NULL
+                    if value == '' or value is None:
+                        params.append(None)
+                    elif col_type.upper() == 'DATE':
+                        # Convert ISO date to Horolog integer
                         date_obj = datetime.strptime(value, '%Y-%m-%d').date()
-                        # Calculate Horolog day number using pre-calculated epoch
                         horolog_days = (date_obj - horolog_epoch).days
-                        value_parts.append(str(horolog_days))  # Inline integer value
-                    except ValueError as e:
-                        logger.error(f"Date parsing failed for column '{col_name}', value '{value}': {e}")
-                        logger.error(f"Row data: {row_dict}")
-                        raise ValueError(f"Invalid date format for column {col_name}: {value} - {e}")
-                else:
-                    # Inline string value (escape single quotes)
-                    escaped_value = str(value).replace("'", "''")
-                    value_parts.append(f"'{escaped_value}'")
+                        params.append(horolog_days)
+                    else:
+                        params.append(value)
 
-            values_clause = ', '.join(value_parts)
-            row_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({values_clause})"
+                params_list.append(params)
 
-            # Execute individual INSERT (no parameters needed)
-            result = await self.iris_executor.execute_query(row_sql, [])
+            logger.debug(f"Calling execute_many() with {len(params_list)} rows")
 
-            if not result.get('success', False):
-                error_msg = result.get('error', 'Unknown error')
-                logger.error(f"INSERT failed: {error_msg}")
-                logger.error(f"SQL: {row_sql}")
-                raise RuntimeError(f"INSERT failed: {error_msg}")
+            # Call execute_many() - it will try DBAPI first, fallback to loop
+            result = await self.iris_executor.execute_many(sql, params_list)
 
-            rows_inserted += 1
+            rows_inserted = result.get('rows_affected', 0)
+            execution_time = (time.perf_counter() - start_time) * 1000
+            throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
+            execution_path = result.get('_execution_path', 'unknown')
 
-        execution_time = (time.perf_counter() - start_time) * 1000
-        throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
+            logger.info(f"✅ Batch INSERT complete via {execution_path}",
+                       rows_inserted=rows_inserted,
+                       execution_time_ms=execution_time,
+                       throughput_rows_per_sec=throughput)
 
-        logger.info(f"✅ Batch INSERT complete",
-                   rows_inserted=rows_inserted,
-                   execution_time_ms=execution_time,
-                   throughput_rows_per_sec=throughput)
+            return rows_inserted
 
-        return rows_inserted
+        except Exception as e:
+            # CATCH: Inline SQL fallback (slow but reliable)
+            logger.warning(f"executemany() failed, falling back to inline SQL",
+                         error=str(e)[:200],
+                         error_type=type(e).__name__)
+
+            # Reset timing for fallback path
+            start_time = time.perf_counter()
+            rows_inserted = 0
+
+            # Execute individual INSERTs with inline values
+            for row_dict in batch:
+                value_parts = []
+
+                for col_name in column_names:
+                    value = row_dict.get(col_name)
+                    col_type = column_types.get(col_name, 'VARCHAR')
+
+                    if value == '' or value is None:
+                        value_parts.append('NULL')
+                    elif col_type.upper() == 'DATE':
+                        date_obj = datetime.strptime(value, '%Y-%m-%d').date()
+                        horolog_days = (date_obj - horolog_epoch).days
+                        value_parts.append(str(horolog_days))
+                    else:
+                        escaped_value = str(value).replace("'", "''")
+                        value_parts.append(f"'{escaped_value}'")
+
+                values_clause = ', '.join(value_parts)
+                row_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({values_clause})"
+
+                result = await self.iris_executor.execute_query(row_sql, [])
+
+                if not result.get('success', False):
+                    error_msg = result.get('error', 'Unknown error')
+                    logger.error(f"INSERT failed: {error_msg}")
+                    raise RuntimeError(f"INSERT failed: {error_msg}")
+
+                rows_inserted += 1
+
+            execution_time = (time.perf_counter() - start_time) * 1000
+            throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
+
+            logger.info(f"✅ Batch INSERT complete via inline_sql_fallback",
+                       rows_inserted=rows_inserted,
+                       execution_time_ms=execution_time,
+                       throughput_rows_per_sec=throughput)
+
+            return rows_inserted
 
     async def _get_column_types(self, table_name: str, column_names: list[str]) -> dict[str, str]:
         """
