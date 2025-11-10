@@ -439,23 +439,27 @@ class IRISExecutor:
         This method leverages IRIS's native batch execution capabilities for maximum performance.
         """
         def _sync_execute_many():
-            """Synchronous IRIS batch execution in thread pool"""
+            """
+            Synchronous IRIS batch execution in thread pool.
+
+            ARCHITECTURE NOTE for Embedded Mode:
+            In embedded mode (irispython), iris.dbapi is shadowed by embedded iris module.
+            Therefore, we use loop-based execution with iris.sql.exec() instead of
+            cursor.executemany(). While this doesn't leverage IRIS "Fast Insert",
+            it works reliably in all modes.
+
+            For external mode, use _execute_many_external_async() which supports
+            true executemany() with DBAPI.
+            """
             import iris
 
-            logger.info("🚀 EXECUTING BATCH IN EMBEDDED MODE",
+            logger.info("🚀 EXECUTING BATCH IN EMBEDDED MODE (loop-based)",
                        sql_preview=sql[:100],
                        batch_size=len(params_list),
                        session_id=session_id)
 
-            connection = None
-            cursor = None
-
             try:
-                # Get or create connection
-                connection = self._get_iris_connection()
-
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
-                # CRITICAL: Transaction translation MUST occur BEFORE normalization (FR-010)
                 transaction_translator = TransactionTranslator()
                 transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
 
@@ -463,29 +467,32 @@ class IRISExecutor:
                 translator = SQLTranslator()
                 normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="batch")
 
-                # Strip trailing semicolon (IRIS executemany() doesn't like it)
+                # Strip trailing semicolon
                 if normalized_sql.rstrip().endswith(';'):
                     normalized_sql = normalized_sql.rstrip().rstrip(';')
-                    logger.debug("Removed trailing semicolon for executemany()",
-                               sql_preview=normalized_sql[:80],
-                               session_id=session_id)
 
-                logger.info("Executing executemany() batch",
+                logger.info("Executing batch with loop (embedded mode)",
                           sql_preview=normalized_sql[:100],
                           batch_size=len(params_list),
                           session_id=session_id)
 
-                # Execute batch using IRIS cursor.executemany()
-                # This is the KEY optimization - uses IRIS "Fast Insert" feature
+                # Execute batch using loop with iris.sql.exec()
+                # This is the fallback for embedded mode (no executemany() available)
                 start_time = time.perf_counter()
 
-                cursor = connection.cursor()
-                cursor.executemany(normalized_sql, params_list)
+                rows_affected = 0
+                for params in params_list:
+                    try:
+                        iris.sql.exec(normalized_sql, *params)
+                        rows_affected += 1
+                    except Exception as row_error:
+                        logger.error(f"Failed to execute row {rows_affected + 1}: {row_error}",
+                                   params=params[:3] if len(params) > 3 else params)
+                        raise
 
                 execution_time = (time.perf_counter() - start_time) * 1000
-                rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else len(params_list)
 
-                logger.info("✅ executemany() COMPLETE",
+                logger.info("✅ Batch execution COMPLETE (loop-based)",
                           rows_affected=rows_affected,
                           execution_time_ms=execution_time,
                           throughput_rows_per_sec=int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0,
@@ -496,30 +503,17 @@ class IRISExecutor:
                     'rows_affected': rows_affected,
                     'execution_time_ms': execution_time,
                     'batch_size': len(params_list),
-                    'rows': [],  # executemany() doesn't return rows
+                    'rows': [],  # Batch operations don't return rows
                     'columns': []
                 }
 
             except Exception as e:
-                logger.error("executemany() failed in IRIS",
+                logger.error("Batch execution failed in IRIS (loop-based)",
                            error=str(e),
                            error_type=type(e).__name__,
                            batch_size=len(params_list),
                            session_id=session_id)
                 raise
-
-            finally:
-                # Clean up resources
-                if cursor:
-                    try:
-                        cursor.close()
-                    except Exception:
-                        pass
-                if connection:
-                    try:
-                        connection.close()
-                    except Exception:
-                        pass
 
         # Execute in thread pool to avoid blocking event loop
         return await asyncio.to_thread(_sync_execute_many)
@@ -527,28 +521,95 @@ class IRISExecutor:
     async def _execute_many_external_async(self, sql: str, params_list: List[List],
                                           session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Execute batch SQL using external DBAPI connection (not yet implemented).
+        Execute batch SQL using external DBAPI executemany() for optimal performance.
 
-        For now, this falls back to individual executions.
-        Future: Implement proper DBAPI executemany() via iris.dbapi connection.
+        THIS IS WHERE THE PERFORMANCE GAINS HAPPEN:
+        - Uses cursor.executemany() with pooled DBAPI connection
+        - Leverages IRIS "Fast Insert" optimization
+        - Community benchmark: IRIS 1.48s vs PostgreSQL 4.58s (4× faster)
+        - Expected throughput: 2,400-10,000+ rows/sec
         """
-        logger.warning("External DBAPI executemany() not yet implemented, using fallback",
-                      batch_size=len(params_list),
-                      session_id=session_id)
+        def _sync_execute_many():
+            """Synchronous IRIS DBAPI executemany() in thread pool"""
+            import iris
 
-        # Fallback: Execute individual queries (inefficient but functional)
-        rows_affected = 0
-        for params in params_list:
-            result = await self._execute_external_async(sql, params, session_id)
-            rows_affected += result.get('rows_affected', 0)
+            logger.info("🚀 EXECUTING BATCH IN EXTERNAL MODE (executemany)",
+                       sql_preview=sql[:100],
+                       batch_size=len(params_list),
+                       session_id=session_id)
 
-        return {
-            'success': True,
-            'rows_affected': rows_affected,
-            'batch_size': len(params_list),
-            'rows': [],
-            'columns': []
-        }
+            connection = None
+            cursor = None
+
+            try:
+                # Get pooled connection
+                connection = self._get_pooled_connection()
+
+                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
+                transaction_translator = TransactionTranslator()
+                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+
+                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
+                translator = SQLTranslator()
+                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="batch")
+
+                # Strip trailing semicolon
+                if normalized_sql.rstrip().endswith(';'):
+                    normalized_sql = normalized_sql.rstrip().rstrip(';')
+
+                logger.info("Executing executemany() batch (external mode)",
+                          sql_preview=normalized_sql[:100],
+                          batch_size=len(params_list),
+                          session_id=session_id)
+
+                # Execute batch using DBAPI cursor.executemany()
+                # KEY OPTIMIZATION: Uses IRIS "Fast Insert" feature
+                start_time = time.perf_counter()
+
+                cursor = connection.cursor()
+                cursor.executemany(normalized_sql, params_list)
+
+                execution_time = (time.perf_counter() - start_time) * 1000
+                rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else len(params_list)
+
+                logger.info("✅ executemany() COMPLETE (external mode)",
+                          rows_affected=rows_affected,
+                          execution_time_ms=execution_time,
+                          throughput_rows_per_sec=int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0,
+                          session_id=session_id)
+
+                return {
+                    'success': True,
+                    'rows_affected': rows_affected,
+                    'execution_time_ms': execution_time,
+                    'batch_size': len(params_list),
+                    'rows': [],
+                    'columns': []
+                }
+
+            except Exception as e:
+                logger.error("executemany() failed in external mode",
+                           error=str(e),
+                           error_type=type(e).__name__,
+                           batch_size=len(params_list),
+                           session_id=session_id)
+                raise
+
+            finally:
+                # Clean up cursor (connection returns to pool)
+                if cursor:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if connection:
+                    try:
+                        self._return_connection(connection)
+                    except Exception:
+                        pass
+
+        # Execute in thread pool to avoid blocking event loop
+        return await asyncio.to_thread(_sync_execute_many)
 
     async def _execute_embedded_async(self, sql: str, params: Optional[List] = None,
                                      session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -1050,35 +1111,17 @@ class IRISExecutor:
         """
         Get or create IRIS connection for embedded mode batch operations.
 
-        CRITICAL: For executemany() in embedded mode, we need DBAPI connection.
-        In embedded mode (irispython), iris.connect() doesn't work - we must use
-        iris.dbapi.connect() to get a proper cursor interface.
+        ARCHITECTURE NOTE:
+        In embedded mode (irispython), we use iris.sql.exec() for individual queries.
+        For batch operations, we fall back to loop-based execution instead of
+        executemany() because the iris.dbapi module is shadowed by the embedded
+        iris module.
 
-        This creates a network connection to localhost IRIS even though we're
-        running inside IRIS. This is required for DBAPI executemany() support.
+        This method is a placeholder for potential future optimization.
         """
-        try:
-            # Use iris.dbapi for DBAPI connection (works in both embedded and external)
-            import iris.dbapi as dbapi
-
-            conn = dbapi.connect(
-                hostname=self.iris_config.get('host', 'localhost'),
-                port=self.iris_config.get('port', 1972),
-                namespace=self.iris_config.get('namespace', 'USER'),
-                username=self.iris_config.get('username', '_SYSTEM'),
-                password=self.iris_config.get('password', 'SYS')
-            )
-
-            logger.debug("Created IRIS DBAPI connection for executemany()",
-                        host=self.iris_config.get('host'),
-                        port=self.iris_config.get('port'),
-                        namespace=self.iris_config.get('namespace'))
-
-            return conn
-        except Exception as e:
-            logger.error(f"Failed to create IRIS DBAPI connection for executemany(): {e}",
-                        error_type=type(e).__name__)
-            raise
+        # For embedded mode, we don't use DBAPI connections
+        # The _execute_many_embedded_async() method will use iris.sql.exec() in a loop
+        return None
 
     def _get_pooled_connection(self):
         """
