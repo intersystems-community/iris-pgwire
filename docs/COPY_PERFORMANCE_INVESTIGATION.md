@@ -473,17 +473,96 @@ The P6 COPY Protocol implementation is **functionally complete** and **constitut
 - 🎯 Projected improvement: 600 → 2,400 rows/sec minimum (potentially >10,000 with tuning)
 - ✅ **FR-005 likely achievable** with executemany() implementation
 
+---
+
+## Implementation Update (2025-11-09)
+
+### executemany() Investigation Results
+
+**Attempted**: Implemented execute_many() method in iris_executor.py with dual code paths:
+- External mode: DBAPI cursor.executemany()
+- Embedded mode: Loop with iris.sql.exec()
+
+**Blocker Discovered**: **Parameter binding incompatibility in embedded mode**
+
+**Root Cause**:
+```python
+# Embedded mode (irispython)
+iris.sql.exec("INSERT INTO Patients VALUES (?, ?, ?)", *params)
+# DATE value (Horolog day number 15) → '15@%SYS.Python' (Python object reference)
+# IRIS rejects with: "Field validation failed (value '15@%SYS.Python')"
+```
+
+**Key Insight**: In embedded mode, `iris.sql.exec()` parameter binding converts Python objects to string representations instead of values. This is fundamentally incompatible with DBAPI's parameter binding semantics.
+
+**User Feedback**: "the only problem with this approach is that you increase the complexity of the problem - 2 methods instead of 1!"
+
+**Solution Implemented**: Simplified architecture using inline SQL values (no parameter binding):
+```python
+# Instead of:
+sql = "INSERT INTO Patients VALUES (?, ?, ?)"
+params = [1, 'John', 15]  # Parameter binding fails in embedded mode
+
+# Use:
+sql = "INSERT INTO Patients VALUES (1, 'John', 15)"  # Inline values work everywhere
+```
+
+**Results** (2025-11-09):
+- ✅ **Functionally Complete**: All 250 patients loaded successfully
+- ✅ **DATE Conversion Working**: Horolog format inline values accepted by IRIS
+- ✅ **Single Implementation**: Works identically in embedded and external modes
+- ✅ **Simpler Architecture**: ONE code path (per user feedback)
+- ⚠️ **Performance**: 569 rows/sec (within variance of 600 rows/sec baseline)
+
+**Conclusion**: executemany() optimization **BLOCKED** by embedded mode parameter binding limitations. Inline SQL values provide reliable fallback solution.
+
+---
+
+## Revised Recommendations
+
+### ⭐ Option 1: Accept Current Performance (RECOMMENDED)
+
+**Status**: **IMPLEMENTED** (2025-11-09)
+
+**Rationale**:
+- 569-600 rows/sec is reasonable for small-to-medium datasets (hundreds to thousands of rows)
+- Single, simple implementation works reliably in both modes
+- No complex dual code paths to maintain
+- Parameter binding issues completely avoided
+
+**Action Items**:
+1. ✅ Document executemany() limitation (embedded mode incompatibility)
+2. ⏭️ Revise FR-005 to >500 rows/sec or document as known limitation
+3. ⏭️ Update CLAUDE.md with inline SQL pattern
+
+**Trade-off**: Lower performance in exchange for simplicity and reliability
+
+### Option 2: External Mode Only executemany() (NOT RECOMMENDED)
+
+**Rationale**: Would require dual code paths (complexity user explicitly rejected)
+
+**User Feedback**: "the only problem with this approach is that you increase the complexity of the problem - 2 methods instead of 1!"
+
+**Status**: **REJECTED** based on user feedback about complexity
+
+### Option 3: Hybrid Approach (NOT RECOMMENDED)
+
+**Rationale**: Use inline SQL for embedded, executemany() for external - increases complexity
+
+**Status**: **REJECTED** - violates "ONE implementation" requirement
+
+---
+
 **Next Steps**:
-1. **HIGH PRIORITY**: Implement execute_many() in iris_executor.py (estimated 50-100 lines)
-2. **HIGH PRIORITY**: Refactor bulk_executor.py to use executemany() instead of for loop
-3. **VALIDATION**: Benchmark with 250/1K/10K/100K row datasets
-4. **MEASUREMENT**: Verify FR-005 compliance (>10,000 rows/sec)
-5. **DOCUMENTATION**: Update CLAUDE.md with executemany() patterns
+1. ✅ Document executemany() limitation and inline SQL solution (this document)
+2. ⏭️ Update CLAUDE.md with inline SQL implementation patterns
+3. ⏭️ Discuss FR-005 requirement revision with stakeholders
+4. ⏭️ Consider future optimization: LOAD DATA for large datasets (>10K rows)
 
-**Risk Assessment**: **LOW**
-- executemany() is standard Python DB-API (not IRIS-specific)
-- Already validated in InterSystems community benchmarks
-- Minimal code changes required (primarily bulk_executor.py)
-- No protocol changes needed (internal optimization only)
+**Risk Assessment**: **RESOLVED**
+- Inline SQL approach proven to work reliably in E2E testing
+- No parameter binding complexity to maintain
+- Single code path reduces maintenance burden
+- Performance consistent with baseline expectations
 
-**Expected Outcome**: FR-005 requirement **WILL BE MET** after executemany() implementation.
+**Final Outcome**: FR-005 requirement **CANNOT BE MET** with current IRIS embedded mode limitations. Inline SQL solution provides maximum reliability and simplicity at cost of performance.

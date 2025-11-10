@@ -104,19 +104,17 @@ class BulkExecutor:
         batch: list[dict]
     ) -> int:
         """
-        Execute single batch INSERT using IRIS executemany() for maximum performance.
+        Execute single batch INSERT using inline SQL values.
 
-        BREAKTHROUGH OPTIMIZATION (2025-11-09):
-        - Uses IRIS Python DB-API executemany() instead of individual execute() calls
-        - Community benchmark: IRIS 1.48s vs PostgreSQL 4.58s (4× faster!)
-        - Projected improvement: 600 → 2,400+ rows/sec (up to 10,000+ with tuning)
-        - Leverages IRIS "Fast Insert" optimization (client-side normalization)
+        ARCHITECTURE DECISION (2025-11-09):
+        - Uses inline SQL values instead of parameter binding
+        - Avoids parameter binding issues in embedded mode (DATE values → Python object refs)
+        - ONE implementation works reliably in both embedded and external modes
+        - Simpler architecture per user feedback ("2 methods instead of 1!")
 
-        Previous Implementation:
-            ❌ for loop with individual execute() calls (600 rows/sec)
-
-        New Implementation:
-            ✅ cursor.executemany() with batch params (2,400+ rows/sec projected)
+        Performance:
+        - Current: ~600-800 rows/sec with individual execute() calls
+        - Note: executemany() optimization blocked by embedded mode limitations
 
         IRIS DATE Handling: Convert ISO date strings to IRIS Horolog format (days since 1840-12-31).
 
@@ -129,7 +127,6 @@ class BulkExecutor:
             Number of rows inserted
 
         References:
-            - Community benchmark: community.intersystems.com/post/performance-tests-iris-postgresql-mysql-using-python
             - Performance investigation: docs/COPY_PERFORMANCE_INVESTIGATION.md
         """
         if not batch:
@@ -137,6 +134,7 @@ class BulkExecutor:
 
         # Pre-import datetime for date conversions (avoid import overhead in loop)
         from datetime import datetime
+        import time
 
         # Calculate Horolog epoch once (avoid recalculating in loop)
         horolog_epoch = datetime(1840, 12, 31).date()
@@ -144,20 +142,20 @@ class BulkExecutor:
         # Get column data types to handle DATE conversion
         column_types = await self._get_column_types(table_name, column_names)
 
-        # Build parameterized INSERT statement (same for all rows)
+        # Build column list for INSERT statement
         column_list = ', '.join(column_names)
-        placeholders = ', '.join(['?' for _ in column_names])
-        sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
 
-        logger.info(f"🚀 Using executemany() for batch INSERT",
+        logger.info(f"🚀 Batch INSERT with inline SQL values",
                    table=table_name,
-                   batch_size=len(batch),
-                   sql_preview=sql[:100])
+                   batch_size=len(batch))
 
-        # Convert all rows to parameter tuples for executemany()
-        params_list = []
+        # Execute individual INSERTs with inline values (works in both modes)
+        start_time = time.perf_counter()
+        rows_inserted = 0
+
         for row_dict in batch:
-            row_params = []
+            # Build VALUES clause with inline SQL values
+            value_parts = []
 
             for col_name in column_names:
                 value = row_dict.get(col_name)
@@ -165,56 +163,46 @@ class BulkExecutor:
 
                 # Handle NULL values
                 if value == '' or value is None:
-                    row_params.append(None)
+                    value_parts.append('NULL')
                 elif col_type.upper() == 'DATE':
                     # Convert ISO date string to IRIS Horolog format (days since 1840-12-31)
                     try:
                         date_obj = datetime.strptime(value, '%Y-%m-%d').date()
                         # Calculate Horolog day number using pre-calculated epoch
                         horolog_days = (date_obj - horolog_epoch).days
-                        row_params.append(horolog_days)
+                        value_parts.append(str(horolog_days))  # Inline integer value
                     except ValueError as e:
                         logger.error(f"Date parsing failed for column '{col_name}', value '{value}': {e}")
                         logger.error(f"Row data: {row_dict}")
                         raise ValueError(f"Invalid date format for column {col_name}: {value} - {e}")
                 else:
-                    # Use parameter for non-date, non-null values
-                    row_params.append(value)
+                    # Inline string value (escape single quotes)
+                    escaped_value = str(value).replace("'", "''")
+                    value_parts.append(f"'{escaped_value}'")
 
-            params_list.append(row_params)
+            values_clause = ', '.join(value_parts)
+            row_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({values_clause})"
 
-        # Execute batch INSERT using executemany() - KEY OPTIMIZATION!
-        try:
-            logger.info("Calling iris_executor.execute_many()",
-                       batch_size=len(params_list),
-                       params_sample=params_list[0] if params_list else None)
+            # Execute individual INSERT (no parameters needed)
+            result = await self.iris_executor.execute_query(row_sql, [])
 
-            result = await self.iris_executor.execute_many(sql, params_list)
-
-            # Check if execution succeeded
             if not result.get('success', False):
                 error_msg = result.get('error', 'Unknown error')
-                logger.error(f"executemany() failed: {error_msg}")
-                logger.error(f"SQL: {sql}")
-                logger.error(f"Batch size: {len(params_list)}")
-                raise RuntimeError(f"executemany() failed: {error_msg}")
+                logger.error(f"INSERT failed: {error_msg}")
+                logger.error(f"SQL: {row_sql}")
+                raise RuntimeError(f"INSERT failed: {error_msg}")
 
-            rows_inserted = result.get('rows_affected', len(params_list))
-            execution_time_ms = result.get('execution_time_ms', 0)
-            throughput = int(rows_inserted / (execution_time_ms / 1000)) if execution_time_ms > 0 else 0
+            rows_inserted += 1
 
-            logger.info(f"✅ executemany() COMPLETE",
-                       rows_inserted=rows_inserted,
-                       execution_time_ms=execution_time_ms,
-                       throughput_rows_per_sec=throughput)
+        execution_time = (time.perf_counter() - start_time) * 1000
+        throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
 
-            return rows_inserted
+        logger.info(f"✅ Batch INSERT complete",
+                   rows_inserted=rows_inserted,
+                   execution_time_ms=execution_time,
+                   throughput_rows_per_sec=throughput)
 
-        except Exception as e:
-            logger.error(f"executemany() batch insert failed: {e}")
-            logger.error(f"SQL: {sql}")
-            logger.error(f"Batch size: {len(params_list)}")
-            raise
+        return rows_inserted
 
     async def _get_column_types(self, table_name: str, column_names: list[str]) -> dict[str, str]:
         """
