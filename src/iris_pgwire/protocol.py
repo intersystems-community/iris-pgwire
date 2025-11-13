@@ -416,6 +416,53 @@ class PGWireProtocol:
 
         return sql
 
+    def infer_parameter_oids_from_casts(self, translated_sql: str, param_count: int) -> list:
+        """
+        Infer PostgreSQL type OIDs from CAST(? AS type) expressions in translated SQL.
+
+        After translate_postgres_parameters() converts $1::int to CAST(? AS INTEGER),
+        this function extracts the IRIS types and maps them back to PostgreSQL OIDs.
+
+        Args:
+            translated_sql: SQL after PostgreSQL→IRIS translation (contains CAST(? AS type))
+            param_count: Number of parameters (? placeholders)
+
+        Returns:
+            List of PostgreSQL type OIDs for each parameter
+        """
+        # Map IRIS types to PostgreSQL OIDs
+        iris_to_pg_oid = {
+            'INTEGER': 23,    # int4
+            'BIGINT': 20,     # int8
+            'SMALLINT': 21,   # int2
+            'VARCHAR': 1043,  # varchar
+            'TEXT': 25,       # text
+            'DOUBLE': 701,    # float8
+            'FLOAT': 700,     # float4
+            'BIT': 16,        # bool
+            'BOOLEAN': 16,    # bool
+            'DATE': 1082,     # date
+            'TIME': 1083,     # time
+            'TIMESTAMP': 1114, # timestamp
+            'NUMERIC': 1700,  # numeric
+            'DECIMAL': 1700,  # numeric
+        }
+
+        # Extract CAST(? AS type) patterns in order
+        param_oids = []
+        pattern = r'CAST\(\?\s+AS\s+(\w+)(?:\([^)]*\))?\)'
+
+        for match in re.finditer(pattern, translated_sql, re.IGNORECASE):
+            iris_type = match.group(1).upper()
+            pg_oid = iris_to_pg_oid.get(iris_type, 705)  # Default to UNKNOWN if type not recognized
+            param_oids.append(pg_oid)
+
+        # If we found fewer CAST expressions than parameters, fill remaining with OID 705 (UNKNOWN)
+        while len(param_oids) < param_count:
+            param_oids.append(705)
+
+        return param_oids[:param_count]  # Ensure we don't return more OIDs than parameters
+
     async def handle_ssl_probe(self, ssl_context: Optional[ssl.SSLContext]):
         """
         P0: Handle SSL probe (first 8 bytes of connection)
@@ -1076,9 +1123,28 @@ class PGWireProtocol:
                 await self.send_deallocate_response(query_upper)
                 return
 
+            # Handle PostgreSQL SET commands (runtime parameter configuration)
+            # IRIS uses different SET syntax (requires OPTION keyword),
+            # so we intercept PostgreSQL-specific SET commands and silently succeed
+            if query_upper.startswith("SET "):
+                await self.handle_set_command(query_upper)
+                return
+
             # P6: Handle COPY commands
             if query_upper.startswith("COPY "):
                 await self.handle_copy_command(query)
+                return
+
+            # CRITICAL: Intercept pg_type catalog queries to prevent asyncpg recursion
+            # asyncpg queries pg_type when it sees OID 0 (unspecified) in ParameterDescription,
+            # using prepared statements which causes infinite recursion.
+            # Solution: Return empty result set for pg_type queries to break the loop.
+            if 'pg_type' in query_upper or 'pg_catalog' in query_upper:
+                logger.info("Intercepting pg_type/pg_catalog query to prevent recursion",
+                           connection_id=self.connection_id,
+                           query_preview=query[:100])
+                # Send empty result set (RowDescription + CommandComplete + ReadyForQuery)
+                await self.send_empty_pg_catalog_result()
                 return
 
             # For now, bypass SQL translation to test core query execution
@@ -1140,7 +1206,7 @@ class PGWireProtocol:
             # CRITICAL: Send ReadyForQuery after exception in Simple Query Protocol
             await self.send_ready_for_query()
 
-    async def send_query_result(self, result: Dict[str, Any], send_ready: bool = True):
+    async def send_query_result(self, result: Dict[str, Any], send_ready: bool = True, send_row_description: bool = True):
         """
         Send query results from IRIS execution.
 
@@ -1148,25 +1214,51 @@ class PGWireProtocol:
             result: Query result dictionary from IRIS executor
             send_ready: If True, send ReadyForQuery (Simple Query Protocol).
                        If False, omit ReadyForQuery (Extended Protocol - Sync will send it)
+            send_row_description: If True, send RowDescription before DataRows.
+                                 If False, skip RowDescription (already sent in Describe for Extended Protocol)
         """
         try:
             rows = result.get('rows', [])
             columns = result.get('columns', [])
-            command = result.get('command', 'SELECT')
+            # CRITICAL: Use command_tag (from iris_executor) with fallback to command
+            command = result.get('command_tag', result.get('command', 'SELECT'))
             row_count = result.get('row_count', 0)
 
-            logger.debug("Sending query result",
+            logger.info("Sending query result - DETAILED DEBUG",
                         connection_id=self.connection_id,
                         command=command,
                         row_count=row_count,
                         column_count=len(columns),
                         has_rows=len(rows) > 0,
-                        send_ready=send_ready)
+                        rows_is_truthy=bool(rows),
+                        columns_is_truthy=bool(columns),
+                        send_ready=send_ready,
+                        rows_sample=rows[:1] if rows else None,
+                        columns_sample=columns[:3] if columns else None)
 
-            # If we have rows, send RowDescription and DataRows with back-pressure
-            if rows and columns:
+            # Send RowDescription for SELECT queries (ALWAYS, even if empty result set)
+            # PostgreSQL protocol requires RowDescription for all SELECT queries
+            if columns and send_row_description:
+                logger.info("🔵 STEP 1: About to send RowDescription",
+                           connection_id=self.connection_id,
+                           column_count=len(columns),
+                           row_count=len(rows))
                 await self.send_row_description(columns)
+                logger.info("🔵 STEP 2: RowDescription sent",
+                           connection_id=self.connection_id)
+            elif columns and not send_row_description:
+                logger.info("🔵 STEP 1 (SKIPPED): RowDescription already sent by Describe",
+                           connection_id=self.connection_id,
+                           column_count=len(columns))
+
+            # Send DataRows if we have any rows
+            if rows and columns:
+                logger.info("🔵 STEP 2: About to send DataRows",
+                           connection_id=self.connection_id,
+                           row_count=len(rows))
                 await self.send_data_rows_with_backpressure(rows, columns)
+                logger.info("🔵 STEP 3: DataRows sent",
+                           connection_id=self.connection_id)
 
             # Send CommandComplete
             if command.upper() == 'SELECT':
@@ -1176,8 +1268,13 @@ class PGWireProtocol:
 
             cmd_complete_length = 4 + len(tag)
             cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+            logger.info("🔵 STEP 4: About to send CommandComplete",
+                       connection_id=self.connection_id,
+                       tag=tag.decode('utf-8', errors='replace').rstrip('\x00'))
             self.writer.write(cmd_complete)
             await self.writer.drain()
+            logger.info("🔵 STEP 5: CommandComplete sent and drained",
+                       connection_id=self.connection_id)
 
             # CRITICAL: For Extended Protocol, give time for Sync message to arrive
             # Without this, rapid return to message loop can miss the Sync message
@@ -1204,7 +1301,7 @@ class PGWireProtocol:
     async def send_row_description(self, columns: List[Dict[str, Any]]):
         """Send RowDescription message for query columns"""
         field_count = len(columns)
-        logger.debug("Row description", field_count=field_count, columns=columns)
+        logger.info("🔴 SEND_ROW_DESCRIPTION CALLED", field_count=field_count, columns=columns[:2])
 
         # Ensure field_count is valid
         if field_count < 0 or field_count > 65535:
@@ -1212,24 +1309,55 @@ class PGWireProtocol:
 
         row_desc_data = struct.pack('!cIH', MSG_ROW_DESCRIPTION, 0, field_count)  # Length will be updated
 
-        # Get type mappings from IRIS executor
+        # Get type mappings from IRIS executor (fallback if columns don't have OID info)
         type_mappings = self.iris_executor.get_iris_type_mapping()
 
         for col in columns:
             name = col.get('name', 'unknown')
-            iris_type = col.get('type', 'VARCHAR').upper()
+            # CRITICAL: Lowercase column names for PostgreSQL compatibility
+            # PostgreSQL clients expect lowercase unless explicitly quoted
+            if isinstance(name, str):
+                name = name.lower()
 
-            # Map IRIS type to PostgreSQL type
-            pg_type = type_mappings.get(iris_type, type_mappings['VARCHAR'])
+            # CRITICAL FIX: Use type_oid, type_size, type_modifier if already present
+            # (IRIS executor may have already done the type mapping)
+            if 'type_oid' in col:
+                # Use pre-computed PostgreSQL type info from executor
+                type_oid = col['type_oid']
+                # Handle None values from executor - struct.pack requires integers
+                type_size = col.get('type_size') or -1
+                type_modifier = col.get('type_modifier') or -1
+                format_code = col.get('format_code', 0)
+
+                logger.info("🟢 Using pre-computed type info from executor",
+                           name=name, type_oid=type_oid, type_size=type_size)
+            else:
+                # Fallback: Map IRIS type to PostgreSQL type
+                iris_type = col.get('type', 'VARCHAR').upper()
+                pg_type = type_mappings.get(iris_type, type_mappings['VARCHAR'])
+
+                type_oid = pg_type['oid']
+                type_size = pg_type['typlen']
+                type_modifier = -1
+                format_code = 0
+
+                logger.warning("⚠️ Falling back to type mapping",
+                             name=name, iris_type=iris_type, mapped_oid=type_oid)
 
             field_name = name.encode('utf-8') + b'\x00'
             field_info = struct.pack('!IHIhiH',
                                    0,  # table_oid
                                    0,  # column_attr_number
-                                   pg_type['oid'],  # type_oid ('I' - 32-bit unsigned)
-                                   pg_type['typlen'],  # type_size ('h' - 16-bit signed, allows -1)
-                                   -1,  # type_modifier ('i' - 32-bit signed)
-                                   0)  # format_code ('H' - 16-bit unsigned)
+                                   type_oid,  # type_oid ('I' - 32-bit unsigned)
+                                   type_size,  # type_size ('h' - 16-bit signed, allows -1)
+                                   type_modifier,  # type_modifier ('i' - 32-bit signed)
+                                   format_code)  # format_code ('H' - 16-bit unsigned)
+
+            logger.info("🔵 Field info packed",
+                       name=name,
+                       field_name_length=len(field_name),
+                       field_info_length=len(field_info),
+                       field_info_hex=field_info.hex())
 
             row_desc_data += field_name + field_info
 
@@ -1237,8 +1365,20 @@ class PGWireProtocol:
         total_length = len(row_desc_data) - 1  # Subtract the message type byte
         row_desc_data = row_desc_data[:1] + struct.pack('!I', total_length) + row_desc_data[5:]
 
+        logger.info("📤 Sending RowDescription message",
+                   total_message_length=len(row_desc_data),
+                   message_hex_preview=row_desc_data[:30].hex(),
+                   field_count=field_count)
+
+        logger.info("📤 STEP A: Writing RowDescription to stream",
+                   connection_id=self.connection_id,
+                   bytes_to_write=len(row_desc_data))
         self.writer.write(row_desc_data)
+        logger.info("📤 STEP B: RowDescription written, about to drain",
+                   connection_id=self.connection_id)
         await self.writer.drain()
+        logger.info("📤 STEP C: RowDescription drained - message sent to client",
+                   connection_id=self.connection_id)
 
     async def send_data_row(self, row: List[Any], columns: List[Dict[str, Any]]):
         """Send DataRow message for a single row"""
@@ -1259,10 +1399,159 @@ class PGWireProtocol:
                 # NULL value
                 data_row_data += struct.pack('!I', 0xFFFFFFFF)  # -1 indicates NULL
             else:
-                # Convert value to string and encode
-                value_str = str(value)
-                value_bytes = value_str.encode('utf-8')
-                data_row_data += struct.pack('!I', len(value_bytes)) + value_bytes
+                # Determine format code for this column
+                # If result_formats is empty, default to text (0)
+                # If single format, apply to all columns
+                # If per-column formats, use specific format for this column
+                result_formats = getattr(self, '_current_result_formats', [])
+                if not result_formats:
+                    format_code = 0  # Default to text
+                elif len(result_formats) == 1:
+                    format_code = result_formats[0]  # Single format for all columns
+                elif i < len(result_formats):
+                    format_code = result_formats[i]  # Per-column format
+                else:
+                    format_code = 0  # Fallback to text
+
+                if format_code == 0:
+                    # Text format - use PostgreSQL text conventions
+                    type_oid = col.get('type_oid', 25)
+
+                    # Special handling for boolean - PostgreSQL uses 't'/'f', not 'True'/'False' or '1'/'0'
+                    if type_oid == 16:  # BOOL
+                        if value in (1, '1', True, 't', 'true', 'TRUE'):
+                            value_str = 't'
+                        elif value in (0, '0', False, 'f', 'false', 'FALSE'):
+                            value_str = 'f'
+                        else:
+                            value_str = 't' if value else 'f'
+                    else:
+                        value_str = str(value)
+
+                    value_bytes = value_str.encode('utf-8')
+                    data_row_data += struct.pack('!I', len(value_bytes)) + value_bytes
+                elif format_code == 1:
+                    # Binary format - encode based on PostgreSQL type OID
+                    type_oid = col.get('type_oid', 25)  # Default to TEXT (25)
+
+                    try:
+                        if type_oid == 23:  # INT4
+                            binary_data = struct.pack('!i', int(value))
+                        elif type_oid == 21:  # INT2 (smallint)
+                            binary_data = struct.pack('!h', int(value))
+                        elif type_oid == 20:  # INT8 (bigint)
+                            binary_data = struct.pack('!q', int(value))
+                        elif type_oid == 700:  # FLOAT4
+                            binary_data = struct.pack('!f', float(value))
+                        elif type_oid == 701:  # FLOAT8 (double)
+                            binary_data = struct.pack('!d', float(value))
+                        elif type_oid == 16:  # BOOL
+                            binary_data = struct.pack('!?', bool(value))
+                        elif type_oid == 1700:  # NUMERIC/DECIMAL
+                            # PostgreSQL NUMERIC binary format:
+                            # https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/numeric.c
+                            # struct NumericData {
+                            #     int16 ndigits;  // number of base-10000 digits
+                            #     int16 weight;   // weight of first digit (10000^weight)
+                            #     int16 sign;     // 0x0000=positive, 0x4000=negative, 0xC000=NaN
+                            #     int16 dscale;   // display scale (digits after decimal point)
+                            #     int16 digits[]; // base-10000 digits
+                            # }
+                            from decimal import Decimal
+                            if isinstance(value, Decimal):
+                                # Convert Decimal to PostgreSQL binary NUMERIC format
+                                dec_str = str(value)
+                                is_negative = dec_str.startswith('-')
+                                dec_str = dec_str.lstrip('-')
+
+                                # Split into integer and fractional parts
+                                if '.' in dec_str:
+                                    int_part, frac_part = dec_str.split('.')
+                                    dscale = len(frac_part)
+                                else:
+                                    int_part = dec_str
+                                    frac_part = ''
+                                    dscale = 0
+
+                                # PostgreSQL NUMERIC splits digits at decimal point
+                                # Integer part: pad left, fractional part: pad right
+                                # Example: 3.14 → int_part='3' frac_part='14'
+                                #   int groups: ['0003'] → [3]
+                                #   frac groups: ['1400'] → [1400]
+                                #   combined: [3, 1400] with weight=0
+
+                                # Process integer part (pad on LEFT to make groups of 4)
+                                if int_part == '0' or not int_part:
+                                    int_groups = []
+                                    int_weight = -1
+                                else:
+                                    int_padding = (4 - len(int_part) % 4) % 4
+                                    int_padded = '0' * int_padding + int_part
+                                    int_groups = []
+                                    for i in range(0, len(int_padded), 4):
+                                        int_groups.append(int(int_padded[i:i+4]))
+                                    # Remove leading zeros
+                                    while int_groups and int_groups[0] == 0:
+                                        int_groups.pop(0)
+                                    int_weight = len(int_groups) - 1
+
+                                # Process fractional part (pad on RIGHT to make groups of 4)
+                                if frac_part:
+                                    frac_padding = (4 - len(frac_part) % 4) % 4
+                                    frac_padded = frac_part + '0' * frac_padding
+                                    frac_groups = []
+                                    for i in range(0, len(frac_padded), 4):
+                                        frac_groups.append(int(frac_padded[i:i+4]))
+                                    # Remove trailing zeros
+                                    while frac_groups and frac_groups[-1] == 0:
+                                        frac_groups.pop()
+                                else:
+                                    frac_groups = []
+
+                                # Combine integer and fractional parts
+                                digits_10000 = int_groups + frac_groups
+                                weight = int_weight if int_groups else -len(frac_groups)
+
+                                ndigits = len(digits_10000)
+                                sign = 0x4000 if is_negative else 0x0000
+
+                                # Pack into PostgreSQL binary format
+                                binary_data = struct.pack('!hhhh', ndigits, weight, sign, dscale)
+                                for digit in digits_10000:
+                                    binary_data += struct.pack('!H', digit)
+                            else:
+                                # Fallback for non-Decimal values
+                                binary_data = str(value).encode('utf-8')
+                        else:
+                            # Fallback to text for unknown types
+                            binary_data = str(value).encode('utf-8')
+
+                        data_row_data += struct.pack('!I', len(binary_data)) + binary_data
+
+                        logger.debug("Binary encoded column",
+                                   column_index=i,
+                                   type_oid=type_oid,
+                                   value=value,
+                                   binary_length=len(binary_data))
+
+                    except (ValueError, struct.error) as e:
+                        # If binary encoding fails, fallback to text
+                        logger.warning("Binary encoding failed, falling back to text",
+                                     column_index=i,
+                                     type_oid=type_oid,
+                                     value=value,
+                                     error=str(e))
+                        value_str = str(value)
+                        value_bytes = value_str.encode('utf-8')
+                        data_row_data += struct.pack('!I', len(value_bytes)) + value_bytes
+                else:
+                    # Unknown format code - default to text
+                    logger.warning("Unknown format code, defaulting to text",
+                                 format_code=format_code,
+                                 column_index=i)
+                    value_str = str(value)
+                    value_bytes = value_str.encode('utf-8')
+                    data_row_data += struct.pack('!I', len(value_bytes)) + value_bytes
 
         # Update length
         total_length = len(data_row_data) - 1  # Subtract the message type byte
@@ -1403,6 +1692,168 @@ class PGWireProtocol:
                     connection_id=self.connection_id,
                     command=command)
 
+    async def handle_set_command(self, command: str):
+        """Handle PostgreSQL SET commands
+
+        PostgreSQL clients send SET commands to configure runtime parameters.
+        IRIS uses different syntax (SET OPTION parameter = value) vs PostgreSQL (SET parameter = value).
+
+        We intercept common PostgreSQL SET commands and silently succeed to maintain compatibility.
+
+        Common PostgreSQL SET commands from drivers:
+        - SET EXTRA_FLOAT_DIGITS = X (JDBC driver initialization - CRITICAL blocker)
+        - SET application_name = 'X' (driver identification)
+        - SET client_encoding = 'X' (character encoding)
+        - SET DateStyle = 'X' (date format preference)
+        - SET TimeZone = 'X' (timezone configuration)
+        """
+        try:
+            # Parse SET command to extract parameter name
+            # Format: "SET parameter = value" or "SET parameter TO value"
+            command_clean = command.strip()
+
+            # Extract parameter name (everything between SET and = or TO)
+            import re
+            match = re.match(r'SET\s+(\w+)(?:\s+(?:=|TO)\s+(.+))?', command_clean, re.IGNORECASE)
+
+            if match:
+                param_name = match.group(1)
+                param_value = match.group(2) if match.group(2) else None
+
+                logger.info("PostgreSQL SET command intercepted",
+                           connection_id=self.connection_id,
+                           parameter=param_name,
+                           value=param_value[:50] if param_value and len(param_value) > 50 else param_value)
+
+                # Send success response for all SET commands
+                # PostgreSQL clients expect success for runtime parameter configuration
+                await self.send_set_response(param_name, param_value)
+            else:
+                # Malformed SET command - send error
+                await self.send_error_response(
+                    "ERROR", "42601", "syntax_error",
+                    f"Invalid SET command syntax: {command_clean}"
+                )
+                await self.send_ready_for_query()
+
+        except Exception as e:
+            logger.error("SET command handling failed",
+                        connection_id=self.connection_id,
+                        error=str(e),
+                        command=command)
+            await self.send_error_response(
+                "ERROR", "08000", "connection_exception",
+                f"SET command processing failed: {e}"
+            )
+            await self.send_ready_for_query()
+
+    async def send_set_response(self, param_name: str, param_value: str = None):
+        """Send response for SET commands (PostgreSQL runtime parameter configuration)
+
+        IRIS uses different SET syntax, so we silently succeed for PostgreSQL SET commands.
+        This is critical for JDBC driver compatibility (sends SET EXTRA_FLOAT_DIGITS during connection init).
+        """
+        # CommandComplete: C + length + tag
+        # Use "SET" to indicate success
+        tag = 'SET\x00'.encode()
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+
+        # Send message
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+
+        # Send ReadyForQuery
+        await self.send_ready_for_query()
+
+        logger.debug("SET response sent (silently succeeded)",
+                    connection_id=self.connection_id,
+                    parameter=param_name,
+                    value=param_value)
+
+    async def send_set_response_extended_protocol(self):
+        """Send response for SET commands in Extended Protocol (Parse/Bind/Execute/Sync)
+
+        CRITICAL: Extended Protocol does NOT send ReadyForQuery in Execute handler.
+        The Sync message handler will send ReadyForQuery after all Execute messages.
+
+        This is essential for JDBC driver compatibility (SET EXTRA_FLOAT_DIGITS during connection init).
+        """
+        # Send CommandComplete: C + length + tag
+        tag = 'SET\x00'.encode()
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+
+        # DO NOT send ReadyForQuery here - Extended Protocol sends it in Sync handler
+
+        logger.debug("SET response sent (Extended Protocol, no ReadyForQuery)",
+                    connection_id=self.connection_id)
+
+    async def send_transaction_response_extended_protocol(self, command: str):
+        """Send response for transaction commands in Extended Protocol (Parse/Bind/Execute/Sync)
+
+        CRITICAL: Extended Protocol does NOT send ReadyForQuery in Execute handler.
+        The Sync message handler will send ReadyForQuery after all Execute messages.
+
+        This fixes JDBC transaction tests by handling BEGIN/COMMIT/ROLLBACK via Extended Protocol.
+        """
+        # Send CommandComplete: C + length + tag
+        tag = f'{command}\x00'.encode()
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+
+        # Update transaction status
+        if command == "BEGIN":
+            self.transaction_status = STATUS_IN_TRANSACTION
+        else:  # COMMIT or ROLLBACK
+            self.transaction_status = STATUS_IDLE
+
+        # DO NOT send ReadyForQuery here - Extended Protocol sends it in Sync handler
+
+        logger.debug("Transaction response sent (Extended Protocol, no ReadyForQuery)",
+                    connection_id=self.connection_id,
+                    command=command,
+                    status=self.transaction_status.decode())
+
+    async def send_empty_pg_catalog_result(self):
+        """Send empty result set for pg_type/pg_catalog queries
+
+        This method intercepts asyncpg's type introspection queries to prevent
+        infinite recursion. When asyncpg sees OID 0 (unspecified) in ParameterDescription,
+        it queries pg_type catalog using prepared statements, which causes recursion.
+
+        By returning an empty result set, we break the recursion loop and allow
+        asyncpg to fall back to its default type handling (which uses binary encoding).
+
+        Protocol Response Sequence:
+        1. RowDescription (T) with 0 fields
+        2. CommandComplete (C) with "SELECT 0"
+        3. ReadyForQuery (Z)
+        """
+        # Send RowDescription with 0 fields (indicates empty result set)
+        row_desc_data = struct.pack('!cIH', MSG_ROW_DESCRIPTION, 4 + 2, 0)  # 0 fields
+        self.writer.write(row_desc_data)
+        await self.writer.drain()
+
+        # Send CommandComplete: SELECT 0 (no rows returned)
+        tag = 'SELECT 0\x00'.encode()
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+
+        # Send ReadyForQuery
+        await self.send_ready_for_query()
+
+        logger.info("Sent empty pg_catalog result to prevent recursion",
+                   connection_id=self.connection_id)
+
     # P2: Extended Protocol Message Handlers
 
     async def handle_parse_message(self, body: bytes):
@@ -1436,6 +1887,166 @@ class PGWireProtocol:
             # This must happen BEFORE translation to avoid IRIS SQL errors with $1 syntax
             query = self.translate_postgres_parameters(query)
 
+            # Handle empty queries (JDBC connection validation)
+            # JDBC driver sends empty Parse/Bind/Execute after SET commands for connection validation
+            if not query or query.strip() == '':
+                logger.info("Empty query in Parse phase - JDBC connection validation",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name)
+
+                # Store empty prepared statement marker
+                self.prepared_statements[statement_name] = {
+                    'original_query': '',
+                    'translated_query': '',
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_empty_query': True  # Marker for Execute phase
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
+            # CRITICAL: Intercept pg_type/pg_catalog queries in Extended Protocol
+            # asyncpg uses prepared statements to query pg_type for type introspection,
+            # which causes infinite recursion when we send OID 0 in ParameterDescription.
+            # Solution: Mark these queries and return empty results in Execute phase.
+            query_upper = query.upper().strip().rstrip(';')
+            if 'pg_type' in query_upper or 'pg_catalog' in query_upper:
+                logger.info("Intercepting pg_type/pg_catalog query in Parse phase",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name,
+                           query_preview=query[:100])
+
+                # Store a marker prepared statement (will return empty result in Execute)
+                self.prepared_statements[statement_name] = {
+                    'original_query': query,
+                    'translated_query': query,
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_pg_catalog_query': True  # Marker for Execute phase
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
+            # Handle PostgreSQL SET commands in Parse phase
+            # JDBC driver uses Extended Protocol, so we must intercept SET during Parse
+            # to prevent translation failures and empty query storage
+            query_upper = query.upper().strip().rstrip(';')
+            if query_upper.startswith("SET "):
+                logger.info("PostgreSQL SET command intercepted in Parse phase",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name,
+                           query=query[:100])
+
+                # Store a marker prepared statement (will be handled in Execute)
+                self.prepared_statements[statement_name] = {
+                    'original_query': query,
+                    'translated_query': query,  # Keep as-is for Execute handler
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_set_command': True  # Marker for Execute phase
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
+            # Handle PostgreSQL transaction commands in Parse phase (Feature 022)
+            # JDBC driver uses Extended Protocol for transactions (setAutoCommit(false) → BEGIN)
+            # CRITICAL: Must intercept BEGIN/COMMIT/ROLLBACK during Parse, not Execute
+            if query_upper in ("BEGIN", "START TRANSACTION", "BEGIN WORK", "BEGIN TRANSACTION"):
+                logger.info("PostgreSQL transaction command intercepted in Parse phase",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name,
+                           command="BEGIN")
+
+                # Store a marker prepared statement (will be handled in Execute)
+                self.prepared_statements[statement_name] = {
+                    'original_query': query,
+                    'translated_query': query,
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_transaction_command': True,
+                        'transaction_type': 'BEGIN'
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
+            if query_upper in ("COMMIT", "COMMIT WORK", "COMMIT TRANSACTION", "END"):
+                logger.info("PostgreSQL transaction command intercepted in Parse phase",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name,
+                           command="COMMIT")
+
+                # Store a marker prepared statement (will be handled in Execute)
+                self.prepared_statements[statement_name] = {
+                    'original_query': query,
+                    'translated_query': query,
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_transaction_command': True,
+                        'transaction_type': 'COMMIT'
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
+            if query_upper in ("ROLLBACK", "ROLLBACK WORK", "ROLLBACK TRANSACTION"):
+                logger.info("PostgreSQL transaction command intercepted in Parse phase",
+                           connection_id=self.connection_id,
+                           statement_name=statement_name,
+                           command="ROLLBACK")
+
+                # Store a marker prepared statement (will be handled in Execute)
+                self.prepared_statements[statement_name] = {
+                    'original_query': query,
+                    'translated_query': query,
+                    'param_types': [],
+                    'translation_metadata': {
+                        'constructs_translated': 0,
+                        'translation_time_ms': 0.0,
+                        'cache_hit': False,
+                        'warnings': [],
+                        'is_transaction_command': True,
+                        'transaction_type': 'ROLLBACK'
+                    }
+                }
+
+                # Send ParseComplete response
+                await self.send_parse_complete()
+                return
+
             # Parse parameter types count
             if pos + 2 > len(body):
                 raise ValueError("Invalid Parse message: missing parameter count")
@@ -1451,8 +2062,31 @@ class PGWireProtocol:
                 param_types.append(param_type)
                 pos += 4
 
-            # Translate SQL for prepared statement
+            # Translate SQL for prepared statement FIRST
+            # We need the translated SQL to infer parameter types from CAST() expressions
             translation_result = await self.translate_sql(query, session_id=f"conn_{self.connection_id}_stmt_{statement_name}")
+
+            # CRITICAL FIX: If client sends 0 parameter types (asyncpg behavior),
+            # infer parameter count and types from query placeholders and CAST() expressions
+            if num_params == 0 and '?' in translation_result['translated_sql']:
+                inferred_param_count = translation_result['translated_sql'].count('?')
+                logger.info("Inferring parameter count from query placeholders",
+                           connection_id=self.connection_id,
+                           query_preview=query[:100],
+                           inferred_count=inferred_param_count)
+
+                # NEW: Infer parameter OIDs from CAST(? AS type) expressions
+                # If query has explicit type casts (e.g., $1::int becomes CAST(? AS INTEGER)),
+                # we can determine the correct PostgreSQL OID (e.g., 23 for INTEGER)
+                param_types = self.infer_parameter_oids_from_casts(
+                    translation_result['translated_sql'],
+                    inferred_param_count
+                )
+
+                logger.info("Inferred parameter types from CAST expressions",
+                           connection_id=self.connection_id,
+                           param_types=[f"OID {oid}" for oid in param_types],
+                           translated_query=translation_result['translated_sql'][:150])
 
             if not translation_result['success']:
                 logger.warning("SQL translation failed for prepared statement",
@@ -1581,8 +2215,21 @@ class PGWireProtocol:
                         format_code = 0  # Default to text
 
                     if format_code == 0:
-                        # Text format
-                        param_values.append(param_data.decode('utf-8'))
+                        # Text format - decode and try to preserve numeric types
+                        text_value = param_data.decode('utf-8')
+
+                        # Try to convert to int or float if it looks numeric
+                        # This handles asyncpg sending integers as text when param type is UNKNOWN
+                        try:
+                            # Try int first
+                            if '.' not in text_value and 'e' not in text_value.lower():
+                                param_values.append(int(text_value))
+                            else:
+                                # Try float
+                                param_values.append(float(text_value))
+                        except (ValueError, TypeError):
+                            # Not a number, keep as string
+                            param_values.append(text_value)
                     elif format_code == 1:
                         # Binary format - decode based on parameter type OID
                         # Get parameter type OID from prepared statement (0 if not available)
@@ -1594,13 +2241,41 @@ class PGWireProtocol:
 
                     pos += param_length
 
-            # Skip result format codes for now (we'll always use text)
-            # In a full implementation, we'd parse these too
+            # Parse result format codes (CRITICAL for asyncpg binary format support)
+            # Format: num_result_format_codes (Int16) + result_format_codes (Int16 array)
+            # If num=0: all text; if num=1: single format for all columns; if num=N: per-column formats
+            result_formats = []
+            if pos + 2 <= len(body):
+                num_result_formats = struct.unpack('!H', body[pos:pos+2])[0]
+                pos += 2
 
-            # Store portal
+                if num_result_formats > 0:
+                    for i in range(num_result_formats):
+                        if pos + 2 <= len(body):
+                            format_code = struct.unpack('!H', body[pos:pos+2])[0]
+                            result_formats.append(format_code)
+                            pos += 2
+                        else:
+                            logger.warning("Truncated result format codes",
+                                         connection_id=self.connection_id,
+                                         expected=num_result_formats, got=i)
+                            break
+
+                logger.info("Parsed result format codes",
+                           connection_id=self.connection_id,
+                           portal_name=portal_name,
+                           num_formats=num_result_formats,
+                           formats=result_formats)
+            else:
+                # No format codes specified - default to text (0)
+                logger.debug("No result format codes in Bind message - defaulting to text",
+                            connection_id=self.connection_id)
+
+            # Store portal with result format codes
             self.portals[portal_name] = {
                 'statement': statement_name,
-                'params': param_values
+                'params': param_values,
+                'result_formats': result_formats  # Store for use in send_data_row
             }
 
             logger.info("Bound portal",
@@ -1642,20 +2317,125 @@ class PGWireProtocol:
 
                 stmt = self.prepared_statements[name]
 
-                # Send ParameterDescription
+                # Send ParameterDescription with parameter type OIDs
                 await self.send_parameter_description(stmt['param_types'])
 
-                # For SELECT statements, we'd send RowDescription
-                # For now, send NoData for simplicity
-                await self.send_no_data()
+                # For SELECT/SHOW statements, send RowDescription with column metadata
+                # For DDL/DML statements, send NoData
+                query = stmt.get('translated_query', stmt.get('query', ''))
+                query_upper = query.strip().upper()
+
+                logger.info("🔍 Describe Statement: Checking query type",
+                           connection_id=self.connection_id,
+                           statement_name=name,
+                           query_preview=query[:100],
+                           is_select=query_upper.startswith('SELECT'),
+                           is_show=query_upper.startswith('SHOW'))
+
+                if query_upper.startswith('SELECT') or query_upper.startswith('SHOW'):
+                    # Execute metadata discovery to get column information
+                    # Use LIMIT 0 pattern to avoid fetching actual data
+                    try:
+                        logger.info("🔍 Describe Statement: Executing metadata discovery",
+                                   connection_id=self.connection_id,
+                                   query=query[:150])
+
+                        # Execute the query to discover column metadata
+                        # NOTE: We're not using LIMIT 0 wrapper because IRIS may not support it
+                        # Instead, we'll execute the full query but only need the metadata
+
+                        # CRITICAL: If statement has parameters, supply dummy values for metadata discovery
+                        param_count = stmt['param_types'] if isinstance(stmt.get('param_types'), int) else len(stmt.get('param_types', []))
+                        dummy_params = [None] * param_count  # Use NULL for all parameters
+
+                        logger.info("🔍 Describe Statement: Using dummy parameters for metadata",
+                                   connection_id=self.connection_id,
+                                   param_count=param_count)
+
+                        result = await self.iris_executor.execute_query(query, params=dummy_params)
+
+                        if result.get('success') and result.get('columns'):
+                            await self.send_row_description(result['columns'])
+                            logger.info("✅ Sent RowDescription for statement Describe",
+                                       connection_id=self.connection_id,
+                                       statement_name=name,
+                                       column_count=len(result['columns']),
+                                       columns=[c['name'] for c in result['columns']])
+                        else:
+                            logger.warning("Metadata discovery returned no columns",
+                                         connection_id=self.connection_id,
+                                         result_keys=list(result.keys()) if result else None)
+                            await self.send_no_data()
+
+                    except Exception as e:
+                        logger.warning("Failed to get column metadata for statement Describe",
+                                     connection_id=self.connection_id,
+                                     statement_name=name,
+                                     error=str(e))
+                        # Fall back to NoData on error
+                        await self.send_no_data()
+                else:
+                    # Non-SELECT queries (DDL/DML) return NoData
+                    logger.info("🔍 Describe Statement: Non-SELECT query, sending NoData",
+                               connection_id=self.connection_id,
+                               query_type=query_upper.split()[0] if query_upper else 'UNKNOWN')
+                    await self.send_no_data()
 
             elif describe_type == 'P':
                 # Describe portal
+                logger.info("🔍🔍🔍 DESCRIBE PORTAL START",
+                           connection_id=self.connection_id,
+                           portal_name=name)
+
                 if name not in self.portals:
                     raise ValueError(f"Portal '{name}' does not exist")
 
-                # Send RowDescription or NoData
-                await self.send_no_data()
+                # For Extended Protocol, we need to describe the result columns
+                # We'll execute the query to get column metadata, then send RowDescription
+                portal = self.portals[name]
+                statement_name = portal['statement']
+
+                logger.info("🔍🔍🔍 PORTAL FOUND",
+                           connection_id=self.connection_id,
+                           portal_name=name,
+                           statement_name=statement_name,
+                           has_statement=statement_name in self.prepared_statements)
+
+                if statement_name in self.prepared_statements:
+                    stmt = self.prepared_statements[statement_name]
+                    query = stmt.get('translated_query', stmt.get('query', ''))
+
+                    # Check if this is a SELECT or SHOW query that returns rows
+                    # SHOW commands also return result sets and need RowDescription
+                    query_upper = query.strip().upper()
+                    logger.info("🔍 Describe: Checking query type",
+                               query_upper_preview=query_upper[:100],
+                               is_select=query_upper.startswith('SELECT'),
+                               is_show=query_upper.startswith('SHOW'))
+                    if query_upper.startswith('SELECT') or query_upper.startswith('SHOW'):
+                        # Execute query to get column metadata
+                        logger.info("🔍 Describe: Executing query to get column metadata",
+                                   query=query[:100])
+                        try:
+                            # CRITICAL: Use empty list [] as default, not None
+                            result = await self.iris_executor.execute_query(query, params=portal.get('params', []))
+                            if result.get('success') and result.get('columns'):
+                                await self.send_row_description(result['columns'])
+                                logger.info("Sent RowDescription for portal Describe",
+                                          connection_id=self.connection_id,
+                                          portal_name=name,
+                                          column_count=len(result['columns']))
+                            else:
+                                await self.send_no_data()
+                        except Exception as e:
+                            logger.warning("Failed to get column metadata for Describe",
+                                         connection_id=self.connection_id, error=str(e))
+                            await self.send_no_data()
+                    else:
+                        # Non-SELECT queries return NoData
+                        await self.send_no_data()
+                else:
+                    await self.send_no_data()
 
             else:
                 raise ValueError(f"Invalid describe type: {describe_type}")
@@ -1701,6 +2481,15 @@ class PGWireProtocol:
             portal = self.portals[portal_name]
             statement_name = portal['statement']
             params = portal['params']
+            result_formats = portal.get('result_formats', [])  # Get result format codes from Bind
+
+            # Store result formats for send_data_row to use during Execute
+            # This enables binary format support for asyncpg and other drivers
+            self._current_result_formats = result_formats
+            logger.info("Execute: Using result formats from portal",
+                        connection_id=self.connection_id,
+                        portal_name=portal_name,
+                        result_formats=result_formats)
 
             if statement_name not in self.prepared_statements:
                 raise ValueError(f"Statement '{statement_name}' no longer exists")
@@ -1718,6 +2507,78 @@ class PGWireProtocol:
                        constructs_translated=translation_metadata.get('constructs_translated', 0),
                        cache_hit=translation_metadata.get('cache_hit', False))
 
+            # Handle empty queries (JDBC connection validation)
+            # JDBC driver sends empty Parse/Bind/Execute after SET commands
+            is_empty_query = translation_metadata.get('is_empty_query', False)
+            if is_empty_query or not query or query.strip() == '':
+                logger.info("Empty query in Execute phase - sending CommandComplete",
+                           connection_id=self.connection_id,
+                           portal_name=portal_name)
+                # For empty queries, just send CommandComplete (no NoData, no RowDescription)
+                # JDBC driver expects this for connection validation
+                tag = 'SELECT 0\x00'.encode()
+                cmd_complete_length = 4 + len(tag)
+                cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+                self.writer.write(cmd_complete)
+                await self.writer.drain()
+                return
+
+            # Handle PostgreSQL SET commands in Extended Protocol
+            # JDBC driver uses Extended Protocol for SET commands during connection init
+            # Check both the marker from Parse phase and the query itself
+            is_set_command = translation_metadata.get('is_set_command', False)
+            query_upper = query.upper().strip().rstrip(';')
+            if is_set_command or query_upper.startswith("SET "):
+                logger.info("PostgreSQL SET command intercepted in Execute phase",
+                           connection_id=self.connection_id,
+                           query=query[:100] if query else "(empty after Parse interception)")
+                # Send success response for SET commands
+                await self.send_set_response_extended_protocol()
+                return
+
+            # Handle PostgreSQL transaction commands in Extended Protocol (Feature 022)
+            # JDBC driver uses Extended Protocol for transactions (setAutoCommit(false) → BEGIN)
+            # Check marker from Parse phase
+            is_transaction_command = translation_metadata.get('is_transaction_command', False)
+            if is_transaction_command:
+                transaction_type = translation_metadata.get('transaction_type')
+                logger.info("PostgreSQL transaction command intercepted in Execute phase",
+                           connection_id=self.connection_id,
+                           transaction_type=transaction_type)
+
+                if transaction_type == 'BEGIN':
+                    await self.iris_executor.begin_transaction()
+                    await self.send_transaction_response_extended_protocol('BEGIN')
+                elif transaction_type == 'COMMIT':
+                    await self.iris_executor.commit_transaction()
+                    await self.send_transaction_response_extended_protocol('COMMIT')
+                elif transaction_type == 'ROLLBACK':
+                    await self.iris_executor.rollback_transaction()
+                    await self.send_transaction_response_extended_protocol('ROLLBACK')
+                return
+
+            # CRITICAL: Handle pg_type/pg_catalog queries in Extended Protocol
+            # asyncpg queries pg_type using prepared statements when it sees OID 0,
+            # which would cause infinite recursion. We intercept in Parse phase and
+            # return empty results here in Execute phase to break the loop.
+            is_pg_catalog_query = translation_metadata.get('is_pg_catalog_query', False)
+            if is_pg_catalog_query:
+                logger.info("pg_type/pg_catalog query intercepted in Execute phase",
+                           connection_id=self.connection_id,
+                           portal_name=portal_name,
+                           query_preview=query[:100] if query else "(empty)")
+                # Return empty result set
+                # Note: Describe phase already sent NoData for this query
+                # We just need to send CommandComplete here
+                tag = 'SELECT 0\x00'.encode()
+                cmd_complete_length = 4 + len(tag)
+                cmd_complete = struct.pack('!cI', MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+                self.writer.write(cmd_complete)
+                await self.writer.drain()
+                logger.info("Sent empty result for pg_catalog query",
+                           connection_id=self.connection_id)
+                return
+
             # Execute the query with parameters
             # IMPORTANT: Pass parameters separately to enable vector query optimizer
             # The optimizer needs to transform vector parameters BEFORE IRIS execution
@@ -1731,7 +2592,8 @@ class PGWireProtocol:
 
             if result['success']:
                 # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
-                await self.send_query_result(result, send_ready=False)
+                # Extended Protocol: Don't send RowDescription here - Describe already sent it
+                await self.send_query_result(result, send_ready=False, send_row_description=False)
             else:
                 await self.send_error_response(
                     "ERROR", "42000", "syntax_error",
@@ -1846,21 +2708,53 @@ class PGWireProtocol:
         await self.writer.drain()
 
     async def send_parameter_description(self, param_types: list):
-        """Send ParameterDescription message"""
+        """Send ParameterDescription message
+
+        CRITICAL: asyncpg has specific behavior based on parameter type OIDs:
+        - OID 0 (unspecified): Causes infinite recursion (introspects pg_type)
+        - OID 25 (TEXT): Forces text encoding, rejects non-string values
+        - OID 705 (UNKNOWN): Also forces text encoding
+        - OID 23 (INT4): Allows binary encoding but only for integers
+
+        The only way to support mixed types is to send OID 0 BUT avoid
+        the recursion. We'll send UNKNOWN (705) which doesn't trigger recursion,
+        and handle type conversion on the server side when we receive TEXT format.
+        """
         count = len(param_types)
+
+        # DEBUG: Log what we're actually sending
+        logger.info("🔍 DEBUG: Sending ParameterDescription",
+                   connection_id=self.connection_id,
+                   param_count=count,
+                   param_types=param_types,
+                   param_oids=[f"OID {pt}" for pt in param_types])
+
         message = struct.pack('!cIH', MSG_PARAMETER_DESCRIPTION, 4 + 2 + count * 4, count)
 
         for param_type in param_types:
-            message += struct.pack('!I', param_type)
+            # Send OID as-is - don't try to fix it here
+            # The fix is in Bind handler to convert TEXT-encoded values properly
+            effective_type = param_type
+            message += struct.pack('!I', effective_type)
 
         self.writer.write(message)
         await self.writer.drain()
 
     async def send_no_data(self):
         """Send NoData response"""
+        # DEBUGGING: Track when NoData is sent (should NOT be sent for SHOW queries!)
+        import traceback
+        caller_info = ''.join(traceback.format_stack()[-3:-1])
+        logger.warning("📛 SEND_NO_DATA CALLED",
+                      connection_id=self.connection_id,
+                      caller=caller_info)
+
         message = struct.pack('!cI', MSG_NO_DATA, 4)
         self.writer.write(message)
         await self.writer.drain()
+
+        logger.info("📛 NoData message sent",
+                   connection_id=self.connection_id)
 
     def _convert_postgres_to_iris_syntax(self, query: str) -> str:
         """
