@@ -1,85 +1,17 @@
 # Known Limitations - IRIS PGWire
 
-**Last Updated**: 2025-11-06
-
-This document catalogs known limitations, workarounds, and ongoing issues in the IRIS PGWire implementation.
-
----
-
-## 🔴 CRITICAL: DDL Semicolon Parsing (FIXED in v0.2.0)
-
-**Status**: ✅ **FIXED** - 2025-11-06
-**Severity**: Critical
-**Affects**: All DDL operations (CREATE/DROP/ALTER TABLE)
-**Fix Version**: v0.2.0
-
-### Issue Description
-
-Prior to v0.2.0, DDL statements with semicolon terminators would fail with error:
-```
-ERROR: Input (;) encountered after end of query^CREATE TABLE ...;
-```
-
-### Root Cause
-
-The SQL translator did not strip trailing semicolons from incoming SQL before translation to IRIS SQL syntax. PostgreSQL clients send statements with semicolons, but IRIS expects them without during intermediate processing.
-
-### Fix Implementation
-
-**File**: `src/iris_pgwire/sql_translator/translator.py:240-244`
-
-```python
-# Strip trailing semicolons from incoming SQL before translation
-# PostgreSQL clients send queries with semicolons, but IRIS expects them without
-# We'll add them back in _finalize_translation() if needed
-original_sql = context.original_sql.rstrip(';').strip()
-translated_sql = original_sql
-```
-
-### Testing
-
-Comprehensive E2E test suite added:
-- **File**: `tests/test_ddl_statements.py`
-- **Coverage**: 15 test cases including regression tests
-- **Validation**: Real PostgreSQL client (psycopg) against running IRIS
-
-### Workaround (Pre-v0.2.0)
-
-If running an older version, create tables via native IRIS SQL:
-
-**Option 1**: Use irissession command
-```bash
-docker exec -i iris irissession IRIS << 'EOF'
-set $namespace="USER"
-do ##class(%SQL.Statement).%ExecDirect(, "CREATE TABLE Patients (PatientID INT PRIMARY KEY, ...)")
-halt
-EOF
-```
-
-**Option 2**: Use IRIS Management Portal
-1. Navigate to http://localhost:52773/csp/sys/UtilHome.csp
-2. System → SQL → Execute Query
-3. Execute DDL without semicolons
-
-**Option 3**: Use native IRIS drivers
-```python
-import iris.dbapi as dbapi
-conn = dbapi.connect(hostname="localhost", port=1972, namespace="USER",
-                     username="_SYSTEM", password="SYS")
-conn.execute("CREATE TABLE Patients (PatientID INT PRIMARY KEY, ...)")
-```
+This document catalogs known limitations, workarounds, and behavior differences when using IRIS through the PostgreSQL wire protocol.
 
 ---
 
 ## 🟡 INFORMATION_SCHEMA Compatibility
 
-**Status**: ⚠️ **PARTIAL SUPPORT**
 **Severity**: Medium
 **Affects**: Schema introspection queries
 
 ### Issue Description
 
-IRIS uses `INFORMATION_SCHEMA` tables (not PostgreSQL's `pg_catalog`). Some PostgreSQL tools expect `pg_catalog` system tables.
+IRIS uses `INFORMATION_SCHEMA` tables (SQL standard) rather than PostgreSQL's `pg_catalog` system tables. Some PostgreSQL tools expect `pg_catalog`.
 
 ### Workaround
 
@@ -93,18 +25,85 @@ SELECT * FROM pg_catalog.pg_tables;
 SELECT * FROM INFORMATION_SCHEMA.TABLES;
 ```
 
-### Affected Tools
+### Tool Compatibility
 
-- ✅ **Superset**: Works (uses SQLAlchemy which handles INFORMATION_SCHEMA)
+- ✅ **Superset**: Works (SQLAlchemy handles INFORMATION_SCHEMA)
 - ✅ **DBeaver**: Works (detects INFORMATION_SCHEMA support)
 - ⚠️ **pgAdmin**: Partial (some features require pg_catalog)
 - ⚠️ **Metabase**: Partial (similar to pgAdmin)
 
 ---
 
+## 🟡 HNSW Index Performance Requirements
+
+**Severity**: Medium
+**Affects**: Vector similarity search performance
+
+### Issue Description
+
+HNSW vector indexes provide significant performance benefits only at scale:
+
+| Dataset Size | HNSW Performance | Recommendation |
+|--------------|------------------|----------------|
+| < 10,000 vectors | 0.98-1.02× (negligible) | Use sequential scan |
+| 10,000-99,999 vectors | 1.0-2.0× improvement | Consider HNSW with testing |
+| ≥ 100,000 vectors | **5.14× improvement** ✅ | **HNSW strongly recommended** |
+
+### Recommendation
+
+Only create HNSW indexes for datasets with 100K+ vectors:
+
+```sql
+-- Only beneficial at scale (≥100K vectors)
+CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='Cosine');
+
+-- Always specify Distance parameter (required)
+CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='DotProduct');
+```
+
+**Reference**: See [HNSW Investigation](docs/HNSW_FINDINGS_2025_10_02.md) for detailed benchmarks.
+
+---
+
+## 🟡 L2 Distance Not Supported
+
+**Severity**: Medium
+**Affects**: pgvector compatibility
+
+### Issue Description
+
+The L2 distance operator `<->` from pgvector is not supported. IRIS VECTOR functions provide:
+- ✅ **Cosine distance**: `<=>` → `VECTOR_COSINE()`
+- ✅ **Dot product**: `<#>` → `VECTOR_DOT_PRODUCT()`
+- ❌ **L2 distance**: `<->` → NOT SUPPORTED
+
+### Error
+
+```sql
+SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]';
+-- Raises: NotImplementedError: L2 distance operator (<->) is not supported by IRIS
+```
+
+### Workaround
+
+Use cosine distance instead:
+
+```sql
+-- Replace:
+SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]' LIMIT 5;
+
+-- With:
+SELECT * FROM vectors ORDER BY embedding <=> '[0.1,0.2]' LIMIT 5;
+```
+
+### Technical Reason
+
+IRIS does not provide a native L2 distance function. Implementing it would require element-wise operations that would violate the <5ms translation performance requirement.
+
+---
+
 ## 🟡 Two-Phase Commit Not Supported
 
-**Status**: ❌ **NOT SUPPORTED**
 **Severity**: Medium
 **Affects**: Distributed transactions
 
@@ -115,6 +114,7 @@ PostgreSQL's `PREPARE TRANSACTION` / `COMMIT PREPARED` two-phase commit protocol
 ### Workaround
 
 Use single-phase transactions:
+
 ```sql
 BEGIN;
 -- Your operations
@@ -130,71 +130,25 @@ Most applications don't require two-phase commit. Affected scenarios:
 
 ---
 
-## 🟡 L2 Distance Vector Operation Not Supported
-
-**Status**: ❌ **NOT SUPPORTED** - Constitutional Requirement
-**Severity**: Medium
-**Affects**: pgvector compatibility
-**Constitutional Reference**: v1.2.4
-
-### Issue Description
-
-The L2 distance operator `<->` from pgvector is not supported. IRIS VECTOR functions support:
-- ✅ **Cosine distance**: `<=>` → `VECTOR_COSINE()`
-- ✅ **Dot product**: `<#>` → `VECTOR_DOT_PRODUCT()`
-- ❌ **L2 distance**: `<->` → NOT SUPPORTED
-
-### Error
-
-```sql
-SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]';
--- Raises: NotImplementedError: L2 distance operator (<->) is not supported by IRIS
-```
-
-### Workaround
-
-Use cosine distance instead:
-```sql
--- Replace:
-SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]' LIMIT 5;
-
--- With:
-SELECT * FROM vectors ORDER BY embedding <=> '[0.1,0.2]' LIMIT 5;
-```
-
-### Technical Reason
-
-IRIS does not provide a native L2 distance vector function. Implementing it would require:
-1. Square root operations (performance penalty)
-2. Element-wise subtraction (complexity)
-3. Breaking the <5ms translation SLA (constitutional violation)
-
----
-
 ## 🟡 Bulk Insert Performance
 
-**Status**: ⚠️ **PERFORMANCE CONCERN**
 **Severity**: Medium
 **Affects**: Large data imports
 
 ### Issue Description
 
-Bulk inserts via `COPY` or `INSERT ... VALUES (multiple rows)` may be slower than expected due to:
-1. PGWire protocol overhead (~4ms per batch)
-2. INFORMATION_SCHEMA compatibility checks
-3. Row-by-row processing in some scenarios
-
-### Performance Expectations
+Bulk inserts via `COPY FROM STDIN` are currently limited by row-by-row processing. Performance expectations:
 
 | Operation | Expected Time | Notes |
 |-----------|---------------|-------|
-| Single INSERT | 6-8ms | Includes PGWire overhead |
-| 100-row COPY | 200-400ms | ~2-4ms per row |
-| 1000-row COPY | 2-4s | Batch processing |
+| Single INSERT | 6-8ms | Includes protocol overhead |
+| 250-row COPY | 400-600ms | ~2.4ms per row |
+| 1000-row COPY | 1.6-2.4s | Row-by-row processing |
 
-### Workaround
+### Workaround (Large Imports)
 
-For large imports, use native IRIS bulk load:
+For imports > 10,000 rows, use native IRIS bulk load:
+
 ```bash
 # Export to CSV
 \copy data TO '/tmp/data.csv' CSV
@@ -207,58 +161,73 @@ halt
 EOF
 ```
 
+### Future Enhancement
+
+Planned optimization: Use IRIS `executemany()` for batch operations (projected 4× speedup to 2,400+ rows/sec).
+
 ---
 
-## 🟢 ACORN-1 Algorithm Deprecated
+## 🟡 VECTOR Type Display (DBAPI Backend)
 
-**Status**: ⚠️ **DEPRECATED**
 **Severity**: Low
-**Affects**: Vector query optimization
-**Constitutional Reference**: v1.2.0
+**Affects**: Type introspection
 
 ### Issue Description
 
-ACORN-1 algorithm shows consistent performance degradation (20-72% slower) at all dataset scales compared to HNSW indexing alone.
+When using the DBAPI backend (external Python process), VECTOR columns show as VARCHAR in INFORMATION_SCHEMA metadata queries. Vector operations work correctly despite the display issue.
 
-### Recommendation
+### Workaround
 
-**DO NOT USE** ACORN-1 in production:
-```sql
--- DEPRECATED (do not use):
-SET OPTION ACORN_1_SELECTIVITY_THRESHOLD=1;
-SELECT TOP 5 * FROM vectors
-WHERE id >= 0  -- ACORN-1 requires WHERE clause
-ORDER BY VECTOR_COSINE(vec, TO_VECTOR('[...]'));
+Use the embedded Python backend for accurate type introspection:
 
--- RECOMMENDED:
-CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='Cosine');
-SELECT TOP 5 * FROM vectors
-ORDER BY VECTOR_COSINE(vec, TO_VECTOR('[...]'));
+```bash
+# Embedded backend (inside IRIS)
+export BACKEND_TYPE=embedded
+irispython -m iris_pgwire.server
 ```
 
-### Performance Data (100K vectors)
+### Impact
 
-- HNSW alone: 10.85ms avg ✅
-- ACORN-1 + WHERE id >= 0: 13.60ms (25% slower) ❌
-- ACORN-1 + WHERE id < 5000: 17.97ms (62% slower) ❌
+- ✅ Vector operations (VECTOR_COSINE, TO_VECTOR) work correctly
+- ✅ Vector parameter binding works (up to 188,962 dimensions)
+- ⚠️ INFORMATION_SCHEMA.COLUMNS shows VARCHAR instead of VECTOR
 
-**Reference**: `docs/HNSW_FINDINGS_2025_10_02.md`
+---
+
+## 🟢 SSL/TLS Encryption (In Development)
+
+**Severity**: Low
+**Affects**: Connection encryption
+
+### Current Status
+
+SSL/TLS wire protocol encryption is in development. Current authentication security provided by:
+- ✅ **OAuth 2.0**: Token-based authentication
+- ✅ **IRIS Wallet**: Encrypted credential storage
+- ✅ **Password Authentication**: SCRAM-SHA-256 protocol
+
+### Workaround
+
+For production deployments requiring transport encryption:
+1. Use OAuth 2.0 for BI tools and applications
+2. Store credentials in IRIS Wallet (encrypted at rest)
+3. Deploy PGWire behind reverse proxy with TLS (nginx, HAProxy)
 
 ---
 
 ## Reporting Issues
 
-Found a new limitation or bug?
+Found a new limitation or unexpected behavior?
 
 ### Before Reporting
 
 1. Check this document for known issues
-2. Check if fixed in latest version
-3. Test with minimal reproduction case
+2. Test with minimal reproduction case
+3. Verify IRIS and PGWire versions
 
 ### Report Format
 
-**GitHub Repository**: https://github.com/intersystems-community/iris-pgwire/issues
+**GitHub Repository**: https://github.com/isc-tdyar/iris-pgwire/issues
 
 ```markdown
 ## Issue Description
@@ -272,7 +241,7 @@ Brief description of the limitation/bug
 ## Reproduction Steps
 1. Step 1
 2. Step 2
-3. Observe error
+3. Observe behavior
 
 ## Expected Behavior
 What should happen
@@ -283,22 +252,6 @@ What actually happens
 ## Workaround (if known)
 How to work around the issue
 ```
-
----
-
-## Version History
-
-### v0.2.0 (2025-11-06)
-- ✅ **FIXED**: DDL semicolon parsing bug
-- 📝 **ADDED**: Comprehensive DDL test suite
-- 📝 **ADDED**: This KNOWN_LIMITATIONS.md document
-
-### v0.1.0 (2025-10-08)
-- 🎉 Initial release
-- ⚠️ DDL semicolon parsing issue documented
-- ⚠️ INFORMATION_SCHEMA compatibility limitations
-- ⚠️ L2 distance not supported (constitutional)
-- ⚠️ ACORN-1 deprecated (performance)
 
 ---
 
@@ -313,6 +266,7 @@ Help us improve! If you find workarounds or solutions:
 5. Update this document
 
 **Priority Contributions Welcome**:
-- pg_catalog emulation for better tool compatibility
-- Bulk insert optimization
+- `pg_catalog` emulation for better tool compatibility
+- Bulk insert optimization (executemany() integration)
+- SSL/TLS wire protocol support
 - Performance improvements for large result sets
