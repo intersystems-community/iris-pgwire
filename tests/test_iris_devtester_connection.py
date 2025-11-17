@@ -8,14 +8,14 @@ a new container.
 """
 
 import sys
-import os
 
 # Add iris-devtester to path
 sys.path.insert(0, "/Users/tdyar/ws/iris-devtester")
 
 try:
-    from iris_devtester.connections import get_connection
     from iris_devtester.config import IRISConfig
+    from iris_devtester.connections import get_connection
+
     print("✓ iris-devtester imported successfully")
 except ImportError as e:
     print(f"❌ Failed to import iris-devtester: {e}")
@@ -23,12 +23,13 @@ except ImportError as e:
     print("   pip install -e ../iris-devtester")
     sys.exit(1)
 
+
 def test_auto_discovery_connection():
     """Test auto-discovery connection (simplest approach)."""
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 1: Auto-discovery Connection")
-    print("="*60)
+    print("=" * 60)
 
     try:
         print("\nAttempting auto-discovery connection...")
@@ -57,12 +58,13 @@ def test_auto_discovery_connection():
         print("   Trying explicit configuration...")
         return False
 
+
 def test_explicit_config_connection():
     """Test explicit configuration connection."""
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 2: Explicit Configuration Connection")
-    print("="*60)
+    print("=" * 60)
 
     # Connection parameters from docker-compose.yml
     print("\nConnection parameters:")
@@ -75,11 +77,7 @@ def test_explicit_config_connection():
         # Create IRISConfig with explicit parameters
         print("\nCreating IRISConfig...")
         config = IRISConfig(
-            host="localhost",
-            port=1972,
-            namespace="USER",
-            username="_SYSTEM",
-            password="SYS"
+            host="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
         )
         print("✓ IRISConfig created")
 
@@ -100,11 +98,13 @@ def test_explicit_config_connection():
         print(f"✓ Current Namespace: {namespace}")
 
         # Check if Patients table exists
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT COUNT(*)
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_NAME = 'Patients'
-        """)
+        """
+        )
         table_exists = cursor.fetchone()[0]
         print(f"✓ Patients table exists: {bool(table_exists)}")
 
@@ -117,13 +117,15 @@ def test_explicit_config_connection():
     except Exception as e:
         print(f"\n❌ Explicit configuration failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
+
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Testing iris-devtester connection to iris-pgwire-db")
-    print("="*60)
+    print("=" * 60)
 
     # Try auto-discovery first (simplest)
     auto_success = test_auto_discovery_connection()
@@ -135,16 +137,16 @@ if __name__ == "__main__":
         explicit_success = False  # No need to try explicit if auto worked
 
     # Overall result
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     if auto_success or explicit_success:
         print("✅ SUCCESS: iris-devtester can connect to iris-pgwire-db!")
         if auto_success:
             print("   Method: Auto-discovery (recommended)")
         else:
             print("   Method: Explicit configuration")
-        print("="*60)
+        print("=" * 60)
         sys.exit(0)
     else:
         print("❌ FAILURE: Both connection methods failed")
-        print("="*60)
+        print("=" * 60)
         sys.exit(1)

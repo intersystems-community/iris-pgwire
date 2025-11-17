@@ -16,12 +16,12 @@ Constitutional Requirement:
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Literal
 from enum import Enum
 
 
 class CopyDirection(str, Enum):
     """COPY operation direction."""
+
     FROM_STDIN = "FROM_STDIN"
     TO_STDOUT = "TO_STDOUT"
 
@@ -33,12 +33,13 @@ class CSVOptions:
 
     Defaults match PostgreSQL standard CSV behavior.
     """
-    format: str = 'CSV'
-    delimiter: str = ','
-    null_string: str = '\\N'
+
+    format: str = "CSV"
+    delimiter: str = ","
+    null_string: str = "\\N"
     header: bool = False
     quote: str = '"'
-    escape: str = '\\'
+    escape: str = "\\"
 
     @staticmethod
     def _unescape_string(s: str) -> str:
@@ -49,10 +50,10 @@ class CSVOptions:
         """
         # Handle common PostgreSQL escape sequences
         escape_map = {
-            '\\t': '\t',
-            '\\n': '\n',
-            '\\r': '\r',
-            '\\\\': '\\',
+            "\\t": "\t",
+            "\\n": "\n",
+            "\\r": "\r",
+            "\\\\": "\\",
         }
 
         result = s
@@ -62,7 +63,7 @@ class CSVOptions:
         return result
 
     @classmethod
-    def from_with_clause(cls, with_clause: str) -> 'CSVOptions':
+    def from_with_clause(cls, with_clause: str) -> "CSVOptions":
         """
         Parse WITH (...) clause to extract CSV options.
 
@@ -77,8 +78,8 @@ class CSVOptions:
         with_clause_upper = with_clause.upper()
 
         # FORMAT option
-        if 'FORMAT' in with_clause_upper:
-            format_match = re.search(r'FORMAT\s+(\w+)', with_clause_upper)
+        if "FORMAT" in with_clause_upper:
+            format_match = re.search(r"FORMAT\s+(\w+)", with_clause_upper)
             if format_match:
                 options.format = format_match.group(1)
 
@@ -97,7 +98,7 @@ class CSVOptions:
             options.null_string = cls._unescape_string(value) if has_e_prefix else value
 
         # HEADER option (boolean flag)
-        if re.search(r'\bHEADER\b', with_clause_upper):
+        if re.search(r"\bHEADER\b", with_clause_upper):
             options.header = True
 
         # QUOTE option (handle doubled single quotes '')
@@ -128,11 +129,12 @@ class CopyCommand:
         csv_options: Parsed CSV format options
         query: SELECT query for COPY (query) TO STDOUT (None for table-based COPY)
     """
-    table_name: Optional[str]
-    column_list: Optional[list[str]]
+
+    table_name: str | None
+    column_list: list[str] | None
     direction: CopyDirection
     csv_options: CSVOptions
-    query: Optional[str] = None
+    query: str | None = None
 
 
 class CopyCommandParser:
@@ -149,24 +151,21 @@ class CopyCommandParser:
 
     # Regex patterns
     COPY_FROM_STDIN_PATTERN = re.compile(
-        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+FROM\s+STDIN(?:\s+WITH\s*\(([^)]+)\))?",
-        re.IGNORECASE
+        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+FROM\s+STDIN(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE
     )
 
     COPY_TO_STDOUT_PATTERN = re.compile(
-        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?",
-        re.IGNORECASE
+        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE
     )
 
     COPY_QUERY_TO_STDOUT_PATTERN = re.compile(
-        r"COPY\s*\((.+)\)\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?",
-        re.IGNORECASE | re.DOTALL
+        r"COPY\s*\((.+)\)\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE | re.DOTALL
     )
 
     @staticmethod
     def is_copy_command(sql: str) -> bool:
         """Check if SQL is a COPY command."""
-        return sql.strip().upper().startswith('COPY')
+        return sql.strip().upper().startswith("COPY")
 
     @staticmethod
     def parse(sql: str) -> CopyCommand:
@@ -193,15 +192,15 @@ class CopyCommandParser:
 
             column_list = None
             if column_list_str:
-                column_list = [col.strip() for col in column_list_str.split(',')]
+                column_list = [col.strip() for col in column_list_str.split(",")]
 
-            csv_options = CSVOptions.from_with_clause(with_clause or '')
+            csv_options = CSVOptions.from_with_clause(with_clause or "")
 
             return CopyCommand(
                 table_name=table_name,
                 column_list=column_list,
                 direction=CopyDirection.FROM_STDIN,
-                csv_options=csv_options
+                csv_options=csv_options,
             )
 
         # Try COPY TO STDOUT (table-based)
@@ -213,15 +212,15 @@ class CopyCommandParser:
 
             column_list = None
             if column_list_str:
-                column_list = [col.strip() for col in column_list_str.split(',')]
+                column_list = [col.strip() for col in column_list_str.split(",")]
 
-            csv_options = CSVOptions.from_with_clause(with_clause or '')
+            csv_options = CSVOptions.from_with_clause(with_clause or "")
 
             return CopyCommand(
                 table_name=table_name,
                 column_list=column_list,
                 direction=CopyDirection.TO_STDOUT,
-                csv_options=csv_options
+                csv_options=csv_options,
             )
 
         # Try COPY (query) TO STDOUT
@@ -230,14 +229,14 @@ class CopyCommandParser:
             query = match.group(1).strip()
             with_clause = match.group(2)
 
-            csv_options = CSVOptions.from_with_clause(with_clause or '')
+            csv_options = CSVOptions.from_with_clause(with_clause or "")
 
             return CopyCommand(
                 table_name=None,
                 column_list=None,
                 direction=CopyDirection.TO_STDOUT,
                 csv_options=csv_options,
-                query=query
+                query=query,
             )
 
         # Invalid COPY command

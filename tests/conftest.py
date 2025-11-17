@@ -12,13 +12,15 @@ This module implements fixtures from specs/017-correct-testing-framework/:
 """
 
 import asyncio
+import socket
 import subprocess
 import time
-import socket
+from typing import Any
+
 import pytest
-import docker
-from typing import Generator, AsyncGenerator, Dict, Any
 import structlog
+
+import docker
 
 logger = structlog.get_logger()
 
@@ -30,6 +32,7 @@ logger = structlog.get_logger()
 # This ensures create_async_engine("iris+psycopg://...") resolves correctly
 # using the caretdev sqlalchemy-iris implementation (v0.18.0)
 from sqlalchemy.dialects import registry
+
 registry.register("iris.psycopg", "sqlalchemy_iris.psycopg", "IRISDialect_psycopg")
 logger.info("SQLAlchemy IRIS dialect registered (caretdev sqlalchemy-iris)")
 
@@ -109,20 +112,20 @@ try:
     logger.info(
         "✅ Applied monkey-patch to IRISDialectAsync_psycopg.do_executemany()",
         reason="Missing await keywords in sqlalchemy-iris v0.18.0",
-        impact="Fixes bulk insert timeout (test_async_bulk_insert)"
+        impact="Fixes bulk insert timeout (test_async_bulk_insert)",
     )
 
     logger.info(
         "✅ Applied monkey-patch to IRISDialectAsync_psycopg.do_execute()",
         reason="Strip IRIS DDL extensions incompatible with psycopg",
-        impact="Fixes CREATE TABLE with %CLASSPARAMETER error"
+        impact="Fixes CREATE TABLE with %CLASSPARAMETER error",
     )
 
 except ImportError as e:
     logger.warning(
         "⚠️ Could not apply async dialect monkey-patch",
         error=str(e),
-        hint="sqlalchemy-iris not installed or version mismatch"
+        hint="sqlalchemy-iris not installed or version mismatch",
     )
 # ============================================================================
 
@@ -134,7 +137,7 @@ def wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
         try:
             with socket.create_connection((host, port), timeout=1):
                 return True
-        except (socket.error, ConnectionRefusedError):
+        except (OSError, ConnectionRefusedError):
             time.sleep(0.1)
     return False
 
@@ -189,9 +192,12 @@ def iris_container():
         # Try to start IRIS container
         try:
             logger.info("Starting IRIS container for tests")
-            subprocess.run([
-                "docker", "compose", "up", "-d", "iris"
-            ], cwd="/Users/tdyar/ws/iris-pgwire", check=True, capture_output=True)
+            subprocess.run(
+                ["docker", "compose", "up", "-d", "iris"],
+                cwd="/Users/tdyar/ws/iris-pgwire",
+                check=True,
+                capture_output=True,
+            )
 
             # Wait for IRIS to be ready
             if not wait_for_port("localhost", 1975, timeout=60):
@@ -229,7 +235,7 @@ async def pgwire_server(iris_container):
         iris_username="SuperUser",
         iris_password="SYS",
         iris_namespace="USER",
-        enable_ssl=False  # Start with plain connections for P0
+        enable_ssl=False,  # Start with plain connections for P0
     )
 
     # Start server in background task
@@ -265,7 +271,7 @@ def pgwire_connection_params():
         "port": 5432,
         "user": "test_user",
         "dbname": "USER",
-        "connect_timeout": 10
+        "connect_timeout": 10,
     }
 
 
@@ -283,17 +289,16 @@ async def psycopg_connection(pgwire_server, pgwire_connection_params):
         # Attempt connection with retries
         for attempt in range(3):
             try:
-                conn = await psycopg.AsyncConnection.connect(
-                    **pgwire_connection_params
-                )
+                conn = await psycopg.AsyncConnection.connect(**pgwire_connection_params)
                 logger.info("psycopg connection established", attempt=attempt + 1)
                 yield conn
                 break
             except Exception as e:
                 if attempt == 2:  # Last attempt
                     pytest.fail(f"Failed to connect with psycopg after 3 attempts: {e}")
-                logger.warning("psycopg connection attempt failed",
-                             attempt=attempt + 1, error=str(e))
+                logger.warning(
+                    "psycopg connection attempt failed", attempt=attempt + 1, error=str(e)
+                )
                 await asyncio.sleep(1)
     finally:
         try:
@@ -309,16 +314,22 @@ def psql_command():
 
     Returns a function that executes psql with our connection parameters.
     """
+
     def run_psql(sql_command: str, timeout: int = 10):
         """Run psql command and return result"""
         cmd = [
             "psql",
-            "-h", "127.0.0.1",
-            "-p", "5432",
-            "-U", "test_user",
-            "-d", "USER",
-            "-c", sql_command,
-            "--no-password"  # Don't prompt for password in P0
+            "-h",
+            "127.0.0.1",
+            "-p",
+            "5432",
+            "-U",
+            "test_user",
+            "-d",
+            "USER",
+            "-c",
+            sql_command,
+            "--no-password",  # Don't prompt for password in P0
         ]
 
         try:
@@ -327,21 +338,16 @@ def psql_command():
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env={"PGPASSWORD": ""}  # Empty password for P0
+                env={"PGPASSWORD": ""},  # Empty password for P0
             )
             return {
                 "returncode": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "success": result.returncode == 0
+                "success": result.returncode == 0,
             }
         except subprocess.TimeoutExpired:
-            return {
-                "returncode": -1,
-                "stdout": "",
-                "stderr": "Command timed out",
-                "success": False
-            }
+            return {"returncode": -1, "stdout": "", "stderr": "Command timed out", "success": False}
         except FileNotFoundError:
             pytest.skip("psql command not available")
 
@@ -358,8 +364,9 @@ pytestmark = [
 # T015: iris_config - Session-scoped configuration fixture
 # ============================================================================
 
+
 @pytest.fixture(scope="session")
-def iris_config() -> Dict[str, Any]:
+def iris_config() -> dict[str, Any]:
     """
     Provide IRIS connection configuration.
 
@@ -370,17 +377,18 @@ def iris_config() -> Dict[str, Any]:
     - Scope: session (shared across all tests)
     """
     return {
-        'host': 'localhost',
-        'port': 1972,
-        'namespace': 'USER',
-        'username': '_SYSTEM',
-        'password': 'SYS'
+        "host": "localhost",
+        "port": 1972,
+        "namespace": "USER",
+        "username": "_SYSTEM",
+        "password": "SYS",
     }
 
 
 # ============================================================================
 # T014: embedded_iris - Session-scoped IRIS connection fixture
 # ============================================================================
+
 
 @pytest.fixture(scope="session")
 def embedded_iris(iris_config):
@@ -409,13 +417,13 @@ def embedded_iris(iris_config):
         # When running via irispython, we're already inside IRIS
         # No connection needed - use iris.sql.exec() directly
         # First, switch to the desired namespace
-        iris.system.Process.SetNamespace(iris_config['namespace'])
+        iris.system.Process.SetNamespace(iris_config["namespace"])
 
         elapsed = time.perf_counter() - start_time
         logger.info(
             "embedded_iris: Embedded Python ready",
             setup_time_ms=f"{elapsed * 1000:.2f}ms",
-            namespace=iris_config['namespace']
+            namespace=iris_config["namespace"],
         )
 
         # Verify IRIS is working
@@ -426,7 +434,9 @@ def embedded_iris(iris_config):
             break
 
         if not first_row or first_row[0] != 1:
-            raise RuntimeError("IRIS embedded Python verification failed: SELECT 1 returned unexpected result")
+            raise RuntimeError(
+                "IRIS embedded Python verification failed: SELECT 1 returned unexpected result"
+            )
 
         logger.info("embedded_iris: Embedded Python verified")
 
@@ -437,22 +447,18 @@ def embedded_iris(iris_config):
         logger.error(
             "embedded_iris: Failed to import iris module",
             error=str(e),
-            hint="Must run tests via 'irispython -m pytest' for embedded Python access"
+            hint="Must run tests via 'irispython -m pytest' for embedded Python access",
         )
         pytest.skip("IRIS embedded Python not available - run via irispython")
 
     except Exception as e:
-        logger.error(
-            "embedded_iris: Connection failed",
-            error=str(e),
-            config=iris_config
-        )
+        logger.error("embedded_iris: Connection failed", error=str(e), config=iris_config)
         pytest.skip(f"IRIS connection failed: {e}")
 
     finally:
         # Teardown: Close connection and release resources
         try:
-            if 'connection' in locals():
+            if "connection" in locals():
                 connection.close()
                 logger.info("embedded_iris: Connection closed")
         except Exception as e:
@@ -462,6 +468,7 @@ def embedded_iris(iris_config):
 # ============================================================================
 # T016: iris_clean_namespace - Function-scoped isolation fixture
 # ============================================================================
+
 
 @pytest.fixture(scope="function")
 def iris_clean_namespace(embedded_iris, iris_config):
@@ -483,17 +490,18 @@ def iris_clean_namespace(embedded_iris, iris_config):
     start_time = time.perf_counter()
 
     # Query existing tables before test starts
-    namespace = iris_config['namespace']
-    result = embedded_iris.sql.exec(f"""
+    namespace = iris_config["namespace"]
+    result = embedded_iris.sql.exec(
+        f"""
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = '{namespace}'
-    """)
+    """
+    )
     existing_tables = {row[0] for row in result}
 
     logger.info(
-        "iris_clean_namespace: Baseline established",
-        existing_tables_count=len(existing_tables)
+        "iris_clean_namespace: Baseline established", existing_tables_count=len(existing_tables)
     )
 
     # Yield iris module to test
@@ -504,11 +512,13 @@ def iris_clean_namespace(embedded_iris, iris_config):
 
     try:
         # Find tables created during test
-        result = embedded_iris.sql.exec(f"""
+        result = embedded_iris.sql.exec(
+            f"""
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = '{namespace}'
-        """)
+        """
+        )
         current_tables = {row[0] for row in result}
         new_tables = current_tables - existing_tables
 
@@ -519,9 +529,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
                 logger.debug("iris_clean_namespace: Dropped table", table=table_name)
             except Exception as e:
                 logger.warning(
-                    "iris_clean_namespace: Failed to drop table",
-                    table=table_name,
-                    error=str(e)
+                    "iris_clean_namespace: Failed to drop table", table=table_name, error=str(e)
                 )
 
         # Commits are automatic with iris.sql.exec() in embedded Python
@@ -533,14 +541,14 @@ def iris_clean_namespace(embedded_iris, iris_config):
             "iris_clean_namespace: Cleanup complete",
             tables_dropped=len(new_tables),
             cleanup_time_ms=f"{cleanup_elapsed * 1000:.2f}ms",
-            total_time_ms=f"{total_elapsed * 1000:.2f}ms"
+            total_time_ms=f"{total_elapsed * 1000:.2f}ms",
         )
 
         # Verify cleanup time contract (<2 seconds)
         if cleanup_elapsed > 2.0:
             logger.warning(
                 "iris_clean_namespace: Cleanup exceeded 2s contract",
-                cleanup_time_ms=f"{cleanup_elapsed * 1000:.2f}ms"
+                cleanup_time_ms=f"{cleanup_elapsed * 1000:.2f}ms",
             )
 
     except Exception as e:
@@ -551,6 +559,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
 # ============================================================================
 # T017: pgwire_client - Function-scoped PostgreSQL client fixture
 # ============================================================================
+
 
 @pytest.fixture(scope="function")
 def pgwire_client(iris_config):
@@ -578,19 +587,19 @@ def pgwire_client(iris_config):
         # PGWire server runs on port 5434 (configurable)
         # Uses PostgreSQL wire protocol to talk to IRIS
         connection = psycopg.connect(
-            host='localhost',
+            host="localhost",
             port=5434,  # PGWire server port (not standard PostgreSQL 5432)
-            dbname=iris_config['namespace'],
-            user=iris_config['username'],
-            password=iris_config['password'],
-            connect_timeout=5
+            dbname=iris_config["namespace"],
+            user=iris_config["username"],
+            password=iris_config["password"],
+            connect_timeout=5,
         )
 
         elapsed = time.perf_counter() - start_time
         logger.info(
             "pgwire_client: Connection established",
             setup_time_ms=f"{elapsed * 1000:.2f}ms",
-            connection_status=connection.info.status.name
+            connection_status=connection.info.status.name,
         )
 
         # Verify connection is ready
@@ -613,7 +622,7 @@ def pgwire_client(iris_config):
         logger.error(
             "pgwire_client: psycopg not available",
             error=str(e),
-            hint="Install psycopg: pip install psycopg>=3.1.0"
+            hint="Install psycopg: pip install psycopg>=3.1.0",
         )
         pytest.skip("psycopg not available - required for PGWire testing")
 
@@ -621,7 +630,7 @@ def pgwire_client(iris_config):
         logger.error(
             "pgwire_client: PGWire server not available",
             error=str(e),
-            hint="Start PGWire server on port 5434 before running tests"
+            hint="Start PGWire server on port 5434 before running tests",
         )
         pytest.skip(f"PGWire server not available: {e}")
 
@@ -632,7 +641,7 @@ def pgwire_client(iris_config):
     finally:
         # Teardown: Close connection
         try:
-            if 'connection' in locals() and connection is not None:
+            if "connection" in locals() and connection is not None:
                 connection.close()
                 logger.info("pgwire_client: Connection closed")
         except Exception as e:
@@ -647,7 +656,7 @@ def pgwire_client(iris_config):
 _iris_query_history = []
 
 
-def capture_iris_state() -> Dict[str, Any]:
+def capture_iris_state() -> dict[str, Any]:
     """
     Capture current IRIS connection state for diagnostics.
 
@@ -662,28 +671,24 @@ def capture_iris_state() -> Dict[str, Any]:
 
         # Get current process information
         process_info = {
-            'connection_count': 0,  # Would query from %Library.ProcessInfo
-            'license_usage': 0,     # Would query from system tables
-            'active_queries': [],   # Would query from active processes
+            "connection_count": 0,  # Would query from %Library.ProcessInfo
+            "license_usage": 0,  # Would query from system tables
+            "active_queries": [],  # Would query from active processes
         }
 
         return {
-            'status': 'success',
-            'process_info': process_info,
-            'query_history': _iris_query_history[-10:]  # Last 10 queries
+            "status": "success",
+            "process_info": process_info,
+            "query_history": _iris_query_history[-10:],  # Last 10 queries
         }
 
     except ImportError:
-        return {
-            'status': 'error',
-            'error': 'IRIS module not available',
-            'query_history': []
-        }
+        return {"status": "error", "error": "IRIS module not available", "query_history": []}
     except Exception as e:
         return {
-            'status': 'error',
-            'error': str(e),
-            'query_history': _iris_query_history[-10:] if _iris_query_history else []
+            "status": "error",
+            "error": str(e),
+            "query_history": _iris_query_history[-10:] if _iris_query_history else [],
         }
 
 
@@ -709,24 +714,24 @@ def pytest_runtest_makereport(item, call):
             "Test failed - capturing diagnostics",
             test_id=item.nodeid,
             phase=report.when,
-            duration=report.duration
+            duration=report.duration,
         )
 
         # Capture IRIS state
         iris_state = capture_iris_state()
 
         # Attach diagnostic information to the test item
-        if not hasattr(item, '_diagnostics'):
+        if not hasattr(item, "_diagnostics"):
             item._diagnostics = []
 
         diagnostic_entry = {
-            'test_id': item.nodeid,
-            'phase': report.when,
-            'duration_ms': report.duration * 1000 if report.duration else 0,
-            'failure_type': 'assertion_error' if call.excinfo else 'unknown',
-            'error_message': str(call.excinfo.value) if call.excinfo else '',
-            'iris_state': iris_state,
-            'timestamp': time.time()
+            "test_id": item.nodeid,
+            "phase": report.when,
+            "duration_ms": report.duration * 1000 if report.duration else 0,
+            "failure_type": "assertion_error" if call.excinfo else "unknown",
+            "error_message": str(call.excinfo.value) if call.excinfo else "",
+            "iris_state": iris_state,
+            "timestamp": time.time(),
         }
 
         item._diagnostics.append(diagnostic_entry)
@@ -734,24 +739,17 @@ def pytest_runtest_makereport(item, call):
         # Write to test_failures.jsonl
         try:
             import json
-            import os
 
-            failures_file = 'test_failures.jsonl'
+            failures_file = "test_failures.jsonl"
 
-            with open(failures_file, 'a') as f:
-                f.write(json.dumps(diagnostic_entry) + '\n')
+            with open(failures_file, "a") as f:
+                f.write(json.dumps(diagnostic_entry) + "\n")
 
-            logger.info(
-                "Diagnostic information written",
-                test_id=item.nodeid,
-                file=failures_file
-            )
+            logger.info("Diagnostic information written", test_id=item.nodeid, file=failures_file)
 
         except Exception as e:
             logger.error(
-                "Failed to write diagnostic information",
-                test_id=item.nodeid,
-                error=str(e)
+                "Failed to write diagnostic information", test_id=item.nodeid, error=str(e)
             )
 
 
@@ -759,18 +757,8 @@ def pytest_configure(config):
     """Configure pytest with custom markers"""
     logger.info("pytest_configure: Initializing IRIS PGWire test framework")
 
-    config.addinivalue_line(
-        "markers", "e2e: E2E tests with real PostgreSQL clients"
-    )
-    config.addinivalue_line(
-        "markers", "integration: Integration tests with IRIS"
-    )
-    config.addinivalue_line(
-        "markers", "unit: Unit tests (no external dependencies)"
-    )
-    config.addinivalue_line(
-        "markers", "requires_iris: Tests requiring IRIS connection"
-    )
-    config.addinivalue_line(
-        "markers", "requires_docker: Tests requiring Docker"
-    )
+    config.addinivalue_line("markers", "e2e: E2E tests with real PostgreSQL clients")
+    config.addinivalue_line("markers", "integration: Integration tests with IRIS")
+    config.addinivalue_line("markers", "unit: Unit tests (no external dependencies)")
+    config.addinivalue_line("markers", "requires_iris: Tests requiring IRIS connection")
+    config.addinivalue_line("markers", "requires_docker: Tests requiring Docker")

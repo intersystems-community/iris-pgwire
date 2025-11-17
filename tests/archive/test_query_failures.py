@@ -3,12 +3,13 @@
 Diagnostic script to identify failing queries in PGWire benchmark.
 """
 
-import psycopg
 import sys
+
+import psycopg
 
 # Connect to PGWire
 try:
-    conn = psycopg.connect(host='localhost', port=5434, dbname='USER', connect_timeout=10)
+    conn = psycopg.connect(host="localhost", port=5434, dbname="USER", connect_timeout=10)
     cursor = conn.cursor()
     print("✅ Connected to PGWire")
 except Exception as e:
@@ -24,12 +25,10 @@ test_queries = {
     "simple_select_all": "SELECT * FROM benchmark_vectors LIMIT 10",
     "simple_select_id": "SELECT * FROM benchmark_vectors WHERE id = 1",
     "simple_count": "SELECT COUNT(*) FROM benchmark_vectors",
-
     # Vector similarity queries (pgvector operators)
     "vector_cosine": f"SELECT id, embedding <=> '{test_vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
     "vector_l2": f"SELECT id, embedding <-> '{test_vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
     "vector_inner_product": f"SELECT id, (embedding <#> '{test_vector}') * -1 AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT 5",
-
     # Complex join queries
     "join_with_metadata": """
         SELECT v.id, v.embedding, m.label, m.created_at

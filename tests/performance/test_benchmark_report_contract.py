@@ -5,15 +5,19 @@ CRITICAL TDD REQUIREMENT: These tests MUST FAIL before implementation.
 Tests validate BenchmarkReport.to_json() and to_table_rows() methods per specs/015-add-3-way/contracts/benchmark_api.py
 """
 
-import pytest
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from benchmarks.config import BenchmarkConfiguration, BenchmarkReport, MethodResults, ConnectionConfig, CategoryMetrics
+from benchmarks.config import (
+    BenchmarkConfiguration,
+    BenchmarkReport,
+    ConnectionConfig,
+    MethodResults,
+)
 
 
 class TestBenchmarkReportJSONExport:
@@ -28,9 +32,11 @@ class TestBenchmarkReportJSONExport:
             iterations=1000,
             connection_configs={
                 "iris_pgwire": ConnectionConfig("iris_pgwire", "localhost", 5432, "USER"),
-                "postgresql_psycopg3": ConnectionConfig("postgresql_psycopg3", "localhost", 5433, "benchmark"),
+                "postgresql_psycopg3": ConnectionConfig(
+                    "postgresql_psycopg3", "localhost", 5433, "benchmark"
+                ),
                 "iris_dbapi": ConnectionConfig("iris_dbapi", "localhost", 1972, "USER"),
-            }
+            },
         )
 
         method_results = {
@@ -42,7 +48,7 @@ class TestBenchmarkReportJSONExport:
                 latency_p50_ms=8.3,
                 latency_p95_ms=12.7,
                 latency_p99_ms=15.9,
-                by_category={}
+                by_category={},
             ),
             "postgresql_psycopg3": MethodResults(
                 method_name="postgresql_psycopg3",
@@ -52,7 +58,7 @@ class TestBenchmarkReportJSONExport:
                 latency_p50_ms=4.2,
                 latency_p95_ms=6.8,
                 latency_p99_ms=9.1,
-                by_category={}
+                by_category={},
             ),
             "iris_dbapi": MethodResults(
                 method_name="iris_dbapi",
@@ -62,7 +68,7 @@ class TestBenchmarkReportJSONExport:
                 latency_p50_ms=10.1,
                 latency_p95_ms=14.5,
                 latency_p99_ms=18.3,
-                by_category={}
+                by_category={},
             ),
         }
 
@@ -74,7 +80,7 @@ class TestBenchmarkReportJSONExport:
             total_duration_seconds=123.4,
             method_results=method_results,
             raw_results=[],
-            validation_errors=[]
+            validation_errors=[],
         )
 
         json_output = report.to_json()
@@ -112,14 +118,18 @@ class TestBenchmarkReportJSONExport:
             dataset_size=100000,
             connection_configs={
                 "iris_pgwire": ConnectionConfig("iris_pgwire", "localhost", 5432, "USER"),
-                "postgresql_psycopg3": ConnectionConfig("postgresql_psycopg3", "localhost", 5433, "benchmark"),
+                "postgresql_psycopg3": ConnectionConfig(
+                    "postgresql_psycopg3", "localhost", 5433, "benchmark"
+                ),
                 "iris_dbapi": ConnectionConfig("iris_dbapi", "localhost", 1972, "USER"),
-            }
+            },
         )
 
         method_results = {
             "iris_pgwire": MethodResults("iris_pgwire", 100, 0, 1234.5, 8.3, 12.7, 15.9, {}),
-            "postgresql_psycopg3": MethodResults("postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}),
+            "postgresql_psycopg3": MethodResults(
+                "postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}
+            ),
             "iris_dbapi": MethodResults("iris_dbapi", 100, 0, 987.3, 10.1, 14.5, 18.3, {}),
         }
 
@@ -131,7 +141,7 @@ class TestBenchmarkReportJSONExport:
             total_duration_seconds=100.0,
             method_results=method_results,
             raw_results=[],
-            validation_errors=[]
+            validation_errors=[],
         )
 
         json_output = report.to_json()
@@ -151,14 +161,18 @@ class TestBenchmarkReportTableExport:
             dataset_size=100000,
             connection_configs={
                 "iris_pgwire": ConnectionConfig("iris_pgwire", "localhost", 5432, "USER"),
-                "postgresql_psycopg3": ConnectionConfig("postgresql_psycopg3", "localhost", 5433, "benchmark"),
+                "postgresql_psycopg3": ConnectionConfig(
+                    "postgresql_psycopg3", "localhost", 5433, "benchmark"
+                ),
                 "iris_dbapi": ConnectionConfig("iris_dbapi", "localhost", 1972, "USER"),
-            }
+            },
         )
 
         method_results = {
             "iris_pgwire": MethodResults("iris_pgwire", 100, 0, 1234.5, 8.3, 12.7, 15.9, {}),
-            "postgresql_psycopg3": MethodResults("postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}),
+            "postgresql_psycopg3": MethodResults(
+                "postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}
+            ),
             "iris_dbapi": MethodResults("iris_dbapi", 100, 0, 987.3, 10.1, 14.5, 18.3, {}),
         }
 
@@ -170,7 +184,7 @@ class TestBenchmarkReportTableExport:
             total_duration_seconds=100.0,
             method_results=method_results,
             raw_results=[],
-            validation_errors=[]
+            validation_errors=[],
         )
 
         table_rows = report.to_table_rows()
@@ -187,14 +201,18 @@ class TestBenchmarkReportTableExport:
             dataset_size=100000,
             connection_configs={
                 "iris_pgwire": ConnectionConfig("iris_pgwire", "localhost", 5432, "USER"),
-                "postgresql_psycopg3": ConnectionConfig("postgresql_psycopg3", "localhost", 5433, "benchmark"),
+                "postgresql_psycopg3": ConnectionConfig(
+                    "postgresql_psycopg3", "localhost", 5433, "benchmark"
+                ),
                 "iris_dbapi": ConnectionConfig("iris_dbapi", "localhost", 1972, "USER"),
-            }
+            },
         )
 
         method_results = {
             "iris_pgwire": MethodResults("iris_pgwire", 100, 0, 1234.5, 8.3, 12.7, 15.9, {}),
-            "postgresql_psycopg3": MethodResults("postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}),
+            "postgresql_psycopg3": MethodResults(
+                "postgresql_psycopg3", 100, 0, 2345.6, 4.2, 6.8, 9.1, {}
+            ),
             "iris_dbapi": MethodResults("iris_dbapi", 100, 0, 987.3, 10.1, 14.5, 18.3, {}),
         }
 
@@ -206,7 +224,7 @@ class TestBenchmarkReportTableExport:
             total_duration_seconds=100.0,
             method_results=method_results,
             raw_results=[],
-            validation_errors=[]
+            validation_errors=[],
         )
 
         table_rows = report.to_table_rows()
@@ -223,13 +241,17 @@ class TestBenchmarkReportTableExport:
             dataset_size=100000,
             connection_configs={
                 "iris_pgwire": ConnectionConfig("iris_pgwire", "localhost", 5432, "USER"),
-                "postgresql_psycopg3": ConnectionConfig("postgresql_psycopg3", "localhost", 5433, "benchmark"),
+                "postgresql_psycopg3": ConnectionConfig(
+                    "postgresql_psycopg3", "localhost", 5433, "benchmark"
+                ),
                 "iris_dbapi": ConnectionConfig("iris_dbapi", "localhost", 1972, "USER"),
-            }
+            },
         )
 
         method_results = {
-            "iris_pgwire": MethodResults("iris_pgwire", 100, 0, 1234.567, 8.345, 12.789, 15.912, {}),
+            "iris_pgwire": MethodResults(
+                "iris_pgwire", 100, 0, 1234.567, 8.345, 12.789, 15.912, {}
+            ),
         }
 
         report = BenchmarkReport(
@@ -240,7 +262,7 @@ class TestBenchmarkReportTableExport:
             total_duration_seconds=100.0,
             method_results=method_results,
             raw_results=[],
-            validation_errors=[]
+            validation_errors=[],
         )
 
         table_rows = report.to_table_rows()

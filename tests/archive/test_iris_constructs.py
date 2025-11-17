@@ -12,8 +12,9 @@ Tests the comprehensive IRIS construct translation including:
 """
 
 import asyncio
+
 import psycopg
-from typing import List, Dict, Any
+
 
 class IRISConstructsTest:
     """Test suite for IRIS-specific constructs"""
@@ -25,20 +26,13 @@ class IRISConstructsTest:
     async def setup_connection(self):
         """Setup PostgreSQL connection"""
         self.conn = await psycopg.AsyncConnection.connect(
-            host='127.0.0.1',
-            port=5432,
-            user='test_user',
-            dbname='USER'
+            host="127.0.0.1", port=5432, user="test_user", dbname="USER"
         )
         print("✅ Connected to IRIS via PostgreSQL wire protocol")
 
     def add_test_result(self, test_name: str, success: bool, details: str = ""):
         """Track test results"""
-        self.test_results.append({
-            'test': test_name,
-            'success': success,
-            'details': details
-        })
+        self.test_results.append({"test": test_name, "success": success, "details": details})
 
     async def test_system_functions(self):
         """Test %SYSTEM.* function translation"""
@@ -49,7 +43,6 @@ class IRISConstructsTest:
             # Version functions
             ("SELECT version() as iris_version", "System version function"),
             ("SELECT current_user as current_iris_user", "Current user function"),
-
             # Custom IRIS system functions (if implemented)
             ("SELECT 1 as parallel_test", "Parallel info function (basic)"),
         ]
@@ -59,9 +52,11 @@ class IRISConstructsTest:
                 async with self.conn.cursor() as cur:
                     await cur.execute(sql)
                     result = await cur.fetchone()
-                    self.add_test_result(f"System Function: {description}",
-                                       result is not None,
-                                       f"Result: {result[0] if result else 'None'}")
+                    self.add_test_result(
+                        f"System Function: {description}",
+                        result is not None,
+                        f"Result: {result[0] if result else 'None'}",
+                    )
                     print(f"✓ {description}: {result[0] if result else 'None'}")
             except Exception as e:
                 self.add_test_result(f"System Function: {description}", False, str(e))
@@ -75,36 +70,46 @@ class IRISConstructsTest:
         # Create test table first
         try:
             async with self.conn.cursor() as cur:
-                await cur.execute("""
+                await cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS test_sql_extensions (
                         id SERIAL PRIMARY KEY,
                         name VARCHAR(50),
                         value INTEGER,
                         created_date DATE DEFAULT CURRENT_DATE
                     )
-                """)
+                """
+                )
 
                 # Insert test data
                 for i in range(20):
                     await cur.execute(
                         "INSERT INTO test_sql_extensions (name, value) VALUES (%s, %s)",
-                        (f"Test{i}", i * 10)
+                        (f"Test{i}", i * 10),
                     )
 
                 # Test TOP clause (should be translated to LIMIT)
-                await cur.execute("SELECT name, value FROM test_sql_extensions ORDER BY value LIMIT 5")
+                await cur.execute(
+                    "SELECT name, value FROM test_sql_extensions ORDER BY value LIMIT 5"
+                )
                 top_results = await cur.fetchall()
-                self.add_test_result("SQL Extension: TOP clause (as LIMIT)",
-                                   len(top_results) == 5,
-                                   f"Retrieved {len(top_results)} rows")
+                self.add_test_result(
+                    "SQL Extension: TOP clause (as LIMIT)",
+                    len(top_results) == 5,
+                    f"Retrieved {len(top_results)} rows",
+                )
                 print(f"✓ TOP clause test: {len(top_results)} rows retrieved")
 
                 # Test FOR UPDATE NOWAIT (should pass through)
-                await cur.execute("SELECT name FROM test_sql_extensions WHERE id = 1 FOR UPDATE NOWAIT")
+                await cur.execute(
+                    "SELECT name FROM test_sql_extensions WHERE id = 1 FOR UPDATE NOWAIT"
+                )
                 update_result = await cur.fetchone()
-                self.add_test_result("SQL Extension: FOR UPDATE NOWAIT",
-                                   update_result is not None,
-                                   "FOR UPDATE NOWAIT passed through")
+                self.add_test_result(
+                    "SQL Extension: FOR UPDATE NOWAIT",
+                    update_result is not None,
+                    "FOR UPDATE NOWAIT passed through",
+                )
                 print(f"✓ FOR UPDATE NOWAIT: {update_result[0] if update_result else 'None'}")
 
         except Exception as e:
@@ -120,10 +125,8 @@ class IRISConstructsTest:
             # String functions (should translate to PostgreSQL equivalents)
             ("SELECT UPPER('test') as uppercase_test", "SQLUPPER → UPPER"),
             ("SELECT LOWER('TEST') as lowercase_test", "SQLLOWER → LOWER"),
-
             # Date/time functions
             ("SELECT EXTRACT(EPOCH FROM NOW()) as current_epoch", "Date/time functions"),
-
             # Basic test functions
             ("SELECT 'test_value' as exact_match", "Text functions"),
         ]
@@ -133,9 +136,9 @@ class IRISConstructsTest:
                 async with self.conn.cursor() as cur:
                     await cur.execute(sql)
                     result = await cur.fetchone()
-                    self.add_test_result(f"IRIS Function: {description}",
-                                       result is not None,
-                                       f"Result: {result[0]}")
+                    self.add_test_result(
+                        f"IRIS Function: {description}", result is not None, f"Result: {result[0]}"
+                    )
                     print(f"✓ {description}: {result[0]}")
             except Exception as e:
                 self.add_test_result(f"IRIS Function: {description}", False, str(e))
@@ -149,28 +152,37 @@ class IRISConstructsTest:
         try:
             async with self.conn.cursor() as cur:
                 # Test SERIAL (should map to PostgreSQL SERIAL)
-                await cur.execute("""
+                await cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS test_iris_types (
                         id SERIAL PRIMARY KEY,
                         amount NUMERIC(19,4),
                         created_time TIMESTAMP DEFAULT NOW(),
                         data_blob BYTEA
                     )
-                """)
+                """
+                )
 
                 # Insert test data
-                await cur.execute("""
+                await cur.execute(
+                    """
                     INSERT INTO test_iris_types (amount, data_blob)
                     VALUES (%s, %s)
-                """, (123.45, b'test binary data'))
+                """,
+                    (123.45, b"test binary data"),
+                )
 
                 # Verify data insertion
-                await cur.execute("SELECT id, amount, created_time FROM test_iris_types ORDER BY id DESC LIMIT 1")
+                await cur.execute(
+                    "SELECT id, amount, created_time FROM test_iris_types ORDER BY id DESC LIMIT 1"
+                )
                 result = await cur.fetchone()
 
-                self.add_test_result("Data Types: SERIAL, NUMERIC, TIMESTAMP, BYTEA",
-                                   result is not None,
-                                   f"ID: {result[0]}, Amount: {result[1]}")
+                self.add_test_result(
+                    "Data Types: SERIAL, NUMERIC, TIMESTAMP, BYTEA",
+                    result is not None,
+                    f"ID: {result[0]}, Amount: {result[1]}",
+                )
                 print(f"✓ Data types test: ID={result[0]}, Amount={result[1]}")
 
         except Exception as e:
@@ -185,28 +197,38 @@ class IRISConstructsTest:
         try:
             async with self.conn.cursor() as cur:
                 # Test basic JSON functions
-                await cur.execute("SELECT json_build_object('name', 'test', 'value', 123) as json_obj")
+                await cur.execute(
+                    "SELECT json_build_object('name', 'test', 'value', 123) as json_obj"
+                )
                 json_result = await cur.fetchone()
-                self.add_test_result("JSON Function: json_build_object",
-                                   json_result is not None,
-                                   f"JSON: {json_result[0]}")
+                self.add_test_result(
+                    "JSON Function: json_build_object",
+                    json_result is not None,
+                    f"JSON: {json_result[0]}",
+                )
                 print(f"✓ JSON_OBJECT → json_build_object: {json_result[0]}")
 
                 # Test JSON array function
                 await cur.execute("SELECT json_build_array(1, 2, 3, 'test') as json_arr")
                 array_result = await cur.fetchone()
-                self.add_test_result("JSON Function: json_build_array",
-                                   array_result is not None,
-                                   f"Array: {array_result[0]}")
+                self.add_test_result(
+                    "JSON Function: json_build_array",
+                    array_result is not None,
+                    f"Array: {array_result[0]}",
+                )
                 print(f"✓ JSON_ARRAY → json_build_array: {array_result[0]}")
 
                 # Test JSON path operations
                 test_json = '{"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]}'
-                await cur.execute("SELECT jsonb_path_query(%s, '$.users[*].name') as names", (test_json,))
+                await cur.execute(
+                    "SELECT jsonb_path_query(%s, '$.users[*].name') as names", (test_json,)
+                )
                 path_results = await cur.fetchall()
-                self.add_test_result("JSON Path: jsonb_path_query",
-                                   len(path_results) > 0,
-                                   f"Found {len(path_results)} names")
+                self.add_test_result(
+                    "JSON Path: jsonb_path_query",
+                    len(path_results) > 0,
+                    f"Found {len(path_results)} names",
+                )
                 print(f"✓ JSON path query: Found {len(path_results)} names")
 
         except Exception as e:
@@ -221,45 +243,59 @@ class IRISConstructsTest:
         try:
             async with self.conn.cursor() as cur:
                 # Create table with JSON data
-                await cur.execute("""
+                await cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS test_docdb (
                         id SERIAL PRIMARY KEY,
                         document JSONB
                     )
-                """)
+                """
+                )
 
                 # Insert test documents
                 test_docs = [
                     '{"name": "Alice", "age": 30, "city": "New York", "skills": ["Python", "SQL"]}',
                     '{"name": "Bob", "age": 25, "city": "San Francisco", "skills": ["JavaScript", "React"]}',
-                    '{"name": "Carol", "age": 35, "city": "Boston", "skills": ["Java", "Spring"]}'
+                    '{"name": "Carol", "age": 35, "city": "Boston", "skills": ["Java", "Spring"]}',
                 ]
 
                 for doc in test_docs:
                     await cur.execute("INSERT INTO test_docdb (document) VALUES (%s)", (doc,))
 
                 # Test JSON field access
-                await cur.execute("SELECT document->>'name' as name FROM test_docdb WHERE (document->>'age')::int > 28")
+                await cur.execute(
+                    "SELECT document->>'name' as name FROM test_docdb WHERE (document->>'age')::int > 28"
+                )
                 filter_results = await cur.fetchall()
-                self.add_test_result("DocDB Filter: Age > 28",
-                                   len(filter_results) == 2,
-                                   f"Found {len(filter_results)} users")
+                self.add_test_result(
+                    "DocDB Filter: Age > 28",
+                    len(filter_results) == 2,
+                    f"Found {len(filter_results)} users",
+                )
                 print(f"✓ Document filter (age > 28): {[r[0] for r in filter_results]}")
 
                 # Test JSON path exists
-                await cur.execute("SELECT document->>'name' as name FROM test_docdb WHERE jsonb_path_exists(document, '$.skills[*] ? (@ == \"Python\")')")
+                await cur.execute(
+                    "SELECT document->>'name' as name FROM test_docdb WHERE jsonb_path_exists(document, '$.skills[*] ? (@ == \"Python\")')"
+                )
                 python_users = await cur.fetchall()
-                self.add_test_result("DocDB Filter: JSON path exists (Python skills)",
-                                   len(python_users) == 1,
-                                   f"Found {len(python_users)} Python users")
+                self.add_test_result(
+                    "DocDB Filter: JSON path exists (Python skills)",
+                    len(python_users) == 1,
+                    f"Found {len(python_users)} Python users",
+                )
                 print(f"✓ JSON path filter (Python skills): {[r[0] for r in python_users]}")
 
                 # Test JSON containment
-                await cur.execute("SELECT document->>'name' as name FROM test_docdb WHERE document @> '{\"city\": \"Boston\"}'")
+                await cur.execute(
+                    "SELECT document->>'name' as name FROM test_docdb WHERE document @> '{\"city\": \"Boston\"}'"
+                )
                 boston_users = await cur.fetchall()
-                self.add_test_result("DocDB Filter: JSON containment (Boston)",
-                                   len(boston_users) == 1,
-                                   f"Found {len(boston_users)} Boston users")
+                self.add_test_result(
+                    "DocDB Filter: JSON containment (Boston)",
+                    len(boston_users) == 1,
+                    f"Found {len(boston_users)} Boston users",
+                )
                 print(f"✓ JSON containment filter (Boston): {[r[0] for r in boston_users]}")
 
         except Exception as e:
@@ -276,22 +312,28 @@ class IRISConstructsTest:
                 # Test vector creation (if vector support available)
                 await cur.execute("SELECT TO_VECTOR('[1,2,3]') as test_vector")
                 vector_result = await cur.fetchone()
-                self.add_test_result("Vector Integration: TO_VECTOR",
-                                   vector_result is not None,
-                                   "Vector created successfully")
+                self.add_test_result(
+                    "Vector Integration: TO_VECTOR",
+                    vector_result is not None,
+                    "Vector created successfully",
+                )
                 print(f"✓ Vector creation: {str(vector_result[0])[:50]}...")
 
                 # Test vector similarity
-                await cur.execute("""
+                await cur.execute(
+                    """
                     SELECT VECTOR_COSINE(
                         TO_VECTOR('[1,0,0]'),
                         TO_VECTOR('[1,0,0]')
                     ) as similarity
-                """)
+                """
+                )
                 similarity_result = await cur.fetchone()
-                self.add_test_result("Vector Integration: VECTOR_COSINE",
-                                   abs(similarity_result[0] - 1.0) < 0.001,
-                                   f"Similarity: {similarity_result[0]}")
+                self.add_test_result(
+                    "Vector Integration: VECTOR_COSINE",
+                    abs(similarity_result[0] - 1.0) < 0.001,
+                    f"Similarity: {similarity_result[0]}",
+                )
                 print(f"✓ Vector similarity: {similarity_result[0]}")
 
         except Exception as e:
@@ -320,39 +362,43 @@ class IRISConstructsTest:
 
     def print_test_summary(self):
         """Print comprehensive test results"""
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("IRIS CONSTRUCTS TRANSLATION - TEST RESULTS")
-        print("="*80)
+        print("=" * 80)
 
         total_tests = len(self.test_results)
-        passed_tests = sum(1 for r in self.test_results if r['success'])
+        passed_tests = sum(1 for r in self.test_results if r["success"])
         failed_tests = total_tests - passed_tests
 
         # Group by category
         categories = {}
         for result in self.test_results:
-            category = result['test'].split(':')[0]
+            category = result["test"].split(":")[0]
             if category not in categories:
-                categories[category] = {'passed': 0, 'failed': 0, 'tests': []}
+                categories[category] = {"passed": 0, "failed": 0, "tests": []}
 
-            if result['success']:
-                categories[category]['passed'] += 1
+            if result["success"]:
+                categories[category]["passed"] += 1
             else:
-                categories[category]['failed'] += 1
-            categories[category]['tests'].append(result)
+                categories[category]["failed"] += 1
+            categories[category]["tests"].append(result)
 
         # Print by category
         for category, stats in categories.items():
             print(f"\n🔸 {category}")
             print("-" * 50)
-            for test in stats['tests']:
-                status = "✅" if test['success'] else "❌"
-                test_name = test['test'].split(':', 1)[1].strip() if ':' in test['test'] else test['test']
+            for test in stats["tests"]:
+                status = "✅" if test["success"] else "❌"
+                test_name = (
+                    test["test"].split(":", 1)[1].strip() if ":" in test["test"] else test["test"]
+                )
                 print(f"  {status} {test_name:<40} {test['details']}")
-            print(f"     Category Total: {stats['passed']}/{stats['passed'] + stats['failed']} passed")
+            print(
+                f"     Category Total: {stats['passed']}/{stats['passed'] + stats['failed']} passed"
+            )
 
         # Overall summary
-        print(f"\n📊 OVERALL SUMMARY")
+        print("\n📊 OVERALL SUMMARY")
         print(f"   Total Tests: {total_tests}")
         print(f"   Passed: {passed_tests}")
         print(f"   Failed: {failed_tests}")
@@ -370,22 +416,24 @@ class IRISConstructsTest:
         else:
             print(f"\n⚠ {failed_tests} tests failed - see details above")
 
+
 async def start_test_server():
     """Start server for testing"""
     try:
         import sys
-        sys.path.append('src')
+
+        sys.path.append("src")
         from iris_pgwire.server import PGWireServer
 
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=5432,
-            iris_host='127.0.0.1',
+            iris_host="127.0.0.1",
             iris_port=1975,
-            iris_username='SuperUser',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_ssl=False
+            iris_username="SuperUser",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_ssl=False,
         )
 
         server_task = asyncio.create_task(server.start())
@@ -394,6 +442,7 @@ async def start_test_server():
     except Exception as e:
         print(f"Server start failed: {e}")
         return None
+
 
 async def main():
     print("🧪 IRIS Constructs Translation - Comprehensive Test Suite")
@@ -409,6 +458,7 @@ async def main():
     finally:
         if server_task:
             server_task.cancel()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -6,10 +6,12 @@ on compiler errors.
 
 EXPECTED: These tests MUST FAIL before implementation (TDD).
 """
-import pytest
+
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 # Add benchmarks to path for executor imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "benchmarks"))
@@ -30,10 +32,10 @@ class TestBenchmarkTimeouts:
 
         result = executor.execute_with_timeout("SELECT 1")
 
-        assert result.status == "SUCCESS", \
-            f"Simple query failed: {result.error_message}"
-        assert result.elapsed_time_ms < 10000, \
-            f"Query took {result.elapsed_time_ms}ms (should be <10000ms)"
+        assert result.status == "SUCCESS", f"Simple query failed: {result.error_message}"
+        assert (
+            result.elapsed_time_ms < 10000
+        ), f"Query took {result.elapsed_time_ms}ms (should be <10000ms)"
         assert result.row_count == 1
 
     def test_hanging_query_times_out(self):
@@ -46,15 +48,14 @@ class TestBenchmarkTimeouts:
             "SELECT id, embedding <=> '[MALFORMED' FROM benchmark_vectors"
         )
 
-        assert result.status == "TIMEOUT", \
-            f"Expected TIMEOUT, got {result.status}"
+        assert result.status == "TIMEOUT", f"Expected TIMEOUT, got {result.status}"
 
         # Should timeout around 5 seconds (with small tolerance)
-        assert 4500 <= result.elapsed_time_ms <= 6000, \
-            f"Timeout at {result.elapsed_time_ms}ms (expected ~5000ms)"
+        assert (
+            4500 <= result.elapsed_time_ms <= 6000
+        ), f"Timeout at {result.elapsed_time_ms}ms (expected ~5000ms)"
 
-        assert result.error_message is not None, \
-            "Timeout should include error message"
+        assert result.error_message is not None, "Timeout should include error message"
 
     def test_iris_compiler_error_caught(self):
         """IRIS compiler errors MUST be caught before timeout (FR-004)"""
@@ -67,15 +68,16 @@ class TestBenchmarkTimeouts:
         )
 
         # Error should be caught immediately, not after timeout
-        assert result.status == "ERROR", \
-            f"Expected ERROR, got {result.status}"
-        assert result.elapsed_time_ms < 5000, \
-            f"Error detection took {result.elapsed_time_ms}ms (should be quick)"
+        assert result.status == "ERROR", f"Expected ERROR, got {result.status}"
+        assert (
+            result.elapsed_time_ms < 5000
+        ), f"Error detection took {result.elapsed_time_ms}ms (should be quick)"
 
         # Check for IRIS error indicators
         error_msg = result.error_message.lower()
-        assert "sqlcode" in error_msg or "compiler" in error_msg or "error" in error_msg, \
-            f"Missing error context in: {result.error_message}"
+        assert (
+            "sqlcode" in error_msg or "compiler" in error_msg or "error" in error_msg
+        ), f"Missing error context in: {result.error_message}"
 
     def test_timeout_cleanup_releases_connection(self):
         """Timeout MUST release connection back to pool (FR-004)"""
@@ -86,14 +88,15 @@ class TestBenchmarkTimeouts:
             result = executor.execute_with_timeout(
                 f"SELECT id, embedding <=> '[MALFORMED{i}' FROM benchmark_vectors"
             )
-            assert result.status in ["TIMEOUT", "ERROR"], \
-                f"Iteration {i}: Expected TIMEOUT or ERROR"
+            assert result.status in [
+                "TIMEOUT",
+                "ERROR",
+            ], f"Iteration {i}: Expected TIMEOUT or ERROR"
 
         # Connection pool MUST NOT be exhausted
         # This query should still work
         result = executor.execute_with_timeout("SELECT 1")
-        assert result.status == "SUCCESS", \
-            "Connection pool exhausted after timeouts!"
+        assert result.status == "SUCCESS", "Connection pool exhausted after timeouts!"
 
     def test_configurable_timeout_duration(self):
         """Timeout duration MUST be configurable (FR-004)"""

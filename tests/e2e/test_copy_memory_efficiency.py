@@ -10,8 +10,6 @@ FR-006: System MUST handle datasets up to 1 million rows without exceeding 100MB
 """
 
 import pytest
-import tempfile
-import os
 
 
 @pytest.mark.e2e

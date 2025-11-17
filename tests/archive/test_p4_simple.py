@@ -6,14 +6,16 @@ This test focuses on the key P4 functionality that works with real PostgreSQL cl
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -31,18 +33,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False  # Use trust auth for testing
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,  # Use trust auth for testing
         )
 
         print(f"🚀 Starting server on 127.0.0.1:{port}...")
@@ -61,6 +65,7 @@ def run_server(port, ready_event):
 
     asyncio.run(start_server())
 
+
 def test_connection_timeout():
     """Test connection timeout handling with psycopg2"""
     PORT = 15490
@@ -74,7 +79,7 @@ def test_connection_timeout():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -90,11 +95,7 @@ def test_connection_timeout():
         start_time = time.time()
         try:
             conn = psycopg2.connect(
-                host='127.0.0.1',
-                port=PORT,
-                database='USER',
-                user='test_user',
-                connect_timeout=5
+                host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
             )
 
             print("   Connection established successfully")
@@ -127,6 +128,7 @@ def test_connection_timeout():
         print(f"❌ Connection timeout test failed: {e}")
         return False
 
+
 def test_graceful_shutdown():
     """Test graceful connection shutdown with psycopg2"""
     PORT = 15491
@@ -140,7 +142,7 @@ def test_graceful_shutdown():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -155,12 +157,13 @@ def test_graceful_shutdown():
         for i in range(3):
             try:
                 import psycopg2
+
                 conn = psycopg2.connect(
-                    host='127.0.0.1',
+                    host="127.0.0.1",
                     port=PORT,
-                    database='USER',
-                    user=f'test_user_{i}',
-                    connect_timeout=5
+                    database="USER",
+                    user=f"test_user_{i}",
+                    connect_timeout=5,
                 )
                 connections.append(conn)
                 print(f"   Connection {i+1} established")
@@ -198,6 +201,7 @@ def test_graceful_shutdown():
         print(f"❌ Graceful shutdown test failed: {e}")
         return False
 
+
 def test_multiple_concurrent_connections():
     """Test multiple concurrent connections (simulates cancel scenario)"""
     PORT = 15492
@@ -211,7 +215,7 @@ def test_multiple_concurrent_connections():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -228,11 +232,11 @@ def test_multiple_concurrent_connections():
         for i in range(5):
             try:
                 conn = psycopg2.connect(
-                    host='127.0.0.1',
+                    host="127.0.0.1",
                     port=PORT,
-                    database='USER',
-                    user=f'user_{i}',
-                    connect_timeout=5
+                    database="USER",
+                    user=f"user_{i}",
+                    connect_timeout=5,
                 )
                 connections.append(conn)
                 print(f"   Connection {i+1} established")
@@ -260,15 +264,20 @@ def test_multiple_concurrent_connections():
                 print(f"   Connection {i+1} close error: {e}")
 
         if successful_queries >= len(connections) // 2:  # At least half should work
-            print(f"🎉 Multiple connections test passed! ({successful_queries}/{len(connections)} successful)")
+            print(
+                f"🎉 Multiple connections test passed! ({successful_queries}/{len(connections)} successful)"
+            )
             return True
         else:
-            print(f"❌ Too many connection failures: only {successful_queries}/{len(connections)} successful")
+            print(
+                f"❌ Too many connection failures: only {successful_queries}/{len(connections)} successful"
+            )
             return False
 
     except Exception as e:
         print(f"❌ Multiple connections test failed: {e}")
         return False
+
 
 def main():
     """Run P4 tests that work with real PostgreSQL clients"""
@@ -298,11 +307,11 @@ def main():
     test_names = [
         "Connection Timeout Handling",
         "Graceful Connection Shutdown",
-        "Multiple Concurrent Connections"
+        "Multiple Concurrent Connections",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -321,6 +330,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} P4 tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

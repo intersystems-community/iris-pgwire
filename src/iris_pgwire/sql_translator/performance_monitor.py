@@ -7,20 +7,19 @@ real-time metrics collection, and constitutional compliance reporting.
 Constitutional Compliance: Sub-5ms translation SLA with detailed monitoring.
 """
 
-import time
-import threading
 import statistics
-from collections import deque, defaultdict
+import threading
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Deque
+from datetime import datetime
 from enum import Enum
-
-from .models import PerformanceTimer, PerformanceStats
+from typing import Any
 
 
 class MetricType(Enum):
     """Types of performance metrics"""
+
     TRANSLATION_TIME = "translation_time"
     CACHE_LOOKUP_TIME = "cache_lookup_time"
     VALIDATION_TIME = "validation_time"
@@ -31,27 +30,30 @@ class MetricType(Enum):
 
 class SLAStatus(Enum):
     """SLA compliance status"""
+
     COMPLIANT = "compliant"
-    WARNING = "warning"      # Approaching SLA threshold
+    WARNING = "warning"  # Approaching SLA threshold
     VIOLATION = "violation"  # SLA violated
-    CRITICAL = "critical"    # Multiple consecutive violations
+    CRITICAL = "critical"  # Multiple consecutive violations
 
 
 @dataclass
 class PerformanceMetric:
     """Individual performance metric record"""
+
     metric_type: MetricType
     value_ms: float
     timestamp: datetime
     component: str
-    session_id: Optional[str] = None
-    trace_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    session_id: str | None = None
+    trace_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SLAViolation:
     """Record of SLA violation"""
+
     violation_id: str
     metric_type: MetricType
     actual_value_ms: float
@@ -60,13 +62,14 @@ class SLAViolation:
     timestamp: datetime
     component: str
     severity: str
-    trace_id: Optional[str] = None
-    context: Dict[str, Any] = field(default_factory=dict)
+    trace_id: str | None = None
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ComponentStats:
     """Performance statistics for a component"""
+
     component_name: str
     total_operations: int
     total_time_ms: float
@@ -84,16 +87,17 @@ class ComponentStats:
 @dataclass
 class ConstitutionalReport:
     """Constitutional compliance report"""
+
     overall_compliance_rate: float
     sla_requirement_ms: float
     total_violations: int
     violation_rate: float
     critical_violations: int
     status: SLAStatus
-    performance_metrics: Dict[str, Any]
-    component_compliance: Dict[str, ComponentStats]
-    recent_violations: List[SLAViolation]
-    recommendations: List[str]
+    performance_metrics: dict[str, Any]
+    component_compliance: dict[str, ComponentStats]
+    recent_violations: list[SLAViolation]
+    recommendations: list[str]
     report_timestamp: datetime
 
 
@@ -123,12 +127,12 @@ class PerformanceMonitor:
 
         # Thread-safe metric storage
         self._lock = threading.RLock()
-        self._metrics: Deque[PerformanceMetric] = deque(maxlen=history_size)
-        self._violations: Deque[SLAViolation] = deque(maxlen=1000)  # Keep last 1000 violations
+        self._metrics: deque[PerformanceMetric] = deque(maxlen=history_size)
+        self._violations: deque[SLAViolation] = deque(maxlen=1000)  # Keep last 1000 violations
 
         # Component-specific tracking
-        self._component_metrics: Dict[str, Deque[float]] = defaultdict(lambda: deque(maxlen=1000))
-        self._component_violations: Dict[str, int] = defaultdict(int)
+        self._component_metrics: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=1000))
+        self._component_violations: dict[str, int] = defaultdict(int)
 
         # Real-time statistics
         self._total_operations = 0
@@ -140,9 +144,15 @@ class PerformanceMonitor:
         self.warning_threshold_ms = sla_threshold_ms * 0.8  # 80% of SLA
         self.critical_violation_threshold = 5  # Consecutive violations before critical
 
-    def record_metric(self, metric_type: MetricType, value_ms: float, component: str,
-                     session_id: Optional[str] = None, trace_id: Optional[str] = None,
-                     **metadata) -> Optional[SLAViolation]:
+    def record_metric(
+        self,
+        metric_type: MetricType,
+        value_ms: float,
+        component: str,
+        session_id: str | None = None,
+        trace_id: str | None = None,
+        **metadata,
+    ) -> SLAViolation | None:
         """
         Record a performance metric
 
@@ -168,7 +178,7 @@ class PerformanceMonitor:
                 component=component,
                 session_id=session_id,
                 trace_id=trace_id,
-                metadata=metadata
+                metadata=metadata,
             )
 
             # Store metric
@@ -212,10 +222,10 @@ class PerformanceMonitor:
             severity=severity,
             trace_id=metric.trace_id,
             context={
-                'session_id': metric.session_id,
-                'consecutive_violations': self._consecutive_violations,
-                'metadata': metric.metadata
-            }
+                "session_id": metric.session_id,
+                "consecutive_violations": self._consecutive_violations,
+                "metadata": metric.metadata,
+            },
         )
 
         self._violations.append(violation)
@@ -224,7 +234,7 @@ class PerformanceMonitor:
 
         return violation
 
-    def get_component_stats(self, component: str) -> Optional[ComponentStats]:
+    def get_component_stats(self, component: str) -> ComponentStats | None:
         """
         Get performance statistics for a specific component
 
@@ -257,7 +267,7 @@ class PerformanceMonitor:
                 p99_time_ms=self._percentile(times, 0.99),
                 sla_violations=violations,
                 sla_compliance_rate=compliance_rate,
-                last_updated=datetime.utcnow()
+                last_updated=datetime.utcnow(),
             )
 
     def get_constitutional_report(self) -> ConstitutionalReport:
@@ -269,7 +279,9 @@ class PerformanceMonitor:
         """
         with self._lock:
             # Calculate overall compliance
-            compliance_rate = max(0.0, 1.0 - (self._total_violations / max(self._total_operations, 1)))
+            compliance_rate = max(
+                0.0, 1.0 - (self._total_violations / max(self._total_operations, 1))
+            )
             violation_rate = self._total_violations / max(self._total_operations, 1)
 
             # Determine overall status
@@ -298,18 +310,20 @@ class PerformanceMonitor:
             performance_metrics = {}
             if all_times:
                 performance_metrics = {
-                    'total_operations': self._total_operations,
-                    'avg_time_ms': statistics.mean(all_times),
-                    'min_time_ms': min(all_times),
-                    'max_time_ms': max(all_times),
-                    'p50_time_ms': statistics.median(all_times),
-                    'p95_time_ms': self._percentile(all_times, 0.95),
-                    'p99_time_ms': self._percentile(all_times, 0.99),
-                    'uptime_seconds': (datetime.utcnow() - self._start_time).total_seconds()
+                    "total_operations": self._total_operations,
+                    "avg_time_ms": statistics.mean(all_times),
+                    "min_time_ms": min(all_times),
+                    "max_time_ms": max(all_times),
+                    "p50_time_ms": statistics.median(all_times),
+                    "p95_time_ms": self._percentile(all_times, 0.95),
+                    "p99_time_ms": self._percentile(all_times, 0.99),
+                    "uptime_seconds": (datetime.utcnow() - self._start_time).total_seconds(),
                 }
 
             # Generate recommendations
-            recommendations = self._generate_recommendations(status, compliance_rate, component_compliance)
+            recommendations = self._generate_recommendations(
+                status, compliance_rate, component_compliance
+            )
 
             # Count critical violations
             critical_violations = sum(1 for v in self._violations if v.severity == "critical")
@@ -325,10 +339,10 @@ class PerformanceMonitor:
                 component_compliance=component_compliance,
                 recent_violations=recent_violations,
                 recommendations=recommendations,
-                report_timestamp=datetime.utcnow()
+                report_timestamp=datetime.utcnow(),
             )
 
-    def get_real_time_status(self) -> Dict[str, Any]:
+    def get_real_time_status(self) -> dict[str, Any]:
         """
         Get real-time performance status
 
@@ -354,23 +368,23 @@ class PerformanceMonitor:
                 sla_status = "warning"
 
             return {
-                'timestamp': datetime.utcnow().isoformat(),
-                'sla_status': sla_status,
-                'sla_threshold_ms': self.sla_threshold_ms,
-                'current_avg_ms': current_avg,
-                'current_p95_ms': current_p95,
-                'consecutive_violations': self._consecutive_violations,
-                'total_operations': self._total_operations,
-                'total_violations': self._total_violations,
-                'operations_per_second': self._calculate_ops_per_second(),
-                'memory_usage': {
-                    'metrics_stored': len(self._metrics),
-                    'violations_stored': len(self._violations),
-                    'components_tracked': len(self._component_metrics)
-                }
+                "timestamp": datetime.utcnow().isoformat(),
+                "sla_status": sla_status,
+                "sla_threshold_ms": self.sla_threshold_ms,
+                "current_avg_ms": current_avg,
+                "current_p95_ms": current_p95,
+                "consecutive_violations": self._consecutive_violations,
+                "total_operations": self._total_operations,
+                "total_violations": self._total_violations,
+                "operations_per_second": self._calculate_ops_per_second(),
+                "memory_usage": {
+                    "metrics_stored": len(self._metrics),
+                    "violations_stored": len(self._violations),
+                    "components_tracked": len(self._component_metrics),
+                },
             }
 
-    def clear_metrics(self, component: Optional[str] = None) -> int:
+    def clear_metrics(self, component: str | None = None) -> int:
         """
         Clear performance metrics
 
@@ -414,17 +428,17 @@ class PerformanceMonitor:
         with self._lock:
             if format_type.lower() == "json":
                 import json
+
                 metrics_data = {
-                    'constitutional_report': self.get_constitutional_report().__dict__,
-                    'real_time_status': self.get_real_time_status(),
-                    'component_stats': {
+                    "constitutional_report": self.get_constitutional_report().__dict__,
+                    "real_time_status": self.get_real_time_status(),
+                    "component_stats": {
                         name: stats.__dict__ if stats else None
                         for name, stats in {
-                            comp: self.get_component_stats(comp)
-                            for comp in self._component_metrics
+                            comp: self.get_component_stats(comp) for comp in self._component_metrics
                         }.items()
                     },
-                    'export_timestamp': datetime.utcnow().isoformat()
+                    "export_timestamp": datetime.utcnow().isoformat(),
                 }
                 return json.dumps(metrics_data, indent=2, default=str)
             elif format_type.lower() == "csv":
@@ -440,7 +454,7 @@ class PerformanceMonitor:
             else:
                 raise ValueError(f"Unsupported export format: {format_type}")
 
-    def _percentile(self, values: List[float], percentile: float) -> float:
+    def _percentile(self, values: list[float], percentile: float) -> float:
         """Calculate percentile value"""
         if not values:
             return 0.0
@@ -454,8 +468,12 @@ class PerformanceMonitor:
         uptime = (datetime.utcnow() - self._start_time).total_seconds()
         return self._total_operations / uptime if uptime > 0 else 0.0
 
-    def _generate_recommendations(self, status: SLAStatus, compliance_rate: float,
-                                component_compliance: Dict[str, ComponentStats]) -> List[str]:
+    def _generate_recommendations(
+        self,
+        status: SLAStatus,
+        compliance_rate: float,
+        component_compliance: dict[str, ComponentStats],
+    ) -> list[str]:
         """Generate performance improvement recommendations"""
         recommendations = []
 
@@ -469,10 +487,14 @@ class PerformanceMonitor:
         # Component-specific recommendations
         for component, stats in component_compliance.items():
             if stats.sla_compliance_rate < 0.9:
-                recommendations.append(f"Component '{component}' has low compliance rate: {stats.sla_compliance_rate:.2f}")
+                recommendations.append(
+                    f"Component '{component}' has low compliance rate: {stats.sla_compliance_rate:.2f}"
+                )
 
             if stats.p95_time_ms > self.sla_threshold_ms * 2:
-                recommendations.append(f"Component '{component}' P95 latency very high: {stats.p95_time_ms:.2f}ms")
+                recommendations.append(
+                    f"Component '{component}' P95 latency very high: {stats.p95_time_ms:.2f}ms"
+                )
 
         # General recommendations
         if not recommendations:
@@ -490,13 +512,16 @@ def get_monitor() -> PerformanceMonitor:
     return _monitor
 
 
-def record_translation_time(value_ms: float, component: str = "translator",
-                          session_id: Optional[str] = None, trace_id: Optional[str] = None,
-                          **metadata) -> Optional[SLAViolation]:
+def record_translation_time(
+    value_ms: float,
+    component: str = "translator",
+    session_id: str | None = None,
+    trace_id: str | None = None,
+    **metadata,
+) -> SLAViolation | None:
     """Record translation time metric (convenience function)"""
     return _monitor.record_metric(
-        MetricType.TRANSLATION_TIME, value_ms, component,
-        session_id, trace_id, **metadata
+        MetricType.TRANSLATION_TIME, value_ms, component, session_id, trace_id, **metadata
     )
 
 
@@ -509,9 +534,14 @@ def get_constitutional_compliance() -> ConstitutionalReport:
 class PerformanceTracker:
     """Context manager for automatic performance tracking"""
 
-    def __init__(self, metric_type: MetricType, component: str,
-                 session_id: Optional[str] = None, trace_id: Optional[str] = None,
-                 **metadata):
+    def __init__(
+        self,
+        metric_type: MetricType,
+        component: str,
+        session_id: str | None = None,
+        trace_id: str | None = None,
+        **metadata,
+    ):
         self.metric_type = metric_type
         self.component = component
         self.session_id = session_id
@@ -528,22 +558,26 @@ class PerformanceTracker:
         if self.start_time:
             elapsed_ms = (time.perf_counter() - self.start_time) * 1000
             self.violation = _monitor.record_metric(
-                self.metric_type, elapsed_ms, self.component,
-                self.session_id, self.trace_id, **self.metadata
+                self.metric_type,
+                elapsed_ms,
+                self.component,
+                self.session_id,
+                self.trace_id,
+                **self.metadata,
             )
 
 
 # Export main components
 __all__ = [
-    'PerformanceMonitor',
-    'PerformanceMetric',
-    'SLAViolation',
-    'ComponentStats',
-    'ConstitutionalReport',
-    'MetricType',
-    'SLAStatus',
-    'PerformanceTracker',
-    'get_monitor',
-    'record_translation_time',
-    'get_constitutional_compliance'
+    "PerformanceMonitor",
+    "PerformanceMetric",
+    "SLAViolation",
+    "ComponentStats",
+    "ConstitutionalReport",
+    "MetricType",
+    "SLAStatus",
+    "PerformanceTracker",
+    "get_monitor",
+    "record_translation_time",
+    "get_constitutional_compliance",
 ]

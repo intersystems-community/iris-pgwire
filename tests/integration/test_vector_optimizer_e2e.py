@@ -17,13 +17,13 @@ Prerequisites:
 - psycopg3 installed: pip install psycopg
 """
 
-import pytest
-import psycopg  # psycopg3 - uses server-side parameter binding
-import struct
 import base64
 import random
+import struct
 import time
 
+import psycopg  # psycopg3 - uses server-side parameter binding
+import pytest
 
 # Fixtures for PGWire server integration tests
 # Note: These tests assume PGWire server is already running
@@ -37,19 +37,19 @@ def generate_random_vector(dimensions=1024):
     Always use dimensions=1024 for E2E tests against test_1024 table.
     """
     vec = [random.gauss(0, 1) for _ in range(dimensions)]
-    norm = sum(x*x for x in vec) ** 0.5
-    return [x/norm for x in vec]
+    norm = sum(x * x for x in vec) ** 0.5
+    return [x / norm for x in vec]
 
 
 def vector_to_base64(vector):
     """Convert vector to base64 format (psycopg2 default)"""
-    vec_bytes = struct.pack(f'{len(vector)}f', *vector)
-    return "base64:" + base64.b64encode(vec_bytes).decode('ascii')
+    vec_bytes = struct.pack(f"{len(vector)}f", *vector)
+    return "base64:" + base64.b64encode(vec_bytes).decode("ascii")
 
 
 def vector_to_json_array(vector):
     """Convert vector to JSON array format"""
-    return '[' + ','.join(str(float(v)) for v in vector) + ']'
+    return "[" + ",".join(str(float(v)) for v in vector) + "]"
 
 
 @pytest.mark.e2e
@@ -63,11 +63,7 @@ class TestVectorOptimizerE2E:
             # psycopg3 uses server-side parameter binding by default (Extended Protocol)
             # This allows optimizer to transform parameters, avoiding IRIS literal size limit
             conn = psycopg.connect(
-                host='127.0.0.1',
-                port=15910,
-                dbname='USER',
-                user='benchmark',
-                autocommit=True
+                host="127.0.0.1", port=15910, dbname="USER", user="benchmark", autocommit=True
             )
             yield conn
             conn.close()
@@ -89,22 +85,26 @@ class TestVectorOptimizerE2E:
 
         # Execute vector similarity query
         start = time.perf_counter()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s, FLOAT))
             LIMIT 5
-        """, (vec_base64,))
+        """,
+            (vec_base64,),
+        )
 
         results = cur.fetchall()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         # Assertions
-        assert len(results) == 5, \
-            f"Expected 5 results, got {len(results)}"
-        assert elapsed_ms < 50.0, \
-            f"Query should complete in <50ms with HNSW, took {elapsed_ms:.2f}ms"
-        assert all(isinstance(r[0], (int, str)) for r in results), \
-            "Results should contain valid IDs"
+        assert len(results) == 5, f"Expected 5 results, got {len(results)}"
+        assert (
+            elapsed_ms < 50.0
+        ), f"Query should complete in <50ms with HNSW, took {elapsed_ms:.2f}ms"
+        assert all(
+            isinstance(r[0], (int, str)) for r in results
+        ), "Results should contain valid IDs"
 
         print(f"✅ T009 PASS: Base64 vector query completed in {elapsed_ms:.2f}ms")
 
@@ -122,20 +122,23 @@ class TestVectorOptimizerE2E:
 
         # Execute vector similarity query
         start = time.perf_counter()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC
             LIMIT 5
-        """, (vec_json,))
+        """,
+            (vec_json,),
+        )
 
         results = cur.fetchall()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         # Assertions
-        assert len(results) == 5, \
-            f"Expected 5 results, got {len(results)}"
-        assert elapsed_ms < 50.0, \
-            f"JSON array query should complete in <50ms, took {elapsed_ms:.2f}ms"
+        assert len(results) == 5, f"Expected 5 results, got {len(results)}"
+        assert (
+            elapsed_ms < 50.0
+        ), f"JSON array query should complete in <50ms, took {elapsed_ms:.2f}ms"
 
         print(f"✅ T010 PASS: JSON array query completed in {elapsed_ms:.2f}ms")
 
@@ -153,20 +156,25 @@ class TestVectorOptimizerE2E:
 
         # Execute multi-parameter query
         start = time.perf_counter()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s))
             LIMIT %s
-        """, (vec_base64, 3))
+        """,
+            (vec_base64, 3),
+        )
 
         results = cur.fetchall()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         # Assertions
-        assert len(results) == 3, \
-            f"LIMIT parameter should work, expected 3 results, got {len(results)}"
-        assert elapsed_ms < 50.0, \
-            f"Multi-parameter query should complete in <50ms, took {elapsed_ms:.2f}ms"
+        assert (
+            len(results) == 3
+        ), f"LIMIT parameter should work, expected 3 results, got {len(results)}"
+        assert (
+            elapsed_ms < 50.0
+        ), f"Multi-parameter query should complete in <50ms, took {elapsed_ms:.2f}ms"
 
         print(f"✅ T011 PASS: Multi-parameter query completed in {elapsed_ms:.2f}ms")
 
@@ -183,10 +191,9 @@ class TestVectorOptimizerE2E:
         result = cur.fetchone()
 
         # Assertions
-        assert result[0] >= 1000, \
-            f"Expected 1000+ vectors, got {result[0]}"
+        assert result[0] >= 1000, f"Expected 1000+ vectors, got {result[0]}"
 
-        print(f"✅ T012 PASS: Non-vector query passed through correctly")
+        print("✅ T012 PASS: Non-vector query passed through correctly")
 
 
 # Performance validation tests
@@ -199,11 +206,7 @@ class TestVectorOptimizerPerformance:
         """Connect to PGWire server using psycopg3 (server-side parameter binding)"""
         try:
             conn = psycopg.connect(
-                host='127.0.0.1',
-                port=15910,
-                dbname='USER',
-                user='benchmark',
-                autocommit=True
+                host="127.0.0.1", port=15910, dbname="USER", user="benchmark", autocommit=True
             )
             yield conn
             conn.close()
@@ -240,13 +243,15 @@ class TestVectorOptimizerPerformance:
 
             # Assert performance budget
             if dims <= 1024:
-                assert avg_ms < 5.0, \
-                    f"{dims}-dim vector should transform in <5ms (constitutional SLA), took {avg_ms:.2f}ms"
+                assert (
+                    avg_ms < 5.0
+                ), f"{dims}-dim vector should transform in <5ms (constitutional SLA), took {avg_ms:.2f}ms"
             elif dims <= 1536:
-                assert avg_ms < 10.0, \
-                    f"{dims}-dim vector should transform in <10ms (budget), took {avg_ms:.2f}ms"
+                assert (
+                    avg_ms < 10.0
+                ), f"{dims}-dim vector should transform in <10ms (budget), took {avg_ms:.2f}ms"
 
-        print(f"\n✅ T013 PASS: Transformation overhead by dimension:")
+        print("\n✅ T013 PASS: Transformation overhead by dimension:")
         for dims, avg_ms in results.items():
             print(f"   {dims}-dim: {avg_ms:.2f}ms")
 
@@ -265,11 +270,14 @@ class TestVectorOptimizerPerformance:
         for _ in range(10):
             vec = generate_random_vector(1024)
             vec_base64 = vector_to_base64(vec)
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM test_1024
                 ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s))
                 LIMIT 5
-            """, (vec_base64,))
+            """,
+                (vec_base64,),
+            )
             cur.fetchall()
 
         # Measure sequential throughput (as baseline)
@@ -281,11 +289,14 @@ class TestVectorOptimizerPerformance:
             vec_base64 = vector_to_base64(vec)
 
             start = time.perf_counter()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM test_1024
                 ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s))
                 LIMIT 5
-            """, (vec_base64,))
+            """,
+                (vec_base64,),
+            )
             cur.fetchall()
             times.append((time.perf_counter() - start) * 1000)
 
@@ -293,18 +304,17 @@ class TestVectorOptimizerPerformance:
         p95_ms = sorted(times)[int(len(times) * 0.95)]
         sequential_qps = num_queries / (sum(times) / 1000)
 
-        print(f"\n📊 Sequential Performance (baseline):")
+        print("\n📊 Sequential Performance (baseline):")
         print(f"   Avg latency: {avg_ms:.2f}ms")
         print(f"   P95 latency: {p95_ms:.2f}ms")
         print(f"   Sequential QPS: {sequential_qps:.1f}")
-        print(f"\n   Note: True concurrent test requires 16 parallel clients")
-        print(f"   Target: 335+ qps (achievable with concurrent clients)")
+        print("\n   Note: True concurrent test requires 16 parallel clients")
+        print("   Target: 335+ qps (achievable with concurrent clients)")
 
         # Assert latency is good (throughput requires concurrency)
-        assert p95_ms < 50.0, \
-            f"P95 latency should be <50ms, got {p95_ms:.2f}ms"
+        assert p95_ms < 50.0, f"P95 latency should be <50ms, got {p95_ms:.2f}ms"
 
-        print(f"\n✅ T014 PASS: Latency targets met (concurrent QPS test deferred)")
+        print("\n✅ T014 PASS: Latency targets met (concurrent QPS test deferred)")
 
 
 if __name__ == "__main__":

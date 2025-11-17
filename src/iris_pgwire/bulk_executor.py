@@ -10,9 +10,8 @@ Constitutional Requirements:
 - Principle IV: Use asyncio.to_thread() for non-blocking IRIS operations
 """
 
-import asyncio
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +36,9 @@ class BulkExecutor:
     async def bulk_insert(
         self,
         table_name: str,
-        column_names: Optional[list[str]],
+        column_names: list[str] | None,
         rows: AsyncIterator[dict],
-        batch_size: int = 1000
+        batch_size: int = 1000,
     ) -> int:
         """
         Execute batched INSERT statements for bulk loading.
@@ -78,30 +77,21 @@ class BulkExecutor:
             # Execute batch when full
             if len(batch) >= batch_size:
                 rows_inserted = await self._execute_batch_insert(
-                    table_name,
-                    actual_column_names,
-                    batch
+                    table_name, actual_column_names, batch
                 )
                 total_rows += rows_inserted
                 batch = []  # Reset batch
 
         # Execute remaining batch
         if batch:
-            rows_inserted = await self._execute_batch_insert(
-                table_name,
-                actual_column_names,
-                batch
-            )
+            rows_inserted = await self._execute_batch_insert(table_name, actual_column_names, batch)
             total_rows += rows_inserted
 
         logger.info(f"Bulk insert complete: {total_rows} rows inserted")
         return total_rows
 
     async def _execute_batch_insert(
-        self,
-        table_name: str,
-        column_names: list[str],
-        batch: list[dict]
+        self, table_name: str, column_names: list[str], batch: list[dict]
     ) -> int:
         """
         Execute single batch INSERT with try/catch architecture.
@@ -132,8 +122,8 @@ class BulkExecutor:
         if not batch:
             return 0
 
-        from datetime import datetime
         import time
+        from datetime import datetime
 
         # Calculate Horolog epoch once
         horolog_epoch = datetime(1840, 12, 31).date()
@@ -142,13 +132,13 @@ class BulkExecutor:
         column_types = await self._get_column_types(table_name, column_names)
 
         # Build INSERT SQL template
-        column_list = ', '.join(column_names)
-        placeholders = ', '.join(['?' for _ in column_names])
+        column_list = ", ".join(column_names)
+        placeholders = ", ".join(["?" for _ in column_names])
         sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})"
 
-        logger.info(f"🚀 Batch INSERT with try/catch architecture",
-                   table=table_name,
-                   batch_size=len(batch))
+        logger.info(
+            "🚀 Batch INSERT with try/catch architecture", table=table_name, batch_size=len(batch)
+        )
 
         start_time = time.perf_counter()
 
@@ -162,14 +152,14 @@ class BulkExecutor:
                 params = []
                 for col_name in column_names:
                     value = row_dict.get(col_name)
-                    col_type = column_types.get(col_name, 'VARCHAR')
+                    col_type = column_types.get(col_name, "VARCHAR")
 
                     # Handle NULL
-                    if value == '' or value is None:
+                    if value == "" or value is None:
                         params.append(None)
-                    elif col_type.upper() == 'DATE':
+                    elif col_type.upper() == "DATE":
                         # Convert ISO date to Horolog integer
-                        date_obj = datetime.strptime(value, '%Y-%m-%d').date()
+                        date_obj = datetime.strptime(value, "%Y-%m-%d").date()
                         horolog_days = (date_obj - horolog_epoch).days
                         params.append(horolog_days)
                     else:
@@ -182,23 +172,27 @@ class BulkExecutor:
             # Call execute_many() - it will try DBAPI first, fallback to loop
             result = await self.iris_executor.execute_many(sql, params_list)
 
-            rows_inserted = result.get('rows_affected', 0)
+            rows_inserted = result.get("rows_affected", 0)
             execution_time = (time.perf_counter() - start_time) * 1000
             throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
-            execution_path = result.get('_execution_path', 'unknown')
+            execution_path = result.get("_execution_path", "unknown")
 
-            logger.info(f"✅ Batch INSERT complete via {execution_path}",
-                       rows_inserted=rows_inserted,
-                       execution_time_ms=execution_time,
-                       throughput_rows_per_sec=throughput)
+            logger.info(
+                f"✅ Batch INSERT complete via {execution_path}",
+                rows_inserted=rows_inserted,
+                execution_time_ms=execution_time,
+                throughput_rows_per_sec=throughput,
+            )
 
             return rows_inserted
 
         except Exception as e:
             # CATCH: Inline SQL fallback (slow but reliable)
-            logger.warning(f"executemany() failed, falling back to inline SQL",
-                         error=str(e)[:200],
-                         error_type=type(e).__name__)
+            logger.warning(
+                "executemany() failed, falling back to inline SQL",
+                error=str(e)[:200],
+                error_type=type(e).__name__,
+            )
 
             # Reset timing for fallback path
             start_time = time.perf_counter()
@@ -210,25 +204,25 @@ class BulkExecutor:
 
                 for col_name in column_names:
                     value = row_dict.get(col_name)
-                    col_type = column_types.get(col_name, 'VARCHAR')
+                    col_type = column_types.get(col_name, "VARCHAR")
 
-                    if value == '' or value is None:
-                        value_parts.append('NULL')
-                    elif col_type.upper() == 'DATE':
-                        date_obj = datetime.strptime(value, '%Y-%m-%d').date()
+                    if value == "" or value is None:
+                        value_parts.append("NULL")
+                    elif col_type.upper() == "DATE":
+                        date_obj = datetime.strptime(value, "%Y-%m-%d").date()
                         horolog_days = (date_obj - horolog_epoch).days
                         value_parts.append(str(horolog_days))
                     else:
                         escaped_value = str(value).replace("'", "''")
                         value_parts.append(f"'{escaped_value}'")
 
-                values_clause = ', '.join(value_parts)
+                values_clause = ", ".join(value_parts)
                 row_sql = f"INSERT INTO {table_name} ({column_list}) VALUES ({values_clause})"
 
                 result = await self.iris_executor.execute_query(row_sql, [])
 
-                if not result.get('success', False):
-                    error_msg = result.get('error', 'Unknown error')
+                if not result.get("success", False):
+                    error_msg = result.get("error", "Unknown error")
                     logger.error(f"INSERT failed: {error_msg}")
                     raise RuntimeError(f"INSERT failed: {error_msg}")
 
@@ -237,10 +231,12 @@ class BulkExecutor:
             execution_time = (time.perf_counter() - start_time) * 1000
             throughput = int(rows_inserted / (execution_time / 1000)) if execution_time > 0 else 0
 
-            logger.info(f"✅ Batch INSERT complete via inline_sql_fallback",
-                       rows_inserted=rows_inserted,
-                       execution_time_ms=execution_time,
-                       throughput_rows_per_sec=throughput)
+            logger.info(
+                "✅ Batch INSERT complete via inline_sql_fallback",
+                rows_inserted=rows_inserted,
+                execution_time_ms=execution_time,
+                throughput_rows_per_sec=throughput,
+            )
 
             return rows_inserted
 
@@ -257,12 +253,12 @@ class BulkExecutor:
         """
         # Query INFORMATION_SCHEMA for column types
         # IRIS stores column names in mixed case, so we need to match case-insensitively
-        placeholders = ', '.join(['?' for _ in column_names])
+        placeholders = ", ".join(["?" for _ in column_names])
         query = f"""
             SELECT COLUMN_NAME, DATA_TYPE
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE LOWER(TABLE_NAME) = LOWER(?)
-            AND UPPER(COLUMN_NAME) IN ({', '.join([f'UPPER(?)' for _ in column_names])})
+            AND UPPER(COLUMN_NAME) IN ({', '.join(['UPPER(?)' for _ in column_names])})
         """
 
         params = [table_name] + column_names
@@ -271,9 +267,9 @@ class BulkExecutor:
 
         # Build column type mapping (key by original input column name)
         column_types = {}
-        if result.get('success') and result.get('rows'):
+        if result.get("success") and result.get("rows"):
             # Create case-insensitive lookup
-            db_columns = {row[0].upper(): row[1] for row in result['rows']}
+            db_columns = {row[0].upper(): row[1] for row in result["rows"]}
             logger.debug(f"Database columns (uppercase keys): {db_columns}")
 
             # Map back to input column names
@@ -282,7 +278,9 @@ class BulkExecutor:
                 if db_type:
                     column_types[col_name] = db_type
         else:
-            logger.warning(f"Failed to get column types: success={result.get('success')}, rows={result.get('rows')}")
+            logger.warning(
+                f"Failed to get column types: success={result.get('success')}, rows={result.get('rows')}"
+            )
 
         logger.debug(f"Column types for {table_name}: {column_types}")
         return column_types
@@ -316,7 +314,7 @@ class BulkExecutor:
                 for row in cursor_result:
                     yield row
 
-            logger.debug(f"Query streaming complete")
+            logger.debug("Query streaming complete")
 
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
@@ -346,8 +344,8 @@ class BulkExecutor:
 
         # Extract column names from result
         columns = []
-        if result and 'rows' in result:
-            columns = [row[0] for row in result['rows']]
+        if result and "rows" in result:
+            columns = [row[0] for row in result["rows"]]
 
         logger.debug(f"Table {table_name} columns: {columns}")
         return columns

@@ -7,21 +7,23 @@ These tests MUST FAIL until the implementation is complete (TDD requirement).
 Constitutional Requirement: Test-First Development with real PostgreSQL clients
 """
 
-import pytest
+import os
 import subprocess
 import time
-import os
-from typing import List, Optional
+
+import pytest
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.server import PGWireServer
     from iris_pgwire.sql_translator import SQLTranslator
+
     SERVER_AVAILABLE = True
 except ImportError:
     SERVER_AVAILABLE = False
 
 pytestmark = [pytest.mark.e2e, pytest.mark.requires_iris]
+
 
 @pytest.fixture(scope="session")
 def pgwire_server():
@@ -40,12 +42,14 @@ def pgwire_server():
 
     server.stop()
 
+
 @pytest.fixture
 def psql_command():
     """Base psql command for testing"""
     return ["psql", "-h", "localhost", "-p", "5433", "-U", "postgres", "-d", "iris"]
 
-def run_psql_query(command: List[str], sql: str, timeout: int = 30) -> tuple[int, str, str]:
+
+def run_psql_query(command: list[str], sql: str, timeout: int = 30) -> tuple[int, str, str]:
     """Execute SQL query via psql client"""
     full_command = command + ["-c", sql]
 
@@ -55,11 +59,12 @@ def run_psql_query(command: List[str], sql: str, timeout: int = 30) -> tuple[int
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "PGPASSWORD": "iris"}  # Avoid password prompt
+            env={**os.environ, "PGPASSWORD": "iris"},  # Avoid password prompt
         )
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "Query timed out"
+
 
 class TestIRISSystemFunctionsE2E:
     """E2E tests for IRIS system function translation with psql"""
@@ -118,7 +123,7 @@ class TestIRISSystemFunctionsE2E:
             "SELECT %SYSTEM.Version.GetNumber();",
             "SELECT 1 AS test;",  # Standard SQL
             "SELECT %SYSTEM.Security.GetUser();",
-            "SELECT CURRENT_TIMESTAMP;"  # Standard SQL
+            "SELECT CURRENT_TIMESTAMP;",  # Standard SQL
         ]
 
         for i, sql in enumerate(queries):
@@ -137,8 +142,9 @@ class TestIRISSystemFunctionsE2E:
 
         # Should return non-zero exit code but not crash
         assert returncode != 0, "Unsupported command should fail"
-        assert "unsupported" in stderr.lower() or "error" in stderr.lower(), \
-            "Should return clear error message"
+        assert (
+            "unsupported" in stderr.lower() or "error" in stderr.lower()
+        ), "Should return clear error message"
 
     def test_psql_performance_requirements(self, psql_command):
         """Test that psql queries meet performance requirements"""
@@ -154,8 +160,10 @@ class TestIRISSystemFunctionsE2E:
 
         assert returncode == 0, f"Query failed: {stderr}"
         # Constitutional requirement: translations should be fast
-        assert execution_time_ms < 1000.0, \
-            f"Query took {execution_time_ms}ms, should be < 1000ms including network overhead"
+        assert (
+            execution_time_ms < 1000.0
+        ), f"Query took {execution_time_ms}ms, should be < 1000ms including network overhead"
+
 
 class TestPSQLProtocolCompliance:
     """Test PostgreSQL protocol compliance with psql client"""
@@ -223,6 +231,7 @@ class TestPSQLProtocolCompliance:
         # Should not crash the connection
         assert returncode in [0, 1], "Meta-command should not crash server"
 
+
 class TestPSQLConcurrentConnections:
     """Test concurrent psql connections"""
 
@@ -231,8 +240,8 @@ class TestPSQLConcurrentConnections:
         if not SERVER_AVAILABLE:
             pytest.skip("Implementation not available yet")
 
-        import threading
         import queue
+        import threading
 
         results = queue.Queue()
 
@@ -262,6 +271,7 @@ class TestPSQLConcurrentConnections:
         for query_id, returncode, stdout, stderr in completed_results:
             assert returncode == 0, f"Query {query_id} failed: {stderr}"
             assert f"version_{query_id}" in stdout, f"Query {query_id} missing expected output"
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_psql_e2e_tdd_validation():
