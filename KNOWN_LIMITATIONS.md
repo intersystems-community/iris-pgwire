@@ -194,24 +194,54 @@ irispython -m iris_pgwire.server
 
 ---
 
-## 🟢 SSL/TLS Encryption (In Development)
+## 🟡 SSL/TLS Wire Protocol Not Implemented
 
-**Severity**: Low
-**Affects**: Connection encryption
+**Severity**: Medium
+**Affects**: Connection transport encryption
 
-### Current Status
+### Issue Description
 
-SSL/TLS wire protocol encryption is in development. Current authentication security provided by:
-- ✅ **OAuth 2.0**: Token-based authentication
-- ✅ **IRIS Wallet**: Encrypted credential storage
-- ✅ **Password Authentication**: SCRAM-SHA-256 protocol
+PGWire responds with 'N' (no SSL) to PostgreSQL client SSL probes. The wire protocol does not support TLS encryption. Authentication security is provided by:
+- ✅ **OAuth 2.0**: Token-based authentication (no plain-text passwords)
+- ✅ **IRIS Wallet**: Encrypted credential storage (encrypted at rest)
+- ✅ **Password Authentication**: SCRAM-SHA-256 protocol (no plain-text transmission)
 
 ### Workaround
 
 For production deployments requiring transport encryption:
-1. Use OAuth 2.0 for BI tools and applications
-2. Store credentials in IRIS Wallet (encrypted at rest)
-3. Deploy PGWire behind reverse proxy with TLS (nginx, HAProxy)
+
+```bash
+# Deploy PGWire behind TLS-terminating reverse proxy
+# Example: nginx with TLS → PGWire plain-text (localhost only)
+
+# nginx.conf
+upstream pgwire {
+    server localhost:5432;
+}
+
+server {
+    listen 5433 ssl;
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+
+    location / {
+        proxy_pass http://pgwire;
+    }
+}
+```
+
+**Client Connection**:
+```bash
+# Connect via TLS proxy on port 5433
+psql "host=your-server port=5433 sslmode=require user=_SYSTEM dbname=USER"
+```
+
+### Impact
+
+- ❌ Wire protocol does not encrypt PostgreSQL traffic
+- ✅ Authentication credentials protected (OAuth tokens, SCRAM-SHA-256, Wallet encryption)
+- ✅ Workaround available (reverse proxy with TLS termination)
+- ⚠️ Database traffic visible to network observers without proxy
 
 ---
 

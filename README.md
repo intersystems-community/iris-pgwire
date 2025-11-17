@@ -442,11 +442,11 @@ irispython -m iris_pgwire.server
 |---------|--------|-------|
 | Simple Queries | ✅ Complete | SELECT, INSERT, UPDATE, DELETE |
 | DDL Statements | ✅ Complete | CREATE/DROP/ALTER TABLE |
-| Extended Protocol | ✅ Working | Prepared statements, parameter binding |
+| Extended Protocol | ✅ Complete | Prepared statements, parameter binding |
 | Authentication | ✅ Complete | OAuth 2.0, IRIS Wallet, password |
-| Transactions | ✅ Working | COMMIT/ROLLBACK supported |
-| COPY Protocol | 🚧 Partial | Single-row inserts work, bulk operations limited |
-| SSL/TLS Encryption | 🚧 In Development | OAuth/Wallet provide authentication security |
+| Transactions | ✅ Complete | BEGIN/COMMIT/ROLLBACK, savepoints |
+| COPY Protocol | ✅ Complete | Bulk import/export with CSV format |
+| SSL/TLS Encryption | ❌ Not Implemented | Use OAuth/Wallet for authentication, TLS proxy for transport |
 
 ### IRIS-Specific Notes
 
@@ -526,23 +526,27 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ## 🎯 Roadmap
 
-### Implemented
-- ✅ PostgreSQL wire protocol v3 (handshake, simple & extended query protocols)
-- ✅ Authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet)
-- ✅ Vector operations (pgvector syntax, HNSW indexes, 188K dimensions)
-- ✅ Async SQLAlchemy support (FastAPI integration, connection pooling)
-- ✅ Dual backend architecture (DBAPI + Embedded Python)
-- ✅ Multi-language client compatibility (Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
+### ✅ Implemented (Production-Ready)
+- PostgreSQL wire protocol v3 (handshake, simple & extended query protocols)
+- Authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet)
+- Vector operations (pgvector syntax, HNSW indexes, up to 188K dimensions)
+- COPY protocol (bulk import/export with CSV format, 600+ rows/sec)
+- Transactions (BEGIN/COMMIT/ROLLBACK with savepoints)
+- Async SQLAlchemy support (FastAPI integration, connection pooling)
+- Dual backend architecture (DBAPI + Embedded Python)
+- Multi-language client compatibility (8 drivers at 100%: Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
 
-### In Development
-- 🚧 SSL/TLS encryption (OAuth/Wallet provide authentication security)
-- 🚧 Kerberos/GSSAPI protocol integration (core implementation complete)
-- 🚧 Enhanced COPY protocol (bulk operations)
+### 🚧 Known Limitations
+- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption
+- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet authentication instead
+- **L2 distance operator** (`<->`): Not supported by IRIS - use cosine (`<=>`) or dot product (`<#>`) instead
 
-### Future Enhancements
-- 📋 Connection limits & rate limiting
-- 📋 Performance optimization (reduce 4ms protocol overhead)
-- 📋 Advanced PostgreSQL features (CTEs, window functions)
+### 📋 Future Enhancements
+- SSL/TLS wire protocol encryption
+- Kerberos/GSSAPI authentication
+- Connection limits & rate limiting
+- Performance optimization (executemany() for bulk operations)
+- Advanced PostgreSQL features (CTEs, window functions)
 
 ---
 
