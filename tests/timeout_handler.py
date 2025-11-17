@@ -10,14 +10,15 @@ Constitutional compliance:
 - Principle V: Diagnostic Excellence (comprehensive IRIS state capture)
 """
 
+import re
+import sys
 import threading
 import time
-import sys
-import re
 import traceback
+from dataclasses import dataclass
+from typing import Any
+
 import structlog
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
 
 logger = structlog.get_logger()
 
@@ -25,6 +26,7 @@ logger = structlog.get_logger()
 # ============================================================================
 # T019: DiagnosticContext - Data class for timeout diagnostics
 # ============================================================================
+
 
 @dataclass
 class DiagnosticContext:
@@ -58,36 +60,37 @@ class DiagnosticContext:
     timeout_threshold_ms: float
     iris_connection_state: str
     iris_namespace: str
-    iris_query_history: List[str]
+    iris_query_history: list[str]
     iris_process_id: int
     hanging_component: str
     stack_trace: str
-    fixture_stack: List[str]
-    environment_vars: Dict[str, str]
+    fixture_stack: list[str]
+    environment_vars: dict[str, str]
     log_excerpt: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
-            'test_id': self.test_id,
-            'failure_type': self.failure_type,
-            'elapsed_ms': self.elapsed_ms,
-            'timeout_threshold_ms': self.timeout_threshold_ms,
-            'iris_connection_state': self.iris_connection_state,
-            'iris_namespace': self.iris_namespace,
-            'iris_query_history': self.iris_query_history,
-            'iris_process_id': self.iris_process_id,
-            'hanging_component': self.hanging_component,
-            'stack_trace': self.stack_trace,
-            'fixture_stack': self.fixture_stack,
-            'environment_vars': self.environment_vars,
-            'log_excerpt': self.log_excerpt
+            "test_id": self.test_id,
+            "failure_type": self.failure_type,
+            "elapsed_ms": self.elapsed_ms,
+            "timeout_threshold_ms": self.timeout_threshold_ms,
+            "iris_connection_state": self.iris_connection_state,
+            "iris_namespace": self.iris_namespace,
+            "iris_query_history": self.iris_query_history,
+            "iris_process_id": self.iris_process_id,
+            "hanging_component": self.hanging_component,
+            "stack_trace": self.stack_trace,
+            "fixture_stack": self.fixture_stack,
+            "environment_vars": self.environment_vars,
+            "log_excerpt": self.log_excerpt,
         }
 
 
 # ============================================================================
 # T018: TimeoutHandler - Timeout detection and monitoring
 # ============================================================================
+
 
 class TimeoutHandler:
     """
@@ -119,7 +122,7 @@ class TimeoutHandler:
         self._stop_event = threading.Event()
         self._timeout_occurred = False
 
-    def monitor_test(self, test_id: str) -> Optional[DiagnosticContext]:
+    def monitor_test(self, test_id: str) -> DiagnosticContext | None:
         """
         Monitor test execution and detect timeout.
 
@@ -137,7 +140,7 @@ class TimeoutHandler:
         logger.info(
             "TimeoutHandler: Starting test monitoring",
             test_id=test_id,
-            timeout_seconds=self.timeout_seconds
+            timeout_seconds=self.timeout_seconds,
         )
 
         start_time = time.perf_counter()
@@ -146,9 +149,7 @@ class TimeoutHandler:
 
         # Start monitoring thread
         self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            args=(test_id, start_time),
-            daemon=True
+            target=self._monitor_loop, args=(test_id, start_time), daemon=True
         )
         self._monitor_thread.start()
 
@@ -163,7 +164,7 @@ class TimeoutHandler:
             logger.warning(
                 "TimeoutHandler: Timeout detected",
                 test_id=test_id,
-                elapsed_ms=f"{elapsed * 1000:.2f}ms"
+                elapsed_ms=f"{elapsed * 1000:.2f}ms",
             )
 
             # Capture diagnostics
@@ -187,7 +188,7 @@ class TimeoutHandler:
                 logger.warning(
                     "TimeoutHandler: Timeout threshold reached",
                     test_id=test_id,
-                    elapsed_ms=f"{elapsed * 1000:.2f}ms"
+                    elapsed_ms=f"{elapsed * 1000:.2f}ms",
                 )
                 self._timeout_occurred = True
                 break
@@ -195,11 +196,7 @@ class TimeoutHandler:
             # Sleep in small intervals for precise timeout detection (±100ms)
             time.sleep(0.05)  # 50ms intervals
 
-    def capture_diagnostics(
-        self,
-        test_id: str,
-        elapsed_ms: float
-    ) -> DiagnosticContext:
+    def capture_diagnostics(self, test_id: str, elapsed_ms: float) -> DiagnosticContext:
         """
         Capture diagnostic information when timeout occurs.
 
@@ -239,21 +236,21 @@ class TimeoutHandler:
             failure_type="timeout",
             elapsed_ms=elapsed_ms,
             timeout_threshold_ms=self.timeout_ms,
-            iris_connection_state=iris_state.get('connection_state', 'unknown'),
-            iris_namespace=iris_state.get('namespace', 'unknown'),
-            iris_query_history=iris_state.get('query_history', []),
-            iris_process_id=iris_state.get('process_id', 0),
+            iris_connection_state=iris_state.get("connection_state", "unknown"),
+            iris_namespace=iris_state.get("namespace", "unknown"),
+            iris_query_history=iris_state.get("query_history", []),
+            iris_process_id=iris_state.get("process_id", 0),
             hanging_component=hanging_component,
             stack_trace=stack_trace,
             fixture_stack=fixture_stack,
             environment_vars=env_vars,
-            log_excerpt=self._capture_log_excerpt()
+            log_excerpt=self._capture_log_excerpt(),
         )
 
         logger.info(
             "TimeoutHandler: Diagnostic context captured",
             test_id=test_id,
-            hanging_component=hanging_component
+            hanging_component=hanging_component,
         )
 
         return diagnostic
@@ -293,25 +290,27 @@ class TimeoutHandler:
             Component name (embedded_iris, pgwire, test_fixture, test_body)
         """
         # Check for IRIS embedded Python patterns
-        if re.search(r'iris\.py|iris\.connect|iris\.cursor|iris\.sql\.exec', stack_trace, re.IGNORECASE):
+        if re.search(
+            r"iris\.py|iris\.connect|iris\.cursor|iris\.sql\.exec", stack_trace, re.IGNORECASE
+        ):
             return "embedded_iris"
 
         # Check for PGWire/psycopg patterns
-        if re.search(r'psycopg|pgwire|postgres', stack_trace, re.IGNORECASE):
+        if re.search(r"psycopg|pgwire|postgres", stack_trace, re.IGNORECASE):
             return "pgwire"
 
         # Check for fixture patterns
-        if re.search(r'conftest\.py|@pytest\.fixture', stack_trace, re.IGNORECASE):
+        if re.search(r"conftest\.py|@pytest\.fixture", stack_trace, re.IGNORECASE):
             return "test_fixture"
 
         # Check for test body patterns
-        if re.search(r'test_\w+\.py|def test_', stack_trace, re.IGNORECASE):
+        if re.search(r"test_\w+\.py|def test_", stack_trace, re.IGNORECASE):
             return "test_body"
 
         # Default to unknown
         return "unknown"
 
-    def _capture_iris_state(self) -> Dict[str, Any]:
+    def _capture_iris_state(self) -> dict[str, Any]:
         """
         Capture IRIS connection state.
 
@@ -329,29 +328,29 @@ class TimeoutHandler:
             # This is a simplified implementation - real version would
             # track actual connection and query history
             return {
-                'connection_state': 'connected',
-                'namespace': 'USER',
-                'query_history': [],  # Would be populated from query tracking
-                'process_id': 0  # Would be populated from iris.system.Process
+                "connection_state": "connected",
+                "namespace": "USER",
+                "query_history": [],  # Would be populated from query tracking
+                "process_id": 0,  # Would be populated from iris.system.Process
             }
 
         except ImportError:
             return {
-                'connection_state': 'disconnected',
-                'namespace': 'unknown',
-                'query_history': [],
-                'process_id': 0
+                "connection_state": "disconnected",
+                "namespace": "unknown",
+                "query_history": [],
+                "process_id": 0,
             }
         except Exception as e:
             logger.error("TimeoutHandler: Failed to capture IRIS state", error=str(e))
             return {
-                'connection_state': 'error',
-                'namespace': 'unknown',
-                'query_history': [],
-                'process_id': 0
+                "connection_state": "error",
+                "namespace": "unknown",
+                "query_history": [],
+                "process_id": 0,
             }
 
-    def _capture_fixture_stack(self) -> List[str]:
+    def _capture_fixture_stack(self) -> list[str]:
         """
         Capture active fixtures from stack trace.
 
@@ -361,7 +360,7 @@ class TimeoutHandler:
         # This is a simplified implementation
         return ["embedded_iris"]  # Would be populated from actual fixture tracking
 
-    def _capture_environment_vars(self) -> Dict[str, str]:
+    def _capture_environment_vars(self) -> dict[str, str]:
         """
         Capture relevant environment variables.
 
@@ -370,16 +369,16 @@ class TimeoutHandler:
         import os
 
         relevant_vars = [
-            'IRIS_HOST', 'IRIS_PORT', 'IRIS_NAMESPACE',
-            'IRIS_USERNAME', 'PYTEST_CURRENT_TEST',
-            'CI', 'PYTHONPATH'
+            "IRIS_HOST",
+            "IRIS_PORT",
+            "IRIS_NAMESPACE",
+            "IRIS_USERNAME",
+            "PYTEST_CURRENT_TEST",
+            "CI",
+            "PYTHONPATH",
         ]
 
-        return {
-            var: os.environ.get(var, '')
-            for var in relevant_vars
-            if os.environ.get(var)
-        }
+        return {var: os.environ.get(var, "") for var in relevant_vars if os.environ.get(var)}
 
     def _capture_log_excerpt(self) -> str:
         """

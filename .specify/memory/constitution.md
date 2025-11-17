@@ -32,7 +32,29 @@ Every implementation decision MUST prioritize PostgreSQL wire protocol complianc
 
 All protocol features MUST be validated with end-to-end tests using real PostgreSQL clients before implementation begins. Write failing tests with psql, psycopg, and other clients, then implement to make them pass. Mock testing is forbidden for database connectivity and protocol validation - only real IRIS instances and real clients provide sufficient validation.
 
-**Rationale**: Protocol implementation is complex and brittle. Real client testing is the only way to ensure compatibility and catch subtle implementation errors that break in production.
+**MANDATORY: Isolated Test Infrastructure**
+
+All E2E and integration tests MUST use `iris-devtester` (https://github.com/caretdev/iris-devtester) for isolated, reproducible test environments:
+
+- **Zero Configuration**: IRISContainer.community() provides isolated IRIS instances per test
+- **Automatic Cleanup**: Containers and state managed automatically via testcontainers
+- **DAT Fixture Loading**: 10-100× faster than INSERT statements for test data
+- **No State Pollution**: Each test suite gets fresh IRIS instance
+- **Password Management**: Automatic handling of IRIS password policies
+- **DBAPI Performance**: 3× faster than JDBC connections
+
+**Pattern**:
+```python
+from iris_devtester import IRISContainer
+
+def test_copy_protocol_with_isolated_iris():
+    with IRISContainer.community() as iris:
+        conn = iris.get_connection()
+        # Run tests against clean IRIS instance
+        # Automatic cleanup on exit
+```
+
+**Rationale**: Testing against "whatever IRIS container is running" leads to state pollution, foreign key conflicts, and unreproducible failures. iris-devtester provides medical-grade reliability (94%+ test coverage) with zero manual setup. Protocol implementation is complex and brittle. Real client testing with isolated instances is the only way to ensure compatibility and catch subtle implementation errors that break in production.
 
 ### III. Phased Implementation
 

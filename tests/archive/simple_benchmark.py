@@ -3,10 +3,12 @@
 ULTRA-SIMPLE 3-way benchmark - no complexity, just raw timing.
 """
 import time
+
 import psycopg
 
 # Test data already exists from previous setup
 # PostgreSQL on 5433, PGWire on 5434, IRIS DBAPI on 1974
+
 
 def time_query(name, connect_func, query, iterations=5):
     """Time a query with simple averaging."""
@@ -29,9 +31,10 @@ def time_query(name, connect_func, query, iterations=5):
     print(f"{name:20s} {avg:8.2f}ms  (min: {min(times):.2f}ms, max: {max(times):.2f}ms)")
     return avg
 
+
 # Test vector for similarity queries (128D)
 # IRIS format: comma-separated WITHOUT brackets
-TEST_VECTOR = ','.join(['0.1'] * 128)
+TEST_VECTOR = ",".join(["0.1"] * 128)
 
 # Test queries
 QUERIES = [
@@ -46,7 +49,7 @@ QUERIES = [
 VECTOR_QUERIES = {
     "PostgreSQL": f"SELECT id, embedding <=> '[{TEST_VECTOR}]' AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
     "PGWire": f"SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('{TEST_VECTOR}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
-    "DBAPI": f"SELECT TOP 5 id, VECTOR_COSINE(embedding, TO_VECTOR('{TEST_VECTOR}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
+    "DBAPI": f"SELECT TOP 5 id, VECTOR_COSINE(embedding, TO_VECTOR('{TEST_VECTOR}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance",
 }
 
 print("=" * 70)
@@ -61,22 +64,29 @@ for query_name, query in QUERIES:
     # PostgreSQL
     time_query(
         "PostgreSQL",
-        lambda: psycopg.connect(host="localhost", port=5433, dbname="benchmark", user="postgres", password="postgres"),
-        query
+        lambda: psycopg.connect(
+            host="localhost", port=5433, dbname="benchmark", user="postgres", password="postgres"
+        ),
+        query,
     )
 
     # PGWire
     time_query(
-        "IRIS + PGWire",
-        lambda: psycopg.connect(host="localhost", port=5434, dbname="USER"),
-        query
+        "IRIS + PGWire", lambda: psycopg.connect(host="localhost", port=5434, dbname="USER"), query
     )
 
     # IRIS DBAPI
     try:
         import iris
+
         def dbapi_conn():
-            return iris.connect(hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS")
+            return iris.connect(
+                hostname="localhost",
+                port=1972,
+                namespace="USER",
+                username="_SYSTEM",
+                password="SYS",
+            )
 
         time_query("IRIS + DBAPI", dbapi_conn, query)
     except ImportError:
@@ -92,22 +102,27 @@ print("\nVector Cosine Similarity (k=5):")
 # PostgreSQL with pgvector
 time_query(
     "PostgreSQL",
-    lambda: psycopg.connect(host="localhost", port=5433, dbname="benchmark", user="postgres", password="postgres"),
-    VECTOR_QUERIES["PostgreSQL"]
+    lambda: psycopg.connect(
+        host="localhost", port=5433, dbname="benchmark", user="postgres", password="postgres"
+    ),
+    VECTOR_QUERIES["PostgreSQL"],
 )
 
 # PGWire
 time_query(
     "IRIS + PGWire",
     lambda: psycopg.connect(host="localhost", port=5434, dbname="USER"),
-    VECTOR_QUERIES["PGWire"]
+    VECTOR_QUERIES["PGWire"],
 )
 
 # IRIS DBAPI
 try:
     import iris
+
     def dbapi_conn():
-        return iris.connect(hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS")
+        return iris.connect(
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+        )
 
     time_query("IRIS + DBAPI", dbapi_conn, VECTOR_QUERIES["DBAPI"])
 except ImportError:

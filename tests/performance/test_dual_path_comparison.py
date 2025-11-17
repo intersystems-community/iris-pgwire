@@ -12,10 +12,10 @@ This demonstrates the architectural difference between:
 - Embedded Python execution (faster, direct IRIS access)
 """
 
-import time
+import base64
 import random
 import struct
-import base64
+import time
 
 
 def gen_vec(d=1024):
@@ -27,8 +27,8 @@ def gen_vec(d=1024):
 
 def vec_to_base64(vec):
     """Convert vector to base64 encoding"""
-    b = struct.pack(f'{len(vec)}f', *vec)
-    return 'base64:' + base64.b64encode(b).decode('ascii')
+    b = struct.pack(f"{len(vec)}f", *vec)
+    return "base64:" + base64.b64encode(b).decode("ascii")
 
 
 print("=" * 80)
@@ -46,17 +46,17 @@ print("-" * 80)
 try:
     import iris
 
-    conn = iris.createConnection('localhost', 1972, 'USER', '_SYSTEM', 'SYS')
+    conn = iris.createConnection("localhost", 1972, "USER", "_SYSTEM", "SYS")
     cur = conn.cursor()
 
     # Check execution mode
-    has_embedded = hasattr(iris, 'sql') and hasattr(iris.sql, 'exec')
+    has_embedded = hasattr(iris, "sql") and hasattr(iris.sql, "exec")
     print(f"   Embedded mode available: {has_embedded}")
-    print(f"   Using: DBAPI external connection")
+    print("   Using: DBAPI external connection")
     print()
 
     # Verify test data
-    cur.execute('SELECT COUNT(*) FROM test_1024')
+    cur.execute("SELECT COUNT(*) FROM test_1024")
     count = cur.fetchone()[0]
     print(f"   Dataset: {count} vectors in test_1024")
     print()
@@ -65,8 +65,10 @@ try:
     print("   Warmup: 5 queries...")
     for i in range(5):
         vec = gen_vec(1024)
-        vec_str = '[' + ','.join(str(v) for v in vec) + ']'
-        cur.execute(f"SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR('{vec_str}'))")
+        vec_str = "[" + ",".join(str(v) for v in vec) + "]"
+        cur.execute(
+            f"SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR('{vec_str}'))"
+        )
         cur.fetchall()
 
     # Benchmark
@@ -74,10 +76,12 @@ try:
     times = []
     for i in range(30):
         vec = gen_vec(1024)
-        vec_str = '[' + ','.join(str(v) for v in vec) + ']'
+        vec_str = "[" + ",".join(str(v) for v in vec) + "]"
 
         start = time.perf_counter()
-        cur.execute(f"SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR('{vec_str}'))")
+        cur.execute(
+            f"SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR('{vec_str}'))"
+        )
         cur.fetchall()
         times.append((time.perf_counter() - start) * 1000)
 
@@ -88,7 +92,7 @@ try:
     qps_dbapi = 30 / (sum(times) / 1000)
 
     print()
-    print(f"   Results (DBAPI External):")
+    print("   Results (DBAPI External):")
     print(f"      Avg latency: {avg_dbapi:6.2f}ms")
     print(f"      P95 latency: {p95_dbapi:6.2f}ms")
     print(f"      Min latency: {min_dbapi:6.2f}ms")
@@ -142,11 +146,7 @@ try:
     import psycopg2
 
     conn = psycopg2.connect(
-        host='localhost',
-        port=5432,
-        database='postgres',
-        user='postgres',
-        password='postgres'
+        host="localhost", port=5432, database="postgres", user="postgres", password="postgres"
     )
     conn.autocommit = True
     cur = conn.cursor()
@@ -161,7 +161,7 @@ try:
     print("   Warmup: 5 queries...")
     for i in range(5):
         vec = gen_vec(1024)
-        cur.execute('SELECT id FROM test_vectors_1024 ORDER BY vec <=> %s LIMIT 5', (vec,))
+        cur.execute("SELECT id FROM test_vectors_1024 ORDER BY vec <=> %s LIMIT 5", (vec,))
         cur.fetchall()
 
     # Benchmark
@@ -171,7 +171,7 @@ try:
         vec = gen_vec(1024)
 
         start = time.perf_counter()
-        cur.execute('SELECT id FROM test_vectors_1024 ORDER BY vec <=> %s LIMIT 5', (vec,))
+        cur.execute("SELECT id FROM test_vectors_1024 ORDER BY vec <=> %s LIMIT 5", (vec,))
         cur.fetchall()
         times.append((time.perf_counter() - start) * 1000)
 
@@ -182,7 +182,7 @@ try:
     qps_pg = 30 / (sum(times) / 1000)
 
     print()
-    print(f"   Results (PostgreSQL + pgvector):")
+    print("   Results (PostgreSQL + pgvector):")
     print(f"      Avg latency: {avg_pg:6.2f}ms")
     print(f"      P95 latency: {p95_pg:6.2f}ms")
     print(f"      Min latency: {min_pg:6.2f}ms")
@@ -211,12 +211,16 @@ print("│ Execution Path          │   Avg    │   P95    │  Throughput  �
 print("├─────────────────────────┼──────────┼──────────┼──────────────┤")
 
 if avg_dbapi:
-    print(f"│ IRIS DBAPI (external)   │ {avg_dbapi:6.2f}ms │ {p95_dbapi:6.2f}ms │ {qps_dbapi:7.1f} qps │")
+    print(
+        f"│ IRIS DBAPI (external)   │ {avg_dbapi:6.2f}ms │ {p95_dbapi:6.2f}ms │ {qps_dbapi:7.1f} qps │"
+    )
 else:
     print("│ IRIS DBAPI (external)   │   N/A    │   N/A    │     N/A      │")
 
 if avg_embedded:
-    print(f"│ IRIS Embedded (direct)  │ {avg_embedded:6.2f}ms │   N/A    │ {qps_embedded:7.1f} qps │")
+    print(
+        f"│ IRIS Embedded (direct)  │ {avg_embedded:6.2f}ms │   N/A    │ {qps_embedded:7.1f} qps │"
+    )
 else:
     print("│ IRIS Embedded (direct)  │   N/A    │   N/A    │     N/A      │")
 
@@ -231,12 +235,12 @@ print()
 # Performance analysis
 if avg_dbapi and avg_pg:
     slowdown = avg_dbapi / avg_pg
-    print(f"Performance Analysis:")
+    print("Performance Analysis:")
     print(f"   IRIS DBAPI is {slowdown:.1f}× slower than PostgreSQL")
-    print(f"   This is expected due to:")
-    print(f"   - External connection overhead (network)")
-    print(f"   - IRIS driver serialization")
-    print(f"   - No HNSW optimization (needs investigation)")
+    print("   This is expected due to:")
+    print("   - External connection overhead (network)")
+    print("   - IRIS driver serialization")
+    print("   - No HNSW optimization (needs investigation)")
     print()
 
 print("Expected Performance (from PERFORMANCE.md):")

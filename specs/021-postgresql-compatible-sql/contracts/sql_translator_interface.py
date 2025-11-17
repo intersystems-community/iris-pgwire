@@ -261,6 +261,7 @@ class DATETranslatorInterface(ABC):
 # Contract Test Assertions
 # These assertions MUST pass for any implementation of the interfaces above
 
+
 def contract_test_normalize_unquoted_identifier():
     """Contract: Unquoted identifiers MUST be converted to UPPERCASE"""
     sql = "SELECT FirstName FROM Patients"

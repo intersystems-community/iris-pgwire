@@ -151,7 +151,9 @@ class AsyncDialectInterface(Protocol):
         """
         ...
 
-    def do_executemany(self, cursor: Any, query: str, params: List[Dict], context: Any = None) -> None:
+    def do_executemany(
+        self, cursor: Any, query: str, params: List[Dict], context: Any = None
+    ) -> None:
         """
         Execute parameterized query multiple times asynchronously.
 
@@ -294,7 +296,9 @@ class AsyncDialectInterface(Protocol):
         """
         ...
 
-    def do_rollback_twophase(self, connection: Any, xid: Any, is_prepared: bool = True, recover: bool = False) -> None:
+    def do_rollback_twophase(
+        self, connection: Any, xid: Any, is_prepared: bool = True, recover: bool = False
+    ) -> None:
         """
         Disable two-phase commit ROLLBACK (not supported via PGWire).
 
@@ -314,7 +318,9 @@ class AsyncDialectInterface(Protocol):
         """
         ...
 
-    def do_commit_twophase(self, connection: Any, xid: Any, is_prepared: bool = True, recover: bool = False) -> None:
+    def do_commit_twophase(
+        self, connection: Any, xid: Any, is_prepared: bool = True, recover: bool = False
+    ) -> None:
         """
         Disable two-phase commit COMMIT (not supported via PGWire).
 

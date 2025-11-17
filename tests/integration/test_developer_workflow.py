@@ -7,13 +7,13 @@ as defined in specs/017-correct-testing-framework/spec.md
 TDD: These tests MUST FAIL until the framework is properly configured.
 """
 
-import pytest
-import subprocess
-import time
-import json
-import sys
-import shutil
 import os
+import shutil
+import subprocess
+import sys
+import time
+
+import pytest
 
 # Find pytest executable (might be in venv or PATH)
 PYTEST_CMD = shutil.which("pytest") or sys.executable + " -m pytest"
@@ -35,29 +35,30 @@ def test_local_test_execution_completes_without_hanging():
         [sys.executable, "-m", "pytest", "tests/contract/", "-v", "--tb=short"],
         capture_output=True,
         text=True,
-        timeout=120  # 2 minutes max - should complete much faster
+        timeout=120,  # 2 minutes max - should complete much faster
     )
 
     # Verify pytest ran (may fail tests, but shouldn't hang)
     assert result.returncode is not None, "pytest should complete (not hang)"
 
     # Verify output shows test execution
-    assert "test session starts" in result.stdout or "test session starts" in result.stderr, \
-        "pytest should start test session"
+    assert (
+        "test session starts" in result.stdout or "test session starts" in result.stderr
+    ), "pytest should start test session"
 
     # Verify sequential execution (no parallel markers)
     # pytest-xdist would show "gw0", "gw1" for workers - we should NOT see this
-    assert "gw0" not in result.stdout, \
-        "Should not see pytest-xdist workers (tests must be sequential)"
+    assert (
+        "gw0" not in result.stdout
+    ), "Should not see pytest-xdist workers (tests must be sequential)"
 
     # Verify timeout configuration is active by checking markers
     markers_result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--markers"],
-        capture_output=True,
-        text=True
+        [sys.executable, "-m", "pytest", "--markers"], capture_output=True, text=True
     )
-    assert "timeout" in markers_result.stdout.lower(), \
-        "pytest-timeout plugin should be active (timeout marker should be available)"
+    assert (
+        "timeout" in markers_result.stdout.lower()
+    ), "pytest-timeout plugin should be active (timeout marker should be available)"
 
 
 def test_local_test_failure_provides_actionable_diagnostics():
@@ -84,7 +85,7 @@ def test_intentional_failure_for_diagnostics():
     # Write temporary test file
     import tempfile
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(test_code)
         test_file_path = f.name
 
@@ -94,7 +95,7 @@ def test_intentional_failure_for_diagnostics():
             [sys.executable, "-m", "pytest", test_file_path, "-v", "--tb=short"],
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=60,
         )
 
         # Should fail (return code 1)
@@ -104,19 +105,23 @@ def test_intentional_failure_for_diagnostics():
         output = result.stdout + result.stderr
 
         # Check for key diagnostic elements
-        assert "test_query" in output or "SELECT 1" in output, \
-            "Diagnostic output should include test context"
+        assert (
+            "test_query" in output or "SELECT 1" in output
+        ), "Diagnostic output should include test context"
 
-        assert "Intentional failure to test diagnostics" in output, \
-            "Assertion message should be visible"
+        assert (
+            "Intentional failure to test diagnostics" in output
+        ), "Assertion message should be visible"
 
         # Verify test function name appears
-        assert "test_intentional_failure_for_diagnostics" in output, \
-            "Test function name should appear in output"
+        assert (
+            "test_intentional_failure_for_diagnostics" in output
+        ), "Test function name should appear in output"
 
         # Verify short traceback mode is working
-        assert "--tb=short" in " ".join([sys.executable, "-m", "pytest", test_file_path, "-v", "--tb=short"]), \
-            "Short traceback mode should be used"
+        assert "--tb=short" in " ".join(
+            [sys.executable, "-m", "pytest", test_file_path, "-v", "--tb=short"]
+        ), "Short traceback mode should be used"
 
     finally:
         # Cleanup temporary test file
@@ -140,26 +145,30 @@ def test_coverage_report_generated_without_enforcement():
         capture_output=True,
         text=True,
         timeout=120,
-        cwd="/app" if os.path.exists("/app/tests") else "."
+        cwd="/app" if os.path.exists("/app/tests") else ".",
     )
 
     output = result.stdout + result.stderr
 
     # Verify coverage is being collected
-    assert "coverage" in output.lower() or "cov" in output.lower(), \
-        "Coverage reporting should be active"
+    assert (
+        "coverage" in output.lower() or "cov" in output.lower()
+    ), "Coverage reporting should be active"
 
     # Verify coverage report mentions iris_pgwire (our target package)
-    assert "iris_pgwire" in output or "src/iris_pgwire" in output, \
-        "Coverage should track iris_pgwire package"
+    assert (
+        "iris_pgwire" in output or "src/iris_pgwire" in output
+    ), "Coverage should track iris_pgwire package"
 
     # Verify NO coverage enforcement (test should not fail due to low coverage)
     # We expect tests to fail due to missing fixtures, but NOT due to coverage
     if result.returncode != 0:
         # If tests failed, it should NOT be due to coverage threshold
-        assert "coverage" not in output.lower() or "failed" not in output.lower() or \
-               "coverage failed" not in output.lower(), \
-            "Tests should not fail due to coverage threshold (no enforcement)"
+        assert (
+            "coverage" not in output.lower()
+            or "failed" not in output.lower()
+            or "coverage failed" not in output.lower()
+        ), "Tests should not fail due to coverage threshold (no enforcement)"
 
 
 @pytest.mark.timeout(35)  # Test runs a 35s timeout test, needs more time
@@ -178,12 +187,13 @@ def test_timeout_configuration_active():
         capture_output=True,
         text=True,
         timeout=30,
-        cwd="/app" if os.path.exists("/app/tests") else "."
+        cwd="/app" if os.path.exists("/app/tests") else ".",
     )
 
     # Verify pytest can collect tests (configuration is valid)
-    assert result.returncode == 0 or result.returncode == 5, \
-        f"pytest configuration should be valid (exit code 0 or 5 for no tests), got {result.returncode}"
+    assert (
+        result.returncode == 0 or result.returncode == 5
+    ), f"pytest configuration should be valid (exit code 0 or 5 for no tests), got {result.returncode}"
 
     # Create a test that will timeout to verify enforcement
     timeout_test_code = '''
@@ -197,7 +207,7 @@ def test_verify_timeout_enforcement():
 
     import tempfile
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(timeout_test_code)
         test_file_path = f.name
 
@@ -209,19 +219,21 @@ def test_verify_timeout_enforcement():
             [sys.executable, "-m", "pytest", test_file_path, "-v"],
             capture_output=True,
             text=True,
-            timeout=60  # Give subprocess time to timeout the test
+            timeout=60,  # Give subprocess time to timeout the test
         )
 
         elapsed = time.perf_counter() - start_time
 
         # Should complete in ~30 seconds (timeout), not 35 seconds (sleep)
-        assert elapsed < 35, \
-            f"Test should timeout at ~30s, not complete full sleep (took {elapsed:.1f}s)"
+        assert (
+            elapsed < 35
+        ), f"Test should timeout at ~30s, not complete full sleep (took {elapsed:.1f}s)"
 
         # Verify timeout occurred
         output = result.stdout + result.stderr
-        assert "timeout" in output.lower() or "timed out" in output.lower(), \
-            "Output should indicate timeout occurred"
+        assert (
+            "timeout" in output.lower() or "timed out" in output.lower()
+        ), "Output should indicate timeout occurred"
 
     finally:
         if os.path.exists(test_file_path):

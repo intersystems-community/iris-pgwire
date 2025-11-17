@@ -15,14 +15,15 @@ Options:
     --contract-only   Run only contract tests
 """
 
-import sys
 import argparse
 import subprocess
+import sys
 import time
+
 import structlog
-from pathlib import Path
 
 logger = structlog.get_logger()
+
 
 def run_pytest_suite(test_path: str, markers: str = None, verbose: bool = True) -> bool:
     """Run pytest suite with specified markers"""
@@ -47,10 +48,12 @@ def run_pytest_suite(test_path: str, markers: str = None, verbose: bool = True) 
                 print(result.stdout)
             return True
         else:
-            logger.error("Test suite failed",
-                        test_path=test_path,
-                        returncode=result.returncode,
-                        stderr=result.stderr)
+            logger.error(
+                "Test suite failed",
+                test_path=test_path,
+                returncode=result.returncode,
+                stderr=result.stderr,
+            )
             print("STDOUT:", result.stdout)
             print("STDERR:", result.stderr)
             return False
@@ -62,30 +65,30 @@ def run_pytest_suite(test_path: str, markers: str = None, verbose: bool = True) 
         logger.error("pytest not found - install with: pip install pytest")
         return False
 
+
 def check_prerequisites() -> bool:
     """Check if prerequisites are available"""
     try:
         # Check if IRIS module can be imported
         from iris_pgwire.iris_constructs import IRISConstructTranslator
+
         logger.info("IRIS constructs module available")
         return True
     except ImportError as e:
         logger.error("IRIS constructs module not available", error=str(e))
         return False
 
+
 def main():
     """Main test runner"""
     parser = argparse.ArgumentParser(description="IRIS SQL Constructs E2E Test Runner")
-    parser.add_argument("--quick", action="store_true",
-                       help="Run only fast tests")
-    parser.add_argument("--integration-only", action="store_true",
-                       help="Run only integration tests")
-    parser.add_argument("--e2e-only", action="store_true",
-                       help="Run only E2E tests")
-    parser.add_argument("--contract-only", action="store_true",
-                       help="Run only contract tests")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                       help="Verbose output")
+    parser.add_argument("--quick", action="store_true", help="Run only fast tests")
+    parser.add_argument(
+        "--integration-only", action="store_true", help="Run only integration tests"
+    )
+    parser.add_argument("--e2e-only", action="store_true", help="Run only E2E tests")
+    parser.add_argument("--contract-only", action="store_true", help="Run only contract tests")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
@@ -98,24 +101,32 @@ def main():
     test_suites = []
 
     if args.contract_only:
-        test_suites.append(("Contract Tests", "tests/test_contract_iris_translation.py", "contract"))
+        test_suites.append(
+            ("Contract Tests", "tests/test_contract_iris_translation.py", "contract")
+        )
     elif args.integration_only:
-        test_suites.append(("Integration Tests", "tests/test_integration_iris_translation.py", "integration"))
+        test_suites.append(
+            ("Integration Tests", "tests/test_integration_iris_translation.py", "integration")
+        )
     elif args.e2e_only:
         test_suites.append(("E2E Tests", "tests/test_e2e_iris_constructs.py", "e2e"))
     elif args.quick:
         # Quick tests: contract and integration only
-        test_suites.extend([
-            ("Contract Tests", "tests/test_contract_iris_translation.py", "contract"),
-            ("Integration Tests", "tests/test_integration_iris_translation.py", "integration")
-        ])
+        test_suites.extend(
+            [
+                ("Contract Tests", "tests/test_contract_iris_translation.py", "contract"),
+                ("Integration Tests", "tests/test_integration_iris_translation.py", "integration"),
+            ]
+        )
     else:
         # Full test suite
-        test_suites.extend([
-            ("Contract Tests", "tests/test_contract_iris_translation.py", "contract"),
-            ("Integration Tests", "tests/test_integration_iris_translation.py", "integration"),
-            ("E2E Tests", "tests/test_e2e_iris_constructs.py", "e2e")
-        ])
+        test_suites.extend(
+            [
+                ("Contract Tests", "tests/test_contract_iris_translation.py", "contract"),
+                ("Integration Tests", "tests/test_integration_iris_translation.py", "integration"),
+                ("E2E Tests", "tests/test_e2e_iris_constructs.py", "e2e"),
+            ]
+        )
 
     # Run test suites
     results = []
@@ -143,7 +154,7 @@ def main():
     total = len(results)
 
     print(f"\n{'='*80}")
-    print(f"IRIS SQL Constructs Test Results")
+    print("IRIS SQL Constructs Test Results")
     print(f"{'='*80}")
 
     for suite_name, success, duration in results:
@@ -156,14 +167,13 @@ def main():
 
     if passed == total:
         print("🎉 All test suites passed!")
-        logger.info("All test suites passed",
-                   passed=passed, total=total, duration=total_duration)
+        logger.info("All test suites passed", passed=passed, total=total, duration=total_duration)
         return True
     else:
         print(f"❌ {total - passed} test suite(s) failed")
-        logger.error("Some test suites failed",
-                    passed=passed, total=total, failed=total-passed)
+        logger.error("Some test suites failed", passed=passed, total=total, failed=total - passed)
         return False
+
 
 if __name__ == "__main__":
     success = main()

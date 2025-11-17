@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 class CommandType(Enum):
     """PostgreSQL transaction command types"""
+
     BEGIN = "BEGIN"
     START_TRANSACTION = "START TRANSACTION"
     COMMIT = "COMMIT"
@@ -32,6 +33,7 @@ class TransactionCommand:
     Lifecycle: Single-use, destroyed after translation
     Thread Safety: Immutable after creation (dataclass frozen=True recommended in implementation)
     """
+
     command_text: str  # Original SQL from client
     command_type: CommandType  # Parsed command type
     modifiers: Optional[str]  # Transaction modifiers (e.g., "ISOLATION LEVEL READ COMMITTED")
@@ -182,9 +184,10 @@ class TransactionTranslatorInterface:
 
 # Contract Test Helpers
 
-def assert_translation_equals(translator: TransactionTranslatorInterface,
-                              input_sql: str,
-                              expected_output: str) -> None:
+
+def assert_translation_equals(
+    translator: TransactionTranslatorInterface, input_sql: str, expected_output: str
+) -> None:
     """
     Helper function for contract tests - assert translation produces expected output.
 
@@ -205,9 +208,9 @@ def assert_translation_equals(translator: TransactionTranslatorInterface,
     )
 
 
-def assert_translation_performance(translator: TransactionTranslatorInterface,
-                                   input_sql: str,
-                                   max_time_ms: float = 0.1) -> float:
+def assert_translation_performance(
+    translator: TransactionTranslatorInterface, input_sql: str, max_time_ms: float = 0.1
+) -> float:
     """
     Helper function for contract tests - assert translation meets performance SLA.
 
@@ -240,6 +243,7 @@ def assert_translation_performance(translator: TransactionTranslatorInterface,
 
 # Integration Contract
 
+
 class IRISExecutorIntegration:
     """
     Contract for integration points with iris_executor.py.
@@ -250,9 +254,9 @@ class IRISExecutorIntegration:
     3. Vector query optimization (optimize_vector_query)
     """
 
-    def execute_with_transaction_translation(self,
-                                            sql: str,
-                                            translator: TransactionTranslatorInterface) -> str:
+    def execute_with_transaction_translation(
+        self, sql: str, translator: TransactionTranslatorInterface
+    ) -> str:
         """
         Execute SQL with transaction verb translation applied BEFORE Feature 021 normalization.
 

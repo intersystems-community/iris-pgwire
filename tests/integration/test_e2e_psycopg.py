@@ -7,16 +7,17 @@ These tests MUST FAIL until the implementation is complete (TDD requirement).
 Constitutional Requirement: Test-First Development with real PostgreSQL clients
 """
 
-import pytest
 import time
-import os
-from typing import Any, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
+
+import pytest
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.server import PGWireServer
     from iris_pgwire.sql_translator import SQLTranslator
+
     SERVER_AVAILABLE = True
 except ImportError:
     SERVER_AVAILABLE = False
@@ -24,11 +25,13 @@ except ImportError:
 # Real PostgreSQL driver - this must work for constitutional compliance
 try:
     import psycopg
+
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
 
 pytestmark = [pytest.mark.e2e, pytest.mark.requires_iris]
+
 
 @pytest.fixture(scope="session")
 def pgwire_server():
@@ -47,6 +50,7 @@ def pgwire_server():
 
     server.stop()
 
+
 @pytest.fixture
 def connection_params():
     """Connection parameters for psycopg testing"""
@@ -55,10 +59,11 @@ def connection_params():
         "port": 5434,
         "user": "postgres",
         "password": "iris",
-        "dbname": "iris"
+        "dbname": "iris",
     }
 
-def create_connection(params: Dict[str, Any], timeout: int = 30) -> Optional[psycopg.Connection]:
+
+def create_connection(params: dict[str, Any], timeout: int = 30) -> psycopg.Connection | None:
     """Create psycopg connection with error handling"""
     if not PSYCOPG_AVAILABLE:
         pytest.skip("psycopg driver not available")
@@ -68,6 +73,7 @@ def create_connection(params: Dict[str, Any], timeout: int = 30) -> Optional[psy
         return conn
     except Exception as e:
         pytest.fail(f"Failed to connect to PGWire server: {e}")
+
 
 class TestIRISSQLSyntaxE2E:
     """E2E tests for IRIS SQL syntax extension translation with psycopg"""
@@ -119,7 +125,7 @@ class TestIRISSQLSyntaxE2E:
                 test_queries = [
                     "SELECT %SYSTEM.SQL.GETDATE() AS current_date",
                     "SELECT DATEADD('dd', 1, GETDATE()) AS tomorrow",
-                    "SELECT DATEDIFF('dd', '2023-01-01', '2023-01-02') AS date_diff"
+                    "SELECT DATEDIFF('dd', '2023-01-01', '2023-01-02') AS date_diff",
                 ]
 
                 for sql in test_queries:
@@ -141,11 +147,14 @@ class TestIRISSQLSyntaxE2E:
 
                 # Should return valid JSON
                 import json
+
                 parsed = json.loads(result)
-                assert parsed['key'] == 'value', "JSON_OBJECT should create valid JSON"
+                assert parsed["key"] == "value", "JSON_OBJECT should create valid JSON"
 
                 # Test JSON extraction
-                cur.execute("SELECT JSON_EXTRACT('{}', '$.key') AS extracted".format('{"key": "test"}'))
+                cur.execute(
+                    "SELECT JSON_EXTRACT('{}', '$.key') AS extracted".format('{"key": "test"}')
+                )
                 result = cur.fetchone()[0]
                 assert result == "test", "JSON_EXTRACT should extract value"
 
@@ -180,8 +189,10 @@ class TestIRISSQLSyntaxE2E:
                     # Verify JSON column contains valid JSON
                     json_col = results[0][2]
                     import json
+
                     parsed = json.loads(json_col)
-                    assert 'id' in parsed and 'active' in parsed
+                    assert "id" in parsed and "active" in parsed
+
 
 class TestIRISParameterBinding:
     """Test parameter binding with IRIS construct translation"""
@@ -194,10 +205,7 @@ class TestIRISParameterBinding:
         with create_connection(connection_params) as conn:
             with conn.cursor() as cur:
                 # Prepare statement with IRIS function and parameter
-                cur.execute(
-                    "SELECT %SQLUPPER(name) AS upper_name FROM users WHERE id = %s",
-                    (123,)
-                )
+                cur.execute("SELECT %SQLUPPER(name) AS upper_name FROM users WHERE id = %s", (123,))
 
                 result = cur.fetchone()
                 # Should handle both parameter binding and function translation
@@ -213,11 +221,12 @@ class TestIRISParameterBinding:
                 # Multiple parameters with IRIS constructs
                 cur.execute(
                     "SELECT TOP %s %SQLUPPER(name) FROM users WHERE id > %s AND status = %s",
-                    (5, 100, 'active')
+                    (5, 100, "active"),
                 )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "TOP parameter should limit results"
+
 
 class TestIRISTransactionSupport:
     """Test transaction support with IRIS construct translation"""
@@ -267,6 +276,7 @@ class TestIRISTransactionSupport:
                 # Should be back to idle state
                 assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
 
+
 class TestIRISConnectionPooling:
     """Test connection pooling with IRIS construct translation"""
 
@@ -284,10 +294,7 @@ class TestIRISConnectionPooling:
 
         # Execute concurrent queries
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(execute_iris_query, i)
-                for i in range(1, 6)
-            ]
+            futures = [executor.submit(execute_iris_query, i) for i in range(1, 6)]
 
             results = [future.result(timeout=30) for future in futures]
 
@@ -297,6 +304,7 @@ class TestIRISConnectionPooling:
             for i, (query_id, version) in enumerate(results, 1):
                 assert query_id == i, f"Query ID should match: expected {i}, got {query_id}"
                 assert version is not None, f"Version should be returned for query {i}"
+
 
 class TestIRISCursorOperations:
     """Test cursor operations with IRIS construct translation"""
@@ -338,14 +346,16 @@ class TestIRISCursorOperations:
 
         with create_connection(connection_params) as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         id,
                         %SQLUPPER(name) AS upper_name,
                         JSON_OBJECT('version', %SYSTEM.Version.GetNumber()) AS meta
                     FROM users
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "LIMIT should be respected"
@@ -357,8 +367,10 @@ class TestIRISCursorOperations:
 
                     # Verify JSON structure
                     import json
+
                     meta = json.loads(row[2])
-                    assert 'version' in meta, "JSON should contain version key"
+                    assert "version" in meta, "JSON should contain version key"
+
 
 class TestIRISErrorHandling:
     """Test error handling for IRIS constructs with psycopg"""
@@ -403,6 +415,7 @@ class TestIRISErrorHandling:
                 result = cur.fetchone()
                 assert result is not None, "Connection should recover after error"
 
+
 class TestIRISPerformanceRequirements:
     """Test performance requirements for IRIS construct translation"""
 
@@ -423,8 +436,9 @@ class TestIRISPerformanceRequirements:
 
                 assert result is not None, "Query should return results"
                 # Constitutional requirement: translations should be fast
-                assert execution_time_ms < 1000.0, \
-                    f"Query took {execution_time_ms}ms, should be < 1000ms including network overhead"
+                assert (
+                    execution_time_ms < 1000.0
+                ), f"Query took {execution_time_ms}ms, should be < 1000ms including network overhead"
 
     def test_complex_iris_query_performance(self, connection_params):
         """Test performance of complex IRIS construct queries"""
@@ -451,8 +465,10 @@ class TestIRISPerformanceRequirements:
 
                 # Verify results and performance
                 assert len(results) <= 100, "TOP 100 should limit results"
-                assert execution_time_ms < 2000.0, \
-                    f"Complex query took {execution_time_ms}ms, should be < 2000ms"
+                assert (
+                    execution_time_ms < 2000.0
+                ), f"Complex query took {execution_time_ms}ms, should be < 2000ms"
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_psycopg_e2e_tdd_validation():

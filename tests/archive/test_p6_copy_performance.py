@@ -7,16 +7,16 @@ with real PostgreSQL clients and bulk data operations.
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
-import tempfile
-import os
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -34,18 +34,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for P6 testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False  # Use trust auth for testing
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,  # Use trust auth for testing
         )
 
         print(f"🚀 Starting server for P6 testing on 127.0.0.1:{port}...")
@@ -64,6 +66,7 @@ def run_server(port, ready_event):
 
     asyncio.run(start_server())
 
+
 def test_copy_from_stdin():
     """Test COPY FROM STDIN bulk data import"""
     PORT = 15600
@@ -77,7 +80,7 @@ def test_copy_from_stdin():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -90,11 +93,7 @@ def test_copy_from_stdin():
         print("📱 Testing COPY FROM STDIN...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -108,8 +107,10 @@ def test_copy_from_stdin():
 3\t[7.0,8.0,9.0]"""
 
             # This should trigger the COPY FROM STDIN protocol
-            cur.copy_expert("COPY test_vectors FROM STDIN WITH (FORMAT CSV, DELIMITER E'\\t')",
-                           source=sample_data.split('\n'))
+            cur.copy_expert(
+                "COPY test_vectors FROM STDIN WITH (FORMAT CSV, DELIMITER E'\\t')",
+                source=sample_data.split("\n"),
+            )
 
             print("   ✅ COPY FROM STDIN protocol working")
         except Exception as e:
@@ -129,6 +130,7 @@ def test_copy_from_stdin():
         print(f"❌ COPY FROM STDIN test failed: {e}")
         return False
 
+
 def test_copy_to_stdout():
     """Test COPY TO STDOUT bulk data export"""
     PORT = 15601
@@ -142,7 +144,7 @@ def test_copy_to_stdout():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -155,11 +157,7 @@ def test_copy_to_stdout():
         print("📱 Testing COPY TO STDOUT...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -168,8 +166,9 @@ def test_copy_to_stdout():
         print("   Testing bulk data export...")
         try:
             # This should trigger the COPY TO STDOUT protocol
-            cur.copy_expert("COPY test_vectors TO STDOUT WITH (FORMAT CSV, DELIMITER E'\\t')",
-                           file=None)
+            cur.copy_expert(
+                "COPY test_vectors TO STDOUT WITH (FORMAT CSV, DELIMITER E'\\t')", file=None
+            )
 
             print("   ✅ COPY TO STDOUT protocol working")
         except Exception as e:
@@ -189,6 +188,7 @@ def test_copy_to_stdout():
         print(f"❌ COPY TO STDOUT test failed: {e}")
         return False
 
+
 def test_performance_monitoring():
     """Test performance monitoring capabilities"""
     print("\n🧪 P6 Test 3: Performance Monitoring")
@@ -196,7 +196,8 @@ def test_performance_monitoring():
 
     try:
         from iris_pgwire.performance_monitor import (
-            PerformanceMonitor, TranslationMetrics, PerformanceStats
+            PerformanceStats,
+            TranslationMetrics,
         )
 
         print("📱 Testing performance monitoring components...")
@@ -210,18 +211,14 @@ def test_performance_monitoring():
             sql_length=50,
             constructs_detected=2,
             constructs_translated=2,
-            construct_types={'FUNCTION': 1, 'SYNTAX': 1}
+            construct_types={"FUNCTION": 1, "SYNTAX": 1},
         )
 
         print(f"   ✅ Translation metrics: {metrics.duration_ms:.2f}ms")
         print(f"   ✅ SLA compliant: {metrics.sla_compliant}")
 
         # Test performance stats
-        stats = PerformanceStats(
-            total_translations=100,
-            sla_violations=5,
-            avg_time_ms=2.5
-        )
+        stats = PerformanceStats(total_translations=100, sla_violations=5, avg_time_ms=2.5)
 
         print(f"   ✅ Performance stats: {stats.total_translations} translations")
 
@@ -231,6 +228,7 @@ def test_performance_monitoring():
     except Exception as e:
         print(f"❌ Performance monitoring test failed: {e}")
         return False
+
 
 def test_bulk_data_handling():
     """Test bulk data handling capabilities"""
@@ -245,7 +243,7 @@ def test_bulk_data_handling():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -258,11 +256,7 @@ def test_bulk_data_handling():
         print("📱 Testing bulk data handling...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='bulk_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="bulk_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -271,7 +265,7 @@ def test_bulk_data_handling():
         bulk_queries = [
             "SELECT 'Bulk operation 1' as message",
             "SELECT 'Bulk operation 2' as message",
-            "SELECT 'Bulk operation 3' as message"
+            "SELECT 'Bulk operation 3' as message",
         ]
 
         successful_queries = 0
@@ -298,6 +292,7 @@ def test_bulk_data_handling():
         print(f"❌ Bulk data handling test failed: {e}")
         return False
 
+
 def test_copy_protocol_assessment():
     """Test COPY protocol implementation assessment"""
     print("\n🧪 P6 Test 5: COPY Protocol Assessment")
@@ -306,18 +301,21 @@ def test_copy_protocol_assessment():
     try:
         # Check COPY protocol constants
         from iris_pgwire.protocol import (
-            MSG_COPY_DATA, MSG_COPY_DONE, MSG_COPY_FAIL,
-            MSG_COPY_IN_RESPONSE, MSG_COPY_OUT_RESPONSE
+            MSG_COPY_DATA,
+            MSG_COPY_DONE,
+            MSG_COPY_FAIL,
+            MSG_COPY_IN_RESPONSE,
+            MSG_COPY_OUT_RESPONSE,
         )
 
         print("📱 Testing COPY protocol constants...")
 
         copy_constants = {
-            'MSG_COPY_DATA': MSG_COPY_DATA,
-            'MSG_COPY_DONE': MSG_COPY_DONE,
-            'MSG_COPY_FAIL': MSG_COPY_FAIL,
-            'MSG_COPY_IN_RESPONSE': MSG_COPY_IN_RESPONSE,
-            'MSG_COPY_OUT_RESPONSE': MSG_COPY_OUT_RESPONSE
+            "MSG_COPY_DATA": MSG_COPY_DATA,
+            "MSG_COPY_DONE": MSG_COPY_DONE,
+            "MSG_COPY_FAIL": MSG_COPY_FAIL,
+            "MSG_COPY_IN_RESPONSE": MSG_COPY_IN_RESPONSE,
+            "MSG_COPY_OUT_RESPONSE": MSG_COPY_OUT_RESPONSE,
         }
 
         for name, value in copy_constants.items():
@@ -335,6 +333,7 @@ def test_copy_protocol_assessment():
     except Exception as e:
         print(f"❌ COPY protocol assessment failed: {e}")
         return False
+
 
 def main():
     """Run comprehensive P6 COPY & Performance tests"""
@@ -374,11 +373,11 @@ def main():
         "COPY TO STDOUT",
         "Performance Monitoring",
         "Bulk Data Handling",
-        "COPY Protocol Assessment"
+        "COPY Protocol Assessment",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -398,6 +397,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} P6 tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()
