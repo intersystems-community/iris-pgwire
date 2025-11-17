@@ -104,12 +104,11 @@ cur.execute("""
 
 ### Enterprise Authentication
 
-**Industry-Standard Security** (matches PgBouncer, YugabyteDB, PGAdapter approach):
+Industry-standard security matching PgBouncer, YugabyteDB, Google Cloud PGAdapter:
 
-- **OAuth 2.0**: Token-based authentication for BI tools and API integrations (cloud-native IAM pattern)
-- **IRIS Wallet**: Encrypted credential storage with audit trail (no plain-text passwords)
-- **SCRAM-SHA-256**: Secure password authentication (industry best practice, replaces deprecated MD5)
-- **Password Fallback**: 100% backward compatible with standard password authentication
+- **OAuth 2.0**: Token-based authentication (cloud-native IAM)
+- **IRIS Wallet**: Encrypted credential storage (zero plain-text passwords)
+- **SCRAM-SHA-256**: Secure password authentication (industry best practice)
 
 ### Performance & Architecture
 
@@ -197,59 +196,23 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
 
 ## 🔐 Authentication
 
-**Production-Ready Security**: IRIS PGWire implements authentication patterns matching industry leaders (PgBouncer, YugabyteDB, Google Cloud PGAdapter). No plain-text passwords, enterprise-grade credential protection.
+**Industry-Standard Security** - No plain-text passwords, enterprise-grade protection matching PgBouncer, YugabyteDB, Google Cloud PGAdapter.
 
-### OAuth 2.0 Token Authentication
-
-**Use Case**: BI tools, data science notebooks, API integrations
-
-```bash
-# Environment configuration
-export OAUTH_CLIENT_ID=pgwire-server
-export OAUTH_CLIENT_SECRET=your-secret-here
-
-# Clients connect normally - OAuth happens transparently
-psql -h localhost -p 5432 -U john.doe -d USER
-# Password is exchanged for OAuth token automatically
-# Token cached in session (5-minute TTL) - no re-authentication
-```
-
-### IRIS Wallet Integration
-
-**Use Case**: Zero plain-text passwords, encrypted credential storage, audit compliance
+### Quick Start
 
 ```python
-# Store user passwords in IRIS Wallet (admin operation)
-import iris
-wallet = iris.cls('%IRIS.Wallet')
-wallet.SetSecret('pgwire-user-john.doe', 'secure_password_123')
-
-# Client connects without password in code
-conn = psycopg.connect("host=localhost port=5432 user=john.doe dbname=USER")
-# Password retrieved from Wallet automatically
-# Audit log: credential access recorded
-```
-
-**Benefits**:
-- ✅ Zero plain-text passwords in code or configuration
-- ✅ Automatic password rotation via Wallet API
-- ✅ Audit trail of all credential access
-- ✅ Encrypted storage in IRISSECURITY database
-
-### Password Authentication (SCRAM-SHA-256)
-
-**Industry Best Practice**: SCRAM-SHA-256 secure password authentication (replaces deprecated MD5, matches YugabyteDB recommendation):
-
-```python
-# SCRAM-SHA-256 authentication (secure challenge-response, no plain-text transmission)
+# Standard PostgreSQL connection (SCRAM-SHA-256 secure authentication)
+import psycopg
 conn = psycopg.connect("host=localhost port=5432 user=_SYSTEM password=SYS dbname=USER")
 ```
 
-**Security Benefits**:
-- ✅ Challenge-response authentication (never transmits plain-text passwords)
-- ✅ Cryptographically secure password storage
-- ✅ Resistant to replay attacks
-- ✅ 100% backward compatible with PostgreSQL clients
+### Enterprise Options
+
+**OAuth 2.0**: Token-based authentication for BI tools and applications (cloud-native IAM pattern)
+**IRIS Wallet**: Encrypted credential storage with audit trail (zero plain-text passwords in code)
+**SCRAM-SHA-256**: Industry best practice for password authentication (replaces deprecated MD5)
+
+See [Authentication Guide](docs/DEPLOYMENT.md#authentication) for detailed configuration
 
 ---
 
@@ -360,29 +323,6 @@ PostgreSQL Client → PGWire Server (Port 5432) → IRIS Database
 
 ---
 
-## 🌐 Industry Comparison
-
-IRIS PGWire follows proven architectural patterns from the PostgreSQL wire protocol ecosystem:
-
-| Feature | IRIS PGWire | PgBouncer | YugabyteDB | PGAdapter | QuestDB | Pattern |
-|---------|-------------|-----------|------------|-----------|---------|---------|
-| **Wire Protocol** | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | Universal |
-| **SSL/TLS** | Proxy | ✅ Native | ✅ Native | ✅ Native | ❌ None | Mixed (3/5 native) |
-| **SCRAM-SHA-256** | ✅ | ✅ | ✅ | ✅ | ❌ | Standard (4/5) |
-| **OAuth/IAM** | ✅ | ❌ | ❌ | ✅ | ❌ | Cloud-native (2/5) |
-| **Kerberos/GSSAPI** | ❌ | ❌ | ❌ | ❌ | ❌ | **Rare (0/5)** |
-| **Connection Pooling** | ✅ | ✅ | ✅ | ✅ | ❌ | Common (4/5) |
-| **Binary Format** | ✅ | ✅ | ✅ | ✅ | ✅ | Universal |
-
-**Key Insights**:
-- **GSSAPI**: Only CockroachDB + PostgreSQL core implement (2 of 9 surveyed implementations)
-- **SSL/TLS**: Mixed - QuestDB has none, Tailscale pgproxy uses network-layer security
-- **Cloud Auth**: OAuth/IAM increasingly preferred over Kerberos for cloud-native deployments
-- **Pattern**: IRIS PGWire matches 6 of 9 major implementations in security profile
-
-**References**: Industry analysis via Perplexity research (November 2025)
-
----
 
 ## 🔧 Installation
 
@@ -467,41 +407,23 @@ irispython -m iris_pgwire.server
 
 ---
 
-## 🏆 Production Readiness
+## ⚡ Production Ready
 
-### Protocol Implementation Status
+**171/171 tests passing** across 8 languages (Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
 
-| Feature | Status | Implementation Quality |
-|---------|--------|----------------------|
-| **Simple Queries** | ✅ Complete | SELECT, INSERT, UPDATE, DELETE - 100% |
-| **DDL Statements** | ✅ Complete | CREATE/DROP/ALTER TABLE - full compatibility |
-| **Extended Protocol** | ✅ Complete | Prepared statements, binary/text formats - 8 drivers validated |
-| **Authentication** | ✅ Complete | OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 - enterprise-grade |
-| **Transactions** | ✅ Complete | BEGIN/COMMIT/ROLLBACK, savepoints - full ACID support |
-| **COPY Protocol** | ✅ Complete | Bulk CSV import/export - 600+ rows/sec |
-| **Client Compatibility** | ✅ **100%** | **171/171 tests passing** across 8 languages |
+### What Works
 
-### Architecture Decisions (Industry-Standard)
+✅ **Core Protocol**: Simple queries, prepared statements, transactions, bulk operations (COPY)
+✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
+✅ **Vectors**: pgvector syntax, HNSW indexes, up to 188K dimensions
+✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
 
-**SSL/TLS Transport Encryption**:
-- **Status**: Delegated to reverse proxy (industry-standard pattern)
-- **Examples**: QuestDB (no SSL), Tailscale pgproxy (network-layer security)
-- **Workaround**: nginx/HAProxy TLS termination (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md))
-- **Authentication Security**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
+### Architecture Decisions
 
-**Kerberos/GSSAPI Authentication**:
-- **Status**: Not implemented (matches PgBouncer, YugabyteDB, PGAdapter, ClickHouse, QuestDB)
-- **Technical Reason**: "Inherently stateful, interactive protocol - difficult for connection poolers" (industry research)
-- **Alternative**: OAuth 2.0 token authentication (cloud-native IAM pattern like Google Cloud PGAdapter)
-- **Enterprise**: Only CockroachDB + PostgreSQL core implement GSSAPI (2 of 9 major implementations)
+**SSL/TLS**: Delegated to reverse proxy (nginx/HAProxy) - industry-standard pattern matching QuestDB, Tailscale pgproxy
+**Kerberos**: Not implemented - matches PgBouncer, YugabyteDB, PGAdapter (use OAuth 2.0 instead)
 
-### IRIS-Specific Optimizations
-
-1. **HNSW Vector Indexes**: 5× speedup at 100K+ vectors (empirically validated). Below 10K vectors, sequential scan is competitive. See [HNSW Investigation](docs/HNSW_FINDINGS_2025_10_02.md).
-
-2. **VECTOR Type Display (DBAPI Backend)**: INFORMATION_SCHEMA shows VARCHAR for VECTOR columns, but all vector operations work correctly (188K dimensions validated). Use embedded backend for accurate type introspection.
-
-**Complete Details**: See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for deployment guidance
+See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for detailed deployment guidance and industry comparison
 
 ---
 
