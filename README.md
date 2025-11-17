@@ -537,8 +537,11 @@ MIT License - See [LICENSE](LICENSE) for details
 - Multi-language client compatibility (8 drivers at 100%: Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
 
 ### 🚧 Known Limitations
-- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption
-- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet authentication instead
+
+**Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer (the most widely deployed connection pooler) also omits GSSAPI support, and QuestDB explicitly does not support SSL/TLS.
+
+- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption (industry-standard approach)
+- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet authentication instead (matches PgBouncer, YugabyteDB, PGAdapter)
 - **L2 distance operator** (`<->`): Not supported by IRIS - use cosine (`<=>`) or dot product (`<#>`) instead
 
 ### 📋 Future Enhancements
