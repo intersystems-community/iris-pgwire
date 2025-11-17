@@ -8,9 +8,11 @@ Constitutional Requirement: Production Readiness (Principle V)
 """
 
 import json
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from iris_pgwire.quality.security_validator import SecurityValidator, SecurityIssue
+
+from iris_pgwire.quality.security_validator import SecurityValidator
 
 
 class TestBanditSeverityClassification:

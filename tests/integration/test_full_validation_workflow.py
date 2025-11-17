@@ -7,10 +7,11 @@ validators work together correctly in the orchestrator.
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
-import pytest
 import tempfile
-import os
 from pathlib import Path
+
+import pytest
+
 from iris_pgwire.quality.validator import PackageQualityValidator
 
 
@@ -52,7 +53,7 @@ class TestFullValidationWorkflow:
 
         # Overall readiness determination (metadata + docs are critical)
         # Security and code quality warnings are informational
-        print(f"\n📊 Validation Results:")
+        print("\n📊 Validation Results:")
         print(f"  Package Metadata: {'✅ PASS' if result['metadata_validation']['is_valid'] else '❌ FAIL'}")
         print(f"  Docstring Coverage: {doc_result['coverage_percentage']:.1f}%")
         print(f"  Overall Ready: {result['is_pypi_ready']}")
@@ -242,7 +243,6 @@ def hello():
     @pytest.mark.integration
     def test_generate_json_report(self):
         """Should generate valid JSON report"""
-        import json
 
         package_root = Path(__file__).parent.parent.parent
 
