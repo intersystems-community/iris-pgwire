@@ -7,52 +7,56 @@ to the original IRIS SQL, ensuring constitutional compliance with accuracy requi
 Constitutional Compliance: High-confidence validation ensuring accurate translation.
 """
 
-import re
-import time
-import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Set, Any, Union
 from enum import Enum
+from typing import Any
 
 from .models import (
-    ValidationResult, ValidationIssue, IssueSeverity, QueryEquivalenceReport,
-    PerformanceTimer, ConstructMapping
+    ConstructMapping,
+    IssueSeverity,
+    PerformanceTimer,
+    QueryEquivalenceReport,
+    ValidationIssue,
+    ValidationResult,
 )
 
 
 class ValidationLevel(Enum):
     """Validation rigor levels"""
-    BASIC = "basic"          # Basic syntax and structure checks
-    SEMANTIC = "semantic"    # Semantic equivalence validation
-    STRICT = "strict"        # Strict constitutional compliance
+
+    BASIC = "basic"  # Basic syntax and structure checks
+    SEMANTIC = "semantic"  # Semantic equivalence validation
+    STRICT = "strict"  # Strict constitutional compliance
     EXHAUSTIVE = "exhaustive"  # Comprehensive validation with edge cases
 
 
 @dataclass
 class ValidationContext:
     """Context for validation operations"""
+
     original_sql: str
     translated_sql: str
-    construct_mappings: List[ConstructMapping]
+    construct_mappings: list[ConstructMapping]
     validation_level: ValidationLevel = ValidationLevel.SEMANTIC
     include_performance: bool = True
-    trace_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    trace_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class QueryAnalysis:
     """Analysis results for a SQL query"""
+
     query_type: str  # SELECT, INSERT, UPDATE, DELETE, etc.
-    tables_referenced: Set[str]
-    columns_referenced: Set[str]
-    functions_used: Set[str]
-    constructs_detected: Set[str]
+    tables_referenced: set[str]
+    columns_referenced: set[str]
+    functions_used: set[str]
+    constructs_detected: set[str]
     complexity_score: float
-    estimated_rows: Optional[int] = None
-    performance_hints: List[str] = field(default_factory=list)
+    estimated_rows: int | None = None
+    performance_hints: list[str] = field(default_factory=list)
 
 
 class SemanticValidator:
@@ -75,7 +79,7 @@ class SemanticValidator:
             validation_level: Level of validation rigor to apply
         """
         self.validation_level = validation_level
-        self.logger = logging.getLogger('iris_pgwire.sql_translator.validator')
+        self.logger = logging.getLogger("iris_pgwire.sql_translator.validator")
 
         # Validation rules and patterns
         self._setup_validation_rules()
@@ -96,9 +100,9 @@ class SemanticValidator:
             Validation result with issues and recommendations
         """
         with PerformanceTimer() as timer:
-            issues: List[ValidationIssue] = []
-            warnings: List[str] = []
-            recommendations: List[str] = []
+            issues: list[ValidationIssue] = []
+            warnings: list[str] = []
+            recommendations: list[str] = []
 
             try:
                 # Basic syntax validation
@@ -110,7 +114,11 @@ class SemanticValidator:
                 issues.extend(structure_issues)
 
                 # Semantic analysis
-                if self.validation_level in [ValidationLevel.SEMANTIC, ValidationLevel.STRICT, ValidationLevel.EXHAUSTIVE]:
+                if self.validation_level in [
+                    ValidationLevel.SEMANTIC,
+                    ValidationLevel.STRICT,
+                    ValidationLevel.EXHAUSTIVE,
+                ]:
                     semantic_issues = self._validate_semantics(context)
                     issues.extend(semantic_issues)
 
@@ -135,7 +143,7 @@ class SemanticValidator:
                     success=success,
                     confidence=confidence,
                     issues=issues,
-                    recommendations=recommendations
+                    recommendations=recommendations,
                 )
 
             except Exception as e:
@@ -143,11 +151,13 @@ class SemanticValidator:
                 return ValidationResult(
                     success=False,
                     confidence=0.0,
-                    issues=[ValidationIssue(
-                        severity=IssueSeverity.ERROR,
-                        message=f"Validation process failed: {str(e)}"
-                    )],
-                    recommendations=["Review query for potential syntax or structural issues"]
+                    issues=[
+                        ValidationIssue(
+                            severity=IssueSeverity.ERROR,
+                            message=f"Validation process failed: {str(e)}",
+                        )
+                    ],
+                    recommendations=["Review query for potential syntax or structural issues"],
                 )
 
     def analyze_query(self, sql: str) -> QueryAnalysis:
@@ -185,11 +195,12 @@ class SemanticValidator:
             functions_used=functions,
             constructs_detected=constructs,
             complexity_score=complexity,
-            performance_hints=hints
+            performance_hints=hints,
         )
 
-    def compare_query_results(self, original_analysis: QueryAnalysis,
-                            translated_analysis: QueryAnalysis) -> QueryEquivalenceReport:
+    def compare_query_results(
+        self, original_analysis: QueryAnalysis, translated_analysis: QueryAnalysis
+    ) -> QueryEquivalenceReport:
         """
         Compare analysis results between original and translated queries
 
@@ -206,7 +217,9 @@ class SemanticValidator:
 
         # Compare query types
         if original_analysis.query_type != translated_analysis.query_type:
-            differences.append(f"Query type mismatch: {original_analysis.query_type} vs {translated_analysis.query_type}")
+            differences.append(
+                f"Query type mismatch: {original_analysis.query_type} vs {translated_analysis.query_type}"
+            )
             equivalence_score -= 0.3
         else:
             similarities.append(f"Query type matches: {original_analysis.query_type}")
@@ -217,18 +230,24 @@ class SemanticValidator:
 
         if table_diff:
             differences.append(f"Table reference differences: {table_diff}")
-            equivalence_score -= 0.2 * (len(table_diff) / max(len(original_analysis.tables_referenced), 1))
+            equivalence_score -= 0.2 * (
+                len(table_diff) / max(len(original_analysis.tables_referenced), 1)
+            )
 
         if table_overlap:
             similarities.append(f"Common table references: {table_overlap}")
 
         # Compare complexity
-        complexity_diff = abs(original_analysis.complexity_score - translated_analysis.complexity_score)
+        complexity_diff = abs(
+            original_analysis.complexity_score - translated_analysis.complexity_score
+        )
         if complexity_diff > 0.2:
             differences.append(f"Significant complexity difference: {complexity_diff:.2f}")
             equivalence_score -= min(complexity_diff * 0.1, 0.2)
         else:
-            similarities.append(f"Similar complexity: {original_analysis.complexity_score:.2f} vs {translated_analysis.complexity_score:.2f}")
+            similarities.append(
+                f"Similar complexity: {original_analysis.complexity_score:.2f} vs {translated_analysis.complexity_score:.2f}"
+            )
 
         # Calculate final equivalence
         is_equivalent = equivalence_score >= 0.8  # 80% threshold for equivalence
@@ -239,74 +258,106 @@ class SemanticValidator:
             differences=differences,
             similarities=similarities,
             original_complexity=original_analysis.complexity_score,
-            translated_complexity=translated_analysis.complexity_score
+            translated_complexity=translated_analysis.complexity_score,
         )
 
-    def get_validation_stats(self) -> Dict[str, Any]:
+    def get_validation_stats(self) -> dict[str, Any]:
         """
         Get validator performance statistics
 
         Returns:
             Validation statistics and metrics
         """
-        avg_time = (self._total_validation_time_ms / self._validation_count
-                   if self._validation_count > 0 else 0.0)
+        avg_time = (
+            self._total_validation_time_ms / self._validation_count
+            if self._validation_count > 0
+            else 0.0
+        )
 
         return {
-            'total_validations': self._validation_count,
-            'average_validation_time_ms': avg_time,
-            'constitutional_violations': self._constitutional_violations,
-            'validation_level': self.validation_level.value,
-            'sla_compliance_rate': max(0.0, 1.0 - (self._constitutional_violations / max(self._validation_count, 1))),
-            'performance_metrics': {
-                'total_time_ms': self._total_validation_time_ms,
-                'avg_time_ms': avg_time,
-                'sla_requirement_ms': 2.0,  # Validation should be fast
-                'violations': self._constitutional_violations
-            }
+            "total_validations": self._validation_count,
+            "average_validation_time_ms": avg_time,
+            "constitutional_violations": self._constitutional_violations,
+            "validation_level": self.validation_level.value,
+            "sla_compliance_rate": max(
+                0.0, 1.0 - (self._constitutional_violations / max(self._validation_count, 1))
+            ),
+            "performance_metrics": {
+                "total_time_ms": self._total_validation_time_ms,
+                "avg_time_ms": avg_time,
+                "sla_requirement_ms": 2.0,  # Validation should be fast
+                "violations": self._constitutional_violations,
+            },
         }
 
     def _setup_validation_rules(self):
         """Setup validation rules and patterns"""
         # SQL keywords that should be preserved
         self.critical_keywords = {
-            'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING',
-            'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP'
+            "SELECT",
+            "FROM",
+            "WHERE",
+            "GROUP BY",
+            "ORDER BY",
+            "HAVING",
+            "INSERT",
+            "UPDATE",
+            "DELETE",
+            "CREATE",
+            "ALTER",
+            "DROP",
         }
 
         # IRIS constructs that require careful translation
         self.iris_constructs = {
-            'TOP', '%SQLUPPER', '%SQLLOWER', '%SYSTEM', 'JSON_TABLE',
-            'VECTOR_COSINE', 'TO_VECTOR', '%STARTSWITH', '%CONTAINS'
+            "TOP",
+            "%SQLUPPER",
+            "%SQLLOWER",
+            "%SYSTEM",
+            "JSON_TABLE",
+            "VECTOR_COSINE",
+            "TO_VECTOR",
+            "%STARTSWITH",
+            "%CONTAINS",
         }
 
         # PostgreSQL equivalents to validate
         self.postgresql_equivalents = {
-            'LIMIT', 'UPPER', 'LOWER', 'CURRENT_DATABASE', 'jsonb_extract_path',
-            'cosine_distance', 'ARRAY', 'LIKE', 'POSITION'
+            "LIMIT",
+            "UPPER",
+            "LOWER",
+            "CURRENT_DATABASE",
+            "jsonb_extract_path",
+            "cosine_distance",
+            "ARRAY",
+            "LIKE",
+            "POSITION",
         }
 
-    def _validate_syntax(self, context: ValidationContext) -> List[ValidationIssue]:
+    def _validate_syntax(self, context: ValidationContext) -> list[ValidationIssue]:
         """Validate basic SQL syntax"""
         issues = []
 
         # Check for balanced parentheses
         if not self._check_balanced_parentheses(context.translated_sql):
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.ERROR,
-                message="Unbalanced parentheses in translated SQL"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.ERROR, message="Unbalanced parentheses in translated SQL"
+                )
+            )
 
         # Check for valid SQL structure
         if not self._check_basic_sql_structure(context.translated_sql):
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.ERROR,
-                message="Invalid SQL structure in translated query"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.ERROR,
+                    message="Invalid SQL structure in translated query",
+                )
+            )
 
         return issues
 
-    def _validate_structure(self, context: ValidationContext) -> List[ValidationIssue]:
+    def _validate_structure(self, context: ValidationContext) -> list[ValidationIssue]:
         """Validate query structure preservation"""
         issues = []
 
@@ -316,10 +367,12 @@ class SemanticValidator:
 
         # Compare structures
         if original_analysis.query_type != translated_analysis.query_type:
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.ERROR,
-                message=f"Query type changed: {original_analysis.query_type} -> {translated_analysis.query_type}"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.ERROR,
+                    message=f"Query type changed: {original_analysis.query_type} -> {translated_analysis.query_type}",
+                )
+            )
 
         # Check for missing critical elements
         original_keywords = self._extract_sql_keywords(context.original_sql)
@@ -327,24 +380,28 @@ class SemanticValidator:
         missing_keywords = original_keywords - translated_keywords
 
         if missing_keywords:
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.WARNING,
-                message=f"Missing SQL keywords in translation: {missing_keywords}"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.WARNING,
+                    message=f"Missing SQL keywords in translation: {missing_keywords}",
+                )
+            )
 
         return issues
 
-    def _validate_semantics(self, context: ValidationContext) -> List[ValidationIssue]:
+    def _validate_semantics(self, context: ValidationContext) -> list[ValidationIssue]:
         """Validate semantic equivalence"""
         issues = []
 
         # Check construct mappings for accuracy
         for mapping in context.construct_mappings:
             if mapping.confidence < 0.8:  # High confidence threshold
-                issues.append(ValidationIssue(
-                    severity=IssueSeverity.WARNING,
-                    message=f"Low confidence mapping: {mapping.original_syntax} -> {mapping.translated_syntax} (confidence: {mapping.confidence})"
-                ))
+                issues.append(
+                    ValidationIssue(
+                        severity=IssueSeverity.WARNING,
+                        message=f"Low confidence mapping: {mapping.original_syntax} -> {mapping.translated_syntax} (confidence: {mapping.confidence})",
+                    )
+                )
 
         # Validate function mappings
         function_issues = self._validate_function_mappings(context)
@@ -352,27 +409,33 @@ class SemanticValidator:
 
         return issues
 
-    def _validate_constitutional_compliance(self, context: ValidationContext) -> List[ValidationIssue]:
+    def _validate_constitutional_compliance(
+        self, context: ValidationContext
+    ) -> list[ValidationIssue]:
         """Validate constitutional compliance requirements"""
         issues = []
 
         # Check if translation maintains data integrity
         if not self._check_data_integrity_preservation(context):
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.ERROR,
-                message="Translation may compromise data integrity"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.ERROR,
+                    message="Translation may compromise data integrity",
+                )
+            )
 
         # Verify performance implications
         if self._has_performance_regression_risk(context):
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.WARNING,
-                message="Translation may introduce performance regression"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.WARNING,
+                    message="Translation may introduce performance regression",
+                )
+            )
 
         return issues
 
-    def _assess_performance_impact(self, context: ValidationContext) -> List[str]:
+    def _assess_performance_impact(self, context: ValidationContext) -> list[str]:
         """Assess performance impact of translation"""
         recommendations = []
 
@@ -380,9 +443,13 @@ class SemanticValidator:
         translated_analysis = self.analyze_query(context.translated_sql)
 
         # Check complexity increase
-        complexity_increase = translated_analysis.complexity_score - original_analysis.complexity_score
+        complexity_increase = (
+            translated_analysis.complexity_score - original_analysis.complexity_score
+        )
         if complexity_increase > 0.3:
-            recommendations.append(f"Translation increased query complexity by {complexity_increase:.2f}")
+            recommendations.append(
+                f"Translation increased query complexity by {complexity_increase:.2f}"
+            )
 
         # Check for performance hints
         if translated_analysis.performance_hints:
@@ -390,7 +457,9 @@ class SemanticValidator:
 
         return recommendations
 
-    def _calculate_confidence(self, issues: List[ValidationIssue], context: ValidationContext) -> float:
+    def _calculate_confidence(
+        self, issues: list[ValidationIssue], context: ValidationContext
+    ) -> float:
         """Calculate overall validation confidence"""
         base_confidence = 1.0
 
@@ -425,39 +494,39 @@ class SemanticValidator:
     def _normalize_sql(self, sql: str) -> str:
         """Normalize SQL for analysis"""
         # Remove comments
-        sql = re.sub(r'--.*?$', '', sql, flags=re.MULTILINE)
-        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+        sql = re.sub(r"--.*?$", "", sql, flags=re.MULTILINE)
+        sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
 
         # Normalize whitespace
-        sql = re.sub(r'\s+', ' ', sql)
+        sql = re.sub(r"\s+", " ", sql)
         return sql.strip()
 
     def _detect_query_type(self, sql: str) -> str:
         """Detect the type of SQL query"""
         sql_upper = sql.upper().strip()
 
-        if sql_upper.startswith('SELECT'):
-            return 'SELECT'
-        elif sql_upper.startswith('INSERT'):
-            return 'INSERT'
-        elif sql_upper.startswith('UPDATE'):
-            return 'UPDATE'
-        elif sql_upper.startswith('DELETE'):
-            return 'DELETE'
-        elif sql_upper.startswith(('CREATE', 'ALTER', 'DROP')):
-            return 'DDL'
+        if sql_upper.startswith("SELECT"):
+            return "SELECT"
+        elif sql_upper.startswith("INSERT"):
+            return "INSERT"
+        elif sql_upper.startswith("UPDATE"):
+            return "UPDATE"
+        elif sql_upper.startswith("DELETE"):
+            return "DELETE"
+        elif sql_upper.startswith(("CREATE", "ALTER", "DROP")):
+            return "DDL"
         else:
-            return 'UNKNOWN'
+            return "UNKNOWN"
 
-    def _extract_tables(self, sql: str) -> Set[str]:
+    def _extract_tables(self, sql: str) -> set[str]:
         """Extract table names from SQL"""
         tables = set()
 
         # Simple pattern matching for table names
         # More sophisticated parsing could use sqlparse
-        from_pattern = r'\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        join_pattern = r'\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        update_pattern = r'\bUPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)'
+        from_pattern = r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+        join_pattern = r"\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+        update_pattern = r"\bUPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)"
 
         for pattern in [from_pattern, join_pattern, update_pattern]:
             matches = re.findall(pattern, sql, re.IGNORECASE)
@@ -465,32 +534,32 @@ class SemanticValidator:
 
         return tables
 
-    def _extract_columns(self, sql: str) -> Set[str]:
+    def _extract_columns(self, sql: str) -> set[str]:
         """Extract column names from SQL"""
         columns = set()
 
         # Extract from SELECT clause
-        select_match = re.search(r'\bSELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+        select_match = re.search(r"\bSELECT\s+(.*?)\s+FROM", sql, re.IGNORECASE | re.DOTALL)
         if select_match:
             select_clause = select_match.group(1)
             # Simple column extraction (could be enhanced)
-            column_names = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_clause)
+            column_names = re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\b", select_clause)
             columns.update(column_names)
 
         return columns
 
-    def _extract_functions(self, sql: str) -> Set[str]:
+    def _extract_functions(self, sql: str) -> set[str]:
         """Extract function names from SQL"""
         functions = set()
 
         # Pattern for function calls
-        function_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\('
+        function_pattern = r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\("
         matches = re.findall(function_pattern, sql, re.IGNORECASE)
         functions.update(matches)
 
         return functions
 
-    def _extract_constructs(self, sql: str) -> Set[str]:
+    def _extract_constructs(self, sql: str) -> set[str]:
         """Extract IRIS constructs from SQL"""
         constructs = set()
 
@@ -500,7 +569,9 @@ class SemanticValidator:
 
         return constructs
 
-    def _calculate_complexity(self, sql: str, tables: Set[str], columns: Set[str], functions: Set[str]) -> float:
+    def _calculate_complexity(
+        self, sql: str, tables: set[str], columns: set[str], functions: set[str]
+    ) -> float:
         """Calculate query complexity score"""
         complexity = 0.0
 
@@ -508,11 +579,11 @@ class SemanticValidator:
         complexity += len(sql) / 1000.0
 
         # Add complexity for joins
-        join_count = len(re.findall(r'\bJOIN\b', sql, re.IGNORECASE))
+        join_count = len(re.findall(r"\bJOIN\b", sql, re.IGNORECASE))
         complexity += join_count * 0.5
 
         # Add complexity for subqueries
-        subquery_count = sql.count('(') - sql.count(')')  # Simplified
+        subquery_count = sql.count("(") - sql.count(")")  # Simplified
         complexity += abs(subquery_count) * 0.3
 
         # Add complexity for functions
@@ -523,17 +594,17 @@ class SemanticValidator:
 
         return complexity
 
-    def _generate_performance_hints(self, sql: str, complexity: float) -> List[str]:
+    def _generate_performance_hints(self, sql: str, complexity: float) -> list[str]:
         """Generate performance optimization hints"""
         hints = []
 
         if complexity > 2.0:
             hints.append("Consider query optimization - high complexity detected")
 
-        if 'SELECT *' in sql.upper():
+        if "SELECT *" in sql.upper():
             hints.append("Avoid SELECT * - specify only needed columns")
 
-        if len(re.findall(r'\bOR\b', sql, re.IGNORECASE)) > 3:
+        if len(re.findall(r"\bOR\b", sql, re.IGNORECASE)) > 3:
             hints.append("Consider restructuring multiple OR conditions")
 
         return hints
@@ -542,9 +613,9 @@ class SemanticValidator:
         """Check if parentheses are balanced"""
         count = 0
         for char in sql:
-            if char == '(':
+            if char == "(":
                 count += 1
-            elif char == ')':
+            elif char == ")":
                 count -= 1
                 if count < 0:
                     return False
@@ -555,15 +626,15 @@ class SemanticValidator:
         sql_upper = sql.upper().strip()
 
         # Must start with valid SQL keyword
-        valid_starts = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER', 'DROP', 'WITH']
+        valid_starts = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH"]
         starts_valid = any(sql_upper.startswith(start) for start in valid_starts)
 
         # Must not have obvious syntax errors
-        has_semicolon_middle = ';' in sql[:-1]  # Semicolon not at end
+        has_semicolon_middle = ";" in sql[:-1]  # Semicolon not at end
 
         return starts_valid and not has_semicolon_middle
 
-    def _extract_sql_keywords(self, sql: str) -> Set[str]:
+    def _extract_sql_keywords(self, sql: str) -> set[str]:
         """Extract SQL keywords from query"""
         keywords = set()
         sql_upper = sql.upper()
@@ -574,7 +645,7 @@ class SemanticValidator:
 
         return keywords
 
-    def _validate_function_mappings(self, context: ValidationContext) -> List[ValidationIssue]:
+    def _validate_function_mappings(self, context: ValidationContext) -> list[ValidationIssue]:
         """Validate function mappings accuracy"""
         issues = []
 
@@ -585,18 +656,20 @@ class SemanticValidator:
         # Simple check for function preservation
         # More sophisticated mapping validation could be added
         if len(iris_functions) > len(postgresql_functions):
-            issues.append(ValidationIssue(
-                severity=IssueSeverity.WARNING,
-                message="Some functions may not have been translated"
-            ))
+            issues.append(
+                ValidationIssue(
+                    severity=IssueSeverity.WARNING,
+                    message="Some functions may not have been translated",
+                )
+            )
 
         return issues
 
     def _check_data_integrity_preservation(self, context: ValidationContext) -> bool:
         """Check if translation preserves data integrity"""
         # Basic check - ensure WHERE clauses are preserved
-        original_has_where = 'WHERE' in context.original_sql.upper()
-        translated_has_where = 'WHERE' in context.translated_sql.upper()
+        original_has_where = "WHERE" in context.original_sql.upper()
+        translated_has_where = "WHERE" in context.translated_sql.upper()
 
         return original_has_where == translated_has_where
 
@@ -606,7 +679,9 @@ class SemanticValidator:
         translated_analysis = self.analyze_query(context.translated_sql)
 
         # Check for significant complexity increase
-        complexity_increase = translated_analysis.complexity_score - original_analysis.complexity_score
+        complexity_increase = (
+            translated_analysis.complexity_score - original_analysis.complexity_score
+        )
         return complexity_increase > 0.5
 
 
@@ -619,15 +694,18 @@ def get_validator() -> SemanticValidator:
     return _validator
 
 
-def validate_translation(original_sql: str, translated_sql: str,
-                        construct_mappings: List[ConstructMapping],
-                        validation_level: ValidationLevel = ValidationLevel.SEMANTIC) -> ValidationResult:
+def validate_translation(
+    original_sql: str,
+    translated_sql: str,
+    construct_mappings: list[ConstructMapping],
+    validation_level: ValidationLevel = ValidationLevel.SEMANTIC,
+) -> ValidationResult:
     """Validate translation equivalence (convenience function)"""
     context = ValidationContext(
         original_sql=original_sql,
         translated_sql=translated_sql,
         construct_mappings=construct_mappings,
-        validation_level=validation_level
+        validation_level=validation_level,
     )
     return _validator.validate_query_equivalence(context)
 
@@ -639,11 +717,11 @@ def analyze_sql_query(sql: str) -> QueryAnalysis:
 
 # Export main components
 __all__ = [
-    'SemanticValidator',
-    'ValidationContext',
-    'QueryAnalysis',
-    'ValidationLevel',
-    'get_validator',
-    'validate_translation',
-    'analyze_sql_query'
+    "SemanticValidator",
+    "ValidationContext",
+    "QueryAnalysis",
+    "ValidationLevel",
+    "get_validator",
+    "validate_translation",
+    "analyze_sql_query",
 ]

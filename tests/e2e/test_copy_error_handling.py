@@ -8,9 +8,10 @@ What happens when a CSV file contains malformed rows (missing quotes, extra colu
 FR-007: System MUST validate CSV data format and report errors with specific line numbers
 """
 
-import pytest
-import tempfile
 import os
+import tempfile
+
+import pytest
 
 
 @pytest.mark.e2e
@@ -21,7 +22,8 @@ def test_copy_malformed_csv_missing_columns(psql_command):
     Expected: FAIL - no CSV validation exists yet
     """
     # Create table
-    psql_command("""
+    psql_command(
+        """
         CREATE TABLE Patients (
             PatientID INT PRIMARY KEY,
             FirstName VARCHAR(50),
@@ -32,11 +34,14 @@ def test_copy_malformed_csv_missing_columns(psql_command):
             AdmissionDate DATE,
             DischargeDate DATE
         )
-    """)
+    """
+    )
 
     # Malformed CSV - missing columns on line 3
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
-        f.write("PatientID,FirstName,LastName,DateOfBirth,Gender,Status,AdmissionDate,DischargeDate\n")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+        f.write(
+            "PatientID,FirstName,LastName,DateOfBirth,Gender,Status,AdmissionDate,DischargeDate\n"
+        )
         f.write("1,Alice,Test,1990-01-01,F,Active,2024-01-01,\n")  # Valid
         f.write("2,Bob\n")  # INVALID - missing columns
         csv_file = f.name
@@ -45,14 +50,15 @@ def test_copy_malformed_csv_missing_columns(psql_command):
         result = psql_command(
             "COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)",
             stdin_file=csv_file,
-            expect_success=False
+            expect_success=False,
         )
 
         # Should fail
         assert result.returncode != 0, "COPY should fail with malformed CSV"
         # Should report line number (FR-007)
-        assert "line" in result.stderr.lower() or "row" in result.stderr.lower(), \
-            "Error message should include line/row number"
+        assert (
+            "line" in result.stderr.lower() or "row" in result.stderr.lower()
+        ), "Error message should include line/row number"
 
         # No data should be inserted (transaction rolled back)
         count_result = psql_command("SELECT COUNT(*) FROM Patients")
@@ -65,15 +71,21 @@ def test_copy_malformed_csv_missing_columns(psql_command):
 @pytest.mark.e2e
 def test_copy_malformed_csv_extra_columns(psql_command):
     """Test COPY with extra columns in CSV."""
-    psql_command("""CREATE TABLE Patients (PatientID INT, FirstName VARCHAR(50), LastName VARCHAR(50))""")
+    psql_command(
+        """CREATE TABLE Patients (PatientID INT, FirstName VARCHAR(50), LastName VARCHAR(50))"""
+    )
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         f.write("PatientID,FirstName,LastName\n")
         f.write("1,Alice,Test,ExtraColumn\n")  # Too many columns
         csv_file = f.name
 
     try:
-        result = psql_command("COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)", stdin_file=csv_file, expect_success=False)
+        result = psql_command(
+            "COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)",
+            stdin_file=csv_file,
+            expect_success=False,
+        )
         assert result.returncode != 0
 
     finally:
@@ -83,15 +95,21 @@ def test_copy_malformed_csv_extra_columns(psql_command):
 @pytest.mark.e2e
 def test_copy_malformed_csv_unclosed_quote(psql_command):
     """Test COPY with unclosed quote character."""
-    psql_command("""CREATE TABLE Patients (PatientID INT, FirstName VARCHAR(50), LastName VARCHAR(50))""")
+    psql_command(
+        """CREATE TABLE Patients (PatientID INT, FirstName VARCHAR(50), LastName VARCHAR(50))"""
+    )
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         f.write("PatientID,FirstName,LastName\n")
         f.write('1,"Alice,Test\n')  # Missing closing quote
         csv_file = f.name
 
     try:
-        result = psql_command("COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)", stdin_file=csv_file, expect_success=False)
+        result = psql_command(
+            "COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)",
+            stdin_file=csv_file,
+            expect_success=False,
+        )
         assert result.returncode != 0
         assert "quote" in result.stderr.lower() or "parse" in result.stderr.lower()
 

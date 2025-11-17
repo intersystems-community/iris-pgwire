@@ -7,23 +7,24 @@ logging infrastructure using structlog for constitutional compliance and observa
 Constitutional Compliance: Comprehensive audit trail and performance monitoring.
 """
 
-import sys
 import json
 import logging
-import structlog
+import sys
 from datetime import datetime
-from typing import Dict, Any, Optional, List
 from pathlib import Path
+from typing import Any
+
+import structlog
 
 from .performance_monitor import get_monitor
 
 
 def setup_translation_logging(
     log_level: str = "INFO",
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
     enable_json: bool = True,
     enable_console: bool = True,
-    enable_performance_log: bool = True
+    enable_performance_log: bool = True,
 ) -> None:
     """
     Setup structured logging for SQL translation system
@@ -55,9 +56,7 @@ def setup_translation_logging(
     # Configure structlog
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(logging, log_level.upper())
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, log_level.upper())),
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
@@ -66,7 +65,7 @@ def setup_translation_logging(
     logging.basicConfig(
         level=getattr(logging, log_level.upper()),
         format="%(message)s",
-        handlers=_create_handlers(log_file, enable_console, enable_json)
+        handlers=_create_handlers(log_file, enable_console, enable_json),
     )
 
     # Setup performance logging if enabled
@@ -75,16 +74,19 @@ def setup_translation_logging(
 
     # Log configuration completion
     logger = structlog.get_logger("iris_pgwire.sql_translator.logging")
-    logger.info("SQL translation logging configured",
-               log_level=log_level,
-               json_enabled=enable_json,
-               console_enabled=enable_console,
-               performance_logging=enable_performance_log,
-               log_file=log_file)
+    logger.info(
+        "SQL translation logging configured",
+        log_level=log_level,
+        json_enabled=enable_json,
+        console_enabled=enable_console,
+        performance_logging=enable_performance_log,
+        log_file=log_file,
+    )
 
 
-def _create_handlers(log_file: Optional[str], enable_console: bool,
-                    enable_json: bool) -> List[logging.Handler]:
+def _create_handlers(
+    log_file: str | None, enable_console: bool, enable_json: bool
+) -> list[logging.Handler]:
     """Create logging handlers based on configuration"""
     handlers = []
 
@@ -106,15 +108,15 @@ def _create_handlers(log_file: Optional[str], enable_console: bool,
     return handlers
 
 
-def setup_performance_logging(base_log_file: Optional[str] = None) -> None:
+def setup_performance_logging(base_log_file: str | None = None) -> None:
     """Setup dedicated performance logging"""
-    perf_logger = logging.getLogger('iris_pgwire.performance')
+    perf_logger = logging.getLogger("iris_pgwire.performance")
 
     # Create performance log file path
     if base_log_file:
-        perf_log_file = str(Path(base_log_file).with_suffix('.performance.log'))
+        perf_log_file = str(Path(base_log_file).with_suffix(".performance.log"))
     else:
-        perf_log_file = 'iris_pgwire_performance.log'
+        perf_log_file = "iris_pgwire_performance.log"
 
     # Setup dedicated file handler for performance metrics
     perf_handler = logging.FileHandler(perf_log_file)
@@ -152,7 +154,7 @@ def add_constitutional_compliance(logger, method_name, event_dict):
     event_dict["constitutional"] = {
         "sla_requirement_ms": 5.0,
         "audit_trail": True,
-        "performance_monitoring": True
+        "performance_monitoring": True,
     }
 
     # Add performance compliance if available
@@ -162,7 +164,7 @@ def add_constitutional_compliance(logger, method_name, event_dict):
         if time_ms > 5.0:
             event_dict["constitutional"]["sla_violation"] = {
                 "actual_ms": time_ms,
-                "violation_amount_ms": time_ms - 5.0
+                "violation_amount_ms": time_ms - 5.0,
             }
 
     return event_dict
@@ -183,7 +185,7 @@ class JSONFormatter(logging.Formatter):
         }
 
         # Add extra fields
-        if hasattr(record, 'extra'):
+        if hasattr(record, "extra"):
             log_data.update(record.extra)
 
         # Add exception information
@@ -198,8 +200,7 @@ class ConsoleFormatter(logging.Formatter):
 
     def __init__(self):
         super().__init__(
-            fmt="%(asctime)s [%(levelname)8s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            fmt="%(asctime)s [%(levelname)8s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
 
 
@@ -215,8 +216,9 @@ class TranslationLogger:
         self.logger = structlog.get_logger(logger_name)
         self.performance_monitor = get_monitor()
 
-    def log_translation_start(self, session_id: str, original_sql: str,
-                            correlation_id: Optional[str] = None) -> None:
+    def log_translation_start(
+        self, session_id: str, original_sql: str, correlation_id: str | None = None
+    ) -> None:
         """Log the start of a translation operation"""
         self.logger.info(
             "Translation started",
@@ -224,13 +226,19 @@ class TranslationLogger:
             correlation_id=correlation_id,
             sql_length=len(original_sql),
             sql_preview=original_sql[:100] + "..." if len(original_sql) > 100 else original_sql,
-            event_type="translation_start"
+            event_type="translation_start",
         )
 
-    def log_translation_complete(self, session_id: str, original_sql: str,
-                               translated_sql: str, constructs_translated: int,
-                               translation_time_ms: float, cache_hit: bool,
-                               correlation_id: Optional[str] = None) -> None:
+    def log_translation_complete(
+        self,
+        session_id: str,
+        original_sql: str,
+        translated_sql: str,
+        constructs_translated: int,
+        translation_time_ms: float,
+        cache_hit: bool,
+        correlation_id: str | None = None,
+    ) -> None:
         """Log the completion of a translation operation"""
         self.logger.info(
             "Translation completed",
@@ -242,11 +250,16 @@ class TranslationLogger:
             translation_time_ms=translation_time_ms,
             cache_hit=cache_hit,
             sla_compliant=translation_time_ms <= 5.0,
-            event_type="translation_complete"
+            event_type="translation_complete",
         )
 
-    def log_translation_error(self, session_id: str, original_sql: str,
-                            error: Exception, correlation_id: Optional[str] = None) -> None:
+    def log_translation_error(
+        self,
+        session_id: str,
+        original_sql: str,
+        error: Exception,
+        correlation_id: str | None = None,
+    ) -> None:
         """Log a translation error"""
         self.logger.error(
             "Translation failed",
@@ -255,12 +268,17 @@ class TranslationLogger:
             sql_preview=original_sql[:100] + "..." if len(original_sql) > 100 else original_sql,
             error_type=type(error).__name__,
             error_message=str(error),
-            event_type="translation_error"
+            event_type="translation_error",
         )
 
-    def log_construct_mapping(self, session_id: str, iris_construct: str,
-                            postgresql_equivalent: str, confidence: float,
-                            correlation_id: Optional[str] = None) -> None:
+    def log_construct_mapping(
+        self,
+        session_id: str,
+        iris_construct: str,
+        postgresql_equivalent: str,
+        confidence: float,
+        correlation_id: str | None = None,
+    ) -> None:
         """Log a construct mapping decision"""
         self.logger.debug(
             "Construct mapped",
@@ -270,11 +288,17 @@ class TranslationLogger:
             postgresql_equivalent=postgresql_equivalent,
             confidence=confidence,
             high_confidence=confidence >= 0.9,
-            event_type="construct_mapping"
+            event_type="construct_mapping",
         )
 
-    def log_cache_operation(self, session_id: str, operation: str, cache_key: str,
-                          hit: bool, correlation_id: Optional[str] = None) -> None:
+    def log_cache_operation(
+        self,
+        session_id: str,
+        operation: str,
+        cache_key: str,
+        hit: bool,
+        correlation_id: str | None = None,
+    ) -> None:
         """Log a cache operation"""
         self.logger.debug(
             f"Cache {operation}",
@@ -283,12 +307,17 @@ class TranslationLogger:
             cache_operation=operation,
             cache_key_hash=hash(cache_key) % 10000,  # Partial key for privacy
             cache_hit=hit,
-            event_type="cache_operation"
+            event_type="cache_operation",
         )
 
-    def log_validation_result(self, session_id: str, validation_success: bool,
-                            issues_count: int, confidence: float,
-                            correlation_id: Optional[str] = None) -> None:
+    def log_validation_result(
+        self,
+        session_id: str,
+        validation_success: bool,
+        issues_count: int,
+        confidence: float,
+        correlation_id: str | None = None,
+    ) -> None:
         """Log validation results"""
         level = "info" if validation_success else "warning"
         getattr(self.logger, level)(
@@ -298,21 +327,22 @@ class TranslationLogger:
             validation_success=validation_success,
             issues_count=issues_count,
             validation_confidence=confidence,
-            event_type="validation_result"
+            event_type="validation_result",
         )
 
-    def log_performance_metrics(self, session_id: str, metrics: Dict[str, Any],
-                              correlation_id: Optional[str] = None) -> None:
+    def log_performance_metrics(
+        self, session_id: str, metrics: dict[str, Any], correlation_id: str | None = None
+    ) -> None:
         """Log performance metrics"""
         # Use dedicated performance logger
-        perf_logger = logging.getLogger('iris_pgwire.performance')
+        perf_logger = logging.getLogger("iris_pgwire.performance")
 
         perf_data = {
             "timestamp": datetime.utcnow().isoformat(),
             "session_id": session_id,
             "correlation_id": correlation_id,
             "event_type": "performance_metrics",
-            **metrics
+            **metrics,
         }
 
         perf_logger.info(json.dumps(perf_data, default=str))
@@ -339,18 +369,11 @@ def configure_server_integration():
     """
     # Setup base logging configuration
     setup_translation_logging(
-        log_level="INFO",
-        enable_json=True,
-        enable_console=True,
-        enable_performance_log=True
+        log_level="INFO", enable_json=True, enable_console=True, enable_performance_log=True
     )
 
     # Configure integration with existing server loggers
-    server_loggers = [
-        'iris_pgwire.server',
-        'iris_pgwire.protocol',
-        'iris_pgwire.iris_executor'
-    ]
+    server_loggers = ["iris_pgwire.server", "iris_pgwire.protocol", "iris_pgwire.iris_executor"]
 
     for logger_name in server_loggers:
         logger = logging.getLogger(logger_name)
@@ -361,19 +384,21 @@ def configure_server_integration():
 
     # Log configuration completion
     logger = structlog.get_logger("iris_pgwire.logging")
-    logger.info("Server logging integration configured",
-               integrated_loggers=server_loggers,
-               structured_logging=True,
-               constitutional_compliance=True)
+    logger.info(
+        "Server logging integration configured",
+        integrated_loggers=server_loggers,
+        structured_logging=True,
+        constitutional_compliance=True,
+    )
 
 
 # Export main components
 __all__ = [
-    'setup_translation_logging',
-    'setup_performance_logging',
-    'TranslationLogger',
-    'JSONFormatter',
-    'ConsoleFormatter',
-    'get_translation_logger',
-    'configure_server_integration'
+    "setup_translation_logging",
+    "setup_performance_logging",
+    "TranslationLogger",
+    "JSONFormatter",
+    "ConsoleFormatter",
+    "get_translation_logger",
+    "configure_server_integration",
 ]

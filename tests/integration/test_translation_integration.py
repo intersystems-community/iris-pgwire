@@ -5,18 +5,12 @@ Tests the end-to-end SQL translation pipeline with all registries working togeth
 to translate complex IRIS SQL queries to PostgreSQL with constitutional compliance.
 """
 
-import pytest
 import time
-from typing import List, Tuple
 
+from iris_pgwire.sql_translator.models import ConstructType
 from iris_pgwire.sql_translator.translator import (
     IRISSQLTranslator,
     TranslationContext,
-    translate_sql
-)
-from iris_pgwire.sql_translator.models import (
-    TranslationResult,
-    ConstructType
 )
 from iris_pgwire.sql_translator.validator import ValidationLevel
 
@@ -35,7 +29,7 @@ class TestTranslationIntegration:
             "SELECT id, name FROM customers WHERE active = 1",
             "INSERT INTO logs (message) VALUES ('test')",
             "UPDATE settings SET value = 'new' WHERE key = 'test'",
-            "DELETE FROM temp_data WHERE created < '2023-01-01'"
+            "DELETE FROM temp_data WHERE created < '2023-01-01'",
         ]
 
         for sql in queries:
@@ -58,13 +52,15 @@ class TestTranslationIntegration:
 
         context = TranslationContext(original_sql=sql)
         result = self.translator.translate(context)
-        assert 'UPPER' in result.translated_sql
-        assert 'LOWER' in result.translated_sql
-        assert '%SQLUPPER' not in result.translated_sql
-        assert '%SQLLOWER' not in result.translated_sql
+        assert "UPPER" in result.translated_sql
+        assert "LOWER" in result.translated_sql
+        assert "%SQLUPPER" not in result.translated_sql
+        assert "%SQLLOWER" not in result.translated_sql
 
         # Check mappings
-        function_mappings = [m for m in result.construct_mappings if m.construct_type == ConstructType.FUNCTION]
+        function_mappings = [
+            m for m in result.construct_mappings if m.construct_type == ConstructType.FUNCTION
+        ]
         assert len(function_mappings) >= 3
 
     def test_iris_datatype_translation(self):
@@ -85,12 +81,14 @@ class TestTranslationIntegration:
         result = self.translator.translate(context)
 
         # Check type translations
-        assert 'TEXT' in result.translated_sql  # LONGVARCHAR -> TEXT
-        assert 'BYTEA' in result.translated_sql  # VARBINARY -> BYTEA
-        assert 'JSONB' in result.translated_sql or 'JSON' in result.translated_sql  # JSON type
+        assert "TEXT" in result.translated_sql  # LONGVARCHAR -> TEXT
+        assert "BYTEA" in result.translated_sql  # VARBINARY -> BYTEA
+        assert "JSONB" in result.translated_sql or "JSON" in result.translated_sql  # JSON type
 
         # Check type mappings
-        type_mappings = [m for m in result.construct_mappings if m.construct_type == ConstructType.DATA_TYPE]
+        type_mappings = [
+            m for m in result.construct_mappings if m.construct_type == ConstructType.DATA_TYPE
+        ]
         assert len(type_mappings) >= 2  # At least LONGVARCHAR and VARBINARY
 
     def test_iris_construct_translation(self):
@@ -102,10 +100,12 @@ class TestTranslationIntegration:
         result = self.translator.translate(context)
 
         # Current implementation removes TOP (though IRIS supports it)
-        if 'TOP 10' not in result.translated_sql:
+        if "TOP 10" not in result.translated_sql:
             # Check if TOP was tracked as a construct
-            construct_mappings = [m for m in result.construct_mappings if m.construct_type == ConstructType.SYNTAX]
-            assert any('TOP' in m.original_syntax for m in construct_mappings)
+            construct_mappings = [
+                m for m in result.construct_mappings if m.construct_type == ConstructType.SYNTAX
+            ]
+            assert any("TOP" in m.original_syntax for m in construct_mappings)
 
     def test_document_filter_translation(self):
         """Test translation of document database operations"""
@@ -122,11 +122,15 @@ class TestTranslationIntegration:
         result = self.translator.translate(context)
 
         # Check JSON function translations
-        assert 'jsonb' in result.translated_sql.lower() or '->' in result.translated_sql
-        assert 'jsonb_array_length' in result.translated_sql
+        assert "jsonb" in result.translated_sql.lower() or "->" in result.translated_sql
+        assert "jsonb_array_length" in result.translated_sql
 
         # Check document filter mappings
-        doc_mappings = [m for m in result.construct_mappings if m.construct_type == ConstructType.DOCUMENT_FILTER]
+        doc_mappings = [
+            m
+            for m in result.construct_mappings
+            if m.construct_type == ConstructType.DOCUMENT_FILTER
+        ]
         assert len(doc_mappings) >= 2  # At least JSON_ARRAY_LENGTH and others
 
     def test_complex_mixed_translation(self):
@@ -154,10 +158,10 @@ class TestTranslationIntegration:
         assert ConstructType.FUNCTION in mapping_types or ConstructType.SYNTAX in mapping_types
 
         # Validate the translation maintains query structure
-        assert 'SELECT' in result.translated_sql
-        assert 'FROM users' in result.translated_sql
-        assert 'GROUP BY' in result.translated_sql
-        assert 'ORDER BY' in result.translated_sql
+        assert "SELECT" in result.translated_sql
+        assert "FROM users" in result.translated_sql
+        assert "GROUP BY" in result.translated_sql
+        assert "ORDER BY" in result.translated_sql
 
     def test_translation_caching(self):
         """Test that translation cache improves performance"""
@@ -170,7 +174,7 @@ class TestTranslationIntegration:
         first_time_ms = (time.perf_counter() - start_time) * 1000
 
         # Check metadata for cache info
-        assert 'cache_hit' not in result1.metadata or result1.metadata.get('cache_hit') is False
+        assert "cache_hit" not in result1.metadata or result1.metadata.get("cache_hit") is False
 
         # Second translation (cache hit)
         context2 = TranslationContext(original_sql=sql)
@@ -189,10 +193,8 @@ class TestTranslationIntegration:
         queries = [
             # Simple query
             "SELECT * FROM users",
-
             # Medium complexity
             "SELECT %SQLUPPER(name) FROM users WHERE id IN (1,2,3)",
-
             # High complexity
             """
             SELECT TOP 100
@@ -206,22 +208,22 @@ class TestTranslationIntegration:
             GROUP BY u.id, u.name, u.data
             ORDER BY post_count DESC
             """,
-
             # DDL statement
-            "CREATE TABLE test (id INTEGER, data LONGVARCHAR, vector VECTOR(128))"
+            "CREATE TABLE test (id INTEGER, data LONGVARCHAR, vector VECTOR(128))",
         ]
 
         for sql in queries:
             context = TranslationContext(original_sql=sql)
             result = self.translator.translate(context)
-            assert result.performance_stats.translation_time_ms < 5.0, f"Query exceeded SLA: {sql[:50]}..."
+            assert (
+                result.performance_stats.translation_time_ms < 5.0
+            ), f"Query exceeded SLA: {sql[:50]}..."
 
     def test_translation_validation_levels(self):
         """Test different validation levels"""
         # Basic validation
         context_basic = TranslationContext(
-            original_sql="SELECT * FROM users",
-            validation_level=ValidationLevel.BASIC
+            original_sql="SELECT * FROM users", validation_level=ValidationLevel.BASIC
         )
         result_basic = self.translator.translate(context_basic)
         assert result_basic.translated_sql is not None
@@ -229,7 +231,7 @@ class TestTranslationIntegration:
         # Semantic validation
         context_semantic = TranslationContext(
             original_sql="SELECT %SQLUPPER(name) FROM users",
-            validation_level=ValidationLevel.SEMANTIC
+            validation_level=ValidationLevel.SEMANTIC,
         )
         result_semantic = self.translator.translate(context_semantic)
         assert result_semantic.translated_sql is not None
@@ -237,7 +239,7 @@ class TestTranslationIntegration:
         # Strict validation
         context_strict = TranslationContext(
             original_sql="CREATE TABLE test (id INTEGER, name VARCHAR(100))",
-            validation_level=ValidationLevel.STRICT
+            validation_level=ValidationLevel.STRICT,
         )
         result_strict = self.translator.translate(context_strict)
         assert result_strict.translated_sql is not None
@@ -248,7 +250,9 @@ class TestTranslationIntegration:
         context = TranslationContext(original_sql="SELECT * FROM WHERE")
         result = self.translator.translate(context)
         # Check for warnings or empty translation
-        assert len(result.warnings) > 0 or result.translated_sql.rstrip(';') == "SELECT * FROM WHERE"
+        assert (
+            len(result.warnings) > 0 or result.translated_sql.rstrip(";") == "SELECT * FROM WHERE"
+        )
 
         # Empty SQL
         context = TranslationContext(original_sql="")
@@ -267,23 +271,29 @@ class TestTranslationIntegration:
         result = self.translator.translate(context)
         # Standard SQL should have no mappings or high confidence mappings
         if result.construct_mappings:
-            avg_confidence = sum(m.confidence for m in result.construct_mappings) / len(result.construct_mappings)
+            avg_confidence = sum(m.confidence for m in result.construct_mappings) / len(
+                result.construct_mappings
+            )
             assert avg_confidence >= 0.9
 
         # Medium confidence - some IRIS features
         context = TranslationContext(original_sql="SELECT %SQLUPPER(name) FROM users")
         result = self.translator.translate(context)
         if result.construct_mappings:
-            avg_confidence = sum(m.confidence for m in result.construct_mappings) / len(result.construct_mappings)
+            avg_confidence = sum(m.confidence for m in result.construct_mappings) / len(
+                result.construct_mappings
+            )
             assert avg_confidence >= 0.8
 
         # Complex IRIS features
-        context = TranslationContext(original_sql="""
+        context = TranslationContext(
+            original_sql="""
             SELECT TOP 10 PERCENT WITH TIES
                 %SQLUPPER(name),
                 JSON_TABLE(data, '$.items[*]' COLUMNS (id INT PATH '$.id'))
             FROM users
-        """)
+        """
+        )
         result = self.translator.translate(context)
         assert len(result.construct_mappings) > 0
 
@@ -326,7 +336,9 @@ class TestTranslationIntegration:
         assert len(result.construct_mappings) >= 1
 
         # Check for function mappings
-        function_mappings = [m for m in result.construct_mappings if m.construct_type == ConstructType.FUNCTION]
+        function_mappings = [
+            m for m in result.construct_mappings if m.construct_type == ConstructType.FUNCTION
+        ]
         assert len(function_mappings) >= 1
 
     def test_translation_statistics(self):
@@ -335,7 +347,7 @@ class TestTranslationIntegration:
         queries = [
             "SELECT * FROM users",
             "SELECT %SQLUPPER(name) FROM customers",
-            "SELECT JSON_ARRAY_LENGTH(data) FROM documents"
+            "SELECT JSON_ARRAY_LENGTH(data) FROM documents",
         ]
 
         for sql in queries:
@@ -369,13 +381,15 @@ class TestTranslationPerformance:
 
         # Complex queries
         for i in range(30):
-            queries.append(f"""
+            queries.append(
+                f"""
                 SELECT TOP {i + 1}
                     %SQLUPPER(name),
                     JSON_EXTRACT(data, '$.field_{i}')
                 FROM table_{i}
                 WHERE JSON_EXISTS(data, '$.active')
-            """)
+            """
+            )
 
         start_time = time.perf_counter()
         results = []
@@ -451,7 +465,7 @@ class TestTranslationEdgeCases:
 
         context = TranslationContext(original_sql=sql)
         result = self.translator.translate(context)
-        assert 'jsonb' in result.translated_sql.lower() or '#>' in result.translated_sql
+        assert "jsonb" in result.translated_sql.lower() or "#>" in result.translated_sql
 
     def test_special_characters_in_identifiers(self):
         """Test handling of special characters"""
@@ -467,7 +481,7 @@ class TestTranslationEdgeCases:
 
         context = TranslationContext(original_sql=sql)
         result = self.translator.translate(context)
-        assert 'José María' in result.translated_sql
+        assert "José María" in result.translated_sql
 
     def test_mixed_case_preservation(self):
         """Test that mixed case identifiers are preserved"""

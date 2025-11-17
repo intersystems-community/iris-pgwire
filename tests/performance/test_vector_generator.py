@@ -4,18 +4,18 @@ Unit tests for vector data generator (T007 validation).
 Validates reproducibility, normalization, and format compliance.
 """
 
-import pytest
-import numpy as np
 import sys
 from pathlib import Path
+
+import numpy as np
 
 # Add benchmarks to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from benchmarks.test_data.vector_generator import (
+    generate_query_vector,
     generate_test_vectors,
     vector_to_text,
-    generate_query_vector
 )
 
 
@@ -77,11 +77,11 @@ class TestVectorGeneration:
         vec = np.array([0.1, 0.2, 0.3], dtype=np.float32)
         text = vector_to_text(vec)
 
-        assert text.startswith('[')
-        assert text.endswith(']')
-        assert '0.1' in text
-        assert '0.2' in text
-        assert '0.3' in text
+        assert text.startswith("[")
+        assert text.endswith("]")
+        assert "0.1" in text
+        assert "0.2" in text
+        assert "0.3" in text
 
     def test_query_vector_generation(self):
         """Query vector should be normalized and have correct shape"""

@@ -10,10 +10,10 @@ Feature: 018-add-dbapi-option
 """
 
 import logging
-from typing import Optional
 
 try:
     import iris
+
     IRIS_AVAILABLE = True
 except ImportError:
     IRIS_AVAILABLE = False
@@ -63,13 +63,11 @@ class IRISLogHandler(logging.Handler):
 
             # Write to IRIS console log
             # This appears in /usr/irissys/mgr/messages.log
-            iris.cls('%SYS.System').WriteToConsoleLog(
-                msg,
-                0,  # 0 = info, 1 = warning, 2 = error, 3 = severe
-                1   # 1 = write immediately
+            iris.cls("%SYS.System").WriteToConsoleLog(
+                msg, 0, 1  # 0 = info, 1 = warning, 2 = error, 3 = severe  # 1 = write immediately
             )
 
-        except Exception as e:
+        except Exception:
             # Don't let logging errors crash the application
             # Fall back to stderr
             self.handleError(record)
@@ -92,7 +90,7 @@ class IRISLogHandler(logging.Handler):
             return 0  # INFO
 
 
-def setup_iris_logging(logger: Optional[logging.Logger] = None) -> None:
+def setup_iris_logging(logger: logging.Logger | None = None) -> None:
     """
     Setup IRIS log handler for a logger.
 
@@ -105,9 +103,7 @@ def setup_iris_logging(logger: Optional[logging.Logger] = None) -> None:
     # Add IRIS handler
     iris_handler = IRISLogHandler()
     iris_handler.setFormatter(
-        logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     )
 
     logger.addHandler(iris_handler)

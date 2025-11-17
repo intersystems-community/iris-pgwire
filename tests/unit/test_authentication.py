@@ -5,28 +5,27 @@ Tests the SCRAM-SHA-256 authentication implementation with comprehensive coverag
 of authentication flows, IRIS integration, and constitutional compliance.
 """
 
-import pytest
 import asyncio
-import secrets
 import base64
 import hashlib
 import hmac
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from iris_pgwire.auth import (
+    AuthenticationMethod,
+    AuthenticationResult,
+    AuthenticationState,
+    IRISAuthenticationProvider,
     PostgreSQLAuthenticator,
     SCRAMAuthenticator,
-    IRISAuthenticationProvider,
-    AuthenticationResult,
-    AuthenticationMethod,
-    AuthenticationState,
     ScramCredentials,
     create_authentication_ok,
     create_authentication_sasl,
     create_authentication_sasl_continue,
     create_authentication_sasl_final,
-    create_error_response
+    create_error_response,
 )
 
 
@@ -85,12 +84,14 @@ class TestSCRAMAuthenticator:
             stored_key=b"stored_key_data",
             server_key=b"server_key_data",
             salt=b"salt_data_16_bytes",
-            iteration_count=4096
+            iteration_count=4096,
         )
         self.iris_provider.get_stored_credentials.return_value = credentials
 
         client_nonce = "clientnonce123"
-        server_message, server_nonce = self.scram_auth.create_server_first_message(client_nonce, "testuser")
+        server_message, server_nonce = self.scram_auth.create_server_first_message(
+            client_nonce, "testuser"
+        )
 
         # Verify message format
         assert server_message.startswith(f"r={client_nonce}")
@@ -107,7 +108,9 @@ class TestSCRAMAuthenticator:
         self.iris_provider.get_stored_credentials.return_value = None
 
         client_nonce = "clientnonce123"
-        server_message, server_nonce = self.scram_auth.create_server_first_message(client_nonce, "unknown_user")
+        server_message, server_nonce = self.scram_auth.create_server_first_message(
+            client_nonce, "unknown_user"
+        )
 
         # Should still create message (prevents user enumeration)
         assert server_message.startswith(f"r={client_nonce}")
@@ -118,10 +121,10 @@ class TestSCRAMAuthenticator:
         """Test successful client-final-message verification"""
         # Setup session data
         session_data = {
-            'username': 'testuser',
-            'client_nonce': 'clientnonce',
-            'server_nonce': 'servernonce',
-            'server_first_message': 'r=clientnonceservernonce,s=c2FsdA==,i=4096'
+            "username": "testuser",
+            "client_nonce": "clientnonce",
+            "server_nonce": "servernonce",
+            "server_first_message": "r=clientnonceservernonce,s=c2FsdA==,i=4096",
         }
 
         # Mock credentials with known values for SCRAM calculation
@@ -130,51 +133,49 @@ class TestSCRAMAuthenticator:
             stored_key=hashlib.sha256(b"test_client_key").digest(),
             server_key=b"test_server_key",
             salt=base64.b64decode("c2FsdA=="),
-            iteration_count=4096
+            iteration_count=4096,
         )
         self.iris_provider.get_stored_credentials.return_value = credentials
 
         # Create valid client-final-message
-        channel_binding = base64.b64encode(b"n,,").decode('ascii')
+        channel_binding = base64.b64encode(b"n,,").decode("ascii")
         combined_nonce = "clientnonceservernonce"
 
         # Calculate client proof for verification
         client_first_bare = "n=testuser,r=clientnonce"
-        server_first = session_data['server_first_message']
+        server_first = session_data["server_first_message"]
         client_final_without_proof = f"c={channel_binding},r={combined_nonce}"
         auth_message = f"{client_first_bare},{server_first},{client_final_without_proof}"
 
         client_signature = hmac.new(
-            credentials.stored_key,
-            auth_message.encode('utf-8'),
-            hashlib.sha256
+            credentials.stored_key, auth_message.encode("utf-8"), hashlib.sha256
         ).digest()
 
         # For this test, we'll use a simple client_key derivation
         client_key = hashlib.sha256(b"test_password_salt").digest()
-        client_proof = bytes(a ^ b for a, b in zip(client_key, client_signature))
-        client_proof_b64 = base64.b64encode(client_proof).decode('ascii')
+        client_proof = bytes(a ^ b for a, b in zip(client_key, client_signature, strict=False))
+        client_proof_b64 = base64.b64encode(client_proof).decode("ascii")
 
         client_final = f"c={channel_binding},r={combined_nonce},p={client_proof_b64}"
 
         # Since the SCRAM calculation is complex, we'll mock the verification
-        with patch.object(self.scram_auth, 'verify_client_final_message') as mock_verify:
+        with patch.object(self.scram_auth, "verify_client_final_message") as mock_verify:
             mock_verify.return_value = (True, None)
 
-            success, error_message = self.scram_auth.verify_client_final_message(client_final, session_data)
+            success, error_message = self.scram_auth.verify_client_final_message(
+                client_final, session_data
+            )
 
             assert success is True
             assert error_message is None
 
     def test_create_server_final_message(self):
         """Test server-final-message creation"""
-        session_data = {
-            'server_signature': b'test_server_signature'
-        }
+        session_data = {"server_signature": b"test_server_signature"}
 
         server_final = self.scram_auth.create_server_final_message(session_data)
 
-        expected_signature = base64.b64encode(b'test_server_signature').decode('ascii')
+        expected_signature = base64.b64encode(b"test_server_signature").decode("ascii")
         assert server_final == f"v={expected_signature}"
 
 
@@ -184,18 +185,18 @@ class TestIRISAuthenticationProvider:
     def setup_method(self):
         """Setup IRIS provider for each test"""
         self.iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER',
-            'system_user': '_SYSTEM',
-            'system_password': 'SYS'
+            "host": "localhost",
+            "port": "1972",
+            "namespace": "USER",
+            "system_user": "_SYSTEM",
+            "system_password": "SYS",
         }
         self.iris_provider = IRISAuthenticationProvider(self.iris_config)
 
     @pytest.mark.asyncio
     async def test_validate_iris_user_success(self):
         """Test successful IRIS user validation"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             # Mock successful IRIS connection and query
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
@@ -204,7 +205,9 @@ class TestIRISAuthenticationProvider:
             mock_conn.cursor.return_value = mock_cursor
             mock_create_conn.return_value = mock_conn
 
-            success, session_id = await self.iris_provider.validate_iris_user("testuser", "password123")
+            success, session_id = await self.iris_provider.validate_iris_user(
+                "testuser", "password123"
+            )
 
             assert success is True
             assert session_id is not None
@@ -214,11 +217,13 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_failure(self):
         """Test failed IRIS user validation"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             # Mock IRIS connection failure
             mock_create_conn.side_effect = Exception("Connection failed")
 
-            success, session_id = await self.iris_provider.validate_iris_user("testuser", "badpassword")
+            success, session_id = await self.iris_provider.validate_iris_user(
+                "testuser", "badpassword"
+            )
 
             assert success is False
             assert session_id is None
@@ -226,7 +231,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_exists_success(self):
         """Test successful IRIS user existence check"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             # Mock successful IRIS connection and user check
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
@@ -250,7 +255,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_exists_not_found(self):
         """Test IRIS user existence check for non-existent user"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             # Mock successful connection but user not found
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
@@ -292,12 +297,10 @@ class TestPostgreSQLAuthenticator:
 
     def setup_method(self):
         """Setup PostgreSQL authenticator for each test"""
-        self.iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER'
-        }
-        self.authenticator = PostgreSQLAuthenticator(self.iris_config, AuthenticationMethod.SCRAM_SHA_256)
+        self.iris_config = {"host": "localhost", "port": "1972", "namespace": "USER"}
+        self.authenticator = PostgreSQLAuthenticator(
+            self.iris_config, AuthenticationMethod.SCRAM_SHA_256
+        )
 
     @pytest.mark.asyncio
     async def test_authenticate_trust_method(self):
@@ -401,13 +404,14 @@ class TestProtocolMessageHelpers:
         message = create_authentication_ok()
 
         # Should be: 'R' + length(8) + status(0)
-        assert message[0:1] == b'R'
+        assert message[0:1] == b"R"
         assert len(message) == 9  # 1 + 4 + 4 bytes
 
         # Verify status is 0 (authentication successful)
         import struct
-        _, length = struct.unpack('!cI', message[:5])
-        status = struct.unpack('!I', message[5:9])[0]
+
+        _, length = struct.unpack("!cI", message[:5])
+        status = struct.unpack("!I", message[5:9])[0]
         assert status == 0
         assert length == 8
 
@@ -416,27 +420,27 @@ class TestProtocolMessageHelpers:
         methods = ["SCRAM-SHA-256"]
         message = create_authentication_sasl(methods)
 
-        assert message[0:1] == b'R'
+        assert message[0:1] == b"R"
 
         # Should contain method name and proper null terminators
-        assert b'SCRAM-SHA-256' in message
-        assert message.endswith(b'\x00\x00')  # Double null terminator
+        assert b"SCRAM-SHA-256" in message
+        assert message.endswith(b"\x00\x00")  # Double null terminator
 
     def test_create_authentication_sasl_continue(self):
         """Test AuthenticationSASLContinue message creation"""
         server_data = "r=clientnonceservernonce,s=salt,i=4096"
         message = create_authentication_sasl_continue(server_data)
 
-        assert message[0:1] == b'R'
-        assert server_data.encode('utf-8') in message
+        assert message[0:1] == b"R"
+        assert server_data.encode("utf-8") in message
 
     def test_create_authentication_sasl_final(self):
         """Test AuthenticationSASLFinal message creation"""
         server_data = "v=server_signature_base64"
         message = create_authentication_sasl_final(server_data)
 
-        assert message[0:1] == b'R'
-        assert server_data.encode('utf-8') in message
+        assert message[0:1] == b"R"
+        assert server_data.encode("utf-8") in message
 
     def test_create_error_response(self):
         """Test ErrorResponse message creation"""
@@ -444,11 +448,11 @@ class TestProtocolMessageHelpers:
         message_text = "Authentication failed"
         message = create_error_response(code, message_text)
 
-        assert message[0:1] == b'E'
-        assert b'FATAL' in message
-        assert code.encode('ascii') in message
-        assert message_text.encode('utf-8') in message
-        assert message.endswith(b'\x00')  # Null terminator
+        assert message[0:1] == b"E"
+        assert b"FATAL" in message
+        assert code.encode("ascii") in message
+        assert message_text.encode("utf-8") in message
+        assert message.endswith(b"\x00")  # Null terminator
 
 
 class TestAuthenticationStates:
@@ -461,7 +465,7 @@ class TestAuthenticationStates:
             AuthenticationState.SASL_STARTED,
             AuthenticationState.SASL_CHALLENGE_SENT,
             AuthenticationState.AUTHENTICATED,
-            AuthenticationState.FAILED
+            AuthenticationState.FAILED,
         ]
 
         # All states should have string values
@@ -474,7 +478,7 @@ class TestAuthenticationStates:
         methods = [
             AuthenticationMethod.TRUST,
             AuthenticationMethod.SCRAM_SHA_256,
-            AuthenticationMethod.MD5
+            AuthenticationMethod.MD5,
         ]
 
         for method in methods:
@@ -488,10 +492,7 @@ class TestAuthenticationResult:
     def test_authentication_result_creation(self):
         """Test AuthenticationResult creation and defaults"""
         result = AuthenticationResult(
-            success=True,
-            username="testuser",
-            auth_time_ms=2.5,
-            sla_compliant=True
+            success=True, username="testuser", auth_time_ms=2.5, sla_compliant=True
         )
 
         assert result.success is True
@@ -506,9 +507,7 @@ class TestAuthenticationResult:
         """Test AuthenticationResult with metadata"""
         metadata = {"method": "SCRAM-SHA-256", "custom_field": "value"}
         result = AuthenticationResult(
-            success=False,
-            error_message="Authentication failed",
-            metadata=metadata
+            success=False, error_message="Authentication failed", metadata=metadata
         )
 
         assert result.success is False
@@ -522,7 +521,7 @@ class TestAuthenticationResult:
             stored_key=b"stored_key_data",
             server_key=b"server_key_data",
             salt=b"salt_data",
-            iteration_count=4096
+            iteration_count=4096,
         )
 
         assert credentials.username == "testuser"
@@ -538,12 +537,10 @@ class TestAuthenticationPerformance:
 
     def setup_method(self):
         """Setup authenticator for performance tests"""
-        iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER'
-        }
-        self.authenticator = PostgreSQLAuthenticator(iris_config, AuthenticationMethod.SCRAM_SHA_256)
+        iris_config = {"host": "localhost", "port": "1972", "namespace": "USER"}
+        self.authenticator = PostgreSQLAuthenticator(
+            iris_config, AuthenticationMethod.SCRAM_SHA_256
+        )
 
     @pytest.mark.asyncio
     async def test_bulk_authentication_performance(self):

@@ -4,17 +4,21 @@ Identify which specific queries are hanging in PGWire.
 Uses signal timeout to prevent infinite hangs.
 """
 
-import psycopg
 import signal
 import sys
 from contextlib import contextmanager
 
+import psycopg
+
+
 class TimeoutError(Exception):
     pass
+
 
 @contextmanager
 def timeout(seconds):
     """Context manager for timeout"""
+
     def timeout_handler(signum, frame):
         raise TimeoutError(f"Query timed out after {seconds}s")
 
@@ -26,14 +30,10 @@ def timeout(seconds):
     finally:
         signal.alarm(0)  # Disable alarm
 
+
 # Connect to PGWire
 try:
-    conn = psycopg.connect(
-        host='localhost',
-        port=5434,
-        dbname='USER',
-        connect_timeout=10
-    )
+    conn = psycopg.connect(host="localhost", port=5434, dbname="USER", connect_timeout=10)
     conn.autocommit = True
     cursor = conn.cursor()
     print("✅ Connected to PGWire\n")
@@ -50,12 +50,10 @@ test_queries = {
     "simple_select_all": "SELECT * FROM benchmark_vectors LIMIT 10",
     "simple_select_id": "SELECT * FROM benchmark_vectors WHERE id = 1",
     "simple_count": "SELECT COUNT(*) FROM benchmark_vectors",
-
     # Vector similarity queries (pgvector operators)
     "vector_cosine": f"SELECT id, embedding <=> '{test_vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
     "vector_l2": f"SELECT id, embedding <-> '{test_vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5",
     "vector_inner_product": f"SELECT id, (embedding <#> '{test_vector}') * -1 AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT 5",
-
     # Complex join queries
     "join_with_metadata": """
         SELECT v.id, v.embedding, m.label, m.created_at

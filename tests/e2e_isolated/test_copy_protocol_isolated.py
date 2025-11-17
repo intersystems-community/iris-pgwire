@@ -13,17 +13,15 @@ Performance Validation:
 - <100MB memory for 1M rows (FR-006 requirement)
 """
 
-import pytest
 import time
-import subprocess
-import psycopg
 from pathlib import Path
-from iris_devtester import IRISContainer
 
+import pytest
+from iris_devtester import IRISContainer
 
 # Test data paths
 REPO_ROOT = Path(__file__).parent.parent.parent
-PATIENTS_CSV = REPO_ROOT / 'examples' / 'superset-iris-healthcare' / 'data' / 'patients-data.csv'
+PATIENTS_CSV = REPO_ROOT / "examples" / "superset-iris-healthcare" / "data" / "patients-data.csv"
 
 
 def start_pgwire_in_container(container, iris_port: int):
@@ -37,17 +35,15 @@ def start_pgwire_in_container(container, iris_port: int):
     Returns:
         int: PGWire server port (mapped to host)
     """
-    import tarfile
     import io
-    import time
-    import socket
+    import tarfile
 
     # Create tar archive of PGWire source code
     print("\n📦 Packaging PGWire source code...")
     tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-        src_path = REPO_ROOT / 'src' / 'iris_pgwire'
-        tar.add(str(src_path), arcname='iris_pgwire')
+    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+        src_path = REPO_ROOT / "src" / "iris_pgwire"
+        tar.add(str(src_path), arcname="iris_pgwire")
 
     tar_stream.seek(0)
 
@@ -59,21 +55,28 @@ def start_pgwire_in_container(container, iris_port: int):
 
     # Copy source code into container
     print("📤 Copying PGWire source to container...")
-    container.put_archive('/tmp/pgwire/', tar_stream.getvalue())
+    container.put_archive("/tmp/pgwire/", tar_stream.getvalue())
 
     # Install dependencies
     print("📦 Installing Python dependencies...")
     install_cmd = [
-        "/usr/irissys/bin/irispython", "-m", "pip", "install",
-        "--quiet", "--break-system-packages",
-        "structlog", "cryptography", "sqlparse", "psycopg"
+        "/usr/irissys/bin/irispython",
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "--break-system-packages",
+        "structlog",
+        "cryptography",
+        "sqlparse",
+        "psycopg",
     ]
     exit_code, output = container.exec_run(install_cmd)
     if exit_code != 0:
         print(f"❌ Dependency install failed: {output.decode()}")
         raise RuntimeError(f"Failed to install dependencies: {output.decode()}")
     else:
-        print(f"✅ Dependencies installed successfully")
+        print("✅ Dependencies installed successfully")
 
     # Start PGWire server in background
     print("🚀 Starting PGWire server in container...")
@@ -91,11 +94,11 @@ def start_pgwire_in_container(container, iris_port: int):
     # Map port 5432 from container to host
     # Get the mapped port from container's port bindings
     container.reload()  # Refresh container state
-    port_bindings = container.attrs['NetworkSettings']['Ports']
+    port_bindings = container.attrs["NetworkSettings"]["Ports"]
 
     # For iris-devtester containers, we need to expose 5432
     # Since the container is already running, we'll connect to the container IP directly
-    container_ip = container.attrs['NetworkSettings']['IPAddress']
+    container_ip = container.attrs["NetworkSettings"]["IPAddress"]
     pgwire_port = 5432
 
     # Wait for PGWire to be ready
@@ -108,11 +111,11 @@ def start_pgwire_in_container(container, iris_port: int):
         try:
             # Use netstat inside container to check if port 5432 is listening
             exit_code, output = container.exec_run("netstat -tuln | grep :5432")
-            if exit_code == 0 and b':5432' in output:
-                print(f"✅ PGWire server ready on port 5432!")
+            if exit_code == 0 and b":5432" in output:
+                print("✅ PGWire server ready on port 5432!")
                 print(f"   Server output: {output.decode()}")
                 return container_ip, pgwire_port
-        except Exception as e:
+        except Exception:
             pass
 
         if i < max_retries - 1:
@@ -140,6 +143,7 @@ def isolated_iris_with_pgwire():
 
         # Parse connection URL for TCP connection details
         import urllib.parse
+
         conn_url = iris.get_connection_url()
         parsed = urllib.parse.urlparse(conn_url)
 
@@ -148,22 +152,19 @@ def isolated_iris_with_pgwire():
         container = iris._container  # Access internal container
 
         # Start PGWire server inside the container
-        pgwire_host, pgwire_port = start_pgwire_in_container(
-            container,
-            parsed.port or 1972
-        )
+        pgwire_host, pgwire_port = start_pgwire_in_container(container, parsed.port or 1972)
 
         # Yield both IRIS connection and connection details
         yield {
-            'iris_connection': iris_conn,
-            'iris_host': parsed.hostname,
-            'iris_port': parsed.port or 1972,
-            'iris_namespace': 'USER',
-            'iris_username': 'test',
-            'iris_password': 'test',
-            'pgwire_host': pgwire_host,
-            'pgwire_port': pgwire_port,
-            'container': container
+            "iris_connection": iris_conn,
+            "iris_host": parsed.hostname,
+            "iris_port": parsed.port or 1972,
+            "iris_namespace": "USER",
+            "iris_username": "test",
+            "iris_password": "test",
+            "pgwire_host": pgwire_host,
+            "pgwire_port": pgwire_port,
+            "container": container,
         }
 
 
@@ -176,22 +177,22 @@ def test_isolated_iris_available(isolated_iris_with_pgwire):
     params = isolated_iris_with_pgwire
 
     # Use IRIS embedded Python connection from iris-devtester
-    iris_conn = params['iris_connection']
+    iris_conn = params["iris_connection"]
 
     # Execute query using IRIS connection cursor
     cursor = iris_conn.cursor()
     cursor.execute("SELECT $ZVERSION")
     version = cursor.fetchone()[0]
 
-    assert 'IRIS' in version, f"Expected IRIS version, got: {version}"
+    assert "IRIS" in version, f"Expected IRIS version, got: {version}"
     print(f"\n✅ Isolated IRIS container running: {version}")
     print(f"   Host: {params['iris_host']}:{params['iris_port']}")
     print(f"   Namespace: {params['iris_namespace']}")
     print(f"   Username: {params['iris_username']}")
-    print(f"\n🎯 THIS IS A CLEAN INSTANCE - NO STATE POLLUTION!")
-    print(f"   No foreign keys from Superset examples")
-    print(f"   No leftover test data")
-    print(f"   Perfect for reproducible E2E testing")
+    print("\n🎯 THIS IS A CLEAN INSTANCE - NO STATE POLLUTION!")
+    print("   No foreign keys from Superset examples")
+    print("   No leftover test data")
+    print("   Perfect for reproducible E2E testing")
 
 
 def test_copy_from_stdin_250_patients_performance(isolated_iris_with_pgwire):
@@ -209,13 +210,18 @@ def test_copy_from_stdin_250_patients_performance(isolated_iris_with_pgwire):
     - Performance requirement validation (FR-005)
     """
     params = isolated_iris_with_pgwire
-    container = params['container']
+    container = params["container"]
 
     # Install psycopg in the container for testing
     print("\n📦 Installing psycopg in container...")
     install_cmd = [
-        "/usr/irissys/bin/irispython", "-m", "pip", "install",
-        "--quiet", "--break-system-packages", "psycopg[binary]"
+        "/usr/irissys/bin/irispython",
+        "-m",
+        "pip",
+        "install",
+        "--quiet",
+        "--break-system-packages",
+        "psycopg[binary]",
     ]
     exit_code, output = container.exec_run(install_cmd)
     if exit_code != 0:
@@ -224,20 +230,21 @@ def test_copy_from_stdin_250_patients_performance(isolated_iris_with_pgwire):
 
     # Copy CSV file into container
     print("📤 Copying patients CSV into container...")
-    with PATIENTS_CSV.open('rb') as f:
+    with PATIENTS_CSV.open("rb") as f:
         csv_data = f.read()
 
     # Write CSV to container
-    container.exec_run(f"mkdir -p /tmp/test_data")
-    import tarfile
+    container.exec_run("mkdir -p /tmp/test_data")
     import io
+    import tarfile
+
     tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-        csv_info = tarfile.TarInfo(name='patients-data.csv')
+    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+        csv_info = tarfile.TarInfo(name="patients-data.csv")
         csv_info.size = len(csv_data)
         tar.addfile(csv_info, io.BytesIO(csv_data))
     tar_stream.seek(0)
-    container.put_archive('/tmp/test_data/', tar_stream.getvalue())
+    container.put_archive("/tmp/test_data/", tar_stream.getvalue())
     print("✅ CSV file copied to /tmp/test_data/patients-data.csv")
 
     # Create test script inside container
@@ -304,29 +311,27 @@ with psycopg.connect(
 
     # Write test script to container
     tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-        script_info = tarfile.TarInfo(name='test_copy.py')
-        script_bytes = test_script.encode('utf-8')
+    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+        script_info = tarfile.TarInfo(name="test_copy.py")
+        script_bytes = test_script.encode("utf-8")
         script_info.size = len(script_bytes)
         tar.addfile(script_info, io.BytesIO(script_bytes))
     tar_stream.seek(0)
-    container.put_archive('/tmp/', tar_stream.getvalue())
+    container.put_archive("/tmp/", tar_stream.getvalue())
 
     # Run test script inside container
     print("\n🧪 Running COPY FROM STDIN performance test inside container...")
-    exit_code, output = container.exec_run([
-        "/usr/irissys/bin/irispython", "/tmp/test_copy.py"
-    ])
+    exit_code, output = container.exec_run(["/usr/irissys/bin/irispython", "/tmp/test_copy.py"])
 
     # Parse results
-    output_str = output.decode('utf-8')
+    output_str = output.decode("utf-8")
     print(output_str)
 
     # Capture PGWire server logs for debugging
     print("\n📋 PGWire Server Logs:")
     exit_code, logs = container.exec_run("tail -100 /tmp/pgwire.log")
     if exit_code == 0:
-        print(logs.decode('utf-8', errors='ignore'))
+        print(logs.decode("utf-8", errors="ignore"))
     else:
         print(f"Could not retrieve logs (exit code {exit_code})")
 
@@ -334,9 +339,9 @@ with psycopg.connect(
         raise RuntimeError(f"Test script failed with exit code {exit_code}")
 
     # Extract results from output
-    for line in output_str.split('\n'):
-        if line.startswith('RESULT|'):
-            parts = line.split('|')
+    for line in output_str.split("\n"):
+        if line.startswith("RESULT|"):
+            parts = line.split("|")
             row_count = int(parts[1])
             elapsed = float(parts[2])
             throughput = float(parts[3])
@@ -346,7 +351,7 @@ with psycopg.connect(
             assert elapsed < 1.0, f"COPY took {elapsed:.2f}s, should be <1s (FR-005 requirement)"
             assert throughput > 10000, f"Throughput {throughput:.0f} rows/sec < 10,000 requirement"
 
-            print(f"\n✅ ALL PERFORMANCE REQUIREMENTS MET!")
+            print("\n✅ ALL PERFORMANCE REQUIREMENTS MET!")
             return
 
     raise ValueError("Could not parse test results from output")
@@ -406,6 +411,7 @@ def test_copy_memory_efficiency_1m_rows(isolated_iris_with_pgwire):
 
 # ==================== Helper Functions ====================
 
+
 def measure_memory_usage(func, *args, **kwargs):
     """
     Measure memory usage delta during function execution.
@@ -423,7 +429,7 @@ def measure_memory_usage(func, *args, **kwargs):
     snapshot_after = tracemalloc.take_snapshot()
     tracemalloc.stop()
 
-    top_stats = snapshot_after.compare_to(snapshot_before, 'lineno')
+    top_stats = snapshot_after.compare_to(snapshot_before, "lineno")
     total_delta = sum(stat.size_diff for stat in top_stats)
     memory_delta_mb = total_delta / (1024 * 1024)
 

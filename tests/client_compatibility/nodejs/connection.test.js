@@ -98,6 +98,8 @@ describe('Basic Connection Tests', () => {
 
       // THEN: Each connection should succeed
       const result = await client.query('SELECT $1::int', [i + 1]);
+      console.log(`Connection ${i} columns:`, result.fields.map(f => f.name));
+      console.log(`Connection ${i} row:`, JSON.stringify(result.rows[0], null, 2));
       expect(result.rows[0].int4).toBe(i + 1);
 
       await client.end();

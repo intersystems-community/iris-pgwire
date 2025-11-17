@@ -14,14 +14,13 @@ Tests cover:
 - Performance requirements (5ms SLA)
 """
 
-import pytest
-import asyncio
 import time
-import psycopg
-from typing import Dict, Any, List
+
+import pytest
 import structlog
 
 logger = structlog.get_logger()
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -63,6 +62,7 @@ class TestIRISSystemFunctions:
 
         logger.info("IRIS version function works with psql", output=result["stdout"])
 
+
 @pytest.mark.e2e
 @pytest.mark.requires_iris
 @pytest.mark.asyncio
@@ -73,10 +73,12 @@ class TestIRISSQLExtensions:
         """Test SELECT TOP n → SELECT ... LIMIT n with psycopg"""
         async with psycopg_connection.cursor() as cur:
             # Create test data first
-            await cur.execute("""
+            await cur.execute(
+                """
                 CREATE TEMP TABLE test_top_data AS
                 SELECT generate_series(1, 100) AS id, 'test_' || generate_series(1, 100) AS name
-            """)
+            """
+            )
 
             # Test TOP clause translation
             await cur.execute("SELECT TOP 5 id, name FROM test_top_data ORDER BY id")
@@ -95,10 +97,14 @@ class TestIRISSQLExtensions:
 
         assert result["success"], f"TOP clause failed in psql: {result['stderr']}"
         # Count actual data rows (excluding headers/footers)
-        data_lines = [line for line in result["stdout"].split('\n')
-                     if line.strip() and not line.startswith('-') and 'test_value' not in line]
+        data_lines = [
+            line
+            for line in result["stdout"].split("\n")
+            if line.strip() and not line.startswith("-") and "test_value" not in line
+        ]
 
         logger.info("TOP clause works with psql", output=result["stdout"])
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -137,6 +143,7 @@ class TestIRISFunctions:
 
         logger.info("IRIS functions work with psql", output=result["stdout"])
 
+
 @pytest.mark.e2e
 @pytest.mark.requires_iris
 @pytest.mark.asyncio
@@ -147,7 +154,8 @@ class TestIRISDataTypes:
         """Test IRIS data type mappings in DDL with psycopg"""
         async with psycopg_connection.cursor() as cur:
             # Test creating table with IRIS data types
-            await cur.execute("""
+            await cur.execute(
+                """
                 CREATE TEMP TABLE test_iris_types (
                     id SERIAL PRIMARY KEY,
                     version_col ROWVERSION,
@@ -155,14 +163,17 @@ class TestIRISDataTypes:
                     list_col %List,
                     stream_col %Stream
                 )
-            """)
+            """
+            )
 
             # If we get here without exception, translation worked
             # Test inserting data
-            await cur.execute("""
+            await cur.execute(
+                """
                 INSERT INTO test_iris_types (vector_col, list_col)
                 VALUES ('[1.0,2.0,3.0]', '{"item1", "item2"}')
-            """)
+            """
+            )
 
             await cur.execute("SELECT id, vector_col FROM test_iris_types")
             result = await cur.fetchone()
@@ -171,6 +182,7 @@ class TestIRISDataTypes:
             assert result[0] == 1, "Serial ID should work"
 
             logger.info("IRIS data types translated successfully", id=result[0])
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -182,7 +194,8 @@ class TestIRISJSONFunctions:
         """Test JSON_TABLE → jsonb_to_recordset with psycopg"""
         async with psycopg_connection.cursor() as cur:
             # Test JSON_TABLE translation
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT name, age FROM JSON_TABLE(
                     '{"users": [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]}',
                     '$.users[*]' COLUMNS (
@@ -190,7 +203,8 @@ class TestIRISJSONFunctions:
                         age INTEGER PATH '$.age'
                     )
                 ) AS jt
-            """)
+            """
+            )
             results = await cur.fetchall()
 
             assert len(results) == 2, "Should return 2 users"
@@ -203,31 +217,38 @@ class TestIRISJSONFunctions:
         """Test Document Database filter operations with psycopg"""
         async with psycopg_connection.cursor() as cur:
             # Create test table with JSON data
-            await cur.execute("""
+            await cur.execute(
+                """
                 CREATE TEMP TABLE test_docs (
                     id SERIAL,
                     data JSONB
                 )
-            """)
+            """
+            )
 
-            await cur.execute("""
+            await cur.execute(
+                """
                 INSERT INTO test_docs (data) VALUES
                 ('{"name": "John", "age": 30, "active": true}'),
                 ('{"name": "Jane", "age": 25, "active": false}')
-            """)
+            """
+            )
 
             # Test document filter with IRIS syntax
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT id, data->>'name' as name
                 FROM test_docs
                 WHERE data->>'active' = 'true'
-            """)
+            """
+            )
             results = await cur.fetchall()
 
             assert len(results) == 1, "Should find 1 active user"
             assert results[0][1] == "John", "Should find John"
 
             logger.info("Document filters translated successfully", active_users=len(results))
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -264,9 +285,12 @@ class TestIRISConstructsPerformance:
         assert len(results) > 0, "Should return results"
         # Note: This tests full execution time, not just translation time
         # In production, we would instrument just the translation layer
-        logger.info("Complex IRIS constructs executed",
-                   execution_time_ms=execution_time,
-                   result_count=len(results))
+        logger.info(
+            "Complex IRIS constructs executed",
+            execution_time_ms=execution_time,
+            result_count=len(results),
+        )
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -278,7 +302,8 @@ class TestIRISConstructsMixed:
         """Test query mixing IRIS constructs with standard PostgreSQL SQL"""
         async with psycopg_connection.cursor() as cur:
             # Query using both IRIS constructs and standard SQL features
-            await cur.execute("""
+            await cur.execute(
+                """
                 WITH user_data AS (
                     SELECT
                         'user_' || generate_series(1, 50) as username,
@@ -299,29 +324,33 @@ class TestIRISConstructsMixed:
                     %SYSTEM.Version.GetNumber() as system_info
                 FROM processed_data
                 ORDER BY rank_pos
-            """)
+            """
+            )
             results = await cur.fetchall()
 
             assert len(results) <= 5, "TOP 5 should limit results"
             # Verify IRIS constructs were translated
             if len(results) > 0:
-                assert results[0][0].startswith('USER_'), "Username should be uppercase"
+                assert results[0][0].startswith("USER_"), "Username should be uppercase"
                 assert isinstance(results[0][3], str), "System version should be string"
 
             logger.info("Mixed IRIS/PostgreSQL constructs work", result_count=len(results))
 
     def test_mixed_constructs_psql(self, psql_command):
         """Test mixed constructs with psql command line"""
-        result = psql_command("""
+        result = psql_command(
+            """
             SELECT TOP 3
                 %SQLUPPER('hello') as greeting,
                 current_timestamp as ts;
-        """)
+        """
+        )
 
         assert result["success"], f"Mixed constructs failed: {result['stderr']}"
         assert "HELLO" in result["stdout"], "IRIS function should work"
 
         logger.info("Mixed constructs work with psql")
+
 
 @pytest.mark.e2e
 @pytest.mark.requires_iris
@@ -338,8 +367,9 @@ class TestIRISConstructsErrorHandling:
 
         # Should get a PostgreSQL-compatible error
         error_msg = str(exc_info.value).lower()
-        assert "syntax error" in error_msg or "unsupported" in error_msg, \
-               "Should get appropriate error message"
+        assert (
+            "syntax error" in error_msg or "unsupported" in error_msg
+        ), "Should get appropriate error message"
 
         logger.info("Unsupported construct handled appropriately", error=str(exc_info.value))
 

@@ -7,13 +7,11 @@ specification with E2E testing approach.
 """
 
 import asyncio
+import importlib
 import logging
 import os
 import ssl
-import struct
 import sys
-from typing import Optional
-import importlib
 
 import structlog
 
@@ -24,7 +22,7 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.add_log_level,
         structlog.processors.StackInfoRenderer(),
-        structlog.dev.ConsoleRenderer()
+        structlog.dev.ConsoleRenderer(),
     ],
     wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
     context_class=dict,
@@ -37,12 +35,13 @@ logger = structlog.get_logger()
 # Force reload of iris_executor BEFORE importing to bypass Python module cache
 # This ensures code changes are picked up in development without container rebuilds
 import iris_pgwire.iris_executor
+
 reloaded_module = importlib.reload(iris_pgwire.iris_executor)
 
 # NOW import after reload
-from .protocol import PGWireProtocol
-from .iris_executor import IRISExecutor
 from .integratedml import enhance_iris_executor_with_integratedml
+from .iris_executor import IRISExecutor
+from .protocol import PGWireProtocol
 
 
 class PGWireServer:
@@ -53,18 +52,20 @@ class PGWireServer:
     Uses asyncio for high concurrency with one coroutine per connection.
     """
 
-    def __init__(self,
-                 host: str = "0.0.0.0",
-                 port: int = 5432,
-                 iris_host: str = "localhost",
-                 iris_port: int = 1972,
-                 iris_username: str = "_SYSTEM",
-                 iris_password: str = "SYS",
-                 iris_namespace: str = "USER",
-                 enable_ssl: bool = False,
-                 ssl_cert_path: Optional[str] = None,
-                 ssl_key_path: Optional[str] = None,
-                 enable_scram: bool = False):
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 5432,
+        iris_host: str = "localhost",
+        iris_port: int = 1972,
+        iris_username: str = "_SYSTEM",
+        iris_password: str = "SYS",
+        iris_namespace: str = "USER",
+        enable_ssl: bool = False,
+        ssl_cert_path: str | None = None,
+        ssl_key_path: str | None = None,
+        enable_scram: bool = False,
+    ):
 
         self.host = host
         self.port = port
@@ -75,11 +76,11 @@ class PGWireServer:
 
         # IRIS connection parameters
         self.iris_config = {
-            'host': iris_host,
-            'port': iris_port,
-            'username': iris_username,
-            'password': iris_password,
-            'namespace': iris_namespace
+            "host": iris_host,
+            "port": iris_port,
+            "username": iris_username,
+            "password": iris_password,
+            "namespace": iris_namespace,
         }
 
         self.server = None
@@ -95,26 +96,35 @@ class PGWireServer:
         # Enhance with IntegratedML support
         self.iris_executor = enhance_iris_executor_with_integratedml(self.iris_executor)
 
-        logger.info("PGWire server initialized",
-                   host=host, port=port, iris_host=iris_host,
-                   iris_port=iris_port, iris_namespace=iris_namespace)
+        logger.info(
+            "PGWire server initialized",
+            host=host,
+            port=port,
+            iris_host=iris_host,
+            iris_port=iris_port,
+            iris_namespace=iris_namespace,
+        )
 
     # P4: Connection Management for Query Cancellation
 
     def register_connection(self, protocol):
         """Register a connection for query cancellation"""
         self.connection_registry[protocol.backend_pid] = (protocol, protocol.backend_secret)
-        logger.debug("Connection registered",
-                    backend_pid=protocol.backend_pid,
-                    connection_id=protocol.connection_id)
+        logger.debug(
+            "Connection registered",
+            backend_pid=protocol.backend_pid,
+            connection_id=protocol.connection_id,
+        )
 
     def unregister_connection(self, protocol):
         """Unregister a connection"""
         if protocol.backend_pid in self.connection_registry:
             del self.connection_registry[protocol.backend_pid]
-            logger.debug("Connection unregistered",
-                        backend_pid=protocol.backend_pid,
-                        connection_id=protocol.connection_id)
+            logger.debug(
+                "Connection unregistered",
+                backend_pid=protocol.backend_pid,
+                connection_id=protocol.connection_id,
+            )
 
     def find_connection_for_cancellation(self, backend_pid: int, backend_secret: int):
         """Find connection for cancellation by PID and secret"""
@@ -124,7 +134,7 @@ class PGWireServer:
                 return stored_protocol
         return None
 
-    async def setup_ssl_context(self) -> Optional[ssl.SSLContext]:
+    async def setup_ssl_context(self) -> ssl.SSLContext | None:
         """Setup SSL context for TLS connections if enabled"""
         if not self.enable_ssl:
             return None
@@ -154,7 +164,7 @@ class PGWireServer:
         5. BackendKeyData generation
         6. ReadyForQuery state
         """
-        client_addr = writer.get_extra_info('peername')
+        client_addr = writer.get_extra_info("peername")
         connection_id = f"{client_addr[0]}:{client_addr[1]}"
 
         logger.info("Client connection established", connection_id=connection_id)
@@ -162,7 +172,9 @@ class PGWireServer:
 
         try:
             # Create protocol handler for this connection
-            protocol = PGWireProtocol(reader, writer, self.iris_executor, connection_id, self.enable_scram)
+            protocol = PGWireProtocol(
+                reader, writer, self.iris_executor, connection_id, self.enable_scram
+            )
 
             # P0 Phase: Handle SSL probe first
             await protocol.handle_ssl_probe(self.ssl_context)
@@ -184,7 +196,7 @@ class PGWireServer:
             logger.error("Connection error", connection_id=connection_id, error=str(e))
         finally:
             # P4: Unregister connection from cancellation registry
-            if 'protocol' in locals():
+            if "protocol" in locals():
                 self.unregister_connection(protocol)
 
             self.active_connections.discard(writer)
@@ -203,17 +215,15 @@ class PGWireServer:
             self.ssl_context = await self.setup_ssl_context()
 
             # Start TCP server
-            self.server = await asyncio.start_server(
-                self.handle_client,
-                self.host,
-                self.port
-            )
+            self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
 
             addr = self.server.sockets[0].getsockname()
-            logger.info("PGWire server started",
-                       address=f"{addr[0]}:{addr[1]}",
-                       ssl_enabled=self.ssl_context is not None,
-                       active_connections=len(self.active_connections))
+            logger.info(
+                "PGWire server started",
+                address=f"{addr[0]}:{addr[1]}",
+                ssl_enabled=self.ssl_context is not None,
+                active_connections=len(self.active_connections),
+            )
 
             # Serve forever
             async with self.server:
@@ -270,7 +280,7 @@ async def main():
         iris_namespace=iris_namespace,
         enable_ssl=enable_ssl,
         ssl_cert_path=ssl_cert_path,
-        ssl_key_path=ssl_key_path
+        ssl_key_path=ssl_key_path,
     )
 
     try:

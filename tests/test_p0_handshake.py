@@ -6,7 +6,6 @@ NO MOCKS - tests actual protocol compatibility.
 """
 
 import pytest
-import asyncio
 import structlog
 
 logger = structlog.get_logger()
@@ -43,8 +42,9 @@ class TestP0Handshake:
 
         # Verify connection is in good state
         assert psycopg_connection.info.status.name == "OK"
-        logger.info("P0 handshake successful with psycopg",
-                   status=psycopg_connection.info.status.name)
+        logger.info(
+            "P0 handshake successful with psycopg", status=psycopg_connection.info.status.name
+        )
 
     async def test_psycopg_simple_query_select_1(self, psycopg_connection):
         """
@@ -63,8 +63,7 @@ class TestP0Handshake:
             assert result is not None
             assert result[0] == 1
 
-            logger.info("P0 simple query successful with psycopg",
-                       result=result[0])
+            logger.info("P0 simple query successful with psycopg", result=result[0])
 
     async def test_psycopg_connection_info(self, psycopg_connection):
         """
@@ -84,10 +83,12 @@ class TestP0Handshake:
         # Check that we're in a good state
         assert info.status.name == "OK"
 
-        logger.info("P0 connection info validated",
-                   protocol_version=info.protocol_version,
-                   server_version=info.server_version,
-                   status=info.status.name)
+        logger.info(
+            "P0 connection info validated",
+            protocol_version=info.protocol_version,
+            server_version=info.server_version,
+            status=info.status.name,
+        )
 
     def test_psql_command_line_connection(self, psql_command):
         """
@@ -102,10 +103,11 @@ class TestP0Handshake:
         result = psql_command("\\conninfo")
 
         assert result["success"], f"psql connection failed: {result['stderr']}"
-        assert "Connected to database" in result["stdout"] or "You are connected" in result["stdout"]
+        assert (
+            "Connected to database" in result["stdout"] or "You are connected" in result["stdout"]
+        )
 
-        logger.info("P0 psql connection successful",
-                   stdout_snippet=result["stdout"][:100])
+        logger.info("P0 psql connection successful", stdout_snippet=result["stdout"][:100])
 
     def test_psql_select_1_query(self, psql_command):
         """
@@ -121,8 +123,7 @@ class TestP0Handshake:
         assert result["success"], f"psql query failed: {result['stderr']}"
         assert "1" in result["stdout"]  # Should contain the result
 
-        logger.info("P0 psql SELECT 1 successful",
-                   stdout=result["stdout"])
+        logger.info("P0 psql SELECT 1 successful", stdout=result["stdout"])
 
     async def test_multiple_concurrent_connections(self, pgwire_server, pgwire_connection_params):
         """
@@ -139,9 +140,7 @@ class TestP0Handshake:
         try:
             # Create multiple concurrent connections
             for i in range(3):
-                conn = await psycopg.AsyncConnection.connect(
-                    **pgwire_connection_params
-                )
+                conn = await psycopg.AsyncConnection.connect(**pgwire_connection_params)
                 connections.append(conn)
 
                 # Verify each connection works
@@ -150,8 +149,9 @@ class TestP0Handshake:
                     result = await cur.fetchone()
                     assert result[0] == 1
 
-            logger.info("P0 multiple concurrent connections successful",
-                       connection_count=len(connections))
+            logger.info(
+                "P0 multiple concurrent connections successful", connection_count=len(connections)
+            )
 
         finally:
             # Cleanup connections
@@ -173,9 +173,7 @@ class TestP0Handshake:
         import psycopg
 
         # Create connection
-        conn = await psycopg.AsyncConnection.connect(
-            **pgwire_connection_params
-        )
+        conn = await psycopg.AsyncConnection.connect(**pgwire_connection_params)
 
         # Verify it's working
         async with conn.cursor() as cur:
@@ -212,8 +210,7 @@ class TestP0ErrorHandling:
         assert not result["success"]
         assert "ERROR" in result["stderr"] or "ERROR" in result["stdout"]
 
-        logger.info("P0 error handling working",
-                   error_output=result["stderr"][:100])
+        logger.info("P0 error handling working", error_output=result["stderr"][:100])
 
     async def test_psycopg_unsupported_query(self, psycopg_connection):
         """
@@ -239,7 +236,7 @@ class TestP0ProtocolMessages:
 
     def test_ssl_request_constants(self):
         """Verify SSL request constants are correct"""
-        from iris_pgwire.protocol import SSL_REQUEST_CODE, PROTOCOL_VERSION
+        from iris_pgwire.protocol import PROTOCOL_VERSION, SSL_REQUEST_CODE
 
         assert SSL_REQUEST_CODE == 80877103
         assert PROTOCOL_VERSION == 0x00030000
@@ -247,12 +244,15 @@ class TestP0ProtocolMessages:
     def test_message_type_constants(self):
         """Verify message type constants"""
         from iris_pgwire.protocol import (
-            MSG_QUERY, MSG_AUTHENTICATION, MSG_READY_FOR_QUERY,
-            MSG_PARAMETER_STATUS, MSG_BACKEND_KEY_DATA
+            MSG_AUTHENTICATION,
+            MSG_BACKEND_KEY_DATA,
+            MSG_PARAMETER_STATUS,
+            MSG_QUERY,
+            MSG_READY_FOR_QUERY,
         )
 
-        assert MSG_QUERY == b'Q'
-        assert MSG_AUTHENTICATION == b'R'
-        assert MSG_READY_FOR_QUERY == b'Z'
-        assert MSG_PARAMETER_STATUS == b'S'
-        assert MSG_BACKEND_KEY_DATA == b'K'
+        assert MSG_QUERY == b"Q"
+        assert MSG_AUTHENTICATION == b"R"
+        assert MSG_READY_FOR_QUERY == b"Z"
+        assert MSG_PARAMETER_STATUS == b"S"
+        assert MSG_BACKEND_KEY_DATA == b"K"

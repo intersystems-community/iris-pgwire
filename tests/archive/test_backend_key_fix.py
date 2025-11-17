@@ -5,9 +5,9 @@ Test Backend Key Data with added debugging
 
 import asyncio
 import struct
-import tempfile
-import os
+
 from iris_pgwire.server import PGWireServer
+
 
 # Patch the protocol to add debugging
 def patch_protocol():
@@ -20,7 +20,9 @@ def patch_protocol():
 
     async def debug_send_backend_key_data(self):
         """Debugging wrapper for send_backend_key_data"""
-        print(f"🔧 DEBUG: send_backend_key_data called - PID={self.backend_pid}, Secret={self.backend_secret}")
+        print(
+            f"🔧 DEBUG: send_backend_key_data called - PID={self.backend_pid}, Secret={self.backend_secret}"
+        )
         try:
             result = await original_send_backend_key_data(self)
             print("🔧 DEBUG: send_backend_key_data completed successfully")
@@ -44,6 +46,7 @@ def patch_protocol():
     protocol.PGWireProtocol.send_backend_key_data = debug_send_backend_key_data
     protocol.PGWireProtocol.startup_sequence = debug_startup_sequence
 
+
 async def test_with_debug():
     """Test with debugging enabled"""
     print("🔍 Testing Backend Key Data with Debug Logging")
@@ -54,14 +57,14 @@ async def test_with_debug():
 
     # Start server
     server = PGWireServer(
-        host='127.0.0.1',
+        host="127.0.0.1",
         port=15475,
-        iris_host='localhost',
+        iris_host="localhost",
         iris_port=1972,
-        iris_username='_SYSTEM',
-        iris_password='SYS',
-        iris_namespace='USER',
-        enable_scram=False
+        iris_username="_SYSTEM",
+        iris_password="SYS",
+        iris_namespace="USER",
+        enable_scram=False,
     )
 
     print("🚀 Starting debug server...")
@@ -71,11 +74,11 @@ async def test_with_debug():
 
     try:
         print("📱 Connecting...")
-        reader, writer = await asyncio.open_connection('127.0.0.1', 15475)
+        reader, writer = await asyncio.open_connection("127.0.0.1", 15475)
 
         # SSL probe
         print("📤 SSL probe...")
-        ssl_request = b'\x00\x00\x00\x08\x04\xd2\x16\x2f'
+        ssl_request = b"\x00\x00\x00\x08\x04\xd2\x16\x2f"
         writer.write(ssl_request)
         await writer.drain()
 
@@ -84,13 +87,13 @@ async def test_with_debug():
 
         # StartupMessage
         print("📤 StartupMessage...")
-        protocol_version = (196608).to_bytes(4, 'big')
-        user_param = b'user\x00test_user\x00'
-        db_param = b'database\x00USER\x00'
-        terminator = b'\x00'
+        protocol_version = (196608).to_bytes(4, "big")
+        user_param = b"user\x00test_user\x00"
+        db_param = b"database\x00USER\x00"
+        terminator = b"\x00"
         params = user_param + db_param + terminator
 
-        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, 'big')
+        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, "big")
         startup_message = message_length + protocol_version + params
 
         writer.write(startup_message)
@@ -111,17 +114,17 @@ async def test_with_debug():
             if pos + 5 > len(response):
                 break
 
-            msg_type = response[pos:pos+1]
-            length = struct.unpack('!I', response[pos+1:pos+5])[0]
+            msg_type = response[pos : pos + 1]
+            length = struct.unpack("!I", response[pos + 1 : pos + 5])[0]
 
             if pos + 1 + length > len(response):
                 break
 
-            msg_data = response[pos+5:pos+1+length]
+            msg_data = response[pos + 5 : pos + 1 + length]
             print(f"   Message: {msg_type} (length {length})")
 
-            if msg_type == b'K':
-                backend_pid, backend_secret = struct.unpack('!II', msg_data[:8])
+            if msg_type == b"K":
+                backend_pid, backend_secret = struct.unpack("!II", msg_data[:8])
                 print(f"   ✅ BackendKeyData found: PID={backend_pid}")
                 found_backend_key = True
 
@@ -138,6 +141,7 @@ async def test_with_debug():
     except Exception as e:
         print(f"❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         server_task.cancel()
@@ -146,6 +150,7 @@ async def test_with_debug():
         except asyncio.CancelledError:
             pass
         print("📡 Server stopped")
+
 
 if __name__ == "__main__":
     asyncio.run(test_with_debug())

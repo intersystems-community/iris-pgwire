@@ -8,15 +8,16 @@ These tests validate the translation logic without requiring full
 server setup, focusing on the iris_constructs.py module.
 """
 
-import pytest
 import time
-from typing import Dict, Any
+
+import pytest
 import structlog
 
 # Import the IRIS construct translator
 from iris_pgwire.iris_constructs import IRISConstructTranslator
 
 logger = structlog.get_logger()
+
 
 @pytest.mark.integration
 class TestIRISSystemFunctionTranslation:
@@ -31,31 +32,32 @@ class TestIRISSystemFunctionTranslation:
         original_sql = "SELECT %SYSTEM.Version.GetNumber() AS version"
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
-        assert "%SYSTEM.Version.GetNumber()" not in translated_sql, \
-               "IRIS function should be translated"
-        assert "version()" in translated_sql, \
-               "Should translate to PostgreSQL version()"
-        assert stats['system_functions'] > 0, \
-               "Should track system function translation"
+        assert (
+            "%SYSTEM.Version.GetNumber()" not in translated_sql
+        ), "IRIS function should be translated"
+        assert "version()" in translated_sql, "Should translate to PostgreSQL version()"
+        assert stats["system_functions"] > 0, "Should track system function translation"
 
-        logger.info("System version function translated",
-                   original=original_sql,
-                   translated=translated_sql,
-                   stats=stats)
+        logger.info(
+            "System version function translated",
+            original=original_sql,
+            translated=translated_sql,
+            stats=stats,
+        )
 
     def test_system_user_translation(self):
         """Test %SYSTEM.Security.GetUser() translation"""
         original_sql = "SELECT %SYSTEM.Security.GetUser() AS current_user"
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
-        assert "%SYSTEM.Security.GetUser()" not in translated_sql, \
-               "IRIS function should be translated"
-        assert "current_user" in translated_sql, \
-               "Should translate to PostgreSQL current_user"
+        assert (
+            "%SYSTEM.Security.GetUser()" not in translated_sql
+        ), "IRIS function should be translated"
+        assert "current_user" in translated_sql, "Should translate to PostgreSQL current_user"
 
-        logger.info("System user function translated",
-                   original=original_sql,
-                   translated=translated_sql)
+        logger.info(
+            "System user function translated", original=original_sql, translated=translated_sql
+        )
 
     def test_multiple_system_functions(self):
         """Test multiple system functions in one query"""
@@ -72,9 +74,10 @@ class TestIRISSystemFunctionTranslation:
         assert "version()" in translated_sql, "Version function should be translated"
         assert "current_user" in translated_sql, "User function should be translated"
         assert "current_query()" in translated_sql, "Query function should be translated"
-        assert stats['system_functions'] >= 3, "Should track multiple translations"
+        assert stats["system_functions"] >= 3, "Should track multiple translations"
 
         logger.info("Multiple system functions translated", stats=stats)
+
 
 @pytest.mark.integration
 class TestIRISSQLExtensionTranslation:
@@ -91,11 +94,9 @@ class TestIRISSQLExtensionTranslation:
 
         assert "TOP 10" not in translated_sql, "TOP clause should be translated"
         assert "LIMIT 10" in translated_sql, "Should add LIMIT clause"
-        assert stats['sql_extensions'] > 0, "Should track SQL extension translation"
+        assert stats["sql_extensions"] > 0, "Should track SQL extension translation"
 
-        logger.info("TOP clause translated",
-                   original=original_sql,
-                   translated=translated_sql)
+        logger.info("TOP clause translated", original=original_sql, translated=translated_sql)
 
     def test_top_with_order_by(self):
         """Test TOP clause with ORDER BY handling"""
@@ -118,6 +119,7 @@ class TestIRISSQLExtensionTranslation:
 
         logger.info("FOR UPDATE NOWAIT translated", translated=translated_sql)
 
+
 @pytest.mark.integration
 class TestIRISFunctionTranslation:
     """Test IRIS-specific function translation logic"""
@@ -133,7 +135,7 @@ class TestIRISFunctionTranslation:
 
         assert "%SQLUPPER" not in translated_sql, "IRIS function should be translated"
         assert "UPPER(name)" in translated_sql, "Should translate to UPPER()"
-        assert stats['iris_functions'] > 0, "Should track function translation"
+        assert stats["iris_functions"] > 0, "Should track function translation"
 
         logger.info("SQLUPPER function translated", translated=translated_sql)
 
@@ -143,8 +145,7 @@ class TestIRISFunctionTranslation:
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
         assert "%HOROLOG" not in translated_sql, "IRIS function should be translated"
-        assert "EXTRACT(EPOCH FROM NOW())" in translated_sql, \
-               "Should translate to epoch extraction"
+        assert "EXTRACT(EPOCH FROM NOW())" in translated_sql, "Should translate to epoch extraction"
 
         logger.info("HOROLOG function translated", translated=translated_sql)
 
@@ -153,12 +154,13 @@ class TestIRISFunctionTranslation:
         original_sql = "SELECT DATEDIFF_MICROSECONDS(start_time, end_time) FROM events"
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
-        assert "DATEDIFF_MICROSECONDS" not in translated_sql, \
-               "IRIS function should be translated"
-        assert "EXTRACT(MICROSECONDS FROM" in translated_sql, \
-               "Should translate to microsecond extraction"
+        assert "DATEDIFF_MICROSECONDS" not in translated_sql, "IRIS function should be translated"
+        assert (
+            "EXTRACT(MICROSECONDS FROM" in translated_sql
+        ), "Should translate to microsecond extraction"
 
         logger.info("DATEDIFF_MICROSECONDS translated", translated=translated_sql)
+
 
 @pytest.mark.integration
 class TestIRISDataTypeTranslation:
@@ -185,7 +187,7 @@ class TestIRISDataTypeTranslation:
 
         assert "ROWVERSION" not in translated_sql, "ROWVERSION should be translated"
         assert "BYTEA" in translated_sql, "Should translate to BYTEA"
-        assert stats['data_types'] > 0, "Should track data type translation"
+        assert stats["data_types"] > 0, "Should track data type translation"
 
         logger.info("ROWVERSION type translated", translated=translated_sql)
 
@@ -209,6 +211,7 @@ class TestIRISDataTypeTranslation:
 
         logger.info("%List type translated", translated=translated_sql)
 
+
 @pytest.mark.integration
 class TestIRISJSONFunctionTranslation:
     """Test IRIS JSON function translation logic"""
@@ -231,9 +234,8 @@ class TestIRISJSONFunctionTranslation:
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
         assert "JSON_TABLE" not in translated_sql, "JSON_TABLE should be translated"
-        assert "jsonb_to_recordset" in translated_sql, \
-               "Should translate to jsonb_to_recordset"
-        assert stats['json_functions'] > 0, "Should track JSON translation"
+        assert "jsonb_to_recordset" in translated_sql, "Should translate to jsonb_to_recordset"
+        assert stats["json_functions"] > 0, "Should track JSON translation"
 
         logger.info("JSON_TABLE translated", stats=stats)
 
@@ -243,10 +245,10 @@ class TestIRISJSONFunctionTranslation:
         translated_sql, stats = self.translator.translate_sql(original_sql)
 
         assert "JSON_OBJECT" not in translated_sql, "JSON_OBJECT should be translated"
-        assert "jsonb_build_object" in translated_sql, \
-               "Should translate to jsonb_build_object"
+        assert "jsonb_build_object" in translated_sql, "Should translate to jsonb_build_object"
 
         logger.info("JSON_OBJECT translated", translated=translated_sql)
+
 
 @pytest.mark.integration
 class TestIRISConstructsMixed:
@@ -283,15 +285,18 @@ class TestIRISConstructsMixed:
         assert "jsonb_build_object" in translated_sql, "Should have jsonb_build_object"
 
         # Verify statistics tracking
-        assert stats['sql_extensions'] > 0, "Should track SQL extensions"
-        assert stats['iris_functions'] > 0, "Should track IRIS functions"
-        assert stats['system_functions'] > 0, "Should track system functions"
-        assert stats['json_functions'] > 0, "Should track JSON functions"
+        assert stats["sql_extensions"] > 0, "Should track SQL extensions"
+        assert stats["iris_functions"] > 0, "Should track IRIS functions"
+        assert stats["system_functions"] > 0, "Should track system functions"
+        assert stats["json_functions"] > 0, "Should track JSON functions"
 
-        logger.info("Complex mixed query translated",
-                   stats=stats,
-                   original_length=len(original_sql),
-                   translated_length=len(translated_sql))
+        logger.info(
+            "Complex mixed query translated",
+            stats=stats,
+            original_length=len(original_sql),
+            translated_length=len(translated_sql),
+        )
+
 
 @pytest.mark.integration
 class TestIRISConstructsPerformance:
@@ -309,12 +314,15 @@ class TestIRISConstructsPerformance:
         translated_sql, stats = self.translator.translate_sql(original_sql)
         translation_time_ms = (time.perf_counter() - start_time) * 1000
 
-        assert translation_time_ms < 5.0, \
-               f"Translation took {translation_time_ms}ms, exceeds 5ms SLA"
+        assert (
+            translation_time_ms < 5.0
+        ), f"Translation took {translation_time_ms}ms, exceeds 5ms SLA"
 
-        logger.info("Simple translation performance",
-                   time_ms=translation_time_ms,
-                   constructs_translated=sum(stats.values()))
+        logger.info(
+            "Simple translation performance",
+            time_ms=translation_time_ms,
+            constructs_translated=sum(stats.values()),
+        )
 
     def test_complex_translation_performance(self):
         """Test that complex translations meet 5ms SLA"""
@@ -340,16 +348,20 @@ class TestIRISConstructsPerformance:
         translated_sql, stats = self.translator.translate_sql(original_sql)
         translation_time_ms = (time.perf_counter() - start_time) * 1000
 
-        assert translation_time_ms < 5.0, \
-               f"Complex translation took {translation_time_ms}ms, exceeds 5ms SLA"
+        assert (
+            translation_time_ms < 5.0
+        ), f"Complex translation took {translation_time_ms}ms, exceeds 5ms SLA"
 
         total_constructs = sum(stats.values())
         assert total_constructs > 5, "Should have translated multiple constructs"
 
-        logger.info("Complex translation performance",
-                   time_ms=translation_time_ms,
-                   constructs_translated=total_constructs,
-                   stats=stats)
+        logger.info(
+            "Complex translation performance",
+            time_ms=translation_time_ms,
+            constructs_translated=total_constructs,
+            stats=stats,
+        )
+
 
 @pytest.mark.integration
 class TestIRISConstructsDetection:
@@ -367,7 +379,7 @@ class TestIRISConstructsDetection:
             "SELECT TOP 10 * FROM table",
             "SELECT %SQLUPPER(name) FROM users",
             "CREATE TABLE test (id SERIAL, version ROWVERSION)",
-            "SELECT JSON_OBJECT('key', value) FROM data"
+            "SELECT JSON_OBJECT('key', value) FROM data",
         ]
 
         for query in iris_queries:
@@ -380,7 +392,7 @@ class TestIRISConstructsDetection:
             "SELECT UPPER(name) FROM users LIMIT 10",
             "CREATE TABLE test (id SERIAL PRIMARY KEY)",
             "INSERT INTO users (name) VALUES ('test')",
-            "UPDATE users SET name = 'updated' WHERE id = 1"
+            "UPDATE users SET name = 'updated' WHERE id = 1",
         ]
 
         for query in standard_queries:
@@ -388,6 +400,7 @@ class TestIRISConstructsDetection:
             assert not needs_translation, f"Should not detect IRIS constructs in: {query}"
 
         logger.info("IRIS construct detection working correctly")
+
 
 @pytest.mark.integration
 class TestIRISConstructsErrorHandling:

@@ -16,20 +16,14 @@ Constitutional Requirement (Principle II): Test-First Development
 - Verifies cleanup and rollback behavior
 """
 
-import pytest
-import asyncio
-import io
-from typing import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from iris_pgwire.copy_handler import CopyHandler
-from iris_pgwire.csv_processor import CSVProcessor, CSVParsingError
+import pytest
+
 from iris_pgwire.bulk_executor import BulkExecutor
-from iris_pgwire.sql_translator.copy_parser import (
-    CopyCommand,
-    CSVOptions,
-    CopyDirection
-)
+from iris_pgwire.copy_handler import CopyHandler
+from iris_pgwire.csv_processor import CSVParsingError, CSVProcessor
+from iris_pgwire.sql_translator.copy_parser import CopyCommand, CopyDirection, CSVOptions
 
 pytestmark = [pytest.mark.integration, pytest.mark.copy]
 
@@ -64,17 +58,17 @@ class TestCopyNetworkErrors:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Generate CSV stream that would send 100 rows
         async def csv_stream():
             yield b"PatientID,FirstName,LastName\n"
             for i in range(100):
-                yield f"{i},First{i},Last{i}\n".encode('utf-8')
+                yield f"{i},First{i},Last{i}\n".encode()
 
         # Should raise ConnectionError
         with pytest.raises(ConnectionError) as exc_info:
@@ -100,10 +94,10 @@ class TestCopyNetworkErrors:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
-            column_list=['PatientID', 'FirstName', 'LastName'],
+            table_name="Patients",
+            column_list=["PatientID", "FirstName", "LastName"],
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Partial CSV stream - header + 1 complete row + 1 incomplete row
@@ -139,17 +133,17 @@ class TestCopyCSVParsingErrors:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
-            column_list=['PatientID', 'FirstName', 'LastName'],
+            table_name="Patients",
+            column_list=["PatientID", "FirstName", "LastName"],
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Malformed CSV - row 2 has only 2 columns instead of 3
         async def malformed_csv_stream():
             yield b"PatientID,FirstName,LastName\n"
             yield b"1,John,Smith\n"  # Valid row
-            yield b"2,Mary\n"         # Invalid - missing LastName
+            yield b"2,Mary\n"  # Invalid - missing LastName
 
         with pytest.raises(CSVParsingError) as exc_info:
             await handler.handle_copy_from_stdin(command, malformed_csv_stream())
@@ -168,10 +162,10 @@ class TestCopyCSVParsingErrors:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Malformed CSV - unclosed quote
@@ -195,10 +189,10 @@ class TestCopyCSVParsingErrors:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Invalid UTF-8 bytes
@@ -211,7 +205,7 @@ class TestCopyCSVParsingErrors:
             await handler.handle_copy_from_stdin(command, invalid_utf8_stream())
 
         error_msg = str(exc_info.value).lower()
-        assert 'utf-8' in error_msg or 'decode' in error_msg
+        assert "utf-8" in error_msg or "decode" in error_msg
 
 
 @pytest.mark.asyncio
@@ -238,16 +232,16 @@ class TestCopyTransactionIntegration:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         async def csv_stream():
             yield b"PatientID,FirstName,LastName\n"
             for i in range(100):
-                yield f"{i},First{i},Last{i}\n".encode('utf-8')
+                yield f"{i},First{i},Last{i}\n".encode()
 
         # Should propagate error for transaction rollback
         with pytest.raises(ValueError) as exc_info:
@@ -262,8 +256,8 @@ class TestCopyTransactionIntegration:
 
         # Mock stream_query_results to raise database error
         async def mock_stream_query_results(query):
-            yield (1, 'John')
-            yield (2, 'Mary')
+            yield (1, "John")
+            yield (2, "Mary")
             # Simulate database connection lost
             raise ConnectionError("Database connection lost")
 
@@ -272,10 +266,10 @@ class TestCopyTransactionIntegration:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
-            column_list=['PatientID', 'FirstName'],
+            table_name="Patients",
+            column_list=["PatientID", "FirstName"],
             direction=CopyDirection.TO_STDOUT,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Should raise error during streaming
@@ -311,17 +305,17 @@ class TestCopyMemoryManagement:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Generate large CSV (10,000 rows)
         async def large_csv_stream():
             yield b"ID,Name,Value\n"
             for i in range(10000):
-                yield f"{i},Name{i},Value{i}\n".encode('utf-8')
+                yield f"{i},Name{i},Value{i}\n".encode()
 
         row_count = await handler.handle_copy_from_stdin(command, large_csv_stream())
 
@@ -337,17 +331,17 @@ class TestCopyMemoryManagement:
         # Generate large result set in chunks
         async def mock_stream_query_results(query):
             for i in range(10000):
-                yield (i, f'Name{i}', f'Value{i}')
+                yield (i, f"Name{i}", f"Value{i}")
 
         bulk_executor.stream_query_results = mock_stream_query_results
 
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='LargeTable',
-            column_list=['ID', 'Name', 'Value'],
+            table_name="LargeTable",
+            column_list=["ID", "Name", "Value"],
             direction=CopyDirection.TO_STDOUT,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Stream should produce multiple chunks
@@ -386,16 +380,16 @@ class TestCopyCleanupAndRecovery:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         async def csv_stream():
             yield b"ID,Name\n"
             for i in range(10):
-                yield f"{i},Name{i}\n".encode('utf-8')
+                yield f"{i},Name{i}\n".encode()
 
         with pytest.raises(RuntimeError):
             await handler.handle_copy_from_stdin(command, csv_stream())
@@ -414,10 +408,10 @@ class TestCopyCleanupAndRecovery:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # Only header, no data rows
@@ -443,17 +437,17 @@ class TestCopyCleanupAndRecovery:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
-            column_list=['ID', 'Name'],
+            table_name="Patients",
+            column_list=["ID", "Name"],
             direction=CopyDirection.TO_STDOUT,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         chunks = [chunk async for chunk in handler.handle_copy_to_stdout(command)]
 
         # Should have at least header
-        csv_output = b''.join(chunks).decode('utf-8')
-        assert 'ID,Name' in csv_output
+        csv_output = b"".join(chunks).decode("utf-8")
+        assert "ID,Name" in csv_output
 
 
 @pytest.mark.asyncio
@@ -476,10 +470,10 @@ class TestCopyEdgeCases:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         async def single_row_csv():
@@ -507,19 +501,19 @@ class TestCopyEdgeCases:
         handler = CopyHandler(processor, bulk_executor)
 
         command = CopyCommand(
-            table_name='Patients',
+            table_name="Patients",
             column_list=None,
             direction=CopyDirection.FROM_STDIN,
-            csv_options=CSVOptions(format='CSV', header=True)
+            csv_options=CSVOptions(format="CSV", header=True),
         )
 
         # CSV with special characters
         async def special_chars_csv():
             yield b"ID,Name,City\n"
-            yield '"1","O\'Brien","São Paulo"\n'.encode('utf-8')
+            yield '"1","O\'Brien","São Paulo"\n'.encode()
 
         row_count = await handler.handle_copy_from_stdin(command, special_chars_csv())
 
         assert row_count == 1
         # Verify special characters preserved
-        assert 'O\'Brien' in str(captured_rows) or "O'Brien" in str(captured_rows)
+        assert "O'Brien" in str(captured_rows) or "O'Brien" in str(captured_rows)

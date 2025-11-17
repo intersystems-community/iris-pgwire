@@ -5,13 +5,14 @@ CAUTION: This is experimental! Testing the new LOAD DATA approach
 before switching from individual INSERTs.
 """
 
-import pytest
 import time
 from pathlib import Path
 
+import pytest
+
 # Test data paths
 REPO_ROOT = Path(__file__).parent.parent.parent
-PATIENTS_CSV = REPO_ROOT / 'examples' / 'superset-iris-healthcare' / 'data' / 'patients-data.csv'
+PATIENTS_CSV = REPO_ROOT / "examples" / "superset-iris-healthcare" / "data" / "patients-data.csv"
 
 
 def test_load_data_available_in_iris():
@@ -29,9 +30,11 @@ def test_load_data_available_in_iris():
         # Try to execute a simple LOAD DATA command to verify it's available
         # This should fail gracefully if LOAD DATA is not available
         try:
-            cursor.execute("SELECT * FROM %SQL_Diag.Result WHERE statement LIKE '%LOAD DATA%' LIMIT 1")
+            cursor.execute(
+                "SELECT * FROM %SQL_Diag.Result WHERE statement LIKE '%LOAD DATA%' LIMIT 1"
+            )
             result = cursor.fetchall()
-            print(f"\n✅ LOAD DATA diagnostic table accessible")
+            print("\n✅ LOAD DATA diagnostic table accessible")
             print(f"   Result count: {len(result)}")
         except Exception as e:
             pytest.skip(f"LOAD DATA not available or not supported: {e}")
@@ -47,16 +50,16 @@ def test_load_data_vs_individual_inserts_performance():
     - LOAD DATA feature enabled
     - Write access to IRIS temp directory
     """
+
     from iris_devtester import IRISContainer
-    import tempfile
-    import shutil
 
     with IRISContainer.community() as iris:
         conn = iris.get_connection()
         cursor = conn.cursor()
 
         # Create test table
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE LoadDataTest (
                 PatientID INT PRIMARY KEY,
                 FirstName VARCHAR(50),
@@ -67,7 +70,8 @@ def test_load_data_vs_individual_inserts_performance():
                 AdmissionDate DATE,
                 DischargeDate DATE
             )
-        """)
+        """
+        )
         conn.commit()
 
         # Write CSV file inside IRIS container using Docker container exec
@@ -83,7 +87,7 @@ def test_load_data_vs_individual_inserts_performance():
 
         # Write file inside container using container.exec_run
         # Use echo with heredoc to write multiline content
-        import shlex
+
         write_cmd = f"cat > {container_path} << 'CSVEOF'\n{csv_content}\nCSVEOF"
 
         exit_code, output = container.exec_run(["/bin/bash", "-c", write_cmd])
@@ -120,7 +124,7 @@ def test_load_data_vs_individual_inserts_performance():
             USING {{"from": {{"file": {{"header": true, "columnseparator": ","}}}}}}
             """
 
-            print(f"\n🚀 Testing LOAD DATA...")
+            print("\n🚀 Testing LOAD DATA...")
             print(f"   SQL: {load_sql[:100]}...")
 
             try:
@@ -132,7 +136,7 @@ def test_load_data_vs_individual_inserts_performance():
                 cursor.execute("SELECT COUNT(*) FROM LoadDataTest")
                 row_count = cursor.fetchone()[0]
 
-                print(f"\n✅ LOAD DATA SUCCESS!")
+                print("\n✅ LOAD DATA SUCCESS!")
                 print(f"   Rows loaded: {row_count}")
                 print(f"   Time: {load_data_time:.3f}s")
                 print(f"   Throughput: {row_count / load_data_time:.0f} rows/sec")
@@ -140,7 +144,9 @@ def test_load_data_vs_individual_inserts_performance():
                 # Check if we hit the performance target
                 throughput = row_count / load_data_time
                 if throughput > 10000:
-                    print(f"\n🎉 FR-005 REQUIREMENT MET: {throughput:.0f} rows/sec > 10,000 target!")
+                    print(
+                        f"\n🎉 FR-005 REQUIREMENT MET: {throughput:.0f} rows/sec > 10,000 target!"
+                    )
                 else:
                     print(f"\n⚠️  Below target: {throughput:.0f} rows/sec < 10,000 requirement")
 
@@ -151,6 +157,7 @@ def test_load_data_vs_individual_inserts_performance():
         finally:
             # Cleanup
             import os
+
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
             cursor.execute("DROP TABLE LoadDataTest")

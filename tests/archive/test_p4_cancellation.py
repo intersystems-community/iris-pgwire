@@ -14,16 +14,17 @@ P4 Features Tested:
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
-import signal
+import socket
 import struct
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -41,18 +42,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for cancellation testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False  # Use trust auth for testing
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,  # Use trust auth for testing
         )
 
         print(f"🚀 Starting server for P4 testing on 127.0.0.1:{port}...")
@@ -70,6 +73,7 @@ def run_server(port, ready_event):
             pass
 
     asyncio.run(start_server())
+
 
 def test_backend_key_data():
     """Test that backend key data is properly exchanged"""
@@ -91,7 +95,7 @@ def test_backend_key_data():
         print("❌ Server failed to start")
         return False
 
-    if not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server port not available")
         return False
 
@@ -103,10 +107,10 @@ def test_backend_key_data():
         print("📱 Testing BackendKeyData exchange...")
 
         # Connect and complete handshake
-        reader, writer = await_sync(asyncio.open_connection('127.0.0.1', PORT))
+        reader, writer = await_sync(asyncio.open_connection("127.0.0.1", PORT))
 
         # SSL probe
-        ssl_request = b'\x00\x00\x00\x08\x04\xd2\x16\x2f'
+        ssl_request = b"\x00\x00\x00\x08\x04\xd2\x16\x2f"
         writer.write(ssl_request)
         await_sync(writer.drain())
 
@@ -114,13 +118,13 @@ def test_backend_key_data():
         print(f"   SSL response: {ssl_response}")
 
         # StartupMessage
-        protocol_version = (196608).to_bytes(4, 'big')
-        user_param = b'user\x00test_user\x00'
-        db_param = b'database\x00USER\x00'
-        terminator = b'\x00'
+        protocol_version = (196608).to_bytes(4, "big")
+        user_param = b"user\x00test_user\x00"
+        db_param = b"database\x00USER\x00"
+        terminator = b"\x00"
         params = user_param + db_param + terminator
 
-        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, 'big')
+        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, "big")
         startup_message = message_length + protocol_version + params
 
         writer.write(startup_message)
@@ -141,13 +145,13 @@ def test_backend_key_data():
             if pos + 5 > len(auth_response):
                 break
 
-            msg_type = auth_response[pos:pos+1]
-            length = struct.unpack('!I', auth_response[pos+1:pos+5])[0]
-            msg_data = auth_response[pos+5:pos+1+length]
+            msg_type = auth_response[pos : pos + 1]
+            length = struct.unpack("!I", auth_response[pos + 1 : pos + 5])[0]
+            msg_data = auth_response[pos + 5 : pos + 1 + length]
 
-            if msg_type == b'K':  # BackendKeyData
+            if msg_type == b"K":  # BackendKeyData
                 backend_key_found = True
-                backend_pid, backend_secret = struct.unpack('!II', msg_data[:8])
+                backend_pid, backend_secret = struct.unpack("!II", msg_data[:8])
                 print(f"   ✅ BackendKeyData found: PID={backend_pid}, Secret=***")
                 break
 
@@ -166,8 +170,10 @@ def test_backend_key_data():
     except Exception as e:
         print(f"❌ Backend Key Data test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False, None, None
+
 
 def await_sync(awaitable):
     """Helper to run async code in sync context"""
@@ -176,6 +182,7 @@ def await_sync(awaitable):
         return loop.run_until_complete(awaitable)
     finally:
         loop.close()
+
 
 def test_cancel_request():
     """Test cancel request protocol"""
@@ -191,7 +198,7 @@ def test_cancel_request():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -202,20 +209,20 @@ def test_cancel_request():
         # First, get backend key data from a connection
         print("📱 Step 1: Getting backend key data...")
 
-        reader, writer = await_sync(asyncio.open_connection('127.0.0.1', PORT))
+        reader, writer = await_sync(asyncio.open_connection("127.0.0.1", PORT))
 
         # Complete handshake
-        ssl_request = b'\x00\x00\x00\x08\x04\xd2\x16\x2f'
+        ssl_request = b"\x00\x00\x00\x08\x04\xd2\x16\x2f"
         writer.write(ssl_request)
         await_sync(writer.drain())
         await_sync(reader.read(1))
 
-        protocol_version = (196608).to_bytes(4, 'big')
-        user_param = b'user\x00test_user\x00'
-        db_param = b'database\x00USER\x00'
-        terminator = b'\x00'
+        protocol_version = (196608).to_bytes(4, "big")
+        user_param = b"user\x00test_user\x00"
+        db_param = b"database\x00USER\x00"
+        terminator = b"\x00"
         params = user_param + db_param + terminator
-        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, 'big')
+        message_length = (4 + len(protocol_version) + len(params)).to_bytes(4, "big")
         startup_message = message_length + protocol_version + params
 
         writer.write(startup_message)
@@ -230,12 +237,12 @@ def test_cancel_request():
         while pos < len(auth_response):
             if pos + 5 > len(auth_response):
                 break
-            msg_type = auth_response[pos:pos+1]
-            length = struct.unpack('!I', auth_response[pos+1:pos+5])[0]
-            msg_data = auth_response[pos+5:pos+1+length]
+            msg_type = auth_response[pos : pos + 1]
+            length = struct.unpack("!I", auth_response[pos + 1 : pos + 5])[0]
+            msg_data = auth_response[pos + 5 : pos + 1 + length]
 
-            if msg_type == b'K':
-                backend_pid, backend_secret = struct.unpack('!II', msg_data[:8])
+            if msg_type == b"K":
+                backend_pid, backend_secret = struct.unpack("!II", msg_data[:8])
                 print(f"   Got BackendKeyData: PID={backend_pid}")
                 break
 
@@ -249,11 +256,13 @@ def test_cancel_request():
         print("📱 Step 2: Sending cancel request...")
 
         # Create new connection for cancel request
-        cancel_reader, cancel_writer = await_sync(asyncio.open_connection('127.0.0.1', PORT))
+        cancel_reader, cancel_writer = await_sync(asyncio.open_connection("127.0.0.1", PORT))
 
         # Send cancel request
         cancel_request_code = 80877102  # PostgreSQL cancel request code
-        cancel_request = struct.pack('!III', 16, cancel_request_code, backend_pid) + struct.pack('!I', backend_secret)
+        cancel_request = struct.pack("!III", 16, cancel_request_code, backend_pid) + struct.pack(
+            "!I", backend_secret
+        )
 
         cancel_writer.write(cancel_request)
         await_sync(cancel_writer.drain())
@@ -274,8 +283,10 @@ def test_cancel_request():
     except Exception as e:
         print(f"❌ Cancel Request test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 def test_connection_timeout():
     """Test connection timeout handling"""
@@ -291,7 +302,7 @@ def test_connection_timeout():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -307,11 +318,11 @@ def test_connection_timeout():
         start_time = time.time()
         try:
             conn = psycopg2.connect(
-                host='127.0.0.1',
+                host="127.0.0.1",
                 port=PORT,
-                database='USER',
-                user='test_user',
-                connect_timeout=1  # Very short timeout
+                database="USER",
+                user="test_user",
+                connect_timeout=1,  # Very short timeout
             )
 
             # If connection succeeds, test query timeout
@@ -349,6 +360,7 @@ def test_connection_timeout():
         print(f"❌ Connection timeout test failed: {e}")
         return False
 
+
 def test_graceful_shutdown():
     """Test graceful connection shutdown"""
 
@@ -363,7 +375,7 @@ def test_graceful_shutdown():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -378,12 +390,13 @@ def test_graceful_shutdown():
         for i in range(3):
             try:
                 import psycopg2
+
                 conn = psycopg2.connect(
-                    host='127.0.0.1',
+                    host="127.0.0.1",
                     port=PORT,
-                    database='USER',
-                    user=f'test_user_{i}',
-                    connect_timeout=5
+                    database="USER",
+                    user=f"test_user_{i}",
+                    connect_timeout=5,
                 )
                 connections.append(conn)
                 print(f"   Connection {i+1} established")
@@ -409,6 +422,7 @@ def test_graceful_shutdown():
     except Exception as e:
         print(f"❌ Graceful shutdown test failed: {e}")
         return False
+
 
 def main():
     """Run comprehensive P4 tests"""
@@ -443,11 +457,11 @@ def main():
         "Backend Key Data Exchange",
         "Cancel Request Protocol",
         "Connection Timeout Handling",
-        "Graceful Connection Shutdown"
+        "Graceful Connection Shutdown",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -466,6 +480,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} P4 tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

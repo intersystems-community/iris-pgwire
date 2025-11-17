@@ -7,14 +7,16 @@ in both query results and COPY operations.
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -32,18 +34,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for back-pressure testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,
         )
 
         print(f"🚀 Starting server for back-pressure testing on 127.0.0.1:{port}...")
@@ -62,6 +66,7 @@ def run_server(port, ready_event):
 
     asyncio.run(start_server())
 
+
 def test_query_result_backpressure():
     """Test back-pressure in large query results"""
     PORT = 15700
@@ -75,7 +80,7 @@ def test_query_result_backpressure():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -88,11 +93,7 @@ def test_query_result_backpressure():
         print("📱 Testing query result back-pressure...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -130,6 +131,7 @@ def test_query_result_backpressure():
         print(f"❌ Query result back-pressure test failed: {e}")
         return False
 
+
 def test_copy_backpressure():
     """Test back-pressure in COPY operations"""
     PORT = 15701
@@ -143,7 +145,7 @@ def test_copy_backpressure():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -156,11 +158,7 @@ def test_copy_backpressure():
         print("📱 Testing COPY back-pressure...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='bulk_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="bulk_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -175,14 +173,14 @@ def test_copy_backpressure():
             for i in range(100):  # Simulate 100 rows
                 bulk_data.append(f"{i}\t[{i}.0,{i+1}.0,{i+2}.0]")
 
-            bulk_data_str = '\n'.join(bulk_data)
+            bulk_data_str = "\n".join(bulk_data)
 
             # This should trigger COPY FROM STDIN protocol with back-pressure
             # The server should handle buffer management properly
             try:
                 cur.copy_expert(
                     "COPY test_vectors FROM STDIN WITH (FORMAT CSV, DELIMITER E'\\t')",
-                    file=None  # This will trigger protocol engagement
+                    file=None,  # This will trigger protocol engagement
                 )
             except Exception as copy_e:
                 if "COPY" in str(copy_e) or "file" in str(copy_e):
@@ -207,6 +205,7 @@ def test_copy_backpressure():
         print(f"❌ COPY back-pressure test failed: {e}")
         return False
 
+
 def test_backpressure_configuration():
     """Test back-pressure configuration and limits"""
     print("\n🧪 Back-pressure Test 3: Configuration Verification")
@@ -218,15 +217,15 @@ def test_backpressure_configuration():
 
         # These values should be configured in the protocol
         backpressure_config = {
-            'result_batch_size': 1000,      # Rows per batch
-            'max_pending_bytes': 1048576,   # 1MB buffer limit
-            'copy_max_buffer_size': 10485760,  # 10MB COPY buffer
-            'copy_batch_size': 1000         # COPY batch size
+            "result_batch_size": 1000,  # Rows per batch
+            "max_pending_bytes": 1048576,  # 1MB buffer limit
+            "copy_max_buffer_size": 10485760,  # 10MB COPY buffer
+            "copy_batch_size": 1000,  # COPY batch size
         }
 
         print("   Back-pressure configuration:")
         for setting, value in backpressure_config.items():
-            if 'bytes' in setting or 'buffer_size' in setting:
+            if "bytes" in setting or "buffer_size" in setting:
                 mb_value = value / (1024 * 1024)
                 print(f"   ✅ {setting}: {value:,} bytes ({mb_value:.1f}MB)")
             else:
@@ -258,6 +257,7 @@ def test_backpressure_configuration():
         print(f"❌ Back-pressure configuration test failed: {e}")
         return False
 
+
 def main():
     """Run comprehensive back-pressure verification tests"""
     print("🔄 BACK-PRESSURE VERIFICATION TEST SUITE")
@@ -286,11 +286,11 @@ def main():
     test_names = [
         "Query Result Back-pressure",
         "COPY Operation Back-pressure",
-        "Back-pressure Configuration"
+        "Back-pressure Configuration",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -309,6 +309,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} back-pressure tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

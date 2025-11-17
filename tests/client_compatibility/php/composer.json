@@ -1,0 +1,16 @@
+{
+    "name": "iris-pgwire/php-compatibility-tests",
+    "description": "PHP PDO_PGSQL compatibility tests for IRIS PGWire",
+    "type": "project",
+    "require": {
+        "php": ">=8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "IrisPGWire\\Tests\\": "tests/"
+        }
+    }
+}

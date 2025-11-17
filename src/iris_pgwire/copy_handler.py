@@ -15,14 +15,13 @@ Constitutional Requirements:
 - IRIS Integration (Principle IV): Use asyncio.to_thread() for IRIS operations
 """
 
-import struct
-import asyncio
-from typing import AsyncIterator, Optional
 import logging
+import struct
+from collections.abc import AsyncIterator
 
-from .sql_translator.copy_parser import CopyCommand, CopyDirection
-from .csv_processor import CSVProcessor
 from .bulk_executor import BulkExecutor
+from .csv_processor import CSVProcessor
+from .sql_translator.copy_parser import CopyCommand
 
 logger = logging.getLogger(__name__)
 
@@ -67,16 +66,16 @@ class CopyHandler:
         """
         # Build message payload
         format_code = 0  # 0 = text/CSV format
-        payload = struct.pack('!b', format_code)  # Int8: format
-        payload += struct.pack('!H', column_count)  # Int16: column count
+        payload = struct.pack("!b", format_code)  # Int8: format
+        payload += struct.pack("!H", column_count)  # Int16: column count
         # Format codes for each column (all 0 = text)
         for _ in range(column_count):
-            payload += struct.pack('!H', 0)  # Int16: format code
+            payload += struct.pack("!H", 0)  # Int16: format code
 
         # Build full message
-        message_type = b'G'
+        message_type = b"G"
         length = len(payload) + 4  # Include length field itself
-        message = message_type + struct.pack('!I', length) + payload
+        message = message_type + struct.pack("!I", length) + payload
 
         logger.debug(f"Built CopyInResponse: {len(message)} bytes, {column_count} columns")
         return message
@@ -95,16 +94,16 @@ class CopyHandler:
         """
         # Build message payload (same format as CopyInResponse)
         format_code = 0  # 0 = text/CSV format
-        payload = struct.pack('!b', format_code)  # Int8: format
-        payload += struct.pack('!H', column_count)  # Int16: column count
+        payload = struct.pack("!b", format_code)  # Int8: format
+        payload += struct.pack("!H", column_count)  # Int16: column count
         # Format codes for each column (all 0 = text)
         for _ in range(column_count):
-            payload += struct.pack('!H', 0)  # Int16: format code
+            payload += struct.pack("!H", 0)  # Int16: format code
 
         # Build full message
-        message_type = b'H'
+        message_type = b"H"
         length = len(payload) + 4  # Include length field itself
-        message = message_type + struct.pack('!I', length) + payload
+        message = message_type + struct.pack("!I", length) + payload
 
         logger.debug(f"Built CopyOutResponse: {len(message)} bytes, {column_count} columns")
         return message
@@ -124,9 +123,9 @@ class CopyHandler:
         Returns:
             Encoded CopyData message
         """
-        message_type = b'd'
+        message_type = b"d"
         length = len(csv_data) + 4  # Include length field itself
-        message = message_type + struct.pack('!I', length) + csv_data
+        message = message_type + struct.pack("!I", length) + csv_data
 
         return message
 
@@ -141,17 +140,15 @@ class CopyHandler:
         Returns:
             Encoded CopyDone message
         """
-        message_type = b'c'
+        message_type = b"c"
         length = 4
-        message = message_type + struct.pack('!I', length)
+        message = message_type + struct.pack("!I", length)
 
         logger.debug("Built CopyDone message")
         return message
 
     async def handle_copy_from_stdin_load_data(
-        self,
-        command: CopyCommand,
-        csv_stream: AsyncIterator[bytes]
+        self, command: CopyCommand, csv_stream: AsyncIterator[bytes]
     ) -> int:
         """
         Handle COPY FROM STDIN using IRIS LOAD DATA for high performance.
@@ -177,10 +174,12 @@ class CopyHandler:
             RuntimeError: LOAD DATA not available or failed
             CSVParsingError: Malformed CSV data
         """
-        import tempfile
         import os
+        import tempfile
 
-        logger.info(f"COPY FROM STDIN (LOAD DATA): table={command.table_name}, columns={command.column_list}")
+        logger.info(
+            f"COPY FROM STDIN (LOAD DATA): table={command.table_name}, columns={command.column_list}"
+        )
 
         temp_path = None
         iris_executor = self.bulk_executor.iris_executor
@@ -188,14 +187,16 @@ class CopyHandler:
         try:
             # BEGIN transaction for atomic COPY operation
             begin_result = await iris_executor.execute_query("START TRANSACTION", [])
-            if not begin_result.get('success', False):
-                raise RuntimeError(f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}")
+            if not begin_result.get("success", False):
+                raise RuntimeError(
+                    f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}"
+                )
 
             logger.debug("Transaction started for COPY FROM STDIN (LOAD DATA)")
 
             # PHASE 1: Write CSV stream to temporary file
             logger.info("Phase 1: Writing CSV stream to temporary file...")
-            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.csv') as temp_file:
+            with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=".csv") as temp_file:
                 temp_path = temp_file.name
                 bytes_written = 0
                 chunk_count = 0
@@ -219,7 +220,7 @@ class CopyHandler:
 
             # Add column list if specified
             if command.column_list:
-                columns_str = ', '.join(command.column_list)
+                columns_str = ", ".join(command.column_list)
                 load_sql += f" ({columns_str})"
 
             # Add USING clause for CSV options
@@ -227,7 +228,7 @@ class CopyHandler:
                 "from": {
                     "file": {
                         "header": command.csv_options.header,
-                        "columnseparator": command.csv_options.delimiter
+                        "columnseparator": command.csv_options.delimiter,
                     }
                 }
             }
@@ -237,6 +238,7 @@ class CopyHandler:
                 using_options["charset"] = command.csv_options.encoding
 
             import json
+
             load_sql += f" USING {json.dumps(using_options)}"
 
             logger.debug(f"Executing LOAD DATA: {load_sql[:200]}...")
@@ -244,21 +246,25 @@ class CopyHandler:
             # Execute LOAD DATA command
             result = await iris_executor.execute_query(load_sql, [])
 
-            if not result.get('success', False):
-                error_msg = result.get('error', 'Unknown LOAD DATA error')
+            if not result.get("success", False):
+                error_msg = result.get("error", "Unknown LOAD DATA error")
                 logger.error(f"LOAD DATA failed: {error_msg}")
                 raise RuntimeError(f"LOAD DATA failed: {error_msg}")
 
             # Get row count - IRIS LOAD DATA sets %ROWCOUNT
-            row_count = result.get('rows_affected', 0)
+            row_count = result.get("rows_affected", 0)
             logger.info(f"LOAD DATA complete: {row_count} rows loaded")
 
             # COMMIT transaction on success
             commit_result = await iris_executor.execute_query("COMMIT", [])
-            if not commit_result.get('success', False):
-                raise RuntimeError(f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}")
+            if not commit_result.get("success", False):
+                raise RuntimeError(
+                    f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}"
+                )
 
-            logger.info(f"COPY FROM STDIN (LOAD DATA) complete: {row_count} rows inserted (transaction committed)")
+            logger.info(
+                f"COPY FROM STDIN (LOAD DATA) complete: {row_count} rows inserted (transaction committed)"
+            )
             return row_count
 
         except Exception as e:
@@ -266,8 +272,10 @@ class CopyHandler:
             logger.error(f"COPY FROM STDIN (LOAD DATA) failed: {e}")
             try:
                 rollback_result = await iris_executor.execute_query("ROLLBACK", [])
-                if not rollback_result.get('success', False):
-                    logger.error(f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}")
+                if not rollback_result.get("success", False):
+                    logger.error(
+                        f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}"
+                    )
             except Exception as rollback_error:
                 logger.error(f"Exception during rollback: {rollback_error}")
 
@@ -281,12 +289,12 @@ class CopyHandler:
                     os.unlink(temp_path)
                     logger.debug(f"Cleaned up temporary file: {temp_path}")
                 except Exception as cleanup_error:
-                    logger.warning(f"Failed to clean up temporary file {temp_path}: {cleanup_error}")
+                    logger.warning(
+                        f"Failed to clean up temporary file {temp_path}: {cleanup_error}"
+                    )
 
     async def handle_copy_from_stdin(
-        self,
-        command: CopyCommand,
-        csv_stream: AsyncIterator[bytes]
+        self, command: CopyCommand, csv_stream: AsyncIterator[bytes]
     ) -> int:
         """
         Handle COPY FROM STDIN operation with transactional semantics.
@@ -317,17 +325,16 @@ class CopyHandler:
         # BEGIN transaction for atomic COPY operation
         iris_executor = self.bulk_executor.iris_executor
         begin_result = await iris_executor.execute_query("START TRANSACTION", [])
-        if not begin_result.get('success', False):
-            raise RuntimeError(f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}")
+        if not begin_result.get("success", False):
+            raise RuntimeError(
+                f"Failed to begin transaction: {begin_result.get('error', 'Unknown error')}"
+            )
 
         logger.debug("Transaction started for COPY FROM STDIN")
 
         try:
             # Parse CSV data stream
-            rows_iterator = self.csv_processor.parse_csv_rows(
-                csv_stream,
-                command.csv_options
-            )
+            rows_iterator = self.csv_processor.parse_csv_rows(csv_stream, command.csv_options)
 
             # Execute bulk insert
             # Note: Using individual INSERT statements per row (IRIS doesn't support multi-row INSERT)
@@ -336,15 +343,19 @@ class CopyHandler:
                 table_name=command.table_name,
                 column_names=command.column_list,
                 rows=rows_iterator,
-                batch_size=100  # Process 100 rows at a time
+                batch_size=100,  # Process 100 rows at a time
             )
 
             # COMMIT transaction on success
             commit_result = await iris_executor.execute_query("COMMIT", [])
-            if not commit_result.get('success', False):
-                raise RuntimeError(f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}")
+            if not commit_result.get("success", False):
+                raise RuntimeError(
+                    f"Failed to commit transaction: {commit_result.get('error', 'Unknown error')}"
+                )
 
-            logger.info(f"COPY FROM STDIN complete: {row_count} rows inserted (transaction committed)")
+            logger.info(
+                f"COPY FROM STDIN complete: {row_count} rows inserted (transaction committed)"
+            )
             return row_count
 
         except Exception as e:
@@ -352,18 +363,17 @@ class CopyHandler:
             logger.error(f"COPY FROM STDIN failed, rolling back transaction: {e}")
             try:
                 rollback_result = await iris_executor.execute_query("ROLLBACK", [])
-                if not rollback_result.get('success', False):
-                    logger.error(f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}")
+                if not rollback_result.get("success", False):
+                    logger.error(
+                        f"Failed to rollback transaction: {rollback_result.get('error', 'Unknown error')}"
+                    )
             except Exception as rollback_error:
                 logger.error(f"Exception during rollback: {rollback_error}")
 
             # Re-raise original error
             raise
 
-    async def handle_copy_to_stdout(
-        self,
-        command: CopyCommand
-    ) -> AsyncIterator[bytes]:
+    async def handle_copy_to_stdout(self, command: CopyCommand) -> AsyncIterator[bytes]:
         """
         Handle COPY TO STDOUT operation.
 
@@ -401,15 +411,13 @@ class CopyHandler:
 
         # Generate CSV data
         csv_stream = self.csv_processor.generate_csv_rows(
-            result_rows,
-            column_names or [],  # TODO: Get from query metadata
-            command.csv_options
+            result_rows, column_names or [], command.csv_options  # TODO: Get from query metadata
         )
 
         # Stream CSV data as CopyData messages
         row_count = 0
         async for csv_chunk in csv_stream:
             yield csv_chunk
-            row_count += csv_chunk.count(b'\n')  # Approximate row count
+            row_count += csv_chunk.count(b"\n")  # Approximate row count
 
         logger.info(f"COPY TO STDOUT complete: ~{row_count} rows exported")

@@ -10,6 +10,7 @@ Tests column name validation against IRIS restrictions:
 """
 
 import pytest
+
 from iris_pgwire.column_validator import ColumnNameValidator
 
 

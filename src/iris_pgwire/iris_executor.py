@@ -6,16 +6,19 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 """
 
 import asyncio
-import os
 import concurrent.futures
 import threading
 import time
-from typing import Dict, Any, List, Optional, Union
+from typing import Any
+
 import structlog
 
-from .sql_translator.performance_monitor import get_monitor, MetricType, PerformanceTracker
-from .sql_translator import SQLTranslator  # Feature 021: PostgreSQL→IRIS normalization
-from .sql_translator import TransactionTranslator  # Feature 022: PostgreSQL transaction verb translation
+from .sql_translator import (
+    SQLTranslator,  # Feature 021: PostgreSQL→IRIS normalization
+    TransactionTranslator,
+)  # Feature 022: PostgreSQL transaction verb translation
+from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
+from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 
 logger = structlog.get_logger()
 
@@ -29,7 +32,7 @@ class IRISExecutor:
     SQLAlchemy implementation.
     """
 
-    def __init__(self, iris_config: Dict[str, Any], server=None):
+    def __init__(self, iris_config: dict[str, Any], server=None):
         self.iris_config = iris_config
         self.server = server  # Reference to server for P4 cancellation
         self.connection = None
@@ -38,12 +41,14 @@ class IRISExecutor:
 
         # Thread pool for async IRIS operations (constitutional requirement)
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=10,
-            thread_name_prefix="iris_executor"
+            max_workers=10, thread_name_prefix="iris_executor"
         )
 
         # Performance monitoring
         self.performance_monitor = get_monitor()
+
+        # Column alias extraction for PostgreSQL compatibility
+        self.alias_extractor = AliasExtractor()
 
         # Connection pool management
         self._connection_lock = threading.RLock()
@@ -53,19 +58,22 @@ class IRISExecutor:
         # Attempt to detect IRIS environment
         self._detect_iris_environment()
 
-        logger.info("IRIS executor initialized",
-                   host=iris_config.get('host'),
-                   port=iris_config.get('port'),
-                   namespace=iris_config.get('namespace'),
-                   embedded_mode=self.embedded_mode)
+        logger.info(
+            "IRIS executor initialized",
+            host=iris_config.get("host"),
+            port=iris_config.get("port"),
+            namespace=iris_config.get("namespace"),
+            embedded_mode=self.embedded_mode,
+        )
 
     def _detect_iris_environment(self):
         """Detect if we're running in IRIS embedded Python environment"""
         try:
             # Try to import IRIS embedded Python module
             import iris
+
             # Check if we're in embedded mode by testing for embedded-specific features
-            if hasattr(iris, 'sql') and hasattr(iris.sql, 'exec'):
+            if hasattr(iris, "sql") and hasattr(iris.sql, "exec"):
                 self.embedded_mode = True
                 logger.info("IRIS embedded Python detected")
                 return True
@@ -79,7 +87,205 @@ class IRISExecutor:
             logger.info("IRIS Python driver not available")
             return False
 
-    def _split_sql_statements(self, sql: str) -> List[str]:
+    def _normalize_iris_null(self, value):
+        """
+        Normalize IRIS NULL representations to Python None.
+
+        IRIS Behavior:
+        - Simple queries: Returns empty string '' for NULL
+        - Prepared statements: Returns '.*@%SYS.Python' for NULL parameters
+
+        Args:
+            value: Value from IRIS result row
+
+        Returns:
+            Python None for NULL values, original value otherwise
+        """
+        if value is None:
+            return None
+
+        # Check if value is a string
+        if isinstance(value, str):
+            # Empty string from simple query NULL
+            if value == "":
+                return None
+
+            # IRIS Python object representation from prepared statement NULL
+            # Pattern: '13@%SYS.Python', '6@%SYS.Python', etc.
+            if "@%SYS.Python" in value:
+                return None
+
+        return value
+
+    def _convert_iris_horolog_date_to_pg(self, horolog_days: int) -> int:
+        """
+        Convert IRIS Horolog date to PostgreSQL date format.
+
+        IRIS Horolog Format:
+        - Stores dates as days since 1840-12-31 (base date)
+        - Example: 67699 days = 2025-11-13
+
+        PostgreSQL Date Format:
+        - Stores dates as days since 2000-01-01 (J2000 epoch)
+        - Example: 9448 days = 2025-11-13
+
+        Args:
+            horolog_days: IRIS Horolog date value (days since 1840-12-31)
+
+        Returns:
+            PostgreSQL date value (days since 2000-01-01)
+        """
+        import datetime
+
+        # IRIS Horolog base date: 1840-12-31
+        HOROLOG_BASE = datetime.date(1840, 12, 31)
+
+        # PostgreSQL J2000 epoch: 2000-01-01
+        PG_EPOCH = datetime.date(2000, 1, 1)
+
+        # Calculate offset between IRIS and PostgreSQL epochs
+        # Days from 1840-12-31 to 2000-01-01
+        EPOCH_OFFSET = (PG_EPOCH - HOROLOG_BASE).days
+
+        # Convert IRIS Horolog days to PostgreSQL days
+        pg_days = horolog_days - EPOCH_OFFSET
+
+        logger.debug(
+            "Converted IRIS Horolog date to PostgreSQL format",
+            horolog_days=horolog_days,
+            pg_days=pg_days,
+            epoch_offset=EPOCH_OFFSET,
+        )
+
+        return pg_days
+
+    def _convert_pg_date_to_iris_horolog(self, pg_days: int) -> int:
+        """
+        Convert PostgreSQL date format to IRIS Horolog date.
+
+        PostgreSQL Date Format:
+        - Stores dates as days since 2000-01-01 (J2000 epoch)
+
+        IRIS Horolog Format:
+        - Stores dates as days since 1840-12-31 (base date)
+
+        Args:
+            pg_days: PostgreSQL date value (days since 2000-01-01)
+
+        Returns:
+            IRIS Horolog date value (days since 1840-12-31)
+        """
+        import datetime
+
+        # IRIS Horolog base date: 1840-12-31
+        HOROLOG_BASE = datetime.date(1840, 12, 31)
+
+        # PostgreSQL J2000 epoch: 2000-01-01
+        PG_EPOCH = datetime.date(2000, 1, 1)
+
+        # Calculate offset between IRIS and PostgreSQL epochs
+        EPOCH_OFFSET = (PG_EPOCH - HOROLOG_BASE).days
+
+        # Convert PostgreSQL days to IRIS Horolog days
+        horolog_days = pg_days + EPOCH_OFFSET
+
+        logger.debug(
+            "Converted PostgreSQL date to IRIS Horolog format",
+            pg_days=pg_days,
+            horolog_days=horolog_days,
+            epoch_offset=EPOCH_OFFSET,
+        )
+
+        return horolog_days
+
+    def _detect_cast_type_oid(self, sql: str, column_name: str) -> int | None:
+        """
+        Detect type OID from CAST expressions in SQL (2025-11-14 asyncpg boolean fix).
+
+        When IRIS doesn't provide type metadata, we can infer types from CAST expressions
+        like $1::bool, CAST(? AS BIT), or CAST(? AS INTEGER).
+
+        Args:
+            sql: SQL query string
+            column_name: Column name to search for casts
+
+        Returns:
+            Type OID if cast detected, None otherwise
+
+        References:
+            - asyncpg test_prepared_with_multiple_params: boolean values returned as int
+        """
+        import re
+
+        sql_upper = sql.upper()
+
+        type_map = {
+            "bool": 16,  # boolean
+            "boolean": 16,  # boolean
+            "bit": 16,  # IRIS uses BIT for boolean
+            "int": 23,  # int4
+            "integer": 23,  # int4
+            "bigint": 20,  # int8
+            "smallint": 21,  # int2
+            "text": 25,  # text
+            "varchar": 1043,  # varchar
+            "date": 1082,  # date
+            "timestamp": 1114,  # timestamp
+            "float": 701,  # float8
+            "double": 701,  # float8
+        }
+
+        # Pattern 1: PostgreSQL-style type cast (::type)
+        # Match: "$1::bool AS column_name"
+        pg_cast_pattern = rf"\$\d+::(\w+)\s+AS\s+{re.escape(column_name.upper())}"
+        match = re.search(pg_cast_pattern, sql_upper)
+
+        if match:
+            cast_type = match.group(1).lower()
+            return type_map.get(cast_type)
+
+        # Pattern 2: CAST function (CAST(? AS type) AS column_name)
+        # Match: "CAST(? AS BIT) AS flag" or "CAST(? AS INTEGER) AS num"
+        cast_func_pattern = rf"CAST\(\?\s+AS\s+(\w+)\)\s+AS\s+{re.escape(column_name.upper())}"
+        match = re.search(cast_func_pattern, sql_upper)
+
+        if match:
+            cast_type = match.group(1).lower()
+            return type_map.get(cast_type)
+
+        return None
+
+    def _infer_type_from_value(self, value) -> int:
+        """
+        Infer PostgreSQL type OID from Python value
+
+        Args:
+            value: Python value from result row
+
+        Returns:
+            PostgreSQL type OID (int)
+        """
+        # Import Decimal for type checking
+        from decimal import Decimal
+
+        if value is None:
+            return 25  # VARCHAR (most flexible for NULL)
+        elif isinstance(value, bool):
+            return 16  # BOOL
+        elif isinstance(value, int):
+            return 23  # INTEGER (INT4)
+        elif isinstance(value, float):
+            return 701  # FLOAT8/DOUBLE
+        elif isinstance(value, Decimal):
+            return 1700  # NUMERIC/DECIMAL
+        elif isinstance(value, bytes):
+            return 17  # BYTEA
+        elif isinstance(value, str):
+            return 25  # VARCHAR/TEXT
+        else:
+            return 25  # Default to VARCHAR
+
+    def _split_sql_statements(self, sql: str) -> list[str]:
         """
         Split SQL string into individual statements, handling semicolons properly.
 
@@ -110,7 +316,7 @@ class IRISExecutor:
 
             # Handle line comments (-- to end of line)
             if not in_single_quote and not in_double_quote and not in_block_comment:
-                if i < len(sql) - 1 and sql[i:i+2] == '--':
+                if i < len(sql) - 1 and sql[i : i + 2] == "--":
                     in_line_comment = True
                     current_stmt.append(char)
                     i += 1
@@ -119,19 +325,19 @@ class IRISExecutor:
             # End of line comment
             if in_line_comment:
                 current_stmt.append(char)
-                if char == '\n':
+                if char == "\n":
                     in_line_comment = False
                 i += 1
                 continue
 
             # Handle block comments (/* ... */)
             if not in_single_quote and not in_double_quote and not in_line_comment:
-                if i < len(sql) - 1 and sql[i:i+2] == '/*':
+                if i < len(sql) - 1 and sql[i : i + 2] == "/*":
                     in_block_comment = True
                     current_stmt.append(char)
                     i += 1
                     continue
-                elif i < len(sql) - 1 and sql[i:i+2] == '*/':
+                elif i < len(sql) - 1 and sql[i : i + 2] == "*/":
                     in_block_comment = False
                     current_stmt.append(char)
                     i += 1
@@ -145,21 +351,21 @@ class IRISExecutor:
             # Toggle quote states
             if char == "'" and not in_double_quote:
                 # Handle escaped quotes
-                if i > 0 and sql[i-1] == '\\':
+                if i > 0 and sql[i - 1] == "\\":
                     current_stmt.append(char)
                 else:
                     in_single_quote = not in_single_quote
                     current_stmt.append(char)
             elif char == '"' and not in_single_quote:
-                if i > 0 and sql[i-1] == '\\':
+                if i > 0 and sql[i - 1] == "\\":
                     current_stmt.append(char)
                 else:
                     in_double_quote = not in_double_quote
                     current_stmt.append(char)
             # Statement separator (semicolon outside quotes)
-            elif char == ';' and not in_single_quote and not in_double_quote:
+            elif char == ";" and not in_single_quote and not in_double_quote:
                 # End of statement - save it
-                stmt = ''.join(current_stmt).strip()
+                stmt = "".join(current_stmt).strip()
                 if stmt:  # Skip empty statements
                     statements.append(stmt)
                 current_stmt = []
@@ -169,13 +375,13 @@ class IRISExecutor:
             i += 1
 
         # Add final statement if any
-        stmt = ''.join(current_stmt).strip()
+        stmt = "".join(current_stmt).strip()
         if stmt:
             statements.append(stmt)
 
-        logger.debug("Split SQL into statements",
-                    total_statements=len(statements),
-                    original_length=len(sql))
+        logger.debug(
+            "Split SQL into statements", total_statements=len(statements), original_length=len(sql)
+        )
 
         return statements
 
@@ -185,17 +391,20 @@ class IRISExecutor:
             if self.embedded_mode:
                 # In embedded mode, skip connection test at startup
                 # IRIS is already available via iris.sql.exec()
-                logger.info("IRIS embedded mode detected - skipping connection test",
-                           embedded_mode=True)
+                logger.info(
+                    "IRIS embedded mode detected - skipping connection test", embedded_mode=True
+                )
             else:
                 await self._test_external_connection()
 
             # Test vector support (from caretdev pattern)
             await self._test_vector_support()
 
-            logger.info("IRIS connection test successful",
-                       embedded_mode=self.embedded_mode,
-                       vector_support=self.vector_support)
+            logger.info(
+                "IRIS connection test successful",
+                embedded_mode=self.embedded_mode,
+                vector_support=self.vector_support,
+            )
 
         except Exception as e:
             logger.error("IRIS connection test failed", error=str(e))
@@ -203,11 +412,13 @@ class IRISExecutor:
 
     async def _test_embedded_connection(self):
         """Test IRIS embedded Python connection"""
+
         def _sync_test():
             import iris
+
             # Simple test query
             result = iris.sql.exec("SELECT 1 as test_column").fetch()
-            return result[0]['test_column'] == 1
+            return result[0]["test_column"] == 1
 
         # Run in thread to avoid blocking asyncio loop
         result = await asyncio.to_thread(_sync_test)
@@ -217,17 +428,18 @@ class IRISExecutor:
     async def _test_external_connection(self):
         """Test external IRIS connection using intersystems driver"""
         try:
+
             def _sync_test():
                 import iris
 
                 # Test real connection to IRIS
                 try:
                     conn = iris.connect(
-                        hostname=self.iris_config['host'],
-                        port=self.iris_config['port'],
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config['username'],
-                        password=self.iris_config['password']
+                        hostname=self.iris_config["host"],
+                        port=self.iris_config["port"],
+                        namespace=self.iris_config["namespace"],
+                        username=self.iris_config["username"],
+                        password=self.iris_config["password"],
                     )
 
                     # Test simple query
@@ -240,9 +452,11 @@ class IRISExecutor:
                     return result[0] == 1
 
                 except Exception as e:
-                    logger.warning("Real IRIS connection failed, config validation only", error=str(e))
+                    logger.warning(
+                        "Real IRIS connection failed, config validation only", error=str(e)
+                    )
                     # Fallback to config validation
-                    required_keys = ['host', 'port', 'username', 'password', 'namespace']
+                    required_keys = ["host", "port", "username", "password", "namespace"]
                     for key in required_keys:
                         if key not in self.iris_config:
                             raise ValueError(f"Missing IRIS config: {key}")
@@ -250,10 +464,12 @@ class IRISExecutor:
 
             result = await asyncio.to_thread(_sync_test)
 
-            logger.info("IRIS connection test successful",
-                       host=self.iris_config['host'],
-                       port=self.iris_config['port'],
-                       namespace=self.iris_config['namespace'])
+            logger.info(
+                "IRIS connection test successful",
+                host=self.iris_config["host"],
+                port=self.iris_config["port"],
+                namespace=self.iris_config["namespace"],
+            )
             return result
 
         except Exception as e:
@@ -264,8 +480,10 @@ class IRISExecutor:
         """Test if IRIS vector support is available (from caretdev pattern)"""
         try:
             if self.embedded_mode:
+
                 def _sync_vector_test():
                     import iris
+
                     try:
                         # Test query from caretdev implementation
                         iris.sql.exec("select vector_cosine(to_vector('1'), to_vector('1'))")
@@ -291,8 +509,9 @@ class IRISExecutor:
             self.vector_support = False
             logger.info("IRIS vector support test failed", error=str(e))
 
-    async def execute_query(self, sql: str, params: Optional[List] = None,
-                          session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_query(
+        self, sql: str, params: list | None = None, session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute SQL query against IRIS with proper async threading
 
@@ -305,53 +524,258 @@ class IRISExecutor:
             Dictionary with query results and metadata
         """
         try:
+            # Feature 022: Apply PostgreSQL→IRIS transaction verb translation FIRST
+            # This must happen before any other processing
+            from .sql_translator import TransactionTranslator
+
+            transaction_translator = TransactionTranslator()
+            sql = transaction_translator.translate_transaction_command(sql)
+
+            # Intercept PostgreSQL system function calls and return stub results
+            sql_upper = sql.upper().strip().rstrip(";")
+
+            # DEBUG: Log sql_upper for DISCARD ALL debugging
+            if "DISCARD" in sql_upper:
+                logger.warning(
+                    f"🔍 DEBUG sql_upper check: sql_upper='{sql_upper}' | startswith('DISCARD ALL')={sql_upper.startswith('DISCARD ALL')} | equals='DISCARD ALL'={sql_upper == 'DISCARD ALL'}"
+                )
+
+            # SHOW command - Return PostgreSQL configuration values
+            if sql_upper.startswith("SHOW "):
+                param_name = sql_upper[5:].strip()  # Extract parameter name
+                logger.info("Intercepting SHOW command", param=param_name, session_id=session_id)
+                # Common PostgreSQL parameters
+                show_values = {
+                    "SERVER_VERSION": "16.0 (InterSystems IRIS)",
+                    "SERVER_VERSION_NUM": "160000",
+                    "CLIENT_ENCODING": "UTF8",
+                    "DATESTYLE": "ISO, MDY",
+                    "TIMEZONE": "UTC",
+                    "STANDARD_CONFORMING_STRINGS": "on",
+                    "INTEGER_DATETIMES": "on",
+                    "INTERVALSTYLE": "postgres",
+                }
+                value = show_values.get(param_name, "unknown")
+                return {
+                    "success": True,
+                    "rows": [[value]],
+                    "columns": [
+                        {
+                            "name": param_name.lower(),
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    ],
+                    "row_count": 1,
+                }
+
+            # Handle asyncpg type introspection query: SELECT CURRENT_SETTING('jit') AS CUR, SET_CONFIG('jit', 'off', FALSE) AS NEW
+            if "CURRENT_SETTING" in sql_upper and "SET_CONFIG" in sql_upper:
+                logger.info(
+                    "Intercepting asyncpg type introspection query",
+                    sql=sql[:150],
+                    session_id=session_id,
+                )
+                return {
+                    "success": True,
+                    "rows": [["off", "off"]],  # Two columns: CUR and NEW
+                    "columns": [
+                        {
+                            "name": "cur",
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        },
+                        {
+                            "name": "new",
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        },
+                    ],
+                    "row_count": 1,
+                }
+
+            # CURRENT_SETTING(name) - Return configuration parameter value (single call)
+            if "CURRENT_SETTING" in sql_upper:
+                logger.info(
+                    "Intercepting CURRENT_SETTING function call",
+                    sql=sql[:100],
+                    session_id=session_id,
+                )
+                return {
+                    "success": True,
+                    "rows": [["off"]],  # Return 'off' for JIT and other settings
+                    "columns": [
+                        {
+                            "name": "current_setting",
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    ],
+                    "row_count": 1,
+                }
+
+            # SET_CONFIG(name, value, is_local) - Set configuration parameter (single call)
+            if "SET_CONFIG" in sql_upper:
+                logger.info(
+                    "Intercepting SET_CONFIG function call", sql=sql[:100], session_id=session_id
+                )
+                return {
+                    "success": True,
+                    "rows": [["off"]],  # Return the value that was set
+                    "columns": [
+                        {
+                            "name": "set_config",
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    ],
+                    "row_count": 1,
+                }
+
+            # PG_ADVISORY_UNLOCK_ALL() - Release all advisory locks
+            if "PG_ADVISORY_UNLOCK_ALL" in sql_upper:
+                logger.info(
+                    "Intercepting PG_ADVISORY_UNLOCK_ALL function call",
+                    sql=sql[:100],
+                    session_id=session_id,
+                )
+                return {"success": True, "rows": [], "columns": [], "row_count": 0}
+
+            # CURRENT_DATABASE() - Return current database name
+            if "CURRENT_DATABASE" in sql_upper:
+                logger.info(
+                    "Intercepting CURRENT_DATABASE function call",
+                    sql=sql[:100],
+                    session_id=session_id,
+                )
+                # Get namespace from connection config (external mode) or embedded mode
+                namespace_name = getattr(
+                    self, "iris_namespace", "USER"
+                )  # Default to USER if not set
+                return {
+                    "success": True,
+                    "rows": [[namespace_name]],
+                    "columns": [
+                        {
+                            "name": "current_database",
+                            "type_oid": 19,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    ],
+                    "row_count": 1,
+                }
+
+            # VERSION() - Return PostgreSQL version string
+            if "VERSION()" in sql_upper or sql_upper.startswith("SELECT VERSION"):
+                logger.info(
+                    "Intercepting VERSION() function call", sql=sql[:100], session_id=session_id
+                )
+                version_string = "PostgreSQL 16.0 (InterSystems IRIS PGWire Protocol)"
+                return {
+                    "success": True,
+                    "rows": [[version_string]],
+                    "columns": [
+                        {
+                            "name": "version",
+                            "type_oid": 25,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    ],
+                    "row_count": 1,
+                }
+
+            # DISCARD ALL - PostgreSQL session reset/cleanup command
+            # Sent by Npgsql during connection teardown - IRIS doesn't support this
+            if sql_upper.startswith("DISCARD ALL") or sql_upper == "DISCARD ALL":
+                logger.info(
+                    "Intercepting DISCARD ALL command (Npgsql cleanup)",
+                    sql=sql[:100],
+                    session_id=session_id,
+                )
+                return {
+                    "success": True,
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command": "DISCARD",
+                    "command_tag": "DISCARD ALL",
+                }
+
             # Performance tracking for constitutional compliance
             with PerformanceTracker(
                 MetricType.API_RESPONSE_TIME,
                 "iris_executor",
                 session_id=session_id,
-                sql_length=len(sql)
+                sql_length=len(sql),
             ) as tracker:
 
                 # P5: Vector query detection for enhanced logging
-                if self.vector_support and 'VECTOR' in sql.upper():
-                    logger.debug("Vector query detected",
-                               sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                               session_id=session_id)
+                if self.vector_support and "VECTOR" in sql.upper():
+                    logger.debug(
+                        "Vector query detected",
+                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                        session_id=session_id,
+                    )
 
                 # Use async execution with thread pool
+                # DEBUG: Log execution path decision
+                logger.warning(
+                    f"🔍 DEBUG: execute_query() branching - embedded_mode = {self.embedded_mode}"
+                )
                 if self.embedded_mode:
+                    logger.warning("🔍 DEBUG: Taking EMBEDDED path → _execute_embedded_async()")
                     result = await self._execute_embedded_async(sql, params, session_id)
                 else:
+                    logger.warning("🔍 DEBUG: Taking EXTERNAL path → _execute_external_async()")
                     result = await self._execute_external_async(sql, params, session_id)
 
                 # Add performance metadata
-                result['execution_metadata'] = {
-                    'execution_time_ms': tracker.start_time and (time.perf_counter() - tracker.start_time) * 1000,
-                    'embedded_mode': self.embedded_mode,
-                    'vector_support': self.vector_support,
-                    'session_id': session_id,
-                    'sql_length': len(sql)
+                result["execution_metadata"] = {
+                    "execution_time_ms": tracker.start_time
+                    and (time.perf_counter() - tracker.start_time) * 1000,
+                    "embedded_mode": self.embedded_mode,
+                    "vector_support": self.vector_support,
+                    "session_id": session_id,
+                    "sql_length": len(sql),
                 }
 
                 # Record performance metrics
                 if tracker.violation:
-                    logger.warning("IRIS execution SLA violation",
-                                 actual_time_ms=tracker.violation.actual_value_ms,
-                                 sla_threshold_ms=tracker.violation.sla_threshold_ms,
-                                 session_id=session_id)
+                    logger.warning(
+                        "IRIS execution SLA violation",
+                        actual_time_ms=tracker.violation.actual_value_ms,
+                        sla_threshold_ms=tracker.violation.sla_threshold_ms,
+                        session_id=session_id,
+                    )
 
                 return result
 
         except Exception as e:
-            logger.error("SQL execution failed",
-                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                        error=str(e),
-                        session_id=session_id)
+            logger.error(
+                "SQL execution failed",
+                sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                error=str(e),
+                session_id=session_id,
+            )
             raise
 
-    async def execute_many(self, sql: str, params_list: List[List],
-                          session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def execute_many(
+        self, sql: str, params_list: list[list], session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute SQL with multiple parameter sets using executemany() for batch operations.
 
@@ -390,71 +814,87 @@ class IRISExecutor:
                 MetricType.API_RESPONSE_TIME,
                 "iris_executor_many",
                 session_id=session_id,
-                sql_length=len(sql)
+                sql_length=len(sql),
             ) as tracker:
 
-                logger.info("execute_many() called",
-                          sql_preview=sql[:100],
-                          batch_size=len(params_list),
-                          session_id=session_id)
+                logger.info(
+                    "execute_many() called",
+                    sql_preview=sql[:100],
+                    batch_size=len(params_list),
+                    session_id=session_id,
+                )
 
                 # ARCHITECTURE FIX: ALWAYS try DBAPI executemany() first (fast path)
                 # Even in embedded mode (irispython), we can connect to localhost via DBAPI
                 # This leverages connection independence: execution mode ≠ connection mode
                 # Fall back to loop-based execution only if DBAPI fails
                 try:
-                    logger.debug("Attempting DBAPI executemany() fast path",
-                               session_id=session_id)
+                    logger.debug("Attempting DBAPI executemany() fast path", session_id=session_id)
                     result = await self._execute_many_external_async(sql, params_list, session_id)
-                    logger.info("✅ DBAPI executemany() succeeded (fast path)",
-                              rows_affected=result.get('rows_affected', 0),
-                              session_id=session_id)
+                    logger.info(
+                        "✅ DBAPI executemany() succeeded (fast path)",
+                        rows_affected=result.get("rows_affected", 0),
+                        session_id=session_id,
+                    )
                 except Exception as dbapi_error:
-                    logger.warning("DBAPI executemany() failed, falling back to loop-based execution",
-                                 error=str(dbapi_error)[:200],
-                                 error_type=type(dbapi_error).__name__,
-                                 session_id=session_id)
+                    logger.warning(
+                        "DBAPI executemany() failed, falling back to loop-based execution",
+                        error=str(dbapi_error)[:200],
+                        error_type=type(dbapi_error).__name__,
+                        session_id=session_id,
+                    )
                     # Fallback to loop-based execution (slower but reliable)
                     result = await self._execute_many_embedded_async(sql, params_list, session_id)
-                    logger.info("✅ Loop-based execution succeeded (fallback path)",
-                              rows_affected=result.get('rows_affected', 0),
-                              session_id=session_id)
+                    logger.info(
+                        "✅ Loop-based execution succeeded (fallback path)",
+                        rows_affected=result.get("rows_affected", 0),
+                        session_id=session_id,
+                    )
 
                 # Add performance metadata (including which path was actually used)
-                result['execution_metadata'] = {
-                    'execution_time_ms': tracker.start_time and (time.perf_counter() - tracker.start_time) * 1000,
-                    'embedded_mode': self.embedded_mode,
-                    'execution_path': result.get('_execution_path', 'unknown'),  # 'dbapi_executemany' or 'loop_fallback'
-                    'batch_size': len(params_list),
-                    'session_id': session_id,
-                    'sql_length': len(sql)
+                result["execution_metadata"] = {
+                    "execution_time_ms": tracker.start_time
+                    and (time.perf_counter() - tracker.start_time) * 1000,
+                    "embedded_mode": self.embedded_mode,
+                    "execution_path": result.get(
+                        "_execution_path", "unknown"
+                    ),  # 'dbapi_executemany' or 'loop_fallback'
+                    "batch_size": len(params_list),
+                    "session_id": session_id,
+                    "sql_length": len(sql),
                 }
 
                 # Record performance metrics
                 if tracker.violation:
-                    logger.warning("execute_many() SLA violation",
-                                 actual_time_ms=tracker.violation.actual_value_ms,
-                                 sla_threshold_ms=tracker.violation.sla_threshold_ms,
-                                 batch_size=len(params_list),
-                                 session_id=session_id)
+                    logger.warning(
+                        "execute_many() SLA violation",
+                        actual_time_ms=tracker.violation.actual_value_ms,
+                        sla_threshold_ms=tracker.violation.sla_threshold_ms,
+                        batch_size=len(params_list),
+                        session_id=session_id,
+                    )
 
                 return result
 
         except Exception as e:
-            logger.error("execute_many() failed",
-                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                        batch_size=len(params_list),
-                        error=str(e),
-                        session_id=session_id)
+            logger.error(
+                "execute_many() failed",
+                sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                batch_size=len(params_list),
+                error=str(e),
+                session_id=session_id,
+            )
             raise
 
-    async def _execute_many_embedded_async(self, sql: str, params_list: List[List],
-                                          session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _execute_many_embedded_async(
+        self, sql: str, params_list: list[list], session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute batch SQL using IRIS embedded Python executemany() with proper async threading.
 
         This method leverages IRIS's native batch execution capabilities for maximum performance.
         """
+
         def _sync_execute_many():
             """
             Synchronous IRIS batch execution in thread pool.
@@ -470,28 +910,36 @@ class IRISExecutor:
             """
             import iris
 
-            logger.info("🚀 EXECUTING BATCH IN EMBEDDED MODE (loop-based)",
-                       sql_preview=sql[:100],
-                       batch_size=len(params_list),
-                       session_id=session_id)
+            logger.info(
+                "🚀 EXECUTING BATCH IN EMBEDDED MODE (loop-based)",
+                sql_preview=sql[:100],
+                batch_size=len(params_list),
+                session_id=session_id,
+            )
 
             try:
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+                transaction_translated_sql = transaction_translator.translate_transaction_command(
+                    sql
+                )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
                 translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="batch")
+                normalized_sql = translator.normalize_sql(
+                    transaction_translated_sql, execution_path="batch"
+                )
 
                 # Strip trailing semicolon
-                if normalized_sql.rstrip().endswith(';'):
-                    normalized_sql = normalized_sql.rstrip().rstrip(';')
+                if normalized_sql.rstrip().endswith(";"):
+                    normalized_sql = normalized_sql.rstrip().rstrip(";")
 
-                logger.info("Executing batch with loop (embedded mode - inline SQL values)",
-                          sql_preview=normalized_sql[:100],
-                          batch_size=len(params_list),
-                          session_id=session_id)
+                logger.info(
+                    "Executing batch with loop (embedded mode - inline SQL values)",
+                    sql_preview=normalized_sql[:100],
+                    batch_size=len(params_list),
+                    session_id=session_id,
+                )
 
                 # Execute batch using loop with iris.sql.exec() - INLINE SQL VALUES
                 # CRITICAL: Cannot use parameter binding in embedded mode (values become '15@%SYS.Python')
@@ -506,7 +954,7 @@ class IRISExecutor:
                         for param_value in params:
                             # Convert value to SQL literal
                             if param_value is None:
-                                sql_literal = 'NULL'
+                                sql_literal = "NULL"
                             elif isinstance(param_value, (int, float)):
                                 # Numbers can be used directly
                                 sql_literal = str(param_value)
@@ -516,48 +964,59 @@ class IRISExecutor:
                                 sql_literal = f"'{escaped_value}'"
 
                             # Replace first occurrence of ? with the value
-                            inline_sql = inline_sql.replace('?', sql_literal, 1)
+                            inline_sql = inline_sql.replace("?", sql_literal, 1)
 
                         logger.debug(f"Executing inline SQL: {inline_sql[:150]}...")
                         iris.sql.exec(inline_sql)
                         rows_affected += 1
                     except Exception as row_error:
-                        logger.error(f"Failed to execute row {rows_affected + 1}: {row_error}",
-                                   params=params[:3] if len(params) > 3 else params,
-                                   inline_sql_preview=inline_sql[:200] if 'inline_sql' in locals() else 'N/A')
+                        logger.error(
+                            f"Failed to execute row {rows_affected + 1}: {row_error}",
+                            params=params[:3] if len(params) > 3 else params,
+                            inline_sql_preview=(
+                                inline_sql[:200] if "inline_sql" in locals() else "N/A"
+                            ),
+                        )
                         raise
 
                 execution_time = (time.perf_counter() - start_time) * 1000
 
-                logger.info("✅ Batch execution COMPLETE (loop-based)",
-                          rows_affected=rows_affected,
-                          execution_time_ms=execution_time,
-                          throughput_rows_per_sec=int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0,
-                          session_id=session_id)
+                logger.info(
+                    "✅ Batch execution COMPLETE (loop-based)",
+                    rows_affected=rows_affected,
+                    execution_time_ms=execution_time,
+                    throughput_rows_per_sec=(
+                        int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0
+                    ),
+                    session_id=session_id,
+                )
 
                 return {
-                    'success': True,
-                    'rows_affected': rows_affected,
-                    'execution_time_ms': execution_time,
-                    'batch_size': len(params_list),
-                    'rows': [],  # Batch operations don't return rows
-                    'columns': [],
-                    '_execution_path': 'loop_fallback'  # Tag for metadata
+                    "success": True,
+                    "rows_affected": rows_affected,
+                    "execution_time_ms": execution_time,
+                    "batch_size": len(params_list),
+                    "rows": [],  # Batch operations don't return rows
+                    "columns": [],
+                    "_execution_path": "loop_fallback",  # Tag for metadata
                 }
 
             except Exception as e:
-                logger.error("Batch execution failed in IRIS (loop-based)",
-                           error=str(e),
-                           error_type=type(e).__name__,
-                           batch_size=len(params_list),
-                           session_id=session_id)
+                logger.error(
+                    "Batch execution failed in IRIS (loop-based)",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    batch_size=len(params_list),
+                    session_id=session_id,
+                )
                 raise
 
         # Execute in thread pool to avoid blocking event loop
         return await asyncio.to_thread(_sync_execute_many)
 
-    async def _execute_many_external_async(self, sql: str, params_list: List[List],
-                                          session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _execute_many_external_async(
+        self, sql: str, params_list: list[list], session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute batch SQL using external DBAPI executemany() for optimal performance.
 
@@ -567,14 +1026,16 @@ class IRISExecutor:
         - Community benchmark: IRIS 1.48s vs PostgreSQL 4.58s (4× faster)
         - Expected throughput: 2,400-10,000+ rows/sec
         """
+
         def _sync_execute_many():
             """Synchronous IRIS DBAPI executemany() in thread pool"""
-            import iris
 
-            logger.info("🚀 EXECUTING BATCH IN EXTERNAL MODE (executemany)",
-                       sql_preview=sql[:100],
-                       batch_size=len(params_list),
-                       session_id=session_id)
+            logger.info(
+                "🚀 EXECUTING BATCH IN EXTERNAL MODE (executemany)",
+                sql_preview=sql[:100],
+                batch_size=len(params_list),
+                session_id=session_id,
+            )
 
             connection = None
             cursor = None
@@ -585,20 +1046,26 @@ class IRISExecutor:
 
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+                transaction_translated_sql = transaction_translator.translate_transaction_command(
+                    sql
+                )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
                 translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="batch")
+                normalized_sql = translator.normalize_sql(
+                    transaction_translated_sql, execution_path="batch"
+                )
 
                 # Strip trailing semicolon
-                if normalized_sql.rstrip().endswith(';'):
-                    normalized_sql = normalized_sql.rstrip().rstrip(';')
+                if normalized_sql.rstrip().endswith(";"):
+                    normalized_sql = normalized_sql.rstrip().rstrip(";")
 
-                logger.info("Executing executemany() batch (external mode)",
-                          sql_preview=normalized_sql[:100],
-                          batch_size=len(params_list),
-                          session_id=session_id)
+                logger.info(
+                    "Executing executemany() batch (external mode)",
+                    sql_preview=normalized_sql[:100],
+                    batch_size=len(params_list),
+                    session_id=session_id,
+                )
 
                 # Execute batch using DBAPI cursor.executemany()
                 # KEY OPTIMIZATION: Uses IRIS "Fast Insert" feature
@@ -608,30 +1075,36 @@ class IRISExecutor:
                 cursor.executemany(normalized_sql, params_list)
 
                 execution_time = (time.perf_counter() - start_time) * 1000
-                rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else len(params_list)
+                rows_affected = cursor.rowcount if hasattr(cursor, "rowcount") else len(params_list)
 
-                logger.info("✅ executemany() COMPLETE (external mode)",
-                          rows_affected=rows_affected,
-                          execution_time_ms=execution_time,
-                          throughput_rows_per_sec=int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0,
-                          session_id=session_id)
+                logger.info(
+                    "✅ executemany() COMPLETE (external mode)",
+                    rows_affected=rows_affected,
+                    execution_time_ms=execution_time,
+                    throughput_rows_per_sec=(
+                        int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0
+                    ),
+                    session_id=session_id,
+                )
 
                 return {
-                    'success': True,
-                    'rows_affected': rows_affected,
-                    'execution_time_ms': execution_time,
-                    'batch_size': len(params_list),
-                    'rows': [],
-                    'columns': [],
-                    '_execution_path': 'dbapi_executemany'  # Tag for metadata
+                    "success": True,
+                    "rows_affected": rows_affected,
+                    "execution_time_ms": execution_time,
+                    "batch_size": len(params_list),
+                    "rows": [],
+                    "columns": [],
+                    "_execution_path": "dbapi_executemany",  # Tag for metadata
                 }
 
             except Exception as e:
-                logger.error("executemany() failed in external mode",
-                           error=str(e),
-                           error_type=type(e).__name__,
-                           batch_size=len(params_list),
-                           session_id=session_id)
+                logger.error(
+                    "executemany() failed in external mode",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    batch_size=len(params_list),
+                    session_id=session_id,
+                )
                 raise
 
             finally:
@@ -650,24 +1123,300 @@ class IRISExecutor:
         # Execute in thread pool to avoid blocking event loop
         return await asyncio.to_thread(_sync_execute_many)
 
-    async def _execute_embedded_async(self, sql: str, params: Optional[List] = None,
-                                     session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _execute_embedded_async(
+        self, sql: str, params: list | None = None, session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute SQL using IRIS embedded Python with proper async threading
 
         This method runs the blocking IRIS operations in a thread pool to avoid
         blocking the event loop, following constitutional async requirements.
         """
+
         def _sync_execute():
             """Synchronous IRIS execution in thread pool"""
             import iris
 
-            # DEBUG: Log entry to embedded execution path
-            logger.info("🔍 EXECUTING IN EMBEDDED MODE",
-                       sql_preview=sql[:100],
-                       has_params=params is not None,
-                       param_count=len(params) if params else 0,
-                       session_id=session_id)
+            # Log entry to embedded execution path
+            logger.info(
+                "🔍 EXECUTING IN EMBEDDED MODE",
+                sql_preview=sql[:100],
+                has_params=params is not None,
+                param_count=len(params) if params else 0,
+                session_id=session_id,
+            )
+
+            # CRITICAL: Intercept PostgreSQL system catalog queries BEFORE any translation
+            # - asyncpg queries pg_type when it sees OID 0 (unspecified) in ParameterDescription
+            # - Npgsql queries pg_type during connection bootstrap to build type registry
+            # - IRIS doesn't have PostgreSQL system catalogs (pg_type, pg_enum, pg_catalog)
+            # Solution: Return FAKE pg_type data with standard PostgreSQL type OIDs
+            sql_upper = sql.upper()
+
+            # pg_enum - Return empty with column metadata (no enums defined)
+            # CRITICAL: PostgreSQL protocol requires RowDescription even for 0-row results
+            if "PG_ENUM" in sql_upper:
+                logger.info(
+                    "Intercepting pg_enum query (returning empty with column metadata)",
+                    sql_preview=sql[:100],
+                    session_id=session_id,
+                )
+                # Define expected columns for enum query (oid, enumlabel)
+                columns = [
+                    {
+                        "name": "oid",
+                        "type_oid": 26,
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    {
+                        "name": "enumlabel",
+                        "type_oid": 19,
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                ]
+                return {
+                    "success": True,
+                    "rows": [],
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # Composite types queries (pg_attribute, att.attname) - Return empty with column metadata
+            # Npgsql queries for composite type definitions, but IRIS doesn't have these
+            # CRITICAL: PostgreSQL protocol requires RowDescription even for 0-row results
+            if (
+                "PG_ATTRIBUTE" in sql_upper
+                or "ATT.ATTNAME" in sql_upper
+                or "ATT.ATTTYPID" in sql_upper
+            ):
+                logger.info(
+                    "Intercepting composite types query (returning empty with column metadata)",
+                    sql_preview=sql[:150],
+                    session_id=session_id,
+                )
+                # Define expected columns for composite types query (oid, attname, atttypid)
+                columns = [
+                    {
+                        "name": "oid",
+                        "type_oid": 26,
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    {
+                        "name": "attname",
+                        "type_oid": 19,
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    {
+                        "name": "atttypid",
+                        "type_oid": 26,
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                ]
+                return {
+                    "success": True,
+                    "rows": [],
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # pg_type - Return standard PostgreSQL types for Npgsql type registry
+            # CRITICAL FIX: Parse SELECT clause to return columns in requested order
+            # Npgsql sends different queries with different column structures
+            if "PG_TYPE" in sql_upper or "PG_CATALOG" in sql_upper:
+                logger.info(
+                    "Intercepting pg_type query (parsing SELECT clause for column order)",
+                    sql_preview=sql[:150],
+                    session_id=session_id,
+                )
+
+                # Define all available columns with their data
+                # nspname: namespace name ('pg_catalog' for built-in types)
+                # oid: type OID (unique identifier)
+                # typname: type name (e.g., 'int4', 'text', 'bool')
+                # typtype: type category ('b'=base, 'c'=composite, 'e'=enum, etc.)
+                # typnotnull: always False for base types
+                # elemtypoid: 0 for non-array types, array element type OID for array types
+                available_columns = {
+                    "nspname": {
+                        "type_oid": 19,
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    "oid": {"type_oid": 26, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                    "typname": {
+                        "type_oid": 19,
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    "typtype": {
+                        "type_oid": 18,
+                        "type_size": 1,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    "typnotnull": {
+                        "type_oid": 16,
+                        "type_size": 1,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    "elemtypoid": {
+                        "type_oid": 26,
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                }
+
+                # Base type data
+                base_types = {
+                    "nspname": "pg_catalog",
+                    "oid": [
+                        16,
+                        17,
+                        20,
+                        21,
+                        23,
+                        25,
+                        700,
+                        701,
+                        1042,
+                        1043,
+                        1082,
+                        1083,
+                        1114,
+                        1184,
+                        1560,
+                        1700,
+                        16388,
+                    ],
+                    "typname": [
+                        "bool",
+                        "bytea",
+                        "int8",
+                        "int2",
+                        "int4",
+                        "text",
+                        "float4",
+                        "float8",
+                        "bpchar",
+                        "varchar",
+                        "date",
+                        "time",
+                        "timestamp",
+                        "timestamptz",
+                        "bit",
+                        "numeric",
+                        "vector",
+                    ],
+                    "typtype": "b",
+                    "typnotnull": False,
+                    "elemtypoid": 0,
+                }
+
+                # Parse SELECT clause to extract requested columns
+                # Extract text between SELECT and FROM
+                import re
+
+                select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql, re.IGNORECASE | re.DOTALL)
+                if not select_match:
+                    # Fallback to default 6-column structure
+                    logger.warning(
+                        "Could not parse SELECT clause, using default 6-column structure"
+                    )
+                    requested_columns = [
+                        "nspname",
+                        "oid",
+                        "typname",
+                        "typtype",
+                        "typnotnull",
+                        "elemtypoid",
+                    ]
+                else:
+                    select_clause = select_match.group(1)
+                    # Extract column names (handle aliases like "t.oid", "ns.nspname")
+                    # Remove table prefixes (ns., t., typ., att., etc.)
+                    column_parts = [col.strip() for col in select_clause.split(",")]
+                    requested_columns = []
+                    for part in column_parts:
+                        # Extract column name after dot (if exists) or use whole part
+                        if "." in part:
+                            col_name = part.split(".")[-1].strip()
+                        else:
+                            col_name = part.strip()
+
+                        # Remove AS aliases
+                        if " AS " in col_name.upper():
+                            col_name = col_name.split()[0]
+
+                        # Check if this is a known column
+                        if col_name in available_columns:
+                            requested_columns.append(col_name)
+                        else:
+                            logger.warning(
+                                f"Unknown column '{col_name}' in SELECT clause, skipping"
+                            )
+
+                    if not requested_columns:
+                        # Fallback if no known columns found
+                        logger.warning(
+                            "No recognized columns in SELECT clause, using default 6-column structure"
+                        )
+                        requested_columns = [
+                            "nspname",
+                            "oid",
+                            "typname",
+                            "typtype",
+                            "typnotnull",
+                            "elemtypoid",
+                        ]
+
+                logger.info(f"🔍 Parsed SELECT clause: requesting columns {requested_columns}")
+
+                # Build rows based on requested column order
+                rows = []
+                for i in range(len(base_types["oid"])):
+                    row = []
+                    for col_name in requested_columns:
+                        if col_name in ["oid", "typname"]:
+                            # These are lists (one value per type)
+                            row.append(base_types[col_name][i])
+                        else:
+                            # These are scalars (same for all types)
+                            row.append(base_types[col_name])
+                    rows.append(tuple(row))
+
+                # Build column metadata in requested order
+                columns = []
+                for col_name in requested_columns:
+                    col_meta = available_columns[col_name].copy()
+                    col_meta["name"] = col_name
+                    columns.append(col_meta)
+
+                return {
+                    "success": True,
+                    "rows": rows,
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "command": "SELECT",
+                    "command_tag": f"SELECT {len(rows)}",
+                }
 
             try:
                 # PROFILING: Track detailed timing
@@ -679,38 +1428,48 @@ class IRISExecutor:
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
                 transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+                transaction_translated_sql = transaction_translator.translate_transaction_command(
+                    sql
+                )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
                 # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
                 translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="direct")
+                normalized_sql = translator.normalize_sql(
+                    transaction_translated_sql, execution_path="direct"
+                )
 
                 # Log transaction translation metrics
                 txn_metrics = transaction_translator.get_translation_metrics()
-                logger.info("Transaction verb translation applied",
-                           total_translations=txn_metrics['total_translations'],
-                           avg_time_ms=txn_metrics['avg_translation_time_ms'],
-                           sla_violations=txn_metrics['sla_violations'],
-                           sql_original_preview=sql[:100],
-                           sql_translated_preview=transaction_translated_sql[:100],
-                           session_id=session_id)
+                logger.info(
+                    "Transaction verb translation applied",
+                    total_translations=txn_metrics["total_translations"],
+                    avg_time_ms=txn_metrics["avg_translation_time_ms"],
+                    sla_violations=txn_metrics["sla_violations"],
+                    sql_original_preview=sql[:100],
+                    sql_translated_preview=transaction_translated_sql[:100],
+                    session_id=session_id,
+                )
 
                 # Log normalization metrics
                 norm_metrics = translator.get_normalization_metrics()
-                logger.info("SQL normalization applied",
-                           identifiers_normalized=norm_metrics['identifier_count'],
-                           dates_translated=norm_metrics['date_literal_count'],
-                           normalization_time_ms=norm_metrics['normalization_time_ms'],
-                           sla_violated=norm_metrics['sla_violated'],
-                           sql_before_preview=transaction_translated_sql[:100],
-                           sql_after_preview=normalized_sql[:100],
-                           session_id=session_id)
+                logger.info(
+                    "SQL normalization applied",
+                    identifiers_normalized=norm_metrics["identifier_count"],
+                    dates_translated=norm_metrics["date_literal_count"],
+                    normalization_time_ms=norm_metrics["normalization_time_ms"],
+                    sla_violated=norm_metrics["sla_violated"],
+                    sql_before_preview=transaction_translated_sql[:100],
+                    sql_after_preview=normalized_sql[:100],
+                    session_id=session_id,
+                )
 
-                if norm_metrics['sla_violated']:
-                    logger.warning("SQL normalization exceeded 5ms SLA",
-                                 normalization_time_ms=norm_metrics['normalization_time_ms'],
-                                 session_id=session_id)
+                if norm_metrics["sla_violated"]:
+                    logger.warning(
+                        "SQL normalization exceeded 5ms SLA",
+                        normalization_time_ms=norm_metrics["normalization_time_ms"],
+                        session_id=session_id,
+                    )
 
                 # Apply vector query optimization (convert parameterized vectors to literals)
                 # Use normalized_sql as input instead of original sql
@@ -724,41 +1483,62 @@ class IRISExecutor:
                 try:
                     from .vector_optimizer import optimize_vector_query
 
-                    logger.debug("Vector optimizer: checking query",
-                               sql_preview=normalized_sql[:200],
-                               param_count=len(params) if params else 0,
-                               session_id=session_id)
+                    logger.debug(
+                        "Vector optimizer: checking query",
+                        sql_preview=normalized_sql[:200],
+                        param_count=len(params) if params else 0,
+                        session_id=session_id,
+                    )
 
                     # CRITICAL: Pass normalized_sql (not original sql) per FR-012
                     optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
 
-                    optimization_applied = (optimized_sql != normalized_sql) or (optimized_params != params)
+                    optimization_applied = (optimized_sql != normalized_sql) or (
+                        optimized_params != params
+                    )
 
                     if optimization_applied:
-                        logger.info("Vector optimization applied",
-                                  sql_changed=(optimized_sql != normalized_sql),
-                                  params_changed=(optimized_params != params),
-                                  params_before=len(params) if params else 0,
-                                  params_after=len(optimized_params) if optimized_params else 0,
-                                  optimized_sql_preview=optimized_sql[:200],
-                                  session_id=session_id)
+                        logger.info(
+                            "Vector optimization applied",
+                            sql_changed=(optimized_sql != normalized_sql),
+                            params_changed=(optimized_params != params),
+                            params_before=len(params) if params else 0,
+                            params_after=len(optimized_params) if optimized_params else 0,
+                            optimized_sql_preview=optimized_sql[:200],
+                            session_id=session_id,
+                        )
                     else:
-                        logger.debug("Vector optimization not applicable",
-                                   reason="No vector patterns found or params unchanged",
-                                   session_id=session_id)
+                        logger.debug(
+                            "Vector optimization not applicable",
+                            reason="No vector patterns found or params unchanged",
+                            session_id=session_id,
+                        )
 
                 except ImportError as e:
-                    logger.warning("Vector optimizer not available",
-                                 error=str(e),
-                                 session_id=session_id)
+                    logger.warning(
+                        "Vector optimizer not available", error=str(e), session_id=session_id
+                    )
                 except Exception as opt_error:
-                    logger.warning("Vector optimization failed, using normalized query",
-                                 error=str(opt_error),
-                                 session_id=session_id)
+                    logger.warning(
+                        "Vector optimization failed, using normalized query",
+                        error=str(opt_error),
+                        session_id=session_id,
+                    )
                     optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
+                # POSTGRESQL COMPATIBILITY: Handle SHOW commands that IRIS doesn't support
+                # Intercept and return fake results for PostgreSQL compatibility
+                sql_upper_stripped = optimized_sql.strip().upper()
+                if sql_upper_stripped.startswith("SHOW "):
+                    logger.info(
+                        "Intercepting SHOW command (PostgreSQL compatibility shim)",
+                        sql=optimized_sql[:100],
+                        session_id=session_id,
+                    )
+                    return self._handle_show_command(optimized_sql, session_id)
 
                 # Execute query with performance tracking
                 start_time = time.perf_counter()
@@ -766,28 +1546,34 @@ class IRISExecutor:
                 # CRITICAL: Strip trailing semicolon when using parameters
                 # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
                 # but works fine with "SELECT ... WHERE id = ?" (no semicolon)
-                if optimized_params and optimized_sql.rstrip().endswith(';'):
+                if optimized_params and optimized_sql.rstrip().endswith(";"):
                     original_len = len(optimized_sql)
-                    optimized_sql = optimized_sql.rstrip().rstrip(';')
-                    logger.info("Removed trailing semicolon for parameterized query",
-                               original_sql_len=original_len,
-                               new_sql_len=len(optimized_sql),
-                               sql_preview=optimized_sql[:80],
-                               param_count=len(optimized_params),
-                               session_id=session_id)
+                    optimized_sql = optimized_sql.rstrip().rstrip(";")
+                    logger.info(
+                        "Removed trailing semicolon for parameterized query",
+                        original_sql_len=original_len,
+                        new_sql_len=len(optimized_sql),
+                        sql_preview=optimized_sql[:80],
+                        param_count=len(optimized_params),
+                        session_id=session_id,
+                    )
 
-                logger.debug("Executing IRIS query",
-                           sql_preview=optimized_sql[:200],
-                           param_count=len(optimized_params) if optimized_params else 0,
-                           optimization_applied=optimization_applied,
-                           session_id=session_id)
+                logger.debug(
+                    "Executing IRIS query",
+                    sql_preview=optimized_sql[:200],
+                    param_count=len(optimized_params) if optimized_params else 0,
+                    optimization_applied=optimization_applied,
+                    session_id=session_id,
+                )
 
                 # Log the actual SQL being sent to IRIS for debugging
-                logger.info("About to execute iris.sql.exec",
-                          sql_ends_with_semicolon=optimized_sql.rstrip().endswith(';'),
-                          sql_last_20=optimized_sql.rstrip()[-20:],
-                          has_params=optimized_params is not None and len(optimized_params) > 0,
-                          session_id=session_id)
+                logger.info(
+                    "About to execute iris.sql.exec",
+                    sql_ends_with_semicolon=optimized_sql.rstrip().endswith(";"),
+                    sql_last_20=optimized_sql.rstrip()[-20:],
+                    has_params=optimized_params is not None and len(optimized_params) > 0,
+                    session_id=session_id,
+                )
 
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
@@ -797,14 +1583,18 @@ class IRISExecutor:
                 statements = self._split_sql_statements(optimized_sql)
 
                 if len(statements) > 1:
-                    logger.info("Executing multiple statements",
-                               statement_count=len(statements),
-                               session_id=session_id)
+                    logger.info(
+                        "Executing multiple statements",
+                        statement_count=len(statements),
+                        session_id=session_id,
+                    )
 
                     # Execute all statements except the last (don't capture results)
                     for stmt in statements[:-1]:
-                        logger.debug(f"Executing intermediate statement: {stmt[:80]}...",
-                                   session_id=session_id)
+                        logger.debug(
+                            f"Executing intermediate statement: {stmt[:80]}...",
+                            session_id=session_id,
+                        )
                         if optimized_params is not None and len(optimized_params) > 0:
                             iris.sql.exec(stmt, *optimized_params)
                         else:
@@ -812,8 +1602,9 @@ class IRISExecutor:
 
                     # Execute last statement and capture results
                     last_stmt = statements[-1]
-                    logger.debug(f"Executing final statement: {last_stmt[:80]}...",
-                               session_id=session_id)
+                    logger.debug(
+                        f"Executing final statement: {last_stmt[:80]}...", session_id=session_id
+                    )
                     if optimized_params is not None and len(optimized_params) > 0:
                         result = iris.sql.exec(last_stmt, *optimized_params)
                     else:
@@ -836,105 +1627,531 @@ class IRISExecutor:
                 columns = []
 
                 # Get column metadata if available
-                if hasattr(result, '_meta') and result._meta:
+                if hasattr(result, "_meta") and result._meta:
                     for col_info in result._meta:
-                        columns.append({
-                            'name': col_info.get('name', ''),
-                            'type_oid': self._iris_type_to_pg_oid(col_info.get('type', 'VARCHAR')),
-                            'type_size': col_info.get('size', -1),
-                            'type_modifier': -1,
-                            'format_code': 0  # Text format
-                        })
+                        # Get original IRIS column name
+                        iris_col_name = col_info.get("name", "")
+                        iris_type = col_info.get("type", "VARCHAR")
+
+                        # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
+                        # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
+                        # PostgreSQL uses ?column?, type names (int4), or function names (count)
+                        col_name = self._normalize_iris_column_name(iris_col_name, sql, iris_type)
+
+                        # DEBUG: Log IRIS type for arithmetic expressions
+                        logger.info(
+                            "🔍 IRIS metadata type discovery",
+                            original_column_name=iris_col_name,
+                            normalized_column_name=col_name,
+                            iris_type=iris_type,
+                            col_info=col_info,
+                        )
+
+                        # Get PostgreSQL type OID
+                        type_oid = self._iris_type_to_pg_oid(iris_type)
+
+                        # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
+                        # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
+                        # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
+                        sql_upper = sql.upper()
+
+                        if iris_type == 2:
+                            # Check for explicit casts
+                            if "AS INTEGER" in sql_upper or "AS INT" in sql_upper:
+                                # Already handled by asyncpg CAST INTEGER fix - don't override
+                                pass
+                            elif "AS NUMERIC" not in sql_upper and "AS DECIMAL" not in sql_upper:
+                                # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
+                                logger.info(
+                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
+                                    column_name=col_name,
+                                    original_oid=type_oid,
+                                    reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
+                                )
+                                type_oid = 701  # FLOAT8
+
+                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 25 (TEXT) in IRIS
+                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
+                        if "CURRENT_TIMESTAMP" in sql_upper and type_oid == 25:
+                            logger.info(
+                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 25 (TEXT) → 1114 (TIMESTAMP)",
+                                column_name=col_name,
+                                original_oid=type_oid,
+                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
+                            )
+                            type_oid = 1114  # TIMESTAMP
+
+                        columns.append(
+                            {
+                                "name": col_name,
+                                "type_oid": type_oid,
+                                "type_size": col_info.get("size", -1),
+                                "type_modifier": -1,
+                                "format_code": 0,  # Text format
+                            }
+                        )
 
                 # Fetch rows
                 try:
                     for row in result:
                         if isinstance(row, (list, tuple)):
-                            rows.append(list(row))
+                            # Normalize IRIS NULL representations to Python None
+                            normalized_row = [self._normalize_iris_null(value) for value in row]
+                            rows.append(normalized_row)
                         else:
                             # Single value result
-                            rows.append([row])
+                            normalized_value = self._normalize_iris_null(row)
+                            rows.append([normalized_value])
                 except Exception as fetch_error:
-                    logger.warning("Error fetching IRIS result rows",
-                                 error=str(fetch_error),
-                                 session_id=session_id)
+                    logger.warning(
+                        "Error fetching IRIS result rows",
+                        error=str(fetch_error),
+                        session_id=session_id,
+                    )
 
-                # If we have rows but no column metadata, generate generic column info
-                # iris.sql.exec() doesn't provide column metadata, so infer from first row
+                # If we have rows but no column metadata, discover column info using hybrid approach
+                # Implements 3-layer strategy from Perplexity research (2025-11-11):
+                # Layer 1: LIMIT 0 metadata discovery (protocol-native)
+                # Layer 2: SQL parsing with correlation validation
+                # Layer 3: Generic fallback
+
+                logger.info(
+                    "🔍 METADATA DISCOVERY CHECK",
+                    has_rows=len(rows) > 0,
+                    has_columns=len(columns) > 0,
+                    will_attempt_discovery=len(rows) > 0 and len(columns) == 0,
+                    session_id=session_id,
+                )
+
                 if rows and not columns:
                     first_row = rows[0] if rows else []
-                    for i in range(len(first_row)):
-                        columns.append({
-                            'name': f'column{i+1}',  # Generic name
-                            'type_oid': 25,  # TEXT type (most flexible)
-                            'type_size': -1,
-                            'type_modifier': -1,
-                            'format_code': 0  # Text format
-                        })
-                    logger.debug("Generated generic column metadata",
-                               column_count=len(columns),
-                               session_id=session_id)
+                    num_columns = len(first_row)
+
+                    # Layer 1: Try LIMIT 0 metadata discovery (BEST - database-native)
+                    discovered_aliases = self._discover_metadata_with_limit_zero(sql, session_id)
+
+                    if discovered_aliases and len(discovered_aliases) == num_columns:
+                        logger.info(
+                            "✅ Layer 1 SUCCESS: LIMIT 0 metadata discovery",
+                            aliases=discovered_aliases,
+                            column_count=num_columns,
+                            session_id=session_id,
+                        )
+                        # Infer types from first row data
+                        for i, alias in enumerate(discovered_aliases):
+                            inferred_type = (
+                                self._infer_type_from_value(first_row[i])
+                                if i < len(first_row)
+                                else 25
+                            )
+                            # CRITICAL: Lowercase column names for PostgreSQL compatibility
+                            col_name = alias.lower() if isinstance(alias, str) else alias
+                            # Apply same normalization as result._meta path
+                            col_name = self._normalize_iris_column_name(
+                                col_name, sql, inferred_type
+                            )
+                            columns.append(
+                                {
+                                    "name": col_name,
+                                    "type_oid": inferred_type,
+                                    "type_size": -1,
+                                    "type_modifier": -1,
+                                    "format_code": 0,
+                                }
+                            )
+                    else:
+                        # Layer 1.5: Try table metadata expansion for SELECT * queries (NEW)
+                        if discovered_aliases:
+                            logger.warning(
+                                "Layer 1 count mismatch",
+                                discovered=len(discovered_aliases),
+                                actual=num_columns,
+                                session_id=session_id,
+                            )
+
+                        # Check if this is a SELECT * FROM table query
+                        table_columns = self._expand_select_star(sql, num_columns, session_id)
+
+                        if table_columns and len(table_columns) == num_columns:
+                            logger.info(
+                                "✅ Layer 1.5 SUCCESS: Table metadata expansion for SELECT *",
+                                aliases=table_columns,
+                                column_count=num_columns,
+                                session_id=session_id,
+                            )
+                            # Infer types from first row data
+                            for i, col_name in enumerate(table_columns):
+                                inferred_type = (
+                                    self._infer_type_from_value(first_row[i])
+                                    if i < len(first_row)
+                                    else 25
+                                )
+                                # Column names from INFORMATION_SCHEMA are already in correct case
+                                columns.append(
+                                    {
+                                        "name": col_name,
+                                        "type_oid": inferred_type,
+                                        "type_size": -1,
+                                        "type_modifier": -1,
+                                        "format_code": 0,
+                                    }
+                                )
+                        else:
+                            # Layer 2: Try SQL parsing with correlation (FALLBACK)
+                            if table_columns:
+                                logger.warning(
+                                    "Layer 1.5 count mismatch",
+                                    discovered=len(table_columns),
+                                    actual=num_columns,
+                                    session_id=session_id,
+                                )
+
+                            # CRITICAL: Use original SQL to preserve case sensitivity for PostgreSQL clients
+                            # psycopg and other PostgreSQL clients expect lowercase column names
+                            extracted_aliases = self.alias_extractor.extract_column_aliases(sql)
+
+                            if extracted_aliases and len(extracted_aliases) == num_columns:
+                                logger.info(
+                                    "✅ Layer 2 SUCCESS: SQL parsing with correlation",
+                                    aliases=extracted_aliases,
+                                    column_count=num_columns,
+                                    session_id=session_id,
+                                )
+                                # Infer types from first row data
+                                for i, alias in enumerate(extracted_aliases):
+                                    # CRITICAL: Lowercase column names for PostgreSQL compatibility
+                                    col_name = alias.lower() if isinstance(alias, str) else alias
+                                    # Apply same normalization as result._meta path
+                                    inferred_type = (
+                                        self._infer_type_from_value(first_row[i])
+                                        if i < len(first_row)
+                                        else 25
+                                    )
+
+                                    # CRITICAL FIX (2025-11-14): Check for CAST expressions in SQL
+                                    # IRIS returns integer 1 for boolean values, but we need OID 16 (bool)
+                                    cast_type_oid = self._detect_cast_type_oid(sql, col_name)
+                                    if cast_type_oid:
+                                        logger.info(
+                                            "✅ Detected CAST type override",
+                                            column=col_name,
+                                            inferred_oid=inferred_type,
+                                            cast_oid=cast_type_oid,
+                                            session_id=session_id,
+                                        )
+                                        inferred_type = cast_type_oid
+
+                                    # CRITICAL FIX: CURRENT_TIMESTAMP returns type 25 (TEXT) in IRIS
+                                    # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
+                                    if "CURRENT_TIMESTAMP" in sql.upper() and inferred_type == 25:
+                                        logger.info(
+                                            "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 25 (TEXT) → 1114 (TIMESTAMP)",
+                                            column_name=col_name,
+                                            original_oid=inferred_type,
+                                            reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
+                                        )
+                                        inferred_type = 1114  # TIMESTAMP
+
+                                    col_name = self._normalize_iris_column_name(
+                                        col_name, sql, inferred_type
+                                    )
+                                    columns.append(
+                                        {
+                                            "name": col_name,
+                                            "type_oid": inferred_type,
+                                            "type_size": -1,
+                                            "type_modifier": -1,
+                                            "format_code": 0,
+                                        }
+                                    )
+                            else:
+                                # Layer 3: Generic fallback (LAST RESORT)
+                                if extracted_aliases:
+                                    logger.warning(
+                                        "Layer 2 count mismatch - falling back to generic",
+                                        extracted=len(extracted_aliases),
+                                        actual=num_columns,
+                                        session_id=session_id,
+                                    )
+                                logger.info(
+                                    "⚠️ Layer 3: Using generic column names",
+                                    column_count=num_columns,
+                                    session_id=session_id,
+                                )
+                                # Infer types from first row data even with generic names
+                                # CRITICAL: For SELECT without FROM (literals), use ?column? for PostgreSQL compatibility
+                                sql_upper = sql.upper()
+                                use_qcolumn = "SELECT" in sql_upper and "FROM" not in sql_upper
+
+                                for i in range(num_columns):
+                                    inferred_type = (
+                                        self._infer_type_from_value(first_row[i])
+                                        if i < len(first_row)
+                                        else 25
+                                    )
+                                    # Use ?column? for literal queries (SELECT 1, SELECT 'hello')
+                                    # Otherwise use generic column1, column2, etc.
+                                    col_name = "?column?" if use_qcolumn else f"column{i+1}"
+                                    columns.append(
+                                        {
+                                            "name": col_name,
+                                            "type_oid": inferred_type,
+                                            "type_size": -1,
+                                            "type_modifier": -1,
+                                            "format_code": 0,
+                                        }
+                                    )
+
+                # CRITICAL: For SELECT queries with 0 rows, we MUST generate column metadata
+                # PostgreSQL protocol requires RowDescription for ALL SELECT queries
+                # JDBC executeQuery() will fail with "No results were returned" without it
+                sql_upper = sql.strip().upper()
+                if not rows and not columns and sql_upper.startswith("SELECT"):
+                    logger.info(
+                        "Empty SELECT result - generating column metadata from table structure",
+                        sql=sql[:100],
+                        session_id=session_id,
+                    )
+
+                    # Extract table name from SELECT query (simple parsing)
+                    table_name = self._extract_table_name_from_select(sql)
+
+                    if table_name:
+                        # Query INFORMATION_SCHEMA for column metadata
+                        try:
+                            metadata_sql = f"""
+                                SELECT column_name, data_type
+                                FROM INFORMATION_SCHEMA.COLUMNS
+                                WHERE LOWER(table_name) = LOWER('{table_name}')
+                                ORDER BY ordinal_position
+                            """
+
+                            # Execute metadata query (recursion-safe - won't trigger this path again)
+                            metadata_result = iris.sql.exec(metadata_sql)
+                            metadata_rows = list(metadata_result)
+
+                            if metadata_rows:
+                                for col_name, col_type in metadata_rows:
+                                    # Map IRIS types to PostgreSQL OIDs
+                                    type_oid = self._map_iris_type_to_oid(col_type)
+                                    columns.append(
+                                        {
+                                            "name": col_name,
+                                            "type_oid": type_oid,
+                                            "type_size": -1,
+                                            "type_modifier": -1,
+                                            "format_code": 0,
+                                        }
+                                    )
+                                logger.info(
+                                    f"✅ Generated {len(columns)} column metadata from table structure",
+                                    table=table_name,
+                                    columns=[c["name"] for c in columns],
+                                    session_id=session_id,
+                                )
+                            else:
+                                # No metadata found - fall back to generic
+                                logger.warning(
+                                    f"No column metadata found for table {table_name}, using generic",
+                                    session_id=session_id,
+                                )
+                                columns.append(
+                                    {
+                                        "name": "column1",
+                                        "type_oid": 25,  # TEXT
+                                        "type_size": -1,
+                                        "type_modifier": -1,
+                                        "format_code": 0,
+                                    }
+                                )
+                        except Exception as metadata_error:
+                            logger.warning(
+                                "Failed to query column metadata",
+                                error=str(metadata_error),
+                                table=table_name,
+                                session_id=session_id,
+                            )
+                            # Fall back to generic column
+                            columns.append(
+                                {
+                                    "name": "column1",
+                                    "type_oid": 25,  # TEXT
+                                    "type_size": -1,
+                                    "type_modifier": -1,
+                                    "format_code": 0,
+                                }
+                            )
+                    else:
+                        # Couldn't parse table name - use generic column
+                        logger.warning(
+                            "Could not extract table name from SELECT, using generic column",
+                            sql=sql[:100],
+                            session_id=session_id,
+                        )
+                        columns.append(
+                            {
+                                "name": "column1",
+                                "type_oid": 25,  # TEXT
+                                "type_size": -1,
+                                "type_modifier": -1,
+                                "format_code": 0,
+                            }
+                        )
 
                 # PROFILING: Fetch complete
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
+
+                # CRITICAL: Convert IRIS date format to PostgreSQL format
+                # IRIS returns dates as ISO strings (e.g., '2024-01-15')
+                # PostgreSQL wire protocol expects dates as INTEGER days since 2000-01-01
+                # This conversion MUST happen before returning results to clients
+                if rows and columns:
+                    import datetime
+
+                    # PostgreSQL J2000 epoch: 2000-01-01
+                    PG_EPOCH = datetime.date(2000, 1, 1)
+
+                    # Build type_oid lookup by column index
+                    column_type_oids = [col["type_oid"] for col in columns]
+
+                    # Convert date values in-place
+                    for row_idx, row in enumerate(rows):
+                        for col_idx, value in enumerate(row):
+                            if col_idx < len(column_type_oids):
+                                type_oid = column_type_oids[col_idx]
+
+                                # OID 1082 = DATE type
+                                if type_oid == 1082 and value is not None:
+                                    try:
+                                        # IRIS returns dates as ISO strings (YYYY-MM-DD)
+                                        if isinstance(value, str):
+                                            # Parse ISO date string
+                                            date_obj = datetime.datetime.strptime(
+                                                value, "%Y-%m-%d"
+                                            ).date()
+                                            # Convert to PostgreSQL days since 2000-01-01
+                                            pg_days = (date_obj - PG_EPOCH).days
+                                            rows[row_idx][col_idx] = pg_days
+                                            logger.debug(
+                                                "Converted date string to PostgreSQL format",
+                                                row=row_idx,
+                                                col=col_idx,
+                                                iris_string=value,
+                                                pg_days=pg_days,
+                                                date_obj=str(date_obj),
+                                            )
+                                        # Handle integer Horolog format (if IRIS returns raw days)
+                                        elif isinstance(value, int):
+                                            pg_date = self._convert_iris_horolog_date_to_pg(value)
+                                            rows[row_idx][col_idx] = pg_date
+                                            logger.debug(
+                                                "Converted Horolog date to PostgreSQL format",
+                                                row=row_idx,
+                                                col=col_idx,
+                                                iris_horolog=value,
+                                                pg_days=pg_date,
+                                            )
+                                    except Exception as date_err:
+                                        logger.warning(
+                                            "Failed to convert date value",
+                                            row=row_idx,
+                                            col=col_idx,
+                                            value=value,
+                                            value_type=type(value),
+                                            error=str(date_err),
+                                        )
+                                        # Keep original value if conversion fails
+
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
                 # Determine command tag based on SQL type
                 command_tag = self._determine_command_tag(sql, len(rows))
 
                 # PROFILING: Log detailed breakdown
-                logger.info("⏱️ EMBEDDED EXECUTION TIMING",
-                          total_ms=round(t_total_elapsed, 2),
-                          optimization_ms=round(t_opt_elapsed, 2),
-                          iris_exec_ms=round(t_iris_elapsed, 2),
-                          fetch_ms=round(t_fetch_elapsed, 2),
-                          overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
-                          session_id=session_id)
+                logger.info(
+                    "⏱️ EMBEDDED EXECUTION TIMING",
+                    total_ms=round(t_total_elapsed, 2),
+                    optimization_ms=round(t_opt_elapsed, 2),
+                    iris_exec_ms=round(t_iris_elapsed, 2),
+                    fetch_ms=round(t_fetch_elapsed, 2),
+                    overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
+                    session_id=session_id,
+                )
 
                 return {
-                    'success': True,
-                    'rows': rows,
-                    'columns': columns,
-                    'row_count': len(rows),
-                    'command_tag': command_tag,
-                    'execution_time_ms': execution_time,
-                    'iris_metadata': {
-                        'embedded_mode': True,
-                        'connection_type': 'embedded_python'
+                    "success": True,
+                    "rows": rows,
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "command_tag": command_tag,
+                    "execution_time_ms": execution_time,
+                    "iris_metadata": {"embedded_mode": True, "connection_type": "embedded_python"},
+                    "profiling": {
+                        "total_ms": t_total_elapsed,
+                        "optimization_ms": t_opt_elapsed,
+                        "iris_execution_ms": t_iris_elapsed,
+                        "fetch_ms": t_fetch_elapsed,
+                        "overhead_ms": t_total_elapsed - t_iris_elapsed,
                     },
-                    'profiling': {
-                        'total_ms': t_total_elapsed,
-                        'optimization_ms': t_opt_elapsed,
-                        'iris_execution_ms': t_iris_elapsed,
-                        'fetch_ms': t_fetch_elapsed,
-                        'overhead_ms': t_total_elapsed - t_iris_elapsed
-                    }
                 }
 
             except Exception as e:
-                logger.error("IRIS embedded execution failed",
-                           sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                           error=str(e),
-                           session_id=session_id)
+                # IRIS SQLCODE 100 = "No rows found" - treat as success with 0 rows
+                # This is NOT an error - it's a normal response for DELETE/UPDATE with no matches
+                if hasattr(e, "sqlcode") and e.sqlcode == 100:
+                    logger.info(
+                        "IRIS SQLCODE 100 - No rows found (success with 0 rows)",
+                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                        session_id=session_id,
+                    )
+                    # Determine command tag from SQL
+                    sql_upper = sql.strip().upper()
+                    if sql_upper.startswith("DELETE"):
+                        command_tag = "DELETE"
+                    elif sql_upper.startswith("UPDATE"):
+                        command_tag = "UPDATE"
+                    elif sql_upper.startswith("INSERT"):
+                        command_tag = "INSERT"
+                    else:
+                        command_tag = "UNKNOWN"
+
+                    return {
+                        "success": True,  # SQLCODE 100 is success!
+                        "rows": [],
+                        "columns": [],
+                        "row_count": 0,
+                        "command_tag": command_tag,
+                        "execution_time_ms": 0,
+                    }
+
+                # Real error - propagate it
+                logger.error(
+                    "IRIS embedded execution failed",
+                    sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                    error=str(e),
+                    session_id=session_id,
+                )
                 return {
-                    'success': False,
-                    'error': str(e),
-                    'rows': [],
-                    'columns': [],
-                    'row_count': 0,
-                    'command_tag': 'ERROR',
-                    'execution_time_ms': 0
+                    "success": False,
+                    "error": str(e),
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command_tag": "ERROR",
+                    "execution_time_ms": 0,
                 }
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.thread_pool, _sync_execute)
 
-    async def _execute_external_async(self, sql: str, params: Optional[List] = None,
-                                     session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _execute_external_async(
+        self, sql: str, params: list | None = None, session_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Execute SQL using external IRIS connection with proper async threading
         """
+
         def _sync_external_execute():
             """Synchronous external IRIS execution in thread pool"""
             try:
@@ -942,43 +2159,52 @@ class IRISExecutor:
                 t_start_total = time.perf_counter()
 
                 # Use intersystems-irispython driver
-                import iris
 
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
                 transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(sql)
+                transaction_translated_sql = transaction_translator.translate_transaction_command(
+                    sql
+                )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
                 # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
                 translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(transaction_translated_sql, execution_path="external")
+                normalized_sql = translator.normalize_sql(
+                    transaction_translated_sql, execution_path="external"
+                )
 
                 # Log transaction translation metrics (external mode)
                 txn_metrics = transaction_translator.get_translation_metrics()
-                logger.info("Transaction verb translation applied (external mode)",
-                           total_translations=txn_metrics['total_translations'],
-                           avg_time_ms=txn_metrics['avg_translation_time_ms'],
-                           sla_violations=txn_metrics['sla_violations'],
-                           sql_original_preview=sql[:100],
-                           sql_translated_preview=transaction_translated_sql[:100],
-                           session_id=session_id)
+                logger.info(
+                    "Transaction verb translation applied (external mode)",
+                    total_translations=txn_metrics["total_translations"],
+                    avg_time_ms=txn_metrics["avg_translation_time_ms"],
+                    sla_violations=txn_metrics["sla_violations"],
+                    sql_original_preview=sql[:100],
+                    sql_translated_preview=transaction_translated_sql[:100],
+                    session_id=session_id,
+                )
 
                 # Log normalization metrics
                 norm_metrics = translator.get_normalization_metrics()
-                logger.info("SQL normalization applied (external mode)",
-                           identifiers_normalized=norm_metrics['identifier_count'],
-                           dates_translated=norm_metrics['date_literal_count'],
-                           normalization_time_ms=norm_metrics['normalization_time_ms'],
-                           sla_violated=norm_metrics['sla_violated'],
-                           sql_before_preview=transaction_translated_sql[:100],
-                           sql_after_preview=normalized_sql[:100],
-                           session_id=session_id)
+                logger.info(
+                    "SQL normalization applied (external mode)",
+                    identifiers_normalized=norm_metrics["identifier_count"],
+                    dates_translated=norm_metrics["date_literal_count"],
+                    normalization_time_ms=norm_metrics["normalization_time_ms"],
+                    sla_violated=norm_metrics["sla_violated"],
+                    sql_before_preview=transaction_translated_sql[:100],
+                    sql_after_preview=normalized_sql[:100],
+                    session_id=session_id,
+                )
 
-                if norm_metrics['sla_violated']:
-                    logger.warning("SQL normalization exceeded 5ms SLA (external mode)",
-                                 normalization_time_ms=norm_metrics['normalization_time_ms'],
-                                 session_id=session_id)
+                if norm_metrics["sla_violated"]:
+                    logger.warning(
+                        "SQL normalization exceeded 5ms SLA (external mode)",
+                        normalization_time_ms=norm_metrics["normalization_time_ms"],
+                        session_id=session_id,
+                    )
 
                 # Apply vector query optimization (convert parameterized vectors to literals)
                 # Use normalized_sql as input instead of original sql
@@ -992,37 +2218,49 @@ class IRISExecutor:
                 try:
                     from .vector_optimizer import optimize_vector_query
 
-                    logger.debug("Vector optimizer: checking query (external mode)",
-                               sql_preview=normalized_sql[:200],
-                               param_count=len(params) if params else 0,
-                               session_id=session_id)
+                    logger.debug(
+                        "Vector optimizer: checking query (external mode)",
+                        sql_preview=normalized_sql[:200],
+                        param_count=len(params) if params else 0,
+                        session_id=session_id,
+                    )
 
                     # CRITICAL: Pass normalized_sql (not original sql) per FR-012
                     optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
 
-                    optimization_applied = (optimized_sql != normalized_sql) or (optimized_params != params)
+                    optimization_applied = (optimized_sql != normalized_sql) or (
+                        optimized_params != params
+                    )
 
                     if optimization_applied:
-                        logger.info("Vector optimization applied (external mode)",
-                                  sql_changed=(optimized_sql != normalized_sql),
-                                  params_changed=(optimized_params != params),
-                                  params_before=len(params) if params else 0,
-                                  params_after=len(optimized_params) if optimized_params else 0,
-                                  optimized_sql_preview=optimized_sql[:200],
-                                  session_id=session_id)
+                        logger.info(
+                            "Vector optimization applied (external mode)",
+                            sql_changed=(optimized_sql != normalized_sql),
+                            params_changed=(optimized_params != params),
+                            params_before=len(params) if params else 0,
+                            params_after=len(optimized_params) if optimized_params else 0,
+                            optimized_sql_preview=optimized_sql[:200],
+                            session_id=session_id,
+                        )
                     else:
-                        logger.debug("Vector optimization not applicable (external mode)",
-                                   reason="No vector patterns found or params unchanged",
-                                   session_id=session_id)
+                        logger.debug(
+                            "Vector optimization not applicable (external mode)",
+                            reason="No vector patterns found or params unchanged",
+                            session_id=session_id,
+                        )
 
                 except ImportError as e:
-                    logger.warning("Vector optimizer not available (external mode)",
-                                 error=str(e),
-                                 session_id=session_id)
+                    logger.warning(
+                        "Vector optimizer not available (external mode)",
+                        error=str(e),
+                        session_id=session_id,
+                    )
                 except Exception as opt_error:
-                    logger.warning("Vector optimization failed, using normalized query (external mode)",
-                                 error=str(opt_error),
-                                 session_id=session_id)
+                    logger.warning(
+                        "Vector optimization failed, using normalized query (external mode)",
+                        error=str(opt_error),
+                        session_id=session_id,
+                    )
                     optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
@@ -1049,6 +2287,14 @@ class IRISExecutor:
                 else:
                     cursor.execute(optimized_sql)
 
+                # CRITICAL DEBUG: Log exact SQL sent to IRIS
+                logger.info(
+                    "🔍 DBAPI SQL EXECUTED",
+                    sql=optimized_sql,
+                    params=optimized_params,
+                    session_id=session_id,
+                )
+
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
 
@@ -1062,18 +2308,85 @@ class IRISExecutor:
                 # Get column information
                 if cursor.description:
                     for desc in cursor.description:
-                        columns.append({
-                            'name': desc[0],
-                            'type_oid': self._iris_type_to_pg_oid(desc[1] if len(desc) > 1 else 'VARCHAR'),
-                            'type_size': desc[2] if len(desc) > 2 else -1,
-                            'type_modifier': -1,
-                            'format_code': 0  # Text format
-                        })
+                        # Get original IRIS column name and type
+                        iris_col_name = desc[0]
+                        iris_type = desc[1] if len(desc) > 1 else "VARCHAR"
+
+                        # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
+                        # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
+                        # PostgreSQL uses ?column?, type names (int4), or function names (count)
+                        col_name = self._normalize_iris_column_name(iris_col_name, sql, iris_type)
+
+                        # DEBUG: Log IRIS type for arithmetic expressions (external mode)
+                        logger.info(
+                            "🔍 IRIS metadata type discovery (EXTERNAL MODE)",
+                            original_column_name=iris_col_name,
+                            normalized_column_name=col_name,
+                            iris_type=iris_type,
+                            desc=desc,
+                            sql_preview=optimized_sql[:200],
+                        )
+
+                        # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
+                        # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
+                        # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
+                        type_oid = self._iris_type_to_pg_oid(iris_type)
+
+                        sql_upper_check = optimized_sql.upper()
+
+                        if iris_type == 2:
+                            # Check for explicit casts
+                            if "AS INTEGER" in sql_upper_check or "AS INT" in sql_upper_check:
+                                # CAST(? AS INTEGER) - override to INT4
+                                logger.info(
+                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 23 (INT4)",
+                                    column_name=col_name,
+                                    original_oid=type_oid,
+                                    reason="SQL contains CAST to INTEGER",
+                                )
+                                type_oid = 23  # INT4
+                            elif (
+                                "AS NUMERIC" not in sql_upper_check
+                                and "AS DECIMAL" not in sql_upper_check
+                            ):
+                                # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
+                                logger.info(
+                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
+                                    column_name=col_name,
+                                    original_oid=type_oid,
+                                    reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
+                                )
+                                type_oid = 701  # FLOAT8
+
+                        columns.append(
+                            {
+                                "name": col_name,
+                                "type_oid": type_oid,
+                                "type_size": desc[2] if len(desc) > 2 else -1,
+                                "type_modifier": -1,
+                                "format_code": 0,  # Text format
+                            }
+                        )
 
                 # Fetch all rows for SELECT queries
-                if sql.upper().strip().startswith('SELECT') and columns:
+                if sql.upper().strip().startswith("SELECT") and columns:
                     try:
                         results = cursor.fetchall()
+
+                        # CRITICAL DEBUG: Log exact values returned by IRIS DBAPI
+                        logger.info(
+                            "🔍 DBAPI RAW RESULTS",
+                            raw_results=results,
+                            result_count=len(results) if results else 0,
+                            first_row=results[0] if results else None,
+                            first_row_type=type(results[0]) if results else None,
+                            first_value=results[0][0] if results and len(results[0]) > 0 else None,
+                            first_value_type=(
+                                type(results[0][0]) if results and len(results[0]) > 0 else None
+                            ),
+                            session_id=session_id,
+                        )
+
                         for row in results:
                             if isinstance(row, (list, tuple)):
                                 rows.append(list(row))
@@ -1081,9 +2394,11 @@ class IRISExecutor:
                                 # Single value result
                                 rows.append([row])
                     except Exception as fetch_error:
-                        logger.warning("Failed to fetch external IRIS results",
-                                     error=str(fetch_error),
-                                     session_id=session_id)
+                        logger.warning(
+                            "Failed to fetch external IRIS results",
+                            error=str(fetch_error),
+                            session_id=session_id,
+                        )
 
                 cursor.close()
                 # Return connection to pool instead of closing
@@ -1091,55 +2406,116 @@ class IRISExecutor:
 
                 # PROFILING: Fetch complete
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
+
+                # CRITICAL: Convert IRIS date format to PostgreSQL format (EXTERNAL MODE)
+                # Same conversion logic as embedded mode
+                if rows and columns:
+                    import datetime
+
+                    # PostgreSQL J2000 epoch: 2000-01-01
+                    PG_EPOCH = datetime.date(2000, 1, 1)
+
+                    # Build type_oid lookup by column index
+                    column_type_oids = [col["type_oid"] for col in columns]
+
+                    # Convert date values in-place
+                    for row_idx, row in enumerate(rows):
+                        for col_idx, value in enumerate(row):
+                            if col_idx < len(column_type_oids):
+                                type_oid = column_type_oids[col_idx]
+
+                                # OID 1082 = DATE type
+                                if type_oid == 1082 and value is not None:
+                                    try:
+                                        # IRIS returns dates as ISO strings (YYYY-MM-DD)
+                                        if isinstance(value, str):
+                                            # Parse ISO date string
+                                            date_obj = datetime.datetime.strptime(
+                                                value, "%Y-%m-%d"
+                                            ).date()
+                                            # Convert to PostgreSQL days since 2000-01-01
+                                            pg_days = (date_obj - PG_EPOCH).days
+                                            rows[row_idx][col_idx] = pg_days
+                                            logger.debug(
+                                                "Converted date string to PostgreSQL format (external)",
+                                                row=row_idx,
+                                                col=col_idx,
+                                                iris_string=value,
+                                                pg_days=pg_days,
+                                                date_obj=str(date_obj),
+                                            )
+                                        # Handle integer Horolog format (if IRIS returns raw days)
+                                        elif isinstance(value, int):
+                                            pg_date = self._convert_iris_horolog_date_to_pg(value)
+                                            rows[row_idx][col_idx] = pg_date
+                                            logger.debug(
+                                                "Converted Horolog date to PostgreSQL format (external)",
+                                                row=row_idx,
+                                                col=col_idx,
+                                                iris_horolog=value,
+                                                pg_days=pg_date,
+                                            )
+                                    except Exception as date_err:
+                                        logger.warning(
+                                            "Failed to convert date value (external mode)",
+                                            row=row_idx,
+                                            col=col_idx,
+                                            value=value,
+                                            value_type=type(value),
+                                            error=str(date_err),
+                                        )
+                                        # Keep original value if conversion fails
+
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
                 # Determine command tag
                 command_tag = self._determine_command_tag(sql, len(rows))
 
                 # PROFILING: Log detailed breakdown
-                logger.info("⏱️ EXTERNAL EXECUTION TIMING",
-                          total_ms=round(t_total_elapsed, 2),
-                          optimization_ms=round(t_opt_elapsed, 2),
-                          connection_ms=round(t_conn_elapsed, 2),
-                          iris_exec_ms=round(t_iris_elapsed, 2),
-                          fetch_ms=round(t_fetch_elapsed, 2),
-                          overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
-                          session_id=session_id)
+                logger.info(
+                    "⏱️ EXTERNAL EXECUTION TIMING",
+                    total_ms=round(t_total_elapsed, 2),
+                    optimization_ms=round(t_opt_elapsed, 2),
+                    connection_ms=round(t_conn_elapsed, 2),
+                    iris_exec_ms=round(t_iris_elapsed, 2),
+                    fetch_ms=round(t_fetch_elapsed, 2),
+                    overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
+                    session_id=session_id,
+                )
 
                 return {
-                    'success': True,
-                    'rows': rows,
-                    'columns': columns,
-                    'row_count': len(rows),
-                    'command_tag': command_tag,
-                    'execution_time_ms': execution_time,
-                    'iris_metadata': {
-                        'embedded_mode': False,
-                        'connection_type': 'external_driver'
+                    "success": True,
+                    "rows": rows,
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "command_tag": command_tag,
+                    "execution_time_ms": execution_time,
+                    "iris_metadata": {"embedded_mode": False, "connection_type": "external_driver"},
+                    "profiling": {
+                        "total_ms": t_total_elapsed,
+                        "optimization_ms": t_opt_elapsed,
+                        "connection_ms": t_conn_elapsed,
+                        "iris_execution_ms": t_iris_elapsed,
+                        "fetch_ms": t_fetch_elapsed,
+                        "overhead_ms": t_total_elapsed - t_iris_elapsed,
                     },
-                    'profiling': {
-                        'total_ms': t_total_elapsed,
-                        'optimization_ms': t_opt_elapsed,
-                        'connection_ms': t_conn_elapsed,
-                        'iris_execution_ms': t_iris_elapsed,
-                        'fetch_ms': t_fetch_elapsed,
-                        'overhead_ms': t_total_elapsed - t_iris_elapsed
-                    }
                 }
 
             except Exception as e:
-                logger.error("IRIS external execution failed",
-                           sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                           error=str(e),
-                           session_id=session_id)
+                logger.error(
+                    "IRIS external execution failed",
+                    sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                    error=str(e),
+                    session_id=session_id,
+                )
                 return {
-                    'success': False,
-                    'error': str(e),
-                    'rows': [],
-                    'columns': [],
-                    'row_count': 0,
-                    'command_tag': 'ERROR',
-                    'execution_time_ms': 0
+                    "success": False,
+                    "error": str(e),
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command_tag": "ERROR",
+                    "execution_time_ms": 0,
                 }
 
         # Execute in thread pool to avoid blocking event loop
@@ -1193,11 +2569,11 @@ class IRISExecutor:
 
             # No connections available or connection was dead - create new one
             conn = iris.connect(
-                hostname=self.iris_config['host'],
-                port=self.iris_config['port'],
-                namespace=self.iris_config['namespace'],
-                username=self.iris_config['username'],
-                password=self.iris_config['password']
+                hostname=self.iris_config["host"],
+                port=self.iris_config["port"],
+                namespace=self.iris_config["namespace"],
+                username=self.iris_config["username"],
+                password=self.iris_config["password"],
             )
 
             return conn
@@ -1220,74 +2596,588 @@ class IRISExecutor:
                 except Exception:
                     pass
 
-    def _iris_type_to_pg_oid(self, iris_type: Union[str, int]) -> int:
+    def _expand_select_star(
+        self, sql: str, expected_columns: int, session_id: str | None = None
+    ) -> list[str] | None:
+        """
+        Layer 1.5: Expand SELECT * queries using INFORMATION_SCHEMA (2025-11-14 fix).
+
+        When a query contains "SELECT * FROM table", IRIS doesn't provide column metadata
+        in the result object. This method queries INFORMATION_SCHEMA to get the actual
+        column names from the table definition.
+
+        Args:
+            sql: Original SQL query
+            expected_columns: Number of columns in the actual result
+            session_id: Optional session identifier for logging
+
+        Returns:
+            List of column names if successful, None if method fails
+
+        References:
+            - asyncpg test failure: KeyError 'id' in test_fetch_all_rows (2025-11-14)
+        """
+        try:
+            import re
+
+            import iris
+
+            # Extract table name from SELECT * FROM table_name pattern
+            # Handle variations: SELECT *, SELECT * FROM, with ORDER BY, WHERE, etc.
+            select_star_pattern = r"SELECT\s+\*\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
+            match = re.search(select_star_pattern, sql, re.IGNORECASE)
+
+            if not match:
+                logger.debug(
+                    "Not a SELECT * FROM table query - pattern did not match",
+                    sql=sql[:100],
+                    session_id=session_id,
+                )
+                return None
+
+            table_name = match.group(1)
+
+            logger.debug(
+                "Detected SELECT * query - expanding via INFORMATION_SCHEMA",
+                table_name=table_name,
+                sql=sql[:100],
+                session_id=session_id,
+            )
+
+            # Query INFORMATION_SCHEMA for column names
+            metadata_sql = f"""
+                SELECT column_name
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE LOWER(table_name) = LOWER('{table_name}')
+                ORDER BY ordinal_position
+            """
+
+            result = iris.sql.exec(metadata_sql)
+            column_names = [row[0] for row in result]
+
+            if column_names:
+                logger.info(
+                    "✅ SELECT * expansion successful",
+                    table=table_name,
+                    columns=column_names,
+                    expected=expected_columns,
+                    actual=len(column_names),
+                    session_id=session_id,
+                )
+                return column_names
+            else:
+                logger.warning(
+                    "No columns found in INFORMATION_SCHEMA",
+                    table=table_name,
+                    session_id=session_id,
+                )
+                return None
+
+        except Exception as e:
+            logger.debug(
+                "SELECT * expansion failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                session_id=session_id,
+            )
+            return None
+
+    def _discover_metadata_with_limit_zero(
+        self, sql: str, session_id: str | None = None
+    ) -> list[str] | None:
+        """
+        Layer 1: Discover column metadata using LIMIT 0 pattern (database-native approach).
+
+        This implements the protocol-native solution recommended by Perplexity research:
+        Execute the query with LIMIT 0 to discover column structure without fetching data.
+
+        Args:
+            sql: Original SQL query
+            session_id: Optional session identifier for logging
+
+        Returns:
+            List of column names if successful, None if method fails
+
+        References:
+            - Perplexity research 2025-11-11: "LIMIT 0 pattern for metadata discovery"
+            - PostgreSQL Parse/Describe mechanism alternative
+        """
+        try:
+            import iris
+
+            # Wrap original query in subquery with LIMIT 0 to discover structure
+            # Pattern: SELECT * FROM (original_query) AS _metadata LIMIT 0
+            metadata_query = f"SELECT * FROM ({sql}) AS _metadata_discovery LIMIT 0"
+
+            logger.debug(
+                "Attempting LIMIT 0 metadata discovery",
+                original_sql=sql[:100],
+                metadata_sql=metadata_query[:150],
+                session_id=session_id,
+            )
+
+            # Execute metadata query - should return 0 rows but expose column structure
+            result = iris.sql.exec(metadata_query)
+
+            # Try to extract column names from result metadata
+            column_names = []
+
+            # Method 1: Check for _meta attribute (IRIS may expose this)
+            if hasattr(result, "_meta") and result._meta:
+                for col_info in result._meta:
+                    if isinstance(col_info, dict) and "name" in col_info:
+                        column_names.append(col_info["name"])
+                    elif hasattr(col_info, "name"):
+                        column_names.append(col_info.name)
+
+                if column_names:
+                    logger.info(
+                        "LIMIT 0 metadata discovery: extracted from _meta",
+                        columns=column_names,
+                        session_id=session_id,
+                    )
+                    return column_names
+
+            # Method 2: Try iterating result (even with 0 rows, may expose structure)
+            # Some database APIs expose column info through iteration interface
+            try:
+                # Attempt to get first row (should be empty)
+                for row in result:
+                    # We shouldn't reach here with LIMIT 0, but if we do,
+                    # we can infer column count from row length
+                    break
+            except Exception:
+                pass
+
+            # Method 3: Check for description attribute (DB-API 2.0 standard)
+            if hasattr(result, "description") and result.description:
+                for col_desc in result.description:
+                    # DB-API 2.0: description is list of 7-tuples (name, type, ...)
+                    if isinstance(col_desc, (list, tuple)) and len(col_desc) > 0:
+                        column_names.append(str(col_desc[0]))
+                    elif hasattr(col_desc, "name"):
+                        column_names.append(col_desc.name)
+
+                if column_names:
+                    logger.info(
+                        "LIMIT 0 metadata discovery: extracted from description",
+                        columns=column_names,
+                        session_id=session_id,
+                    )
+                    return column_names
+
+            # No metadata could be extracted
+            logger.debug(
+                "LIMIT 0 metadata discovery: no metadata exposed by IRIS", session_id=session_id
+            )
+            return None
+
+        except Exception as e:
+            logger.debug(
+                "LIMIT 0 metadata discovery failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                session_id=session_id,
+            )
+            return None
+
+    def _normalize_iris_column_name(self, iris_name: str, sql: str, iris_type: str | int) -> str:
+        """
+        Normalize IRIS-generated column names to PostgreSQL-compatible names.
+
+        IRIS generates generic names like HostVar_1, Expression_1, Aggregate_1
+        when no explicit alias is provided. PostgreSQL uses different conventions.
+
+        Args:
+            iris_name: Original column name from IRIS
+            sql: Original SQL query for context
+            iris_type: IRIS type code for type-specific naming
+
+        Returns:
+            PostgreSQL-compatible column name
+        """
+        # Lowercase for PostgreSQL compatibility
+        normalized = iris_name.lower()
+
+        logger.info(
+            "🔍 _normalize_iris_column_name CALLED",
+            iris_name=iris_name,
+            normalized=normalized,
+            sql_preview=sql[:100],
+            iris_type=iris_type,
+        )
+
+        # Pattern 0: Literal column names (e.g., '1' for SELECT 1, 'second query' for SELECT 'second query')
+        # IRIS sometimes returns the literal value as the column name instead of HostVar_N
+        # These should be mapped to ?column? for PostgreSQL compatibility
+
+        # Helper: Check if SQL has explicit alias near this literal value
+        def has_explicit_alias_for_literal(literal_val: str, sql_text: str) -> str | None:
+            """
+            Check if SQL contains 'literal_val AS alias' pattern.
+            Returns the alias if found, None otherwise.
+
+            Examples:
+            - "SELECT 1 AS id" with literal='1' → returns 'id'
+            - "SELECT 'first' AS name" with literal='first' → returns 'name'
+            """
+            import re
+
+            # Pattern 1: numeric literal followed by AS alias
+            # Match: "1 AS id", "2.5 AS score"
+            if literal_val.replace(".", "").replace("-", "").isdigit():
+                pattern = rf"\b{re.escape(literal_val)}\s+AS\s+(\w+)"
+                match = re.search(pattern, sql_text, re.IGNORECASE)
+                if match:
+                    return match.group(1).lower()
+
+            # Pattern 2: string literal followed by AS alias
+            # Match: "'first' AS name", '"hello" AS greeting'
+            else:
+                # Try both single and double quotes
+                pattern1 = rf"'{re.escape(literal_val)}'\s+AS\s+(\w+)"
+                pattern2 = rf'"{re.escape(literal_val)}"\s+AS\s+(\w+)'
+                match = re.search(pattern1, sql_text, re.IGNORECASE) or re.search(
+                    pattern2, sql_text, re.IGNORECASE
+                )
+                if match:
+                    return match.group(1).lower()
+
+            return None
+
+        # Case 1: Pure numeric column name (e.g., '1', '42', '3.14', '-5')
+        try:
+            float(normalized)
+
+            # Check if this literal has an explicit alias in SQL
+            explicit_alias = has_explicit_alias_for_literal(normalized, sql)
+            if explicit_alias:
+                logger.info(
+                    f"🔍 NUMERIC LITERAL with EXPLICIT ALIAS: '{normalized}' → '{explicit_alias}'",
+                    iris_name=iris_name,
+                    normalized=normalized,
+                )
+                return explicit_alias
+
+            logger.info(
+                "🔍 NUMERIC COLUMN DETECTED → returning '?column?'",
+                iris_name=iris_name,
+                normalized=normalized,
+            )
+            return "?column?"
+        except ValueError:
+            logger.debug("Not a numeric column name", normalized=normalized)
+            pass
+
+        # Case 2: Generic column names for SELECT without FROM (e.g., SELECT 'hello', SELECT 1+2)
+        # ONLY convert generic names, preserve explicit aliases and expression types
+        sql_upper = sql.upper()
+        if "SELECT" in sql_upper and "FROM" not in sql_upper:
+            # ONLY apply ?column? to truly generic column names (column, column1, etc.)
+            # This preserves explicit aliases (AS id) and type names from casts (int4)
+            if normalized in ("column", "column1", "column2", "column3", "column4", "column5"):
+                # Additional check: make sure there's no explicit AS alias in the SQL
+                # If "AS <normalized>" appears, keep the original name
+                sql_lower = sql.lower()
+                if f" as {normalized}" not in sql_lower and f' as "{normalized}"' not in sql_lower:
+                    return "?column?"
+
+            # Check if the column name appears as a string literal in the SQL
+            # Remove quotes and check if it matches
+            unquoted = normalized.replace("'", "").replace('"', "").strip()
+            sql_lower = sql.lower()
+
+            # If the unquoted column name appears in the SQL as a quoted string
+            if f"'{unquoted}'" in sql_lower or f'"{unquoted}"' in sql_lower:
+                return "?column?"
+
+        # Pattern 1: HostVar_N (unnamed literals) → ?column?
+        if normalized.startswith("hostvar_"):
+            return "?column?"
+
+        # Pattern 2: Expression_N (casts/expressions)
+        if normalized.startswith("expression_"):
+            # Check for type cast patterns in SQL
+            sql_upper = sql.upper()
+
+            # ::int or CAST(? AS INTEGER) → int4
+            if "::INT" in sql_upper or ("CAST" in sql_upper and "AS INTEGER" in sql_upper):
+                return "int4"
+            # ::bigint or CAST(? AS BIGINT) → int8
+            elif "::BIGINT" in sql_upper or ("CAST" in sql_upper and "AS BIGINT" in sql_upper):
+                return "int8"
+            # ::smallint or CAST(? AS SMALLINT) → int2
+            elif "::SMALLINT" in sql_upper or ("CAST" in sql_upper and "AS SMALLINT" in sql_upper):
+                return "int2"
+            # ::text or CAST(? AS TEXT) → text
+            elif "::TEXT" in sql_upper or ("CAST" in sql_upper and "AS TEXT" in sql_upper):
+                return "text"
+            # ::varchar or CAST(? AS VARCHAR) → varchar
+            elif "::VARCHAR" in sql_upper or ("CAST" in sql_upper and "AS VARCHAR" in sql_upper):
+                return "varchar"
+            # ::bool or CAST(? AS BOOL) → bool
+            elif "::BOOL" in sql_upper or ("CAST" in sql_upper and "AS BIT" in sql_upper):
+                return "bool"
+            # ::date or CAST(? AS DATE) → date
+            elif "::DATE" in sql_upper or ("CAST" in sql_upper and "AS DATE" in sql_upper):
+                return "date"
+            else:
+                # Generic expression without clear type → ?column?
+                return "?column?"
+
+        # Pattern 3: Aggregate_N (aggregate functions)
+        if normalized.startswith("aggregate_"):
+            # Detect aggregate function from SQL
+            sql_upper = sql.upper()
+
+            if "COUNT(" in sql_upper:
+                return "count"
+            elif "SUM(" in sql_upper:
+                return "sum"
+            elif "AVG(" in sql_upper:
+                return "avg"
+            elif "MIN(" in sql_upper:
+                return "min"
+            elif "MAX(" in sql_upper:
+                return "max"
+            else:
+                # Unknown aggregate → keep lowercase name
+                return normalized
+
+        # Pattern 3.5: PostgreSQL type name mapping (for cast expressions)
+        # IRIS returns 'INTEGER', 'BIGINT', etc. but PostgreSQL clients expect 'int4', 'int8'
+        postgres_type_mapping = {
+            "integer": "int4",
+            "bigint": "int8",
+            "smallint": "int2",
+            "real": "float4",
+            "double": "float8",
+            "double precision": "float8",
+            "character varying": "varchar",
+            "character": "char",
+        }
+
+        if normalized in postgres_type_mapping:
+            pg_type = postgres_type_mapping[normalized]
+            logger.info(f"🔧 Type name mapping: '{normalized}' → '{pg_type}'")
+            return pg_type
+
+        # Pattern 4: Named columns → keep original (lowercased)
+        return normalized
+
+    def _iris_type_to_pg_oid(self, iris_type: str | int) -> int:
         """Convert IRIS data type to PostgreSQL OID"""
         # Handle both string type names and integer type codes
         if isinstance(iris_type, int):
             # Map IRIS integer type codes to PostgreSQL OIDs
+            # CRITICAL: Based on actual IRIS behavior for SQL literals:
+            # - type_code=4 returns Python int (e.g., SELECT 1) → INTEGER
+            # - type_code=2 returns Python Decimal (e.g., SELECT 3.14) → NUMERIC
             int_type_mapping = {
-                1: 23,      # int4
-                2: 21,      # int2
-                3: 20,      # int8
-                4: 700,     # float4
-                5: 701,     # float8
-                8: 1082,    # date
-                9: 1083,    # time
-                10: 1114,   # timestamp
-                12: 1043,   # varchar
-                16: 16,     # bool
-                17: 17,     # bytea
+                -7: 16,  # BIT → bool (IRIS type code for BIT columns)
+                1: 23,  # int4
+                2: 1700,  # numeric (FIXED: was 21/int2, but IRIS returns Decimal for numeric literals)
+                3: 20,  # int8
+                4: 23,  # int4 (FIXED: was 700/float4, but IRIS returns int for integer literals)
+                5: 701,  # float8
+                8: 1083,  # time (FIXED: was 1082/date - IRIS type code 8 is TIME)
+                9: 1082,  # date (FIXED: was 1083/time - IRIS type code 9 is DATE)
+                10: 1114,  # timestamp
+                12: 1043,  # varchar
+                16: 16,  # bool
+                17: 17,  # bytea
             }
             return int_type_mapping.get(iris_type, 25)  # Default to text
 
         # Handle string type names
         type_mapping = {
-            'VARCHAR': 1043,    # varchar
-            'CHAR': 1042,       # bpchar
-            'TEXT': 25,         # text
-            'INTEGER': 23,      # int4
-            'BIGINT': 20,       # int8
-            'SMALLINT': 21,     # int2
-            'DECIMAL': 1700,    # numeric
-            'NUMERIC': 1700,    # numeric
-            'DOUBLE': 701,      # float8
-            'FLOAT': 700,       # float4
-            'DATE': 1082,       # date
-            'TIME': 1083,       # time
-            'TIMESTAMP': 1114,  # timestamp
-            'BOOLEAN': 16,      # bool
-            'BINARY': 17,       # bytea
-            'VARBINARY': 17,    # bytea
-            'VECTOR': 16388,    # custom vector type
+            "VARCHAR": 1043,  # varchar
+            "CHAR": 1042,  # bpchar
+            "TEXT": 25,  # text
+            "INTEGER": 23,  # int4
+            "BIGINT": 20,  # int8
+            "SMALLINT": 21,  # int2
+            "DECIMAL": 1700,  # numeric
+            "NUMERIC": 1700,  # numeric
+            "DOUBLE": 701,  # float8
+            "FLOAT": 700,  # float4
+            "DATE": 1082,  # date
+            "TIME": 1083,  # time
+            "TIMESTAMP": 1114,  # timestamp
+            "BOOLEAN": 16,  # bool
+            "BINARY": 17,  # bytea
+            "VARBINARY": 17,  # bytea
+            "VECTOR": 16388,  # custom vector type
         }
         return type_mapping.get(str(iris_type).upper(), 25)  # Default to text
+
+    def _extract_table_name_from_select(self, sql: str) -> str | None:
+        """
+        Extract table name from SELECT query (simple parsing).
+
+        Handles:
+        - SELECT * FROM table_name
+        - SELECT col1, col2 FROM table_name
+        - SELECT * FROM table_name WHERE ...
+
+        Returns:
+            Table name or None if cannot parse
+        """
+        import re
+
+        # Simple regex to extract table name from SELECT ... FROM table_name
+        # Pattern: SELECT ... FROM <table_name>
+        match = re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
+        if match:
+            table_name = match.group(1)
+            logger.debug(f"Extracted table name: {table_name}", sql=sql[:100])
+            return table_name
+
+        return None
+
+    def _map_iris_type_to_oid(self, iris_type: str) -> int:
+        """
+        Map IRIS data type to PostgreSQL type OID.
+
+        Args:
+            iris_type: IRIS data type (e.g., 'INT', 'VARCHAR', 'DATE')
+
+        Returns:
+            PostgreSQL type OID
+        """
+        type_map = {
+            "INT": 23,  # int4
+            "INTEGER": 23,  # int4
+            "BIGINT": 20,  # int8
+            "SMALLINT": 21,  # int2
+            "VARCHAR": 1043,  # varchar
+            "CHAR": 1042,  # char
+            "TEXT": 25,  # text
+            "DATE": 1082,  # date
+            "TIME": 1083,  # time
+            "TIMESTAMP": 1114,  # timestamp
+            "DOUBLE": 701,  # float8
+            "FLOAT": 701,  # float8
+            "NUMERIC": 1700,  # numeric
+            "DECIMAL": 1700,  # numeric
+            "BIT": 1560,  # bit
+            "BOOLEAN": 16,  # bool
+            "VARBINARY": 17,  # bytea
+        }
+
+        # Normalize type name (remove size, etc.)
+        normalized_type = iris_type.upper().split("(")[0].strip()
+
+        return type_map.get(normalized_type, 25)  # Default to TEXT (OID 25)
 
     def _determine_command_tag(self, sql: str, row_count: int) -> str:
         """Determine PostgreSQL command tag from SQL"""
         sql_upper = sql.upper().strip()
 
-        if sql_upper.startswith('SELECT'):
-            return 'SELECT'
-        elif sql_upper.startswith('INSERT'):
-            return f'INSERT 0 {row_count}'
-        elif sql_upper.startswith('UPDATE'):
-            return f'UPDATE {row_count}'
-        elif sql_upper.startswith('DELETE'):
-            return f'DELETE {row_count}'
-        elif sql_upper.startswith('CREATE'):
-            return 'CREATE'
-        elif sql_upper.startswith('DROP'):
-            return 'DROP'
-        elif sql_upper.startswith('ALTER'):
-            return 'ALTER'
-        elif sql_upper.startswith('BEGIN'):
-            return 'BEGIN'
-        elif sql_upper.startswith('COMMIT'):
-            return 'COMMIT'
-        elif sql_upper.startswith('ROLLBACK'):
-            return 'ROLLBACK'
+        if sql_upper.startswith("SELECT"):
+            return "SELECT"
+        elif sql_upper.startswith("INSERT"):
+            return f"INSERT 0 {row_count}"
+        elif sql_upper.startswith("UPDATE"):
+            return f"UPDATE {row_count}"
+        elif sql_upper.startswith("DELETE"):
+            return f"DELETE {row_count}"
+        elif sql_upper.startswith("CREATE"):
+            return "CREATE"
+        elif sql_upper.startswith("DROP"):
+            return "DROP"
+        elif sql_upper.startswith("ALTER"):
+            return "ALTER"
+        elif sql_upper.startswith("BEGIN"):
+            return "BEGIN"
+        elif sql_upper.startswith("COMMIT"):
+            return "COMMIT"
+        elif sql_upper.startswith("ROLLBACK"):
+            return "ROLLBACK"
+        elif sql_upper.startswith("SHOW"):
+            return "SHOW"
         else:
-            return 'UNKNOWN'
+            return "UNKNOWN"
+
+    def _handle_show_command(self, sql: str, session_id: str | None = None) -> dict[str, Any]:
+        """
+        Handle PostgreSQL SHOW commands that IRIS doesn't support.
+
+        Returns fake/default values for PostgreSQL compatibility.
+
+        Args:
+            sql: SHOW command SQL
+            session_id: Optional session identifier
+
+        Returns:
+            Dictionary with fake query results
+        """
+        sql_upper = sql.strip().upper()
+
+        # Map of SHOW commands to their default values
+        show_responses = {
+            "SHOW TRANSACTION ISOLATION LEVEL": "read committed",
+            "SHOW SERVER_VERSION": "16.0 (InterSystems IRIS)",
+            "SHOW SERVER_ENCODING": "UTF8",
+            "SHOW CLIENT_ENCODING": "UTF8",
+            "SHOW DATESTYLE": "ISO, MDY",
+            "SHOW TIMEZONE": "UTC",
+            "SHOW STANDARD_CONFORMING_STRINGS": "on",
+            "SHOW INTEGER_DATETIMES": "on",
+            "SHOW INTERVALSTYLE": "postgres",
+            "SHOW IS_SUPERUSER": "off",
+            "SHOW APPLICATION_NAME": "",
+        }
+
+        # Normalize the SQL (remove trailing semicolon and extra whitespace)
+        normalized_show = sql_upper.rstrip(";").strip()
+
+        # Find matching SHOW command
+        response_value = None
+        column_name = "setting"  # Default column name for SHOW results
+
+        for show_cmd, default_value in show_responses.items():
+            if normalized_show.startswith(show_cmd):
+                response_value = default_value
+                # Extract column name from command (e.g., "transaction_isolation_level")
+                parts = show_cmd.split(" ", 1)
+                if len(parts) > 1:
+                    column_name = parts[1].lower().replace(" ", "_")
+                break
+
+        # If not found in map, return generic error-like response
+        if response_value is None:
+            logger.warning(
+                "Unknown SHOW command, returning empty result", sql=sql[:100], session_id=session_id
+            )
+            response_value = ""
+            column_name = "setting"
+
+        logger.info(
+            "SHOW command shim returning fake result",
+            command=normalized_show,
+            response_value=response_value,
+            session_id=session_id,
+        )
+
+        # Return result in the format expected by protocol.py
+        return {
+            "success": True,
+            "rows": [[response_value]],  # Single row, single column
+            "columns": [
+                {
+                    "name": column_name,
+                    "type_oid": 25,  # TEXT type
+                    "type_size": -1,
+                    "type_modifier": -1,
+                    "format_code": 0,
+                }
+            ],
+            "row_count": 1,
+            "command_tag": "SHOW",
+            "execution_time_ms": 0.1,  # Negligible time for fake result
+            "iris_metadata": {"embedded_mode": self.embedded_mode, "connection_type": "show_shim"},
+        }
 
     async def shutdown(self):
         """Shutdown the executor and cleanup resources"""
@@ -1299,33 +3189,39 @@ class IRISExecutor:
             logger.warning("Error during IRIS executor shutdown", error=str(e))
 
     # Transaction management methods (using async threading)
-    async def begin_transaction(self, session_id: Optional[str] = None):
+    async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction with async threading"""
+
         def _sync_begin():
             if self.embedded_mode:
                 import iris
+
                 iris.sql.exec("START TRANSACTION")
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.thread_pool, _sync_begin)
 
-    async def commit_transaction(self, session_id: Optional[str] = None):
+    async def commit_transaction(self, session_id: str | None = None):
         """Commit transaction with async threading"""
+
         def _sync_commit():
             if self.embedded_mode:
                 import iris
+
                 iris.sql.exec("COMMIT")
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.thread_pool, _sync_commit)
 
-    async def rollback_transaction(self, session_id: Optional[str] = None):
+    async def rollback_transaction(self, session_id: str | None = None):
         """Rollback transaction with async threading"""
+
         def _sync_rollback():
             if self.embedded_mode:
                 import iris
+
                 iris.sql.exec("ROLLBACK")
             # For external mode, transaction is managed per connection
 
@@ -1340,9 +3236,11 @@ class IRISExecutor:
         this using process termination and connection management.
         """
         try:
-            logger.info("Processing query cancellation request",
-                       backend_pid=backend_pid,
-                       backend_secret="***")
+            logger.info(
+                "Processing query cancellation request",
+                backend_pid=backend_pid,
+                backend_secret="***",
+            )
 
             # P4: Query cancellation via connection termination
             # In production, this would:
@@ -1359,22 +3257,23 @@ class IRISExecutor:
                 success = await self._cancel_external_query(backend_pid, backend_secret)
 
             if success:
-                logger.info("Query cancellation successful",
-                           backend_pid=backend_pid)
+                logger.info("Query cancellation successful", backend_pid=backend_pid)
             else:
-                logger.warning("Query cancellation failed - PID not found or secret mismatch",
-                              backend_pid=backend_pid)
+                logger.warning(
+                    "Query cancellation failed - PID not found or secret mismatch",
+                    backend_pid=backend_pid,
+                )
 
             return success
 
         except Exception as e:
-            logger.error("Query cancellation error",
-                        backend_pid=backend_pid, error=str(e))
+            logger.error("Query cancellation error", backend_pid=backend_pid, error=str(e))
             return False
 
     async def _cancel_embedded_query(self, backend_pid: int, backend_secret: int) -> bool:
         """Cancel query in IRIS embedded mode"""
         try:
+
             def _sync_cancel():
                 # In embedded mode, we could potentially use IRIS job control
                 # For now, return success for demo purposes
@@ -1397,17 +3296,20 @@ class IRISExecutor:
                 return False
 
             # Find the target connection
-            target_protocol = self.server.find_connection_for_cancellation(backend_pid, backend_secret)
+            target_protocol = self.server.find_connection_for_cancellation(
+                backend_pid, backend_secret
+            )
 
             if not target_protocol:
-                logger.warning("Connection not found for cancellation",
-                              backend_pid=backend_pid)
+                logger.warning("Connection not found for cancellation", backend_pid=backend_pid)
                 return False
 
             # Terminate the connection - this will stop any running queries
-            logger.info("Terminating connection for query cancellation",
-                       backend_pid=backend_pid,
-                       connection_id=target_protocol.connection_id)
+            logger.info(
+                "Terminating connection for query cancellation",
+                backend_pid=backend_pid,
+                connection_id=target_protocol.connection_id,
+            )
 
             # Close the connection which will abort any running IRIS queries
             if not target_protocol.writer.is_closing():
@@ -1423,7 +3325,7 @@ class IRISExecutor:
             logger.error("External query cancellation failed", error=str(e))
             return False
 
-    def get_iris_type_mapping(self) -> Dict[str, Dict[str, Any]]:
+    def get_iris_type_mapping(self) -> dict[str, dict[str, Any]]:
         """
         Get IRIS to PostgreSQL type mappings (based on caretdev patterns)
 
@@ -1431,39 +3333,42 @@ class IRISExecutor:
         """
         return {
             # Standard PostgreSQL types (from caretdev)
-            'BIGINT': {'oid': 20, 'typname': 'int8', 'typlen': 8},
-            'BIT': {'oid': 1560, 'typname': 'bit', 'typlen': -1},
-            'DATE': {'oid': 1082, 'typname': 'date', 'typlen': 4},
-            'DOUBLE': {'oid': 701, 'typname': 'float8', 'typlen': 8},
-            'INTEGER': {'oid': 23, 'typname': 'int4', 'typlen': 4},
-            'NUMERIC': {'oid': 1700, 'typname': 'numeric', 'typlen': -1},
-            'SMALLINT': {'oid': 21, 'typname': 'int2', 'typlen': 2},
-            'TIME': {'oid': 1083, 'typname': 'time', 'typlen': 8},
-            'TIMESTAMP': {'oid': 1114, 'typname': 'timestamp', 'typlen': 8},
-            'TINYINT': {'oid': 21, 'typname': 'int2', 'typlen': 2},  # Map to smallint
-            'VARBINARY': {'oid': 17, 'typname': 'bytea', 'typlen': -1},
-            'VARCHAR': {'oid': 1043, 'typname': 'varchar', 'typlen': -1},
-            'LONGVARCHAR': {'oid': 25, 'typname': 'text', 'typlen': -1},
-            'LONGVARBINARY': {'oid': 17, 'typname': 'bytea', 'typlen': -1},
-
+            "BIGINT": {"oid": 20, "typname": "int8", "typlen": 8},
+            "BIT": {"oid": 1560, "typname": "bit", "typlen": -1},
+            "DATE": {"oid": 1082, "typname": "date", "typlen": 4},
+            "DOUBLE": {"oid": 701, "typname": "float8", "typlen": 8},
+            "INTEGER": {"oid": 23, "typname": "int4", "typlen": 4},
+            "NUMERIC": {"oid": 1700, "typname": "numeric", "typlen": -1},
+            "SMALLINT": {"oid": 21, "typname": "int2", "typlen": 2},
+            "TIME": {"oid": 1083, "typname": "time", "typlen": 8},
+            "TIMESTAMP": {"oid": 1114, "typname": "timestamp", "typlen": 8},
+            "TINYINT": {"oid": 21, "typname": "int2", "typlen": 2},  # Map to smallint
+            "VARBINARY": {"oid": 17, "typname": "bytea", "typlen": -1},
+            "VARCHAR": {"oid": 1043, "typname": "varchar", "typlen": -1},
+            "LONGVARCHAR": {"oid": 25, "typname": "text", "typlen": -1},
+            "LONGVARBINARY": {"oid": 17, "typname": "bytea", "typlen": -1},
             # IRIS-specific types with P5 vector support
-            'VECTOR': {'oid': 16388, 'typname': 'vector', 'typlen': -1},
-            'EMBEDDING': {'oid': 16389, 'typname': 'vector', 'typlen': -1},  # Map IRIS EMBEDDING to vector
+            "VECTOR": {"oid": 16388, "typname": "vector", "typlen": -1},
+            "EMBEDDING": {
+                "oid": 16389,
+                "typname": "vector",
+                "typlen": -1,
+            },  # Map IRIS EMBEDDING to vector
         }
 
-    def get_server_info(self) -> Dict[str, Any]:
+    def get_server_info(self) -> dict[str, Any]:
         """Get IRIS server information for PostgreSQL compatibility"""
         return {
-            'server_version': '16.0 (InterSystems IRIS)',
-            'server_version_num': '160000',
-            'embedded_mode': self.embedded_mode,
-            'vector_support': self.vector_support,
-            'protocol_version': '3.0'
+            "server_version": "16.0 (InterSystems IRIS)",
+            "server_version_num": "160000",
+            "embedded_mode": self.embedded_mode,
+            "vector_support": self.vector_support,
+            "protocol_version": "3.0",
         }
 
     # P5: Vector/Embedding Support
 
-    def get_vector_functions(self) -> Dict[str, str]:
+    def get_vector_functions(self) -> dict[str, str]:
         """
         Get pgvector-compatible function mappings to IRIS vector functions
 
@@ -1471,19 +3376,17 @@ class IRISExecutor:
         """
         return {
             # Distance functions (pgvector compatibility)
-            'vector_cosine_distance': 'VECTOR_COSINE',
-            'cosine_distance': 'VECTOR_COSINE',
-            'euclidean_distance': 'VECTOR_DOT_PRODUCT',  # IRIS equivalent
-            'inner_product': 'VECTOR_DOT_PRODUCT',
-
+            "vector_cosine_distance": "VECTOR_COSINE",
+            "cosine_distance": "VECTOR_COSINE",
+            "euclidean_distance": "VECTOR_DOT_PRODUCT",  # IRIS equivalent
+            "inner_product": "VECTOR_DOT_PRODUCT",
             # Vector operations
-            'vector_dims': 'VECTOR_DIM',
-            'vector_norm': 'VECTOR_NORM',
-
+            "vector_dims": "VECTOR_DIM",
+            "vector_norm": "VECTOR_NORM",
             # IRIS-specific vector functions
-            'to_vector': 'TO_VECTOR',
-            'vector_dot_product': 'VECTOR_DOT_PRODUCT',
-            'vector_cosine': 'VECTOR_COSINE'
+            "to_vector": "TO_VECTOR",
+            "vector_dot_product": "VECTOR_DOT_PRODUCT",
+            "vector_cosine": "VECTOR_COSINE",
         }
 
     def translate_vector_query(self, sql: str) -> str:
@@ -1498,31 +3401,40 @@ class IRISExecutor:
 
             # Replace pgvector operators with IRIS functions
             # <-> operator (cosine distance) -> VECTOR_COSINE
-            if '<->' in translated_sql:
+            if "<->" in translated_sql:
                 # Pattern: column <-> '[1,2,3]' becomes VECTOR_COSINE(column, TO_VECTOR('[1,2,3]'))
                 import re
-                pattern = r'([\w\.]+)\s*<->\s*([^\s]+)'
+
+                pattern = r"([\w\.]+)\s*<->\s*([^\s]+)"
+
                 def replace_cosine(match):
                     col, vec = match.groups()
-                    return f'VECTOR_COSINE({col}, TO_VECTOR({vec}))'
+                    return f"VECTOR_COSINE({col}, TO_VECTOR({vec}))"
+
                 translated_sql = re.sub(pattern, replace_cosine, translated_sql)
 
             # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
-            if '<#>' in translated_sql:
+            if "<#>" in translated_sql:
                 import re
-                pattern = r'([\w\.]+)\s*<#>\s*([^\s]+)'
+
+                pattern = r"([\w\.]+)\s*<#>\s*([^\s]+)"
+
                 def replace_inner_product(match):
                     col, vec = match.groups()
-                    return f'(-VECTOR_DOT_PRODUCT({col}, TO_VECTOR({vec})))'
+                    return f"(-VECTOR_DOT_PRODUCT({col}, TO_VECTOR({vec})))"
+
                 translated_sql = re.sub(pattern, replace_inner_product, translated_sql)
 
             # <=> operator (cosine distance) -> VECTOR_COSINE
-            if '<=>' in translated_sql:
+            if "<=>" in translated_sql:
                 import re
-                pattern = r'([\w\.]+)\s*<=>\s*([^\s]+)'
+
+                pattern = r"([\w\.]+)\s*<=>\s*([^\s]+)"
+
                 def replace_cosine_distance(match):
                     col, vec = match.groups()
-                    return f'VECTOR_COSINE({col}, TO_VECTOR({vec}))'
+                    return f"VECTOR_COSINE({col}, TO_VECTOR({vec}))"
+
                 translated_sql = re.sub(pattern, replace_cosine_distance, translated_sql)
 
             # Replace function names

@@ -6,9 +6,8 @@ Quick baseline benchmark of IRIS DBAPI performance for comparison.
 This establishes the baseline before we test PGWire overhead.
 """
 
-import time
 import statistics
-from typing import List
+import time
 
 # Configuration
 BENCHMARK_QUERIES = 1000
@@ -18,9 +17,9 @@ WARMUP_QUERIES = 100
 def benchmark_iris_dbapi_simple():
     """Benchmark simple SELECT queries"""
 
-    print("="*80)
+    print("=" * 80)
     print("IRIS DBAPI Baseline Benchmark - Simple Queries")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import iris
@@ -30,9 +29,10 @@ def benchmark_iris_dbapi_simple():
 
     # Connect
     try:
-        conn = iris.connect(hostname="localhost", port=1972, namespace="USER",
-                           username="_SYSTEM", password="SYS")
-        print(f"✅ Connected to IRIS on localhost:1972")
+        conn = iris.connect(
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+        )
+        print("✅ Connected to IRIS on localhost:1972")
     except Exception as e:
         print(f"❌ Failed to connect: {e}")
         return
@@ -72,7 +72,7 @@ def benchmark_iris_dbapi_simple():
     print(f"Total queries: {BENCHMARK_QUERIES}")
     print(f"Total time: {total_time:.2f}s")
     print(f"Throughput: {qps:.2f} QPS")
-    print(f"\nLatency:")
+    print("\nLatency:")
     print(f"  Average: {avg_ms:.2f}ms")
     print(f"  P50: {p50_ms:.2f}ms")
     print(f"  P95: {p95_ms:.2f}ms")
@@ -81,13 +81,7 @@ def benchmark_iris_dbapi_simple():
     cursor.close()
     conn.close()
 
-    return {
-        'qps': qps,
-        'avg_ms': avg_ms,
-        'p50_ms': p50_ms,
-        'p95_ms': p95_ms,
-        'p99_ms': p99_ms
-    }
+    return {"qps": qps, "avg_ms": avg_ms, "p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms}
 
 
 if __name__ == "__main__":

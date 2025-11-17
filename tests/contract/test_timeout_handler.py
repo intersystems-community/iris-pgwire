@@ -7,9 +7,10 @@ specs/017-correct-testing-framework/contracts/timeout-handler.md
 TDD: These tests MUST FAIL until TimeoutHandler is implemented.
 """
 
-import pytest
-import time
 import threading
+import time
+
+import pytest
 
 
 @pytest.mark.timeout(35)  # Allow test to run longer than the 30s timeout being tested
@@ -47,12 +48,11 @@ def test_timeout_handler_detects_30s_timeout():
 
     # Verify timeout was detected
     assert diagnostic is not None, "DiagnosticContext should be returned on timeout"
-    assert 29.9 <= elapsed <= 30.5, \
-        f"Timeout should trigger at ~30s (±100ms), got {elapsed:.2f}s"
+    assert 29.9 <= elapsed <= 30.5, f"Timeout should trigger at ~30s (±100ms), got {elapsed:.2f}s"
 
     # Verify diagnostic context structure
-    assert hasattr(diagnostic, 'test_id'), "DiagnosticContext must have test_id"
-    assert hasattr(diagnostic, 'failure_type'), "DiagnosticContext must have failure_type"
+    assert hasattr(diagnostic, "test_id"), "DiagnosticContext must have test_id"
+    assert hasattr(diagnostic, "failure_type"), "DiagnosticContext must have failure_type"
     assert diagnostic.failure_type == "timeout", "failure_type must be 'timeout'"
 
 
@@ -65,7 +65,7 @@ def test_timeout_handler_captures_iris_query_history():
     - Last 10 queries captured
     - IRIS connection state included
     """
-    from tests.timeout_handler import TimeoutHandler, DiagnosticContext
+    from tests.timeout_handler import DiagnosticContext, TimeoutHandler
 
     handler = TimeoutHandler(timeout_seconds=30)
 
@@ -90,18 +90,22 @@ def test_timeout_handler_captures_iris_query_history():
         stack_trace="...",
         fixture_stack=["embedded_iris"],
         environment_vars={"IRIS_HOST": "localhost"},
-        log_excerpt="..."
+        log_excerpt="...",
     )
 
     # Verify query history is captured
     assert diagnostic.iris_query_history is not None, "Query history must be captured"
     assert len(diagnostic.iris_query_history) <= 10, "Should capture last 10 queries max"
-    assert "SELECT * FROM large_table" in diagnostic.iris_query_history, \
-        "Recent queries should be in history"
+    assert (
+        "SELECT * FROM large_table" in diagnostic.iris_query_history
+    ), "Recent queries should be in history"
 
     # Verify IRIS state is captured
-    assert diagnostic.iris_connection_state in ["connected", "disconnected", "hung"], \
-        f"Invalid connection state: {diagnostic.iris_connection_state}"
+    assert diagnostic.iris_connection_state in [
+        "connected",
+        "disconnected",
+        "hung",
+    ], f"Invalid connection state: {diagnostic.iris_connection_state}"
     assert diagnostic.iris_namespace == "USER", "Namespace should be captured"
 
 
@@ -122,26 +126,27 @@ def test_timeout_handler_identifies_hanging_component():
     test_cases = [
         {
             "stack_trace": "  File 'iris.py', in connect()\n    ...",
-            "expected_component": "embedded_iris"
+            "expected_component": "embedded_iris",
         },
         {
             "stack_trace": "  File 'psycopg/connection.py', in execute()\n    ...",
-            "expected_component": "pgwire"
+            "expected_component": "pgwire",
         },
         {
             "stack_trace": "  File 'tests/conftest.py', in iris_clean_namespace()\n    ...",
-            "expected_component": "test_fixture"
+            "expected_component": "test_fixture",
         },
         {
             "stack_trace": "  File 'tests/integration/test_foo.py', in test_something()\n    ...",
-            "expected_component": "test_body"
+            "expected_component": "test_body",
         },
     ]
 
     for test_case in test_cases:
         component = handler._identify_hanging_component(test_case["stack_trace"])
-        assert component == test_case["expected_component"], \
-            f"Stack trace should identify {test_case['expected_component']}, got {component}"
+        assert (
+            component == test_case["expected_component"]
+        ), f"Stack trace should identify {test_case['expected_component']}, got {component}"
 
 
 @pytest.mark.timeout(35)  # This test needs longer than default 30s
@@ -198,7 +203,7 @@ def test_diagnostic_context_structure():
         stack_trace="traceback...",
         fixture_stack=["embedded_iris", "iris_clean_namespace"],
         environment_vars={"IRIS_HOST": "localhost", "IRIS_PORT": "1972"},
-        log_excerpt="Last 50 lines..."
+        log_excerpt="Last 50 lines...",
     )
 
     # Verify required fields

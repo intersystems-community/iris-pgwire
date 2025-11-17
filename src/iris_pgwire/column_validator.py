@@ -14,7 +14,6 @@ Constitutional Requirement (Principle I - Protocol Fidelity):
 """
 
 import re
-from typing import Tuple
 
 
 class ColumnNameValidator:
@@ -29,19 +28,80 @@ class ColumnNameValidator:
     # allowed by IRIS as column names, but we reject them to avoid confusion since they
     # are SQL keywords that could cause issues in queries.
     IRIS_RESERVED = {
-        'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP',
-        'ALTER', 'TABLE', 'INDEX', 'VIEW', 'AS', 'AND', 'OR', 'NOT', 'NULL',
-        'IS', 'IN', 'BETWEEN', 'LIKE', 'ORDER', 'BY', 'GROUP', 'HAVING', 'UNION',
-        'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'USING', 'DISTINCT',
-        'ALL', 'ANY', 'SOME', 'EXISTS', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
-        'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'GRANT', 'REVOKE',
-        'PRIMARY', 'FOREIGN', 'KEY', 'REFERENCES', 'UNIQUE', 'CHECK', 'DEFAULT',
-        'VALUES', 'SET', 'INTO', 'LIMIT', 'OFFSET', 'FETCH', 'FIRST', 'LAST',
-        'TRUE', 'FALSE', 'UNKNOWN', 'CURRENT_DATE', 'CURRENT_TIME', 'CURRENT_TIMESTAMP'
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE",
+        "DROP",
+        "ALTER",
+        "TABLE",
+        "INDEX",
+        "VIEW",
+        "AS",
+        "AND",
+        "OR",
+        "NOT",
+        "NULL",
+        "IS",
+        "IN",
+        "BETWEEN",
+        "LIKE",
+        "ORDER",
+        "BY",
+        "GROUP",
+        "HAVING",
+        "UNION",
+        "JOIN",
+        "LEFT",
+        "RIGHT",
+        "INNER",
+        "OUTER",
+        "ON",
+        "USING",
+        "DISTINCT",
+        "ALL",
+        "ANY",
+        "SOME",
+        "EXISTS",
+        "CASE",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "END",
+        "BEGIN",
+        "COMMIT",
+        "ROLLBACK",
+        "TRANSACTION",
+        "GRANT",
+        "REVOKE",
+        "PRIMARY",
+        "FOREIGN",
+        "KEY",
+        "REFERENCES",
+        "UNIQUE",
+        "CHECK",
+        "DEFAULT",
+        "VALUES",
+        "SET",
+        "INTO",
+        "LIMIT",
+        "OFFSET",
+        "FETCH",
+        "FIRST",
+        "LAST",
+        "TRUE",
+        "FALSE",
+        "UNKNOWN",
+        "CURRENT_DATE",
+        "CURRENT_TIME",
+        "CURRENT_TIMESTAMP",
     }
 
     @staticmethod
-    def validate_column_name(name: str) -> Tuple[bool, str]:
+    def validate_column_name(name: str) -> tuple[bool, str]:
         """
         Validate a single column name for IRIS compatibility.
 
@@ -58,7 +118,7 @@ class ColumnNameValidator:
             return False, "Column name cannot be empty"
 
         # Check for dots (PostgreSQL qualified names not supported in IRIS DDL)
-        if '.' in name:
+        if "." in name:
             return False, (
                 f"Column name '{name}' contains dot (.) which IRIS does not support.\n"
                 f"    Hint: Replace dots with underscores (e.g., 'user_name' instead of 'user.name')"
@@ -73,7 +133,7 @@ class ColumnNameValidator:
 
         # Check for invalid characters (IRIS allows alphanumeric + underscore)
         # PostgreSQL allows more characters in quoted identifiers, but IRIS is stricter
-        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
             return False, (
                 f"Column name '{name}' contains invalid characters.\n"
                 f"    IRIS allows: letters, digits, underscore (must start with letter or underscore)\n"
@@ -140,10 +200,10 @@ class ColumnNameValidator:
             str: Sanitized column name
         """
         # Replace dots with underscores
-        sanitized = name.replace('.', '_')
+        sanitized = name.replace(".", "_")
 
         # Remove invalid characters
-        sanitized = re.sub(r'[^A-Za-z0-9_]', '_', sanitized)
+        sanitized = re.sub(r"[^A-Za-z0-9_]", "_", sanitized)
 
         # Ensure starts with letter or underscore
         if sanitized and sanitized[0].isdigit():

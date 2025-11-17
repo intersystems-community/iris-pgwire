@@ -8,9 +8,9 @@ Constitutional Requirement (Principle II): Test-First Development
 - Tests written BEFORE implementation, designed to FAIL initially
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from typing import AsyncIterator
-from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.mark.contract
@@ -19,10 +19,10 @@ async def test_handle_copy_from_stdin_contract():
     """
     FR-001: handle_copy_from_stdin must accept CopyCommand and return row count.
     """
-    from iris_pgwire.copy_handler import CopyHandler
-    from iris_pgwire.sql_translator.copy_parser import CopyCommand, CSVOptions, CopyDirection
-    from iris_pgwire.csv_processor import CSVProcessor
     from iris_pgwire.bulk_executor import BulkExecutor
+    from iris_pgwire.copy_handler import CopyHandler
+    from iris_pgwire.csv_processor import CSVProcessor
+    from iris_pgwire.sql_translator.copy_parser import CopyCommand, CopyDirection, CSVOptions
 
     # Create mocked dependencies
     csv_processor = CSVProcessor()
@@ -42,10 +42,10 @@ async def test_handle_copy_from_stdin_contract():
 
     # Test data
     command = CopyCommand(
-        table_name='Patients',
+        table_name="Patients",
         column_list=None,
         direction=CopyDirection.FROM_STDIN,
-        csv_options=CSVOptions(format='CSV', header=True)
+        csv_options=CSVOptions(format="CSV", header=True),
     )
 
     async def csv_stream():
@@ -66,10 +66,10 @@ async def test_handle_copy_to_stdout_contract():
     """
     FR-002: handle_copy_to_stdout must yield CSV bytes.
     """
-    from iris_pgwire.copy_handler import CopyHandler
-    from iris_pgwire.sql_translator.copy_parser import CopyCommand, CSVOptions, CopyDirection
-    from iris_pgwire.csv_processor import CSVProcessor
     from iris_pgwire.bulk_executor import BulkExecutor
+    from iris_pgwire.copy_handler import CopyHandler
+    from iris_pgwire.csv_processor import CSVProcessor
+    from iris_pgwire.sql_translator.copy_parser import CopyCommand, CopyDirection, CSVOptions
 
     # Create mocked dependencies
     csv_processor = CSVProcessor()
@@ -77,18 +77,18 @@ async def test_handle_copy_to_stdout_contract():
 
     # Mock stream_query_results to yield sample rows
     async def mock_stream_query_results(query):
-        yield (1, 'John')
-        yield (2, 'Mary')
+        yield (1, "John")
+        yield (2, "Mary")
 
     bulk_executor.stream_query_results = mock_stream_query_results
 
     handler = CopyHandler(csv_processor, bulk_executor)
 
     command = CopyCommand(
-        table_name='Patients',
-        column_list=['PatientID', 'FirstName'],
+        table_name="Patients",
+        column_list=["PatientID", "FirstName"],
         direction=CopyDirection.TO_STDOUT,
-        csv_options=CSVOptions(format='CSV', header=True)
+        csv_options=CSVOptions(format="CSV", header=True),
     )
 
     # Execute
@@ -97,4 +97,6 @@ async def test_handle_copy_to_stdout_contract():
     # Contract: Yields bytes
     assert len(csv_chunks) > 0, "Should yield at least one chunk"
     assert isinstance(csv_chunks[0], bytes), "Chunks must be bytes"
-    assert b'PatientID,FirstName' in csv_chunks[0] or b'PatientID' in csv_chunks[0], "Header row expected"
+    assert (
+        b"PatientID,FirstName" in csv_chunks[0] or b"PatientID" in csv_chunks[0]
+    ), "Header row expected"

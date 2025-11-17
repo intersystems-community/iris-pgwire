@@ -14,12 +14,11 @@ This test suite validates the fix for GitHub Issue #XXX:
 "DDL statements fail with semicolon parsing error"
 """
 
-import pytest
 import psycopg
-from datetime import datetime
-
+import pytest
 
 # Test Fixtures
+
 
 @pytest.fixture(scope="module")
 def pgwire_connection():
@@ -30,7 +29,7 @@ def pgwire_connection():
             port=5432,
             user="test_user",
             dbname="USER",
-            autocommit=True  # DDL requires autocommit in PostgreSQL
+            autocommit=True,  # DDL requires autocommit in PostgreSQL
         )
         yield conn
         conn.close()
@@ -47,7 +46,7 @@ def cleanup_test_tables(pgwire_connection):
         "test_simple_table",
         "test_composite_key",
         "test_foreign_key_parent",
-        "test_foreign_key_child"
+        "test_foreign_key_child",
     ]
 
     # Cleanup before test
@@ -69,6 +68,7 @@ def cleanup_test_tables(pgwire_connection):
 
 
 # Basic DDL Tests with Semicolons
+
 
 def test_create_table_simple_with_semicolon(pgwire_connection, cleanup_test_tables):
     """
@@ -160,26 +160,32 @@ def test_create_table_healthcare_schema(pgwire_connection, cleanup_test_tables):
     cur.execute(lab_results_ddl)
 
     # Verify both tables exist and can accept data
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO test_patients_ddl
         (PatientID, FirstName, LastName, DateOfBirth, Gender, Status, AdmissionDate)
         VALUES (1, 'John', 'Doe', '1980-01-01', 'M', 'Active', '2025-01-01')
-    """)
+    """
+    )
 
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO test_lab_results_ddl
         (ResultID, PatientID, TestName, TestDate, Result, Status)
         VALUES (1, 1, 'Blood Glucose', '2025-01-05', 95.5, 'Normal')
-    """)
+    """
+    )
 
     # Verify foreign key relationship works
-    cur.execute("""
+    cur.execute(
+        """
         SELECT p.FirstName, l.TestName, l.Result
         FROM test_patients_ddl p
         JOIN test_lab_results_ddl l ON p.PatientID = l.PatientID
-    """)
+    """
+    )
     result = cur.fetchone()
-    assert result == ('John', 'Blood Glucose', 95.5)
+    assert result == ("John", "Blood Glucose", 95.5)
 
 
 def test_drop_table_with_semicolon(pgwire_connection, cleanup_test_tables):
@@ -220,6 +226,7 @@ def test_multiple_ddl_statements_in_sequence(pgwire_connection, cleanup_test_tab
 
 # Advanced DDL Tests
 
+
 def test_create_table_with_constraints(pgwire_connection, cleanup_test_tables):
     """E2E: CREATE TABLE with various constraints"""
     cur = pgwire_connection.cursor()
@@ -236,15 +243,19 @@ def test_create_table_with_constraints(pgwire_connection, cleanup_test_tables):
     cur.execute(sql)
 
     # Verify constraint enforcement
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO test_composite_key VALUES (1, '2025-01-01', 'Flu')
-    """)
+    """
+    )
 
     # Duplicate primary key should fail
     try:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO test_composite_key VALUES (1, '2025-01-01', 'Cold')
-        """)
+        """
+        )
         pytest.fail("Duplicate primary key should be rejected")
     except psycopg.errors.UniqueViolation:
         pass  # Expected
@@ -270,7 +281,8 @@ def test_create_table_with_data_types(pgwire_connection, cleanup_test_tables):
     cur.execute(sql)
 
     # Insert data with all types
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO test_simple_table VALUES (
             42,
             9223372036854775807,
@@ -281,15 +293,17 @@ def test_create_table_with_data_types(pgwire_connection, cleanup_test_tables):
             123.45,
             TRUE
         )
-    """)
+    """
+    )
 
     # Verify data retrieval
     cur.execute("SELECT int_col, varchar_col, boolean_col FROM test_simple_table")
     result = cur.fetchone()
-    assert result == (42, 'varchar text', True)
+    assert result == (42, "varchar text", True)
 
 
 # Performance Tests
+
 
 def test_ddl_translation_performance(pgwire_connection, cleanup_test_tables):
     """
@@ -309,17 +323,19 @@ def test_ddl_translation_performance(pgwire_connection, cleanup_test_tables):
     for i in range(iterations):
         # Drop table if exists
         try:
-            cur.execute(f"DROP TABLE test_simple_table")
+            cur.execute("DROP TABLE test_simple_table")
         except:
             pass
 
         start = time.perf_counter()
-        cur.execute("""
+        cur.execute(
+            """
             CREATE TABLE test_simple_table (
                 id INT PRIMARY KEY,
                 data VARCHAR(100)
             );
-        """)
+        """
+        )
         end = time.perf_counter()
 
         total_time += (end - start) * 1000  # Convert to ms
@@ -328,7 +344,7 @@ def test_ddl_translation_performance(pgwire_connection, cleanup_test_tables):
 
     # Log performance (not enforcing <5ms since this includes IRIS execution)
     print(f"\nAverage DDL execution time: {avg_time_ms:.2f}ms")
-    print(f"(Includes PGWire translation + IRIS execution)")
+    print("(Includes PGWire translation + IRIS execution)")
 
     # We can't enforce <5ms for full execution, but log if unexpectedly slow
     if avg_time_ms > 100:
@@ -336,6 +352,7 @@ def test_ddl_translation_performance(pgwire_connection, cleanup_test_tables):
 
 
 # Edge Cases
+
 
 def test_ddl_with_multiple_semicolons(pgwire_connection, cleanup_test_tables):
     """E2E: DDL with trailing multiple semicolons (edge case)"""
@@ -379,6 +396,7 @@ def test_empty_statement_with_semicolon(pgwire_connection):
 
 # Regression Tests
 
+
 def test_regression_superset_scenario_a_ddl(pgwire_connection, cleanup_test_tables):
     """
     Regression: Validate fix for Superset Scenario A integration test failure
@@ -406,7 +424,9 @@ def test_regression_superset_scenario_a_ddl(pgwire_connection, cleanup_test_tabl
     cur.execute(patients_sql)
 
     # Verify table is usable
-    cur.execute("INSERT INTO test_patients_ddl VALUES (1, 'Test', 'Patient', '1980-01-01', 'M', 'Active', '2025-01-01', NULL)")
+    cur.execute(
+        "INSERT INTO test_patients_ddl VALUES (1, 'Test', 'Patient', '1980-01-01', 'M', 'Active', '2025-01-01', NULL)"
+    )
     cur.execute("SELECT COUNT(*) FROM test_patients_ddl")
     assert cur.fetchone()[0] == 1
 
@@ -414,6 +434,7 @@ def test_regression_superset_scenario_a_ddl(pgwire_connection, cleanup_test_tabl
 
 
 # Test Metadata
+
 
 def test_ddl_metadata():
     """
@@ -431,16 +452,16 @@ def test_ddl_metadata():
             "Multiple statements in sequence",
             "Constraints and data types",
             "Performance validation",
-            "Edge cases (multiple semicolons, whitespace)"
+            "Edge cases (multiple semicolons, whitespace)",
         ],
         "constitutional_compliance": {
             "translation_sla": "<5ms (tested separately)",
-            "postgresql_compatibility": "Full DDL support required"
-        }
+            "postgresql_compatibility": "Full DDL support required",
+        },
     }
 
     assert metadata["bug_fix"], "Test suite documents bug fix"
-    print(f"\nTest Suite Metadata:")
+    print("\nTest Suite Metadata:")
     print(f"Bug Fix: {metadata['bug_fix']}")
     print(f"Root Cause: {metadata['root_cause']}")
     print(f"Fix Location: {metadata['fix_location']}")

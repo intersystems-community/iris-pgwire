@@ -12,23 +12,21 @@ Requirements:
 - psycopg[binary] installed
 """
 
-import pytest
 import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text, Table, Column, Integer, String, MetaData, select
+
+import pytest
 
 # Import dialect directly to register it
 import sqlalchemy_iris.psycopg  # noqa
+from sqlalchemy import Column, Integer, MetaData, String, Table, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.mark.asyncio
 async def test_async_engine_creation():
     """Test creating async engine with iris+psycopg connection string"""
-    engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=True
-    )
+    engine = create_async_engine("iris+psycopg://localhost:5432/USER", echo=True)
 
     async with engine.begin() as conn:
         result = await conn.execute(text("SELECT 1 as test_value"))
@@ -41,10 +39,7 @@ async def test_async_engine_creation():
 @pytest.mark.asyncio
 async def test_async_simple_query():
     """Test simple async query execution"""
-    engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=False
-    )
+    engine = create_async_engine("iris+psycopg://localhost:5432/USER", echo=False)
 
     async with engine.begin() as conn:
         result = await conn.execute(text("SELECT CURRENT_TIMESTAMP as now"))
@@ -58,27 +53,28 @@ async def test_async_simple_query():
 @pytest.mark.asyncio
 async def test_async_table_reflection():
     """Test table reflection using IRIS INFORMATION_SCHEMA"""
-    engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=False
-    )
+    engine = create_async_engine("iris+psycopg://localhost:5432/USER", echo=False)
 
     metadata = MetaData()
 
     async with engine.begin() as conn:
         # Create a test table
-        await conn.execute(text("""
+        await conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS test_sqlalchemy_async (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR(50)
             )
-        """))
+        """
+            )
+        )
 
         # Reflect the table (should query INFORMATION_SCHEMA not pg_catalog)
-        await conn.run_sync(metadata.reflect, only=['test_sqlalchemy_async'])
+        await conn.run_sync(metadata.reflect, only=["test_sqlalchemy_async"])
 
         # Verify table was reflected
-        assert 'test_sqlalchemy_async' in metadata.tables
+        assert "test_sqlalchemy_async" in metadata.tables
 
         # Cleanup
         await conn.execute(text("DROP TABLE test_sqlalchemy_async"))
@@ -89,33 +85,39 @@ async def test_async_table_reflection():
 @pytest.mark.asyncio
 async def test_async_vector_operations():
     """Test IRIS VECTOR type operations via async SQLAlchemy"""
-    engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=True
-    )
+    engine = create_async_engine("iris+psycopg://localhost:5432/USER", echo=True)
 
     async with engine.begin() as conn:
         # Create test table with VECTOR column
-        await conn.execute(text("""
+        await conn.execute(
+            text(
+                """
             CREATE TABLE IF NOT EXISTS test_vectors_async (
                 id INTEGER,
                 embedding VECTOR(FLOAT, 3)
             )
-        """))
+        """
+            )
+        )
 
         # Insert vector data using parameter binding
         await conn.execute(
             text("INSERT INTO test_vectors_async VALUES (:id, TO_VECTOR(:vec, FLOAT))"),
-            {"id": 1, "vec": "[0.1,0.2,0.3]"}
+            {"id": 1, "vec": "[0.1,0.2,0.3]"},
         )
 
         # Query with vector similarity (should use IRIS VECTOR_COSINE)
-        result = await conn.execute(text("""
+        result = await conn.execute(
+            text(
+                """
             SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(:query, FLOAT)) as score
             FROM test_vectors_async
             ORDER BY score DESC
             LIMIT 5
-        """), {"query": "[0.1,0.2,0.3]"})
+        """
+            ),
+            {"query": "[0.1,0.2,0.3]"},
+        )
 
         rows = result.fetchall()
         assert len(rows) > 0
@@ -130,17 +132,14 @@ async def test_async_vector_operations():
 @pytest.mark.asyncio
 async def test_async_orm_session():
     """Test async ORM session with IRIS dialect"""
-    engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=False
-    )
+    engine = create_async_engine("iris+psycopg://localhost:5432/USER", echo=False)
 
     metadata = MetaData()
     test_table = Table(
-        'test_orm_async',
+        "test_orm_async",
         metadata,
-        Column('id', Integer, primary_key=True),
-        Column('name', String(50))
+        Column("id", Integer, primary_key=True),
+        Column("name", String(50)),
     )
 
     async with engine.begin() as conn:
@@ -148,15 +147,11 @@ async def test_async_orm_session():
         await conn.run_sync(metadata.create_all)
 
         # Insert via ORM
-        async_session = sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )
+        async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
         async with async_session() as session:
             async with session.begin():
-                await session.execute(
-                    test_table.insert().values(id=1, name='Test')
-                )
+                await session.execute(test_table.insert().values(id=1, name="Test"))
 
         # Query via ORM
         async with async_session() as session:
@@ -164,7 +159,7 @@ async def test_async_orm_session():
             rows = result.fetchall()
             assert len(rows) == 1
             assert rows[0].id == 1
-            assert rows[0].name == 'Test'
+            assert rows[0].name == "Test"
 
         # Cleanup
         await conn.run_sync(metadata.drop_all)
@@ -176,18 +171,22 @@ async def test_async_orm_session():
 async def test_information_schema_queries():
     """Verify SQLAlchemy uses IRIS INFORMATION_SCHEMA not pg_catalog"""
     engine = create_async_engine(
-        'iris+psycopg://localhost:5432/USER',
-        echo=True  # Should see INFORMATION_SCHEMA queries in logs
+        "iris+psycopg://localhost:5432/USER",
+        echo=True,  # Should see INFORMATION_SCHEMA queries in logs
     )
 
     async with engine.begin() as conn:
         # This should trigger INFORMATION_SCHEMA queries, not pg_catalog
-        result = await conn.execute(text("""
+        result = await conn.execute(
+            text(
+                """
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = 'SQLUser'
             LIMIT 5
-        """))
+        """
+            )
+        )
 
         tables = result.fetchall()
         # Just verify query executes (IRIS has INFORMATION_SCHEMA)
@@ -196,7 +195,7 @@ async def test_information_schema_queries():
     await engine.dispose()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Run a quick smoke test
     async def smoke_test():
         print("Testing async SQLAlchemy with iris+psycopg...")

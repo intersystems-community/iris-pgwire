@@ -65,6 +65,9 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
+    # Authentication bridge (feature 024-research-and-implement)
+    # Kerberos GSSAPI authentication for enterprise SSO
+    "python-gssapi>=1.8.0",
 ]
 
 [project.optional-dependencies]
@@ -80,6 +83,8 @@ test = [
     "docker>=6.0.0",
     # Runtime dependencies needed when importing iris_pgwire modules in tests
     "sqlparse>=0.4.0",
+    # Kerberos test realm isolation (constitutional TDD requirement - feature 024)
+    "k5test>=0.10.3",
 ]
 dev = [
     "black>=23.0.0",
@@ -199,6 +204,26 @@ disallow_untyped_defs = true
 no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
+
+[tool.interrogate]
+ignore-init-method = true
+ignore-init-module = false
+ignore-magic = false
+ignore-semiprivate = false
+ignore-private = false
+ignore-property-decorators = false
+ignore-module = false
+ignore-nested-functions = false
+ignore-nested-classes = true
+ignore-setters = false
+fail-under = 80
+exclude = ["setup.py", "docs", "build", "tests"]
+verbose = 2
+quiet = false
+whitelist-regex = []
+color = true
+generate-badge = "."
+badge-format = "svg"
 
 [tool.pytest.ini_options]
 minversion = "7.0"

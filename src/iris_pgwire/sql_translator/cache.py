@@ -7,23 +7,26 @@ compliance monitoring and performance optimization.
 Constitutional Compliance: Sub-millisecond cache operations supporting 5ms SLA.
 """
 
-import time
-import threading
 import hashlib
+import threading
 from collections import OrderedDict
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from .models import (
-    CacheEntry, CacheStats, InvalidationResult, TranslationResult,
-    PerformanceTimer, PerformanceStats
+    CacheEntry,
+    CacheStats,
+    InvalidationResult,
+    PerformanceStats,
+    PerformanceTimer,
 )
 
 
 @dataclass
 class CacheMetrics:
     """Real-time cache performance metrics"""
+
     hits: int = 0
     misses: int = 0
     evictions: int = 0
@@ -82,7 +85,7 @@ class TranslationCache:
         self._sla_violations = 0
         self._max_lookup_time_ms = 0.0
 
-    def get(self, cache_key: str) -> Optional[CacheEntry]:
+    def get(self, cache_key: str) -> CacheEntry | None:
         """
         Get entry from cache
 
@@ -119,9 +122,14 @@ class TranslationCache:
 
                 return entry
 
-    def put(self, cache_key: str, translated_sql: str, construct_mappings: List,
-            performance_stats: Optional[PerformanceStats] = None,
-            ttl_seconds: Optional[int] = None) -> None:
+    def put(
+        self,
+        cache_key: str,
+        translated_sql: str,
+        construct_mappings: list,
+        performance_stats: PerformanceStats | None = None,
+        ttl_seconds: int | None = None,
+    ) -> None:
         """
         Put entry into cache
 
@@ -143,7 +151,7 @@ class TranslationCache:
                     translated_sql=translated_sql,
                     construct_mappings=construct_mappings,
                     performance_stats=performance_stats or PerformanceStats(0.0, False, 0, 0),
-                    ttl_seconds=entry_ttl
+                    ttl_seconds=entry_ttl,
                 )
 
                 # Add to cache
@@ -160,7 +168,7 @@ class TranslationCache:
                 if timer.elapsed_ms > 1.0:  # 1ms threshold for cache operations
                     self._sla_violations += 1
 
-    def invalidate(self, pattern: Optional[str] = None) -> InvalidationResult:
+    def invalidate(self, pattern: str | None = None) -> InvalidationResult:
         """
         Invalidate cache entries
 
@@ -219,7 +227,7 @@ class TranslationCache:
                 hit_rate=self._metrics.hit_rate,
                 average_lookup_ms=self._metrics.average_lookup_ms,
                 memory_usage_mb=memory_usage_mb,
-                oldest_entry_age_minutes=oldest_age_minutes
+                oldest_entry_age_minutes=oldest_age_minutes,
             )
 
     def clear(self) -> int:
@@ -255,7 +263,7 @@ class TranslationCache:
             self._update_memory_usage()
             return len(expired_keys)
 
-    def get_cache_info(self) -> Dict[str, Any]:
+    def get_cache_info(self) -> dict[str, Any]:
         """
         Get detailed cache information for debugging
 
@@ -264,27 +272,27 @@ class TranslationCache:
         """
         with self._lock:
             return {
-                'cache_size': len(self._cache),
-                'max_size': self.max_size,
-                'default_ttl_seconds': self.default_ttl_seconds,
-                'metrics': {
-                    'hits': self._metrics.hits,
-                    'misses': self._metrics.misses,
-                    'evictions': self._metrics.evictions,
-                    'invalidations': self._metrics.invalidations,
-                    'total_lookups': self._metrics.total_lookups,
-                    'hit_rate': self._metrics.hit_rate,
-                    'average_lookup_ms': self._metrics.average_lookup_ms
+                "cache_size": len(self._cache),
+                "max_size": self.max_size,
+                "default_ttl_seconds": self.default_ttl_seconds,
+                "metrics": {
+                    "hits": self._metrics.hits,
+                    "misses": self._metrics.misses,
+                    "evictions": self._metrics.evictions,
+                    "invalidations": self._metrics.invalidations,
+                    "total_lookups": self._metrics.total_lookups,
+                    "hit_rate": self._metrics.hit_rate,
+                    "average_lookup_ms": self._metrics.average_lookup_ms,
                 },
-                'constitutional_compliance': {
-                    'sla_violations': self._sla_violations,
-                    'max_lookup_time_ms': self._max_lookup_time_ms,
-                    'uptime_seconds': (datetime.utcnow() - self._start_time).total_seconds()
+                "constitutional_compliance": {
+                    "sla_violations": self._sla_violations,
+                    "max_lookup_time_ms": self._max_lookup_time_ms,
+                    "uptime_seconds": (datetime.utcnow() - self._start_time).total_seconds(),
                 },
-                'sample_keys': list(self._cache.keys())[:10]  # First 10 keys for debugging
+                "sample_keys": list(self._cache.keys())[:10],  # First 10 keys for debugging
             }
 
-    def get_entry_details(self, cache_key: str) -> Optional[Dict[str, Any]]:
+    def get_entry_details(self, cache_key: str) -> dict[str, Any] | None:
         """
         Get detailed information about a specific cache entry
 
@@ -300,21 +308,21 @@ class TranslationCache:
 
             entry = self._cache[cache_key]
             return {
-                'cache_key': cache_key,
-                'created_at': entry.created_at.isoformat(),
-                'last_accessed': entry.last_accessed.isoformat(),
-                'access_count': entry.access_count,
-                'ttl_seconds': entry.ttl_seconds,
-                'age_minutes': entry.age_minutes,
-                'is_expired': entry.is_expired,
-                'translated_sql_length': len(entry.translated_sql),
-                'construct_mappings_count': len(entry.construct_mappings),
-                'performance_stats': {
-                    'translation_time_ms': entry.performance_stats.translation_time_ms,
-                    'cache_hit': entry.performance_stats.cache_hit,
-                    'constructs_detected': entry.performance_stats.constructs_detected,
-                    'constructs_translated': entry.performance_stats.constructs_translated
-                }
+                "cache_key": cache_key,
+                "created_at": entry.created_at.isoformat(),
+                "last_accessed": entry.last_accessed.isoformat(),
+                "access_count": entry.access_count,
+                "ttl_seconds": entry.ttl_seconds,
+                "age_minutes": entry.age_minutes,
+                "is_expired": entry.is_expired,
+                "translated_sql_length": len(entry.translated_sql),
+                "construct_mappings_count": len(entry.construct_mappings),
+                "performance_stats": {
+                    "translation_time_ms": entry.performance_stats.translation_time_ms,
+                    "cache_hit": entry.performance_stats.cache_hit,
+                    "constructs_detected": entry.performance_stats.constructs_detected,
+                    "constructs_translated": entry.performance_stats.constructs_translated,
+                },
             }
 
     def _evict_if_needed(self) -> None:
@@ -340,12 +348,12 @@ class TranslationCache:
             return True
 
         # Simple pattern matching - could be enhanced with regex
-        if pattern.endswith('%'):
+        if pattern.endswith("%"):
             return sql.upper().startswith(pattern[:-1].upper())
-        elif pattern.startswith('%'):
+        elif pattern.startswith("%"):
             return sql.upper().endswith(pattern[1:].upper())
-        elif '%' in pattern:
-            parts = pattern.upper().split('%')
+        elif "%" in pattern:
+            parts = pattern.upper().split("%")
             sql_upper = sql.upper()
             return sql_upper.startswith(parts[0]) and sql_upper.endswith(parts[-1])
         else:
@@ -367,10 +375,10 @@ class TranslationCache:
         for entry in self._cache.values():
             # Estimate: original SQL + translated SQL + overhead
             total_bytes += (
-                len(entry.original_sql.encode('utf-8')) +
-                len(entry.translated_sql.encode('utf-8')) +
-                len(entry.construct_mappings) * 200 +  # Rough estimate per mapping
-                500  # Overhead per entry
+                len(entry.original_sql.encode("utf-8"))
+                + len(entry.translated_sql.encode("utf-8"))
+                + len(entry.construct_mappings) * 200  # Rough estimate per mapping
+                + 500  # Overhead per entry
             )
 
         self._metrics.memory_usage_bytes = total_bytes
@@ -384,8 +392,9 @@ class CacheKeyGenerator:
     """Generates consistent cache keys for translation requests"""
 
     @staticmethod
-    def generate_key(original_sql: str, parameters: Optional[Dict] = None,
-                    session_context: Optional[Dict] = None) -> str:
+    def generate_key(
+        original_sql: str, parameters: dict | None = None, session_context: dict | None = None
+    ) -> str:
         """
         Generate cache key from SQL and context
 
@@ -405,17 +414,23 @@ class CacheKeyGenerator:
 
         if parameters:
             # Sort parameters for consistent ordering
-            sorted_params = sorted(parameters.items()) if isinstance(parameters, dict) else str(parameters)
+            sorted_params = (
+                sorted(parameters.items()) if isinstance(parameters, dict) else str(parameters)
+            )
             content_parts.append(str(sorted_params))
 
         if session_context:
             # Sort context for consistent ordering
-            sorted_context = sorted(session_context.items()) if isinstance(session_context, dict) else str(session_context)
+            sorted_context = (
+                sorted(session_context.items())
+                if isinstance(session_context, dict)
+                else str(session_context)
+            )
             content_parts.append(str(sorted_context))
 
         # Generate hash
-        content = '|||'.join(content_parts)
-        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+        content = "|||".join(content_parts)
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
     def normalize_sql(sql: str) -> str:
@@ -432,11 +447,11 @@ class CacheKeyGenerator:
         import re
 
         # Remove comments
-        sql = re.sub(r'--.*?\n', '\n', sql)
-        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+        sql = re.sub(r"--.*?\n", "\n", sql)
+        sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)
 
         # Normalize whitespace
-        sql = re.sub(r'\s+', ' ', sql)
+        sql = re.sub(r"\s+", " ", sql)
         sql = sql.strip()
 
         return sql
@@ -451,30 +466,35 @@ def get_cache() -> TranslationCache:
     return _cache
 
 
-def generate_cache_key(original_sql: str, parameters: Optional[Dict] = None,
-                      session_context: Optional[Dict] = None) -> str:
+def generate_cache_key(
+    original_sql: str, parameters: dict | None = None, session_context: dict | None = None
+) -> str:
     """Generate cache key (convenience function)"""
     return CacheKeyGenerator.generate_key(original_sql, parameters, session_context)
 
 
-def get_cached_translation(cache_key: str) -> Optional[CacheEntry]:
+def get_cached_translation(cache_key: str) -> CacheEntry | None:
     """Get cached translation (convenience function)"""
     return _cache.get(cache_key)
 
 
-def cache_translation(cache_key: str, translated_sql: str, construct_mappings: List,
-                     performance_stats: Optional[PerformanceStats] = None) -> None:
+def cache_translation(
+    cache_key: str,
+    translated_sql: str,
+    construct_mappings: list,
+    performance_stats: PerformanceStats | None = None,
+) -> None:
     """Cache translation result (convenience function)"""
     _cache.put(cache_key, translated_sql, construct_mappings, performance_stats)
 
 
 # Export main components
 __all__ = [
-    'TranslationCache',
-    'CacheKeyGenerator',
-    'CacheMetrics',
-    'get_cache',
-    'generate_cache_key',
-    'get_cached_translation',
-    'cache_translation'
+    "TranslationCache",
+    "CacheKeyGenerator",
+    "CacheMetrics",
+    "get_cache",
+    "generate_cache_key",
+    "get_cached_translation",
+    "cache_translation",
 ]

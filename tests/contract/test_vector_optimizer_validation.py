@@ -6,9 +6,11 @@ to prevent compiler crashes.
 
 EXPECTED: These tests MUST FAIL before implementation (TDD).
 """
-import pytest
+
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -30,10 +32,10 @@ class TestVectorOptimizerValidation:
         # This assumes validate_sql() method exists (will fail initially)
         result = self.optimizer.validate_sql(sql)
 
-        assert result.is_valid is True, \
-            f"Valid SQL failed validation: {result.error_message}"
-        assert result.has_brackets_in_vector_literals is True, \
-            "Bracket detection failed for valid SQL"
+        assert result.is_valid is True, f"Valid SQL failed validation: {result.error_message}"
+        assert (
+            result.has_brackets_in_vector_literals is True
+        ), "Bracket detection failed for valid SQL"
         assert result.error_message is None
 
     def test_missing_brackets_fails_validation(self):
@@ -43,12 +45,13 @@ class TestVectorOptimizerValidation:
 
         result = self.optimizer.validate_sql(sql)
 
-        assert result.is_valid is False, \
-            "Validation passed for SQL with missing brackets!"
-        assert result.has_brackets_in_vector_literals is False, \
-            "Bracket detection incorrectly returned True"
-        assert "bracket" in result.error_message.lower(), \
-            f"Error message should mention brackets: {result.error_message}"
+        assert result.is_valid is False, "Validation passed for SQL with missing brackets!"
+        assert (
+            result.has_brackets_in_vector_literals is False
+        ), "Bracket detection incorrectly returned True"
+        assert (
+            "bracket" in result.error_message.lower()
+        ), f"Error message should mention brackets: {result.error_message}"
 
     def test_malformed_to_vector_fails_validation(self):
         """Malformed TO_VECTOR syntax MUST fail validation (FR-002)"""
@@ -57,9 +60,11 @@ class TestVectorOptimizerValidation:
 
         result = self.optimizer.validate_sql(sql)
 
-        assert result.is_valid is False, \
-            "Validation passed for malformed TO_VECTOR!"
-        assert "to_vector" in result.error_message.lower() or "parameter" in result.error_message.lower()
+        assert result.is_valid is False, "Validation passed for malformed TO_VECTOR!"
+        assert (
+            "to_vector" in result.error_message.lower()
+            or "parameter" in result.error_message.lower()
+        )
 
     def test_multiple_vector_literals_validated(self):
         """SQL with multiple vector literals MUST validate all (FR-002)"""
@@ -72,10 +77,10 @@ class TestVectorOptimizerValidation:
 
         result = self.optimizer.validate_sql(sql)
 
-        assert result.is_valid is True, \
-            f"Valid multi-vector SQL failed: {result.error_message}"
-        assert result.vector_literal_count == 2, \
-            f"Expected 2 vector literals, got {result.vector_literal_count}"
+        assert result.is_valid is True, f"Valid multi-vector SQL failed: {result.error_message}"
+        assert (
+            result.vector_literal_count == 2
+        ), f"Expected 2 vector literals, got {result.vector_literal_count}"
         assert result.has_brackets_in_vector_literals is True
 
     def test_non_vector_sql_passes(self):
@@ -84,13 +89,10 @@ class TestVectorOptimizerValidation:
 
         result = self.optimizer.validate_sql(sql)
 
-        assert result.is_valid is True, \
-            "Non-vector SQL failed validation"
-        assert result.vector_literal_count == 0, \
-            "Found vector literals where none exist"
+        assert result.is_valid is True, "Non-vector SQL failed validation"
+        assert result.vector_literal_count == 0, "Found vector literals where none exist"
         # Validation should be skipped for non-vector queries
-        assert result.validation_applied is False, \
-            "Validation was applied to non-vector query"
+        assert result.validation_applied is False, "Validation was applied to non-vector query"
 
 
 if __name__ == "__main__":

@@ -11,15 +11,17 @@ Breaks down timing into:
 6. Response send (PGWire → client)
 """
 import time
-import psycopg
+
 import iris
+import psycopg
 
 # Test vector (128D)
-TEST_VECTOR = ','.join(['0.1'] * 128)
+TEST_VECTOR = ",".join(["0.1"] * 128)
 
 # Query to profile
 QUERY_PGWIRE = f"SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('{TEST_VECTOR}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT 5"
 QUERY_DBAPI = f"SELECT TOP 5 id, VECTOR_COSINE(embedding, TO_VECTOR('{TEST_VECTOR}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
+
 
 def profile_pgwire(iterations=10):
     """Profile PGWire query execution"""
@@ -28,16 +30,16 @@ def profile_pgwire(iterations=10):
     print("=" * 80)
 
     timings = {
-        'total': [],
-        'connect': [],
-        'execute': [],
-        'fetch': [],
+        "total": [],
+        "connect": [],
+        "execute": [],
+        "fetch": [],
     }
 
     for i in range(iterations):
         # Connection time
         t_start = time.perf_counter()
-        conn = psycopg.connect(host='localhost', port=5434, dbname='USER')
+        conn = psycopg.connect(host="localhost", port=5434, dbname="USER")
         cur = conn.cursor()
         t_connect = (time.perf_counter() - t_start) * 1000
 
@@ -56,19 +58,26 @@ def profile_pgwire(iterations=10):
 
         t_total = t_connect + t_execute + t_fetch
 
-        timings['total'].append(t_total)
-        timings['connect'].append(t_connect)
-        timings['execute'].append(t_execute)
-        timings['fetch'].append(t_fetch)
+        timings["total"].append(t_total)
+        timings["connect"].append(t_connect)
+        timings["execute"].append(t_execute)
+        timings["fetch"].append(t_fetch)
 
     # Calculate averages
     print(f"\nResults over {iterations} iterations:")
     print(f"  Total:      {sum(timings['total'])/iterations:.2f}ms")
-    print(f"  Connect:    {sum(timings['connect'])/iterations:.2f}ms  ({sum(timings['connect'])/sum(timings['total'])*100:.1f}%)")
-    print(f"  Execute:    {sum(timings['execute'])/iterations:.2f}ms  ({sum(timings['execute'])/sum(timings['total'])*100:.1f}%)")
-    print(f"  Fetch:      {sum(timings['fetch'])/iterations:.2f}ms  ({sum(timings['fetch'])/sum(timings['total'])*100:.1f}%)")
+    print(
+        f"  Connect:    {sum(timings['connect'])/iterations:.2f}ms  ({sum(timings['connect'])/sum(timings['total'])*100:.1f}%)"
+    )
+    print(
+        f"  Execute:    {sum(timings['execute'])/iterations:.2f}ms  ({sum(timings['execute'])/sum(timings['total'])*100:.1f}%)"
+    )
+    print(
+        f"  Fetch:      {sum(timings['fetch'])/iterations:.2f}ms  ({sum(timings['fetch'])/sum(timings['total'])*100:.1f}%)"
+    )
 
     return timings
+
 
 def profile_dbapi(iterations=10):
     """Profile direct IRIS DBAPI execution"""
@@ -77,17 +86,18 @@ def profile_dbapi(iterations=10):
     print("=" * 80)
 
     timings = {
-        'total': [],
-        'connect': [],
-        'execute': [],
-        'fetch': [],
+        "total": [],
+        "connect": [],
+        "execute": [],
+        "fetch": [],
     }
 
     for i in range(iterations):
         # Connection time
         t_start = time.perf_counter()
-        conn = iris.connect(hostname='localhost', port=1972, namespace='USER',
-                           username='_SYSTEM', password='SYS')
+        conn = iris.connect(
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+        )
         cur = conn.cursor()
         t_connect = (time.perf_counter() - t_start) * 1000
 
@@ -106,19 +116,26 @@ def profile_dbapi(iterations=10):
 
         t_total = t_connect + t_execute + t_fetch
 
-        timings['total'].append(t_total)
-        timings['connect'].append(t_connect)
-        timings['execute'].append(t_execute)
-        timings['fetch'].append(t_fetch)
+        timings["total"].append(t_total)
+        timings["connect"].append(t_connect)
+        timings["execute"].append(t_execute)
+        timings["fetch"].append(t_fetch)
 
     # Calculate averages
     print(f"\nResults over {iterations} iterations:")
     print(f"  Total:      {sum(timings['total'])/iterations:.2f}ms")
-    print(f"  Connect:    {sum(timings['connect'])/iterations:.2f}ms  ({sum(timings['connect'])/sum(timings['total'])*100:.1f}%)")
-    print(f"  Execute:    {sum(timings['execute'])/iterations:.2f}ms  ({sum(timings['execute'])/sum(timings['total'])*100:.1f}%)")
-    print(f"  Fetch:      {sum(timings['fetch'])/iterations:.2f}ms  ({sum(timings['fetch'])/sum(timings['total'])*100:.1f}%)")
+    print(
+        f"  Connect:    {sum(timings['connect'])/iterations:.2f}ms  ({sum(timings['connect'])/sum(timings['total'])*100:.1f}%)"
+    )
+    print(
+        f"  Execute:    {sum(timings['execute'])/iterations:.2f}ms  ({sum(timings['execute'])/sum(timings['total'])*100:.1f}%)"
+    )
+    print(
+        f"  Fetch:      {sum(timings['fetch'])/iterations:.2f}ms  ({sum(timings['fetch'])/sum(timings['total'])*100:.1f}%)"
+    )
 
     return timings
+
 
 def compare_results(pgwire_timings, dbapi_timings):
     """Compare PGWire vs DBAPI performance"""
@@ -126,9 +143,9 @@ def compare_results(pgwire_timings, dbapi_timings):
     print("COMPARISON: PGWire vs IRIS DBAPI")
     print("=" * 80)
 
-    iterations = len(pgwire_timings['total'])
+    iterations = len(pgwire_timings["total"])
 
-    for phase in ['total', 'connect', 'execute', 'fetch']:
+    for phase in ["total", "connect", "execute", "fetch"]:
         pgwire_avg = sum(pgwire_timings[phase]) / iterations
         dbapi_avg = sum(dbapi_timings[phase]) / iterations
         overhead = pgwire_avg - dbapi_avg
@@ -139,18 +156,20 @@ def compare_results(pgwire_timings, dbapi_timings):
         print(f"  DBAPI:      {dbapi_avg:.2f}ms")
         print(f"  Overhead:   {overhead:.2f}ms ({overhead_pct:+.1f}%)")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # Warmup
     print("Warming up connections...")
     try:
-        conn = psycopg.connect(host='localhost', port=5434, dbname='USER')
+        conn = psycopg.connect(host="localhost", port=5434, dbname="USER")
         conn.close()
     except Exception as e:
         print(f"Warning: PGWire warmup failed: {e}")
 
     try:
-        conn = iris.connect(hostname='localhost', port=1972, namespace='USER',
-                           username='_SYSTEM', password='SYS')
+        conn = iris.connect(
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+        )
         conn.close()
     except Exception as e:
         print(f"Warning: DBAPI warmup failed: {e}")

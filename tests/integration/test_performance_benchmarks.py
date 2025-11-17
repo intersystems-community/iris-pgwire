@@ -12,28 +12,23 @@ Constitutional Requirements:
 - Graceful degradation under stress
 """
 
-import time
-import pytest
-import statistics
-import threading
 import concurrent.futures
-from typing import List, Dict, Tuple, Any
+import statistics
+import time
 from dataclasses import dataclass
 
-from iris_pgwire.sql_translator.translator import (
-    IRISSQLTranslator,
-    TranslationContext
-)
-from iris_pgwire.sql_translator.models import TranslationResult
-from iris_pgwire.sql_translator.performance_monitor import (
-    get_monitor, get_constitutional_compliance
-)
 from iris_pgwire.constitutional import get_governor
+from iris_pgwire.sql_translator.performance_monitor import (
+    get_constitutional_compliance,
+    get_monitor,
+)
+from iris_pgwire.sql_translator.translator import IRISSQLTranslator, TranslationContext
 
 
 @dataclass
 class BenchmarkResult:
     """Results from a performance benchmark"""
+
     test_name: str
     query_count: int
     total_time_ms: float
@@ -69,7 +64,7 @@ class TestConstitutionalPerformance:
             "SELECT id, name FROM customers",
             "SELECT COUNT(*) FROM orders",
             "SELECT DISTINCT status FROM products",
-            "SELECT name FROM users WHERE id = 123"
+            "SELECT name FROM users WHERE id = 123",
         ]
 
         violations = 0
@@ -93,10 +88,14 @@ class TestConstitutionalPerformance:
 
         # Require 100% compliance for simple queries
         compliance_rate = (len(simple_queries) - violations) / len(simple_queries)
-        assert compliance_rate >= 1.0, f"Simple queries must have 100% SLA compliance, got {compliance_rate:.1%}"
+        assert (
+            compliance_rate >= 1.0
+        ), f"Simple queries must have 100% SLA compliance, got {compliance_rate:.1%}"
 
         avg_time = statistics.mean(times)
-        assert avg_time < 2.0, f"Average time for simple queries should be <2ms, got {avg_time:.2f}ms"
+        assert (
+            avg_time < 2.0
+        ), f"Average time for simple queries should be <2ms, got {avg_time:.2f}ms"
 
     def test_constitutional_sla_compliance_complex_queries(self):
         """Test 5ms SLA compliance for complex IRIS queries"""
@@ -138,7 +137,7 @@ class TestConstitutionalPerformance:
             FROM applications
             WHERE status IN ('active', 'pending')
               AND JSON_EXISTS(config, '$.version')
-            """
+            """,
         ]
 
         violations = 0
@@ -160,16 +159,18 @@ class TestConstitutionalPerformance:
 
         # Require 95% compliance for complex queries (constitutional requirement)
         compliance_rate = (len(complex_queries) - violations) / len(complex_queries)
-        assert compliance_rate >= 0.95, f"Complex queries must have ≥95% SLA compliance, got {compliance_rate:.1%}"
+        assert (
+            compliance_rate >= 0.95
+        ), f"Complex queries must have ≥95% SLA compliance, got {compliance_rate:.1%}"
 
     def test_bulk_translation_performance_benchmark(self):
         """Comprehensive bulk translation performance benchmark"""
 
         # Generate test queries across different complexity levels
         queries = self._generate_benchmark_queries(
-            simple=50,      # 50 simple queries
-            medium=75,      # 75 medium complexity
-            complex=25      # 25 complex queries
+            simple=50,  # 50 simple queries
+            medium=75,  # 75 medium complexity
+            complex=25,  # 25 complex queries
         )
 
         results = []
@@ -218,17 +219,25 @@ class TestConstitutionalPerformance:
             cache_hit_rate=cache_hits / len(times) if times else 0,
             success_rate=(len(queries) - errors) / len(queries),
             memory_growth_factor=1.0,  # Would measure actual memory growth
-            constitutional_compliance=violations / len(times) <= 0.05 if times else False
+            constitutional_compliance=violations / len(times) <= 0.05 if times else False,
         )
 
         # Constitutional compliance assertions
-        assert benchmark.sla_compliance_rate >= 0.95, f"SLA compliance rate {benchmark.sla_compliance_rate:.1%} below 95% requirement"
-        assert benchmark.success_rate >= 0.99, f"Success rate {benchmark.success_rate:.1%} below 99% requirement"
-        assert benchmark.avg_time_ms < 3.0, f"Average translation time {benchmark.avg_time_ms:.2f}ms exceeds 3ms target"
-        assert benchmark.p95_time_ms <= 5.0, f"P95 translation time {benchmark.p95_time_ms:.2f}ms exceeds 5ms SLA"
+        assert (
+            benchmark.sla_compliance_rate >= 0.95
+        ), f"SLA compliance rate {benchmark.sla_compliance_rate:.1%} below 95% requirement"
+        assert (
+            benchmark.success_rate >= 0.99
+        ), f"Success rate {benchmark.success_rate:.1%} below 99% requirement"
+        assert (
+            benchmark.avg_time_ms < 3.0
+        ), f"Average translation time {benchmark.avg_time_ms:.2f}ms exceeds 3ms target"
+        assert (
+            benchmark.p95_time_ms <= 5.0
+        ), f"P95 translation time {benchmark.p95_time_ms:.2f}ms exceeds 5ms SLA"
 
         # Print benchmark results for analysis
-        print(f"\n📊 Bulk Translation Benchmark Results:")
+        print("\n📊 Bulk Translation Benchmark Results:")
         print(f"  Queries processed: {benchmark.query_count}")
         print(f"  Total time: {benchmark.total_time_ms:.2f}ms")
         print(f"  Average time: {benchmark.avg_time_ms:.2f}ms")
@@ -238,18 +247,19 @@ class TestConstitutionalPerformance:
         print(f"  SLA compliance: {benchmark.sla_compliance_rate:.1%}")
         print(f"  Cache hit rate: {benchmark.cache_hit_rate:.1%}")
         print(f"  Success rate: {benchmark.success_rate:.1%}")
-        print(f"  Constitutional compliance: {'✅ PASS' if benchmark.constitutional_compliance else '❌ FAIL'}")
+        print(
+            f"  Constitutional compliance: {'✅ PASS' if benchmark.constitutional_compliance else '❌ FAIL'}"
+        )
 
     def test_concurrent_translation_performance(self):
         """Test performance under concurrent load"""
 
-        def translate_queries(query_batch: List[str], thread_id: int) -> List[float]:
+        def translate_queries(query_batch: list[str], thread_id: int) -> list[float]:
             """Translate a batch of queries and return timing results"""
             times = []
             for i, sql in enumerate(query_batch):
                 context = TranslationContext(
-                    original_sql=sql,
-                    session_id=f"thread_{thread_id}_query_{i}"
+                    original_sql=sql, session_id=f"thread_{thread_id}_query_{i}"
                 )
 
                 start = time.perf_counter()
@@ -269,14 +279,11 @@ class TestConstitutionalPerformance:
         all_queries = self._generate_benchmark_queries(
             simple=int(total_queries * 0.6),
             medium=int(total_queries * 0.3),
-            complex=int(total_queries * 0.1)
+            complex=int(total_queries * 0.1),
         )
 
         # Split queries among threads
-        query_batches = [
-            all_queries[i::num_threads]
-            for i in range(num_threads)
-        ]
+        query_batches = [all_queries[i::num_threads] for i in range(num_threads)]
 
         start_time = time.perf_counter()
 
@@ -300,10 +307,14 @@ class TestConstitutionalPerformance:
         avg_time = statistics.mean(all_times)
 
         # Concurrent performance should maintain reasonable compliance (thread contention expected)
-        assert compliance_rate >= 0.80, f"Concurrent SLA compliance {compliance_rate:.1%} below 80% minimum"
-        assert avg_time < 6.0, f"Concurrent average time {avg_time:.2f}ms exceeds 6ms (allowing for thread contention)"
+        assert (
+            compliance_rate >= 0.80
+        ), f"Concurrent SLA compliance {compliance_rate:.1%} below 80% minimum"
+        assert (
+            avg_time < 6.0
+        ), f"Concurrent average time {avg_time:.2f}ms exceeds 6ms (allowing for thread contention)"
 
-        print(f"\n🔄 Concurrent Translation Performance:")
+        print("\n🔄 Concurrent Translation Performance:")
         print(f"  Threads: {num_threads}")
         print(f"  Queries per thread: {queries_per_thread}")
         print(f"  Total queries: {len(all_times)}")
@@ -315,8 +326,10 @@ class TestConstitutionalPerformance:
     def test_memory_efficiency_benchmark(self):
         """Test memory efficiency under sustained load"""
         try:
-            import psutil
             import os
+
+            import psutil
+
             has_psutil = True
         except ImportError:
             has_psutil = False
@@ -337,8 +350,7 @@ class TestConstitutionalPerformance:
             # Process a batch of queries
             for sql in queries:
                 context = TranslationContext(
-                    original_sql=sql,
-                    session_id=f"memory_test_{iteration}"
+                    original_sql=sql, session_id=f"memory_test_{iteration}"
                 )
                 result = self.translator.translate(context)
                 assert result.translated_sql is not None
@@ -358,18 +370,20 @@ class TestConstitutionalPerformance:
         else:
             growth_percentage = 0.0
 
-        print(f"\n💾 Memory Efficiency Benchmark:")
+        print("\n💾 Memory Efficiency Benchmark:")
         if has_psutil:
             print(f"  Initial memory: {initial_memory:.2f} MB")
             print(f"  Final memory: {final_memory:.2f} MB")
             print(f"  Memory growth: {memory_growth:.2f} MB ({growth_percentage:.1f}%)")
         else:
-            print(f"  Memory monitoring: N/A (psutil not available)")
+            print("  Memory monitoring: N/A (psutil not available)")
         print(f"  Queries processed: {num_iterations * len(queries)}")
 
         # Memory growth should be reasonable (< 50% increase) - only if psutil available
         if has_psutil and initial_memory > 0:
-            assert growth_percentage < 50.0, f"Memory growth {growth_percentage:.1f}% exceeds 50% limit"
+            assert (
+                growth_percentage < 50.0
+            ), f"Memory growth {growth_percentage:.1f}% exceeds 50% limit"
 
     def test_translation_cache_performance(self):
         """Test cache performance and hit rates"""
@@ -408,7 +422,7 @@ class TestConstitutionalPerformance:
         avg_cache_time = statistics.mean(times_with_cache) if times_with_cache else 0
         avg_nocache_time = statistics.mean(times_without_cache) if times_without_cache else 0
 
-        print(f"\n🗄️ Cache Performance Analysis:")
+        print("\n🗄️ Cache Performance Analysis:")
         print(f"  Cache hit rate: {cache_hit_rate:.1%}")
         print(f"  Average cache hit time: {avg_cache_time:.2f}ms")
         print(f"  Average cache miss time: {avg_nocache_time:.2f}ms")
@@ -436,21 +450,29 @@ class TestConstitutionalPerformance:
         compliance_report = get_constitutional_compliance()
         translator_stats = self.translator.get_translation_stats()
 
-        print(f"\n📋 Constitutional Compliance Report:")
-        print(f"  Overall compliance: {'✅ COMPLIANT' if compliance_report.overall_compliance_rate >= 0.95 else '❌ NON-COMPLIANT'}")
+        print("\n📋 Constitutional Compliance Report:")
+        print(
+            f"  Overall compliance: {'✅ COMPLIANT' if compliance_report.overall_compliance_rate >= 0.95 else '❌ NON-COMPLIANT'}"
+        )
         print(f"  Overall compliance rate: {compliance_report.overall_compliance_rate:.1%}")
         print(f"  SLA compliance rate: {translator_stats['sla_compliance_rate']:.1%}")
-        print(f"  Average translation time: {translator_stats['average_translation_time_ms']:.2f}ms")
+        print(
+            f"  Average translation time: {translator_stats['average_translation_time_ms']:.2f}ms"
+        )
         print(f"  Total translations: {translator_stats['total_translations']}")
         print(f"  SLA violations: {translator_stats['sla_violations']}")
         print(f"  Cache hit rate: {translator_stats['cache_hit_rate']:.1%}")
 
         # Constitutional requirements
-        assert translator_stats['sla_compliance_rate'] >= 0.95, "SLA compliance must be ≥95%"
-        assert translator_stats['average_translation_time_ms'] <= 5.0, "Average time must be ≤5ms"
-        assert compliance_report.overall_compliance_rate >= 0.95, "Overall constitutional compliance must be ≥95%"
+        assert translator_stats["sla_compliance_rate"] >= 0.95, "SLA compliance must be ≥95%"
+        assert translator_stats["average_translation_time_ms"] <= 5.0, "Average time must be ≤5ms"
+        assert (
+            compliance_report.overall_compliance_rate >= 0.95
+        ), "Overall constitutional compliance must be ≥95%"
 
-    def _generate_benchmark_queries(self, simple: int = 10, medium: int = 10, complex: int = 10) -> List[str]:
+    def _generate_benchmark_queries(
+        self, simple: int = 10, medium: int = 10, complex: int = 10
+    ) -> list[str]:
         """Generate a mix of queries for benchmarking"""
         queries = []
 
@@ -461,7 +483,7 @@ class TestConstitutionalPerformance:
                 f"SELECT id, name FROM users WHERE id = {i}",
                 f"SELECT COUNT(*) FROM orders_{i % 3}",
                 f"SELECT DISTINCT status FROM products_{i % 4}",
-                f"INSERT INTO logs (message) VALUES ('test_{i}')"
+                f"INSERT INTO logs (message) VALUES ('test_{i}')",
             ]
             queries.append(simple_templates[i % len(simple_templates)])
 
@@ -472,7 +494,7 @@ class TestConstitutionalPerformance:
                 f"SELECT TOP {(i % 10) + 1} * FROM products ORDER BY price DESC",
                 f"SELECT JSON_EXTRACT(data, '$.field_{i}') FROM documents WHERE id > {i}",
                 f"CREATE TABLE temp_{i} (id INTEGER, name LONGVARCHAR, data VARBINARY)",
-                f"SELECT %SQLLOWER(category) FROM items_{i % 2} GROUP BY category"
+                f"SELECT %SQLLOWER(category) FROM items_{i % 2} GROUP BY category",
             ]
             queries.append(medium_templates[i % len(medium_templates)])
 
@@ -508,7 +530,7 @@ class TestConstitutionalPerformance:
                     metadata JSON,
                     created_date DATE
                 )
-                """
+                """,
             ]
             queries.append(complex_templates[i % len(complex_templates)])
 
@@ -527,11 +549,11 @@ class TestRegressionDetection:
 
         # Known baseline performance targets (in milliseconds)
         baselines = {
-            "simple_query": 1.0,          # Simple SELECT should be <1ms
-            "function_translation": 2.0,   # Function translation should be <2ms
-            "json_operation": 3.0,         # JSON operations should be <3ms
-            "complex_mixed": 4.0,          # Complex mixed queries should be <4ms
-            "ddl_statement": 2.5           # DDL statements should be <2.5ms
+            "simple_query": 1.0,  # Simple SELECT should be <1ms
+            "function_translation": 2.0,  # Function translation should be <2ms
+            "json_operation": 3.0,  # JSON operations should be <3ms
+            "complex_mixed": 4.0,  # Complex mixed queries should be <4ms
+            "ddl_statement": 2.5,  # DDL statements should be <2.5ms
         }
 
         test_cases = {
@@ -550,7 +572,7 @@ class TestRegressionDetection:
                 GROUP BY u.id, u.name, u.created_date, u.profile
                 ORDER BY post_count DESC
             """,
-            "ddl_statement": "CREATE TABLE test (id INTEGER, name LONGVARCHAR, data VARBINARY, embedding VECTOR(128))"
+            "ddl_statement": "CREATE TABLE test (id INTEGER, name LONGVARCHAR, data VARBINARY, embedding VECTOR(128))",
         }
 
         regressions = []
@@ -573,24 +595,32 @@ class TestRegressionDetection:
             avg_time = statistics.mean(times)
 
             if avg_time > baseline:
-                regressions.append({
-                    'test': test_name,
-                    'baseline': baseline,
-                    'actual': avg_time,
-                    'regression': avg_time - baseline
-                })
+                regressions.append(
+                    {
+                        "test": test_name,
+                        "baseline": baseline,
+                        "actual": avg_time,
+                        "regression": avg_time - baseline,
+                    }
+                )
 
         # Report any regressions found
         if regressions:
-            print(f"\n⚠️ Performance Regressions Detected:")
+            print("\n⚠️ Performance Regressions Detected:")
             for reg in regressions:
-                print(f"  {reg['test']}: {reg['actual']:.2f}ms (baseline: {reg['baseline']:.2f}ms, +{reg['regression']:.2f}ms)")
+                print(
+                    f"  {reg['test']}: {reg['actual']:.2f}ms (baseline: {reg['baseline']:.2f}ms, +{reg['regression']:.2f}ms)"
+                )
         else:
-            print(f"\n✅ No Performance Regressions Detected")
+            print("\n✅ No Performance Regressions Detected")
 
         # Fail test if significant regressions found
-        significant_regressions = [r for r in regressions if r['regression'] > 1.0]  # >1ms regression
-        assert len(significant_regressions) == 0, f"Significant performance regressions detected: {significant_regressions}"
+        significant_regressions = [
+            r for r in regressions if r["regression"] > 1.0
+        ]  # >1ms regression
+        assert (
+            len(significant_regressions) == 0
+        ), f"Significant performance regressions detected: {significant_regressions}"
 
     def test_stress_load_performance(self):
         """Test performance under stress load conditions"""
@@ -605,7 +635,7 @@ class TestRegressionDetection:
                 f"SELECT %SQLUPPER(col_{i % 20}) FROM table_{i % 5}",
                 f"SELECT JSON_EXTRACT(data, '$.field_{i}') FROM docs_{i % 8}",
                 f"SELECT TOP {(i % 10) + 1} * FROM products_{i % 3} ORDER BY id",
-                f"CREATE TABLE temp_{i} (id INTEGER, data LONGVARCHAR)"
+                f"CREATE TABLE temp_{i} (id INTEGER, data LONGVARCHAR)",
             ]
             stress_queries.append(query_types[i % len(query_types)])
 
@@ -626,7 +656,7 @@ class TestRegressionDetection:
 
                 assert result.translated_sql is not None
 
-            except Exception as e:
+            except Exception:
                 errors += 1
                 if errors > 5:  # Stop if too many errors
                     break
@@ -635,7 +665,7 @@ class TestRegressionDetection:
         processed = len(stress_queries) - errors
         compliance_rate = (processed - violations) / processed if processed > 0 else 0
 
-        print(f"\n🔥 Stress Load Performance:")
+        print("\n🔥 Stress Load Performance:")
         print(f"  Queries processed: {processed}/{len(stress_queries)}")
         print(f"  Total time: {total_time:.2f}ms")
         print(f"  Average time: {total_time/processed:.2f}ms")
@@ -644,5 +674,9 @@ class TestRegressionDetection:
         print(f"  Compliance rate: {compliance_rate:.1%}")
 
         # Stress test requirements
-        assert errors / len(stress_queries) < 0.01, f"Error rate {errors/len(stress_queries):.1%} exceeds 1% limit"
-        assert compliance_rate >= 0.85, f"Stress SLA compliance {compliance_rate:.1%} below 85% minimum"
+        assert (
+            errors / len(stress_queries) < 0.01
+        ), f"Error rate {errors/len(stress_queries):.1%} exceeds 1% limit"
+        assert (
+            compliance_rate >= 0.85
+        ), f"Stress SLA compliance {compliance_rate:.1%} below 85% minimum"

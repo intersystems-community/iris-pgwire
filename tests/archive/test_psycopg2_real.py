@@ -3,9 +3,10 @@
 Real psycopg2 test for P2 Extended Protocol
 """
 
-import psycopg2
 import sys
-import time
+
+import psycopg2
+
 
 def test_psycopg2():
     try:
@@ -18,7 +19,7 @@ def test_psycopg2():
             database="USER",
             user="test_user",
             password="test",
-            connect_timeout=10
+            connect_timeout=10,
         )
 
         print("✅ psycopg2 connection successful!")
@@ -58,8 +59,10 @@ def test_psycopg2():
     except Exception as e:
         print(f"❌ psycopg2 error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = test_psycopg2()

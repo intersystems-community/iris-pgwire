@@ -7,22 +7,24 @@ cache settings, performance tuning, and constitutional compliance parameters.
 Constitutional Compliance: Configurable SLA thresholds and monitoring settings.
 """
 
-import os
 import json
 import logging
+import os
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, Any, Optional, List, Union
 from enum import Enum
+from pathlib import Path
+from typing import Any
 
 try:
     import yaml
+
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
 
 try:
     import toml
+
     TOML_AVAILABLE = True
 except ImportError:
     TOML_AVAILABLE = False
@@ -30,6 +32,7 @@ except ImportError:
 
 class ConfigFormat(Enum):
     """Supported configuration file formats"""
+
     JSON = "json"
     YAML = "yaml"
     TOML = "toml"
@@ -39,6 +42,7 @@ class ConfigFormat(Enum):
 @dataclass
 class CacheConfig:
     """Cache configuration settings"""
+
     enabled: bool = True
     max_size: int = 10000
     ttl_seconds: int = 3600
@@ -59,6 +63,7 @@ class CacheConfig:
 @dataclass
 class DebugConfig:
     """Debug and tracing configuration"""
+
     enabled: bool = False
     trace_all_queries: bool = False
     trace_constructs: bool = True
@@ -67,7 +72,7 @@ class DebugConfig:
     trace_validation: bool = False
     log_level: str = "INFO"
     log_format: str = "json"
-    log_file: Optional[str] = None
+    log_file: str | None = None
     max_trace_size: int = 1000
     trace_retention_hours: int = 24
 
@@ -85,6 +90,7 @@ class DebugConfig:
 @dataclass
 class PerformanceConfig:
     """Performance and optimization settings"""
+
     sla_threshold_ms: float = 5.0  # Constitutional requirement
     validation_sla_ms: float = 2.0
     enable_async_translation: bool = True
@@ -107,6 +113,7 @@ class PerformanceConfig:
 @dataclass
 class ValidationConfig:
     """Validation system configuration"""
+
     enabled: bool = True
     default_level: str = "SEMANTIC"
     confidence_threshold: float = 0.8
@@ -129,10 +136,11 @@ class ValidationConfig:
 @dataclass
 class MetricsConfig:
     """Metrics collection configuration"""
+
     enabled: bool = True
     enable_otel: bool = False
     enable_prometheus: bool = False
-    otel_endpoint: Optional[str] = None
+    otel_endpoint: str | None = None
     prometheus_port: int = 8080
     collection_interval_seconds: int = 30
     retention_days: int = 7
@@ -150,7 +158,8 @@ class MetricsConfig:
 @dataclass
 class IRISConfig:
     """IRIS-specific configuration"""
-    connection_string: Optional[str] = None
+
+    connection_string: str | None = None
     embedded_python: bool = True
     namespace: str = "USER"
     timeout_seconds: int = 30
@@ -170,6 +179,7 @@ class IRISConfig:
 @dataclass
 class TranslationConfig:
     """Complete translation system configuration"""
+
     cache: CacheConfig = field(default_factory=CacheConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
@@ -180,7 +190,7 @@ class TranslationConfig:
     # Global settings
     environment: str = "development"
     config_version: str = "1.0.0"
-    loaded_from: Optional[str] = None
+    loaded_from: str | None = None
 
 
 class ConfigurationManager:
@@ -195,7 +205,7 @@ class ConfigurationManager:
     - Constitutional compliance defaults
     """
 
-    def __init__(self, config_path: Optional[Union[str, Path]] = None):
+    def __init__(self, config_path: str | Path | None = None):
         """
         Initialize configuration manager
 
@@ -203,8 +213,8 @@ class ConfigurationManager:
             config_path: Optional path to configuration file
         """
         self.config_path = Path(config_path) if config_path else None
-        self.config: Optional[TranslationConfig] = None
-        self.logger = logging.getLogger('iris_pgwire.sql_translator.config')
+        self.config: TranslationConfig | None = None
+        self.logger = logging.getLogger("iris_pgwire.sql_translator.config")
 
         # Default config search paths
         self.search_paths = [
@@ -222,7 +232,7 @@ class ConfigurationManager:
             Path(".iris_pgwire.toml"),
         ]
 
-    def load_config(self, config_path: Optional[Union[str, Path]] = None) -> TranslationConfig:
+    def load_config(self, config_path: str | Path | None = None) -> TranslationConfig:
         """
         Load configuration from file or environment
 
@@ -283,9 +293,12 @@ class ConfigurationManager:
         self.config = None
         return self.load_config()
 
-    def save_config(self, config: TranslationConfig,
-                   output_path: Optional[Union[str, Path]] = None,
-                   format: ConfigFormat = ConfigFormat.JSON) -> None:
+    def save_config(
+        self,
+        config: TranslationConfig,
+        output_path: str | Path | None = None,
+        format: ConfigFormat = ConfigFormat.JSON,
+    ) -> None:
         """
         Save configuration to file
 
@@ -305,30 +318,30 @@ class ConfigurationManager:
         config_data = self._config_to_dict(config)
 
         if format == ConfigFormat.JSON:
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 json.dump(config_data, f, indent=2, default=str)
         elif format == ConfigFormat.YAML and YAML_AVAILABLE:
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 yaml.dump(config_data, f, default_flow_style=False)
         elif format == ConfigFormat.TOML and TOML_AVAILABLE:
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 toml.dump(config_data, f)
         else:
             raise ValueError(f"Unsupported format: {format}")
 
         self.logger.info(f"Configuration saved to: {output_path}")
 
-    def _load_config_file(self, config_path: Path) -> Dict[str, Any]:
+    def _load_config_file(self, config_path: Path) -> dict[str, Any]:
         """Load configuration from file"""
         try:
-            with open(config_path, 'r') as f:
-                if config_path.suffix.lower() == '.json':
+            with open(config_path) as f:
+                if config_path.suffix.lower() == ".json":
                     return json.load(f)
-                elif config_path.suffix.lower() in ['.yaml', '.yml']:
+                elif config_path.suffix.lower() in [".yaml", ".yml"]:
                     if not YAML_AVAILABLE:
                         raise ImportError("PyYAML not available for YAML config files")
                     return yaml.safe_load(f) or {}
-                elif config_path.suffix.lower() == '.toml':
+                elif config_path.suffix.lower() == ".toml":
                     if not TOML_AVAILABLE:
                         raise ImportError("toml not available for TOML config files")
                     return toml.load(f)
@@ -340,31 +353,31 @@ class ConfigurationManager:
             self.logger.error(f"Failed to load config from {config_path}: {e}")
             return {}
 
-    def _load_environment_config(self) -> Dict[str, Any]:
+    def _load_environment_config(self) -> dict[str, Any]:
         """Load configuration overrides from environment variables"""
         env_config = {}
 
         # Define environment variable mappings
         env_mappings = {
-            'IRIS_PGWIRE_DEBUG': ('debug', 'enabled', bool),
-            'IRIS_PGWIRE_CACHE_ENABLED': ('cache', 'enabled', bool),
-            'IRIS_PGWIRE_CACHE_SIZE': ('cache', 'max_size', int),
-            'IRIS_PGWIRE_CACHE_TTL': ('cache', 'ttl_seconds', int),
-            'IRIS_PGWIRE_LOG_LEVEL': ('debug', 'log_level', str),
-            'IRIS_PGWIRE_LOG_FORMAT': ('debug', 'log_format', str),
-            'IRIS_PGWIRE_LOG_FILE': ('debug', 'log_file', str),
-            'IRIS_PGWIRE_SLA_THRESHOLD': ('performance', 'sla_threshold_ms', float),
-            'IRIS_PGWIRE_THREAD_POOL_SIZE': ('performance', 'thread_pool_size', int),
-            'IRIS_PGWIRE_VALIDATION_ENABLED': ('validation', 'enabled', bool),
-            'IRIS_PGWIRE_VALIDATION_LEVEL': ('validation', 'default_level', str),
-            'IRIS_PGWIRE_METRICS_ENABLED': ('metrics', 'enabled', bool),
-            'IRIS_PGWIRE_OTEL_ENABLED': ('metrics', 'enable_otel', bool),
-            'IRIS_PGWIRE_OTEL_ENDPOINT': ('metrics', 'otel_endpoint', str),
-            'IRIS_PGWIRE_PROMETHEUS_ENABLED': ('metrics', 'enable_prometheus', bool),
-            'IRIS_PGWIRE_PROMETHEUS_PORT': ('metrics', 'prometheus_port', int),
-            'IRIS_PGWIRE_IRIS_NAMESPACE': ('iris', 'namespace', str),
-            'IRIS_PGWIRE_IRIS_TIMEOUT': ('iris', 'timeout_seconds', int),
-            'IRIS_PGWIRE_ENVIRONMENT': ('environment', None, str),
+            "IRIS_PGWIRE_DEBUG": ("debug", "enabled", bool),
+            "IRIS_PGWIRE_CACHE_ENABLED": ("cache", "enabled", bool),
+            "IRIS_PGWIRE_CACHE_SIZE": ("cache", "max_size", int),
+            "IRIS_PGWIRE_CACHE_TTL": ("cache", "ttl_seconds", int),
+            "IRIS_PGWIRE_LOG_LEVEL": ("debug", "log_level", str),
+            "IRIS_PGWIRE_LOG_FORMAT": ("debug", "log_format", str),
+            "IRIS_PGWIRE_LOG_FILE": ("debug", "log_file", str),
+            "IRIS_PGWIRE_SLA_THRESHOLD": ("performance", "sla_threshold_ms", float),
+            "IRIS_PGWIRE_THREAD_POOL_SIZE": ("performance", "thread_pool_size", int),
+            "IRIS_PGWIRE_VALIDATION_ENABLED": ("validation", "enabled", bool),
+            "IRIS_PGWIRE_VALIDATION_LEVEL": ("validation", "default_level", str),
+            "IRIS_PGWIRE_METRICS_ENABLED": ("metrics", "enabled", bool),
+            "IRIS_PGWIRE_OTEL_ENABLED": ("metrics", "enable_otel", bool),
+            "IRIS_PGWIRE_OTEL_ENDPOINT": ("metrics", "otel_endpoint", str),
+            "IRIS_PGWIRE_PROMETHEUS_ENABLED": ("metrics", "enable_prometheus", bool),
+            "IRIS_PGWIRE_PROMETHEUS_PORT": ("metrics", "prometheus_port", int),
+            "IRIS_PGWIRE_IRIS_NAMESPACE": ("iris", "namespace", str),
+            "IRIS_PGWIRE_IRIS_TIMEOUT": ("iris", "timeout_seconds", int),
+            "IRIS_PGWIRE_ENVIRONMENT": ("environment", None, str),
         }
 
         for env_var, (section, key, value_type) in env_mappings.items():
@@ -373,7 +386,7 @@ class ConfigurationManager:
                 try:
                     # Convert value to appropriate type
                     if value_type == bool:
-                        converted_value = env_value.lower() in ('true', '1', 'yes', 'on')
+                        converted_value = env_value.lower() in ("true", "1", "yes", "on")
                     elif value_type == int:
                         converted_value = int(env_value)
                     elif value_type == float:
@@ -394,7 +407,9 @@ class ConfigurationManager:
 
         return env_config
 
-    def _merge_config(self, base_config: Dict[str, Any], override_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_config(
+        self, base_config: dict[str, Any], override_config: dict[str, Any]
+    ) -> dict[str, Any]:
         """Recursively merge configuration dictionaries"""
         merged = base_config.copy()
 
@@ -406,15 +421,15 @@ class ConfigurationManager:
 
         return merged
 
-    def _create_config_object(self, config_data: Dict[str, Any]) -> TranslationConfig:
+    def _create_config_object(self, config_data: dict[str, Any]) -> TranslationConfig:
         """Create configuration object from dictionary"""
         # Extract section data with defaults
-        cache_data = config_data.get('cache', {})
-        debug_data = config_data.get('debug', {})
-        performance_data = config_data.get('performance', {})
-        validation_data = config_data.get('validation', {})
-        metrics_data = config_data.get('metrics', {})
-        iris_data = config_data.get('iris', {})
+        cache_data = config_data.get("cache", {})
+        debug_data = config_data.get("debug", {})
+        performance_data = config_data.get("performance", {})
+        validation_data = config_data.get("validation", {})
+        metrics_data = config_data.get("metrics", {})
+        iris_data = config_data.get("iris", {})
 
         # Create configuration object
         config = TranslationConfig(
@@ -424,82 +439,82 @@ class ConfigurationManager:
             validation=ValidationConfig(**validation_data),
             metrics=MetricsConfig(**metrics_data),
             iris=IRISConfig(**iris_data),
-            environment=config_data.get('environment', 'development'),
-            config_version=config_data.get('config_version', '1.0.0')
+            environment=config_data.get("environment", "development"),
+            config_version=config_data.get("config_version", "1.0.0"),
         )
 
         return config
 
-    def _config_to_dict(self, config: TranslationConfig) -> Dict[str, Any]:
+    def _config_to_dict(self, config: TranslationConfig) -> dict[str, Any]:
         """Convert configuration object to dictionary"""
         return {
-            'cache': {
-                'enabled': config.cache.enabled,
-                'max_size': config.cache.max_size,
-                'ttl_seconds': config.cache.ttl_seconds,
-                'cleanup_interval_seconds': config.cache.cleanup_interval_seconds,
-                'memory_limit_mb': config.cache.memory_limit_mb,
-                'hit_rate_threshold': config.cache.hit_rate_threshold,
+            "cache": {
+                "enabled": config.cache.enabled,
+                "max_size": config.cache.max_size,
+                "ttl_seconds": config.cache.ttl_seconds,
+                "cleanup_interval_seconds": config.cache.cleanup_interval_seconds,
+                "memory_limit_mb": config.cache.memory_limit_mb,
+                "hit_rate_threshold": config.cache.hit_rate_threshold,
             },
-            'debug': {
-                'enabled': config.debug.enabled,
-                'trace_all_queries': config.debug.trace_all_queries,
-                'trace_constructs': config.debug.trace_constructs,
-                'trace_mappings': config.debug.trace_mappings,
-                'trace_performance': config.debug.trace_performance,
-                'trace_validation': config.debug.trace_validation,
-                'log_level': config.debug.log_level,
-                'log_format': config.debug.log_format,
-                'log_file': config.debug.log_file,
-                'max_trace_size': config.debug.max_trace_size,
-                'trace_retention_hours': config.debug.trace_retention_hours,
+            "debug": {
+                "enabled": config.debug.enabled,
+                "trace_all_queries": config.debug.trace_all_queries,
+                "trace_constructs": config.debug.trace_constructs,
+                "trace_mappings": config.debug.trace_mappings,
+                "trace_performance": config.debug.trace_performance,
+                "trace_validation": config.debug.trace_validation,
+                "log_level": config.debug.log_level,
+                "log_format": config.debug.log_format,
+                "log_file": config.debug.log_file,
+                "max_trace_size": config.debug.max_trace_size,
+                "trace_retention_hours": config.debug.trace_retention_hours,
             },
-            'performance': {
-                'sla_threshold_ms': config.performance.sla_threshold_ms,
-                'validation_sla_ms': config.performance.validation_sla_ms,
-                'enable_async_translation': config.performance.enable_async_translation,
-                'thread_pool_size': config.performance.thread_pool_size,
-                'batch_size': config.performance.batch_size,
-                'memory_limit_mb': config.performance.memory_limit_mb,
-                'enable_profiling': config.performance.enable_profiling,
-                'profile_sample_rate': config.performance.profile_sample_rate,
+            "performance": {
+                "sla_threshold_ms": config.performance.sla_threshold_ms,
+                "validation_sla_ms": config.performance.validation_sla_ms,
+                "enable_async_translation": config.performance.enable_async_translation,
+                "thread_pool_size": config.performance.thread_pool_size,
+                "batch_size": config.performance.batch_size,
+                "memory_limit_mb": config.performance.memory_limit_mb,
+                "enable_profiling": config.performance.enable_profiling,
+                "profile_sample_rate": config.performance.profile_sample_rate,
             },
-            'validation': {
-                'enabled': config.validation.enabled,
-                'default_level': config.validation.default_level,
-                'confidence_threshold': config.validation.confidence_threshold,
-                'enable_constitutional_checks': config.validation.enable_constitutional_checks,
-                'enable_performance_checks': config.validation.enable_performance_checks,
-                'enable_semantic_checks': config.validation.enable_semantic_checks,
-                'max_issues_per_query': config.validation.max_issues_per_query,
-                'validation_timeout_ms': config.validation.validation_timeout_ms,
+            "validation": {
+                "enabled": config.validation.enabled,
+                "default_level": config.validation.default_level,
+                "confidence_threshold": config.validation.confidence_threshold,
+                "enable_constitutional_checks": config.validation.enable_constitutional_checks,
+                "enable_performance_checks": config.validation.enable_performance_checks,
+                "enable_semantic_checks": config.validation.enable_semantic_checks,
+                "max_issues_per_query": config.validation.max_issues_per_query,
+                "validation_timeout_ms": config.validation.validation_timeout_ms,
             },
-            'metrics': {
-                'enabled': config.metrics.enabled,
-                'enable_otel': config.metrics.enable_otel,
-                'enable_prometheus': config.metrics.enable_prometheus,
-                'otel_endpoint': config.metrics.otel_endpoint,
-                'prometheus_port': config.metrics.prometheus_port,
-                'collection_interval_seconds': config.metrics.collection_interval_seconds,
-                'retention_days': config.metrics.retention_days,
-                'export_timeout_ms': config.metrics.export_timeout_ms,
-                'iris_integration': config.metrics.iris_integration,
+            "metrics": {
+                "enabled": config.metrics.enabled,
+                "enable_otel": config.metrics.enable_otel,
+                "enable_prometheus": config.metrics.enable_prometheus,
+                "otel_endpoint": config.metrics.otel_endpoint,
+                "prometheus_port": config.metrics.prometheus_port,
+                "collection_interval_seconds": config.metrics.collection_interval_seconds,
+                "retention_days": config.metrics.retention_days,
+                "export_timeout_ms": config.metrics.export_timeout_ms,
+                "iris_integration": config.metrics.iris_integration,
             },
-            'iris': {
-                'connection_string': config.iris.connection_string,
-                'embedded_python': config.iris.embedded_python,
-                'namespace': config.iris.namespace,
-                'timeout_seconds': config.iris.timeout_seconds,
-                'pool_size': config.iris.pool_size,
-                'enable_vector_support': config.iris.enable_vector_support,
-                'vector_license_check': config.iris.vector_license_check,
-                'version_detection': config.iris.version_detection,
+            "iris": {
+                "connection_string": config.iris.connection_string,
+                "embedded_python": config.iris.embedded_python,
+                "namespace": config.iris.namespace,
+                "timeout_seconds": config.iris.timeout_seconds,
+                "pool_size": config.iris.pool_size,
+                "enable_vector_support": config.iris.enable_vector_support,
+                "vector_license_check": config.iris.vector_license_check,
+                "version_detection": config.iris.version_detection,
             },
-            'environment': config.environment,
-            'config_version': config.config_version,
+            "environment": config.environment,
+            "config_version": config.config_version,
         }
 
-    def get_constitutional_compliance_config(self) -> Dict[str, Any]:
+    def get_constitutional_compliance_config(self) -> dict[str, Any]:
         """
         Get constitutional compliance configuration summary
 
@@ -509,27 +524,27 @@ class ConfigurationManager:
         config = self.get_config()
 
         return {
-            'sla_requirements': {
-                'translation_threshold_ms': config.performance.sla_threshold_ms,
-                'validation_threshold_ms': config.performance.validation_sla_ms,
-                'enabled': True
+            "sla_requirements": {
+                "translation_threshold_ms": config.performance.sla_threshold_ms,
+                "validation_threshold_ms": config.performance.validation_sla_ms,
+                "enabled": True,
             },
-            'monitoring': {
-                'metrics_enabled': config.metrics.enabled,
-                'debug_tracing': config.debug.enabled,
-                'performance_tracking': config.debug.trace_performance,
-                'constitutional_checks': config.validation.enable_constitutional_checks,
+            "monitoring": {
+                "metrics_enabled": config.metrics.enabled,
+                "debug_tracing": config.debug.enabled,
+                "performance_tracking": config.debug.trace_performance,
+                "constitutional_checks": config.validation.enable_constitutional_checks,
             },
-            'quality_thresholds': {
-                'confidence_threshold': config.validation.confidence_threshold,
-                'cache_hit_rate_threshold': config.cache.hit_rate_threshold,
-                'validation_level': config.validation.default_level,
+            "quality_thresholds": {
+                "confidence_threshold": config.validation.confidence_threshold,
+                "cache_hit_rate_threshold": config.cache.hit_rate_threshold,
+                "validation_level": config.validation.default_level,
             },
-            'audit_trail': {
-                'trace_retention_hours': config.debug.trace_retention_hours,
-                'metrics_retention_days': config.metrics.retention_days,
-                'log_file': config.debug.log_file,
-            }
+            "audit_trail": {
+                "trace_retention_hours": config.debug.trace_retention_hours,
+                "metrics_retention_days": config.metrics.retention_days,
+                "log_file": config.debug.log_file,
+            },
         }
 
 
@@ -547,7 +562,7 @@ def get_config() -> TranslationConfig:
     return _config_manager.get_config()
 
 
-def load_config(config_path: Optional[Union[str, Path]] = None) -> TranslationConfig:
+def load_config(config_path: str | Path | None = None) -> TranslationConfig:
     """Load configuration from file (convenience function)"""
     return _config_manager.load_config(config_path)
 
@@ -559,17 +574,17 @@ def reload_config() -> TranslationConfig:
 
 # Export main components
 __all__ = [
-    'TranslationConfig',
-    'CacheConfig',
-    'DebugConfig',
-    'PerformanceConfig',
-    'ValidationConfig',
-    'MetricsConfig',
-    'IRISConfig',
-    'ConfigurationManager',
-    'ConfigFormat',
-    'get_config_manager',
-    'get_config',
-    'load_config',
-    'reload_config'
+    "TranslationConfig",
+    "CacheConfig",
+    "DebugConfig",
+    "PerformanceConfig",
+    "ValidationConfig",
+    "MetricsConfig",
+    "IRISConfig",
+    "ConfigurationManager",
+    "ConfigFormat",
+    "get_config_manager",
+    "get_config",
+    "load_config",
+    "reload_config",
 ]
