@@ -79,7 +79,7 @@ That's it. No IRIS-specific drivers needed.
 ### Docker (Fastest)
 
 ```bash
-git clone https://gitlab.iscinternal.com/tdyar/iris-pgwire.git
+git clone https://github.com/isc-tdyar/iris-pgwire.git
 cd iris-pgwire
 docker-compose up -d
 
@@ -182,7 +182,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 
 ```bash
 # Clone repository
-git clone https://gitlab.iscinternal.com/tdyar/iris-pgwire.git
+git clone https://github.com/isc-tdyar/iris-pgwire.git
 cd iris-pgwire
 
 # Start services
@@ -850,7 +850,7 @@ python3 benchmarks/4way_comparison.py \
 
 ```bash
 # Clone repository
-git clone https://gitlab.iscinternal.com/tdyar/iris-pgwire.git
+git clone https://github.com/isc-tdyar/iris-pgwire.git
 cd iris-pgwire
 
 # Install development dependencies
@@ -893,7 +893,7 @@ iris-pgwire/
 
 ## 🔗 Links
 
-- **Repository**: https://gitlab.iscinternal.com/tdyar/iris-pgwire
+- **Repository**: https://github.com/isc-tdyar/iris-pgwire
 - **IRIS Documentation**: https://docs.intersystems.com/iris/
 - **PostgreSQL Protocol**: https://www.postgresql.org/docs/current/protocol.html
 - **pgvector**: https://github.com/pgvector/pgvector

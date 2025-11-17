@@ -19,7 +19,7 @@ services:
 
   # 2. IRIS database (shared by all IRIS-based paths)
   iris-benchmark:
-    image: docker.iscinternal.com/intersystems/iris:2025.3.0EHAT.127.0-linux-arm64v8
+    image: containers.intersystems.com/intersystems/iris-community:latest
     container_name: iris-4way
     environment:
       - ISC_DEFAULT_PASSWORD=SYS
@@ -81,7 +81,7 @@ services:
   # 4. PGWire server with embedded Python backend (irispython)
   # EXACT COPY from main docker-compose.yml (known working config)
   iris-pgwire-embedded:
-    image: docker.iscinternal.com/intersystems/iris:2025.3.0EHAT.127.0-linux-arm64v8
+    image: containers.intersystems.com/intersystems/iris-community:latest
     container_name: iris-4way-embedded
     environment:
       - IRISNAMESPACE=USER
