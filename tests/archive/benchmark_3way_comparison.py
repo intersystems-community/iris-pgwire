@@ -15,10 +15,8 @@ Tests:
 - Latency (P50, P95, P99)
 """
 
-import time
 import statistics
-import sys
-from typing import List, Dict, Tuple
+import time
 from dataclasses import dataclass, field
 
 # Configuration
@@ -30,10 +28,11 @@ VECTOR_DIMENSIONS = 128
 @dataclass
 class BenchmarkResult:
     """Results for a single benchmark configuration"""
+
     name: str
     queries_executed: int
     total_time_sec: float
-    latencies_ms: List[float] = field(default_factory=list)
+    latencies_ms: list[float] = field(default_factory=list)
     errors: int = 0
 
     @property
@@ -49,12 +48,18 @@ class BenchmarkResult:
     @property
     def p95_ms(self) -> float:
         """95th percentile latency"""
-        return statistics.quantiles(self.latencies_ms, n=20)[18] if len(self.latencies_ms) > 20 else 0
+        return (
+            statistics.quantiles(self.latencies_ms, n=20)[18] if len(self.latencies_ms) > 20 else 0
+        )
 
     @property
     def p99_ms(self) -> float:
         """99th percentile latency"""
-        return statistics.quantiles(self.latencies_ms, n=100)[98] if len(self.latencies_ms) > 100 else 0
+        return (
+            statistics.quantiles(self.latencies_ms, n=100)[98]
+            if len(self.latencies_ms) > 100
+            else 0
+        )
 
     @property
     def avg_ms(self) -> float:
@@ -65,9 +70,9 @@ class BenchmarkResult:
 def benchmark_iris_pgwire():
     """Benchmark 1: IRIS + PGWire server"""
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK 1: IRIS + PGWire")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import psycopg
@@ -116,7 +121,9 @@ def benchmark_iris_pgwire():
 
     print(f"✅ Completed {result.queries_executed} queries in {result.total_time_sec:.2f}s")
     print(f"   QPS: {result.qps:.2f}")
-    print(f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms")
+    print(
+        f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms"
+    )
 
     return result
 
@@ -124,9 +131,9 @@ def benchmark_iris_pgwire():
 def benchmark_postgresql_native():
     """Benchmark 2: PostgreSQL + psycopg3"""
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK 2: PostgreSQL + psycopg3 (native)")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import psycopg
@@ -136,7 +143,9 @@ def benchmark_postgresql_native():
 
     # Connect to PostgreSQL
     try:
-        conn = psycopg.connect("host=localhost port=5433 dbname=postgres user=postgres password=postgres")
+        conn = psycopg.connect(
+            "host=localhost port=5433 dbname=postgres user=postgres password=postgres"
+        )
         print("✅ Connected to PostgreSQL on port 5433")
     except Exception as e:
         print(f"⚠️  PostgreSQL not available: {e}")
@@ -175,7 +184,9 @@ def benchmark_postgresql_native():
 
     print(f"✅ Completed {result.queries_executed} queries in {result.total_time_sec:.2f}s")
     print(f"   QPS: {result.qps:.2f}")
-    print(f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms")
+    print(
+        f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms"
+    )
 
     return result
 
@@ -183,9 +194,9 @@ def benchmark_postgresql_native():
 def benchmark_iris_dbapi():
     """Benchmark 3: IRIS + DBAPI (direct connection)"""
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("BENCHMARK 3: IRIS + DBAPI (direct)")
-    print("="*80)
+    print("=" * 80)
 
     try:
         import iris
@@ -195,8 +206,9 @@ def benchmark_iris_dbapi():
 
     # Connect directly to IRIS
     try:
-        conn = iris.connect(hostname="localhost", port=1972, namespace="USER",
-                           username="_SYSTEM", password="SYS")
+        conn = iris.connect(
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
+        )
         print("✅ Connected to IRIS directly on port 1972")
     except Exception as e:
         print(f"❌ Failed to connect to IRIS: {e}")
@@ -235,17 +247,19 @@ def benchmark_iris_dbapi():
 
     print(f"✅ Completed {result.queries_executed} queries in {result.total_time_sec:.2f}s")
     print(f"   QPS: {result.qps:.2f}")
-    print(f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms")
+    print(
+        f"   Latency - Avg: {result.avg_ms:.2f}ms, P50: {result.p50_ms:.2f}ms, P95: {result.p95_ms:.2f}ms, P99: {result.p99_ms:.2f}ms"
+    )
 
     return result
 
 
-def print_comparison_table(results: List[BenchmarkResult]):
+def print_comparison_table(results: list[BenchmarkResult]):
     """Print comparison table of all benchmark results"""
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("COMPARISON SUMMARY")
-    print("="*80)
+    print("=" * 80)
 
     # Filter out None results
     results = [r for r in results if r is not None]
@@ -257,20 +271,24 @@ def print_comparison_table(results: List[BenchmarkResult]):
     # Find baseline (IRIS DBAPI if available, otherwise first result)
     baseline = next((r for r in results if "DBAPI" in r.name), results[0])
 
-    print(f"\n{'Configuration':<30} {'QPS':<12} {'Avg (ms)':<12} {'P50 (ms)':<12} {'P95 (ms)':<12} {'P99 (ms)':<12} {'vs Baseline':<15}")
+    print(
+        f"\n{'Configuration':<30} {'QPS':<12} {'Avg (ms)':<12} {'P50 (ms)':<12} {'P95 (ms)':<12} {'P99 (ms)':<12} {'vs Baseline':<15}"
+    )
     print("-" * 120)
 
     for result in results:
         qps_ratio = result.qps / baseline.qps if baseline.qps > 0 else 0
         vs_baseline = f"{qps_ratio:.2f}x" if result != baseline else "baseline"
 
-        print(f"{result.name:<30} {result.qps:<12.2f} {result.avg_ms:<12.2f} {result.p50_ms:<12.2f} "
-              f"{result.p95_ms:<12.2f} {result.p99_ms:<12.2f} {vs_baseline:<15}")
+        print(
+            f"{result.name:<30} {result.qps:<12.2f} {result.avg_ms:<12.2f} {result.p50_ms:<12.2f} "
+            f"{result.p95_ms:<12.2f} {result.p99_ms:<12.2f} {vs_baseline:<15}"
+        )
 
     # Analysis
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("ANALYSIS")
-    print("="*80)
+    print("=" * 80)
 
     pgwire = next((r for r in results if "PGWire" in r.name), None)
     postgres = next((r for r in results if "PostgreSQL" in r.name), None)
@@ -278,13 +296,17 @@ def print_comparison_table(results: List[BenchmarkResult]):
 
     if pgwire and dbapi:
         overhead = ((pgwire.avg_ms - dbapi.avg_ms) / dbapi.avg_ms * 100) if dbapi.avg_ms > 0 else 0
-        print(f"\nPGWire vs IRIS DBAPI:")
+        print("\nPGWire vs IRIS DBAPI:")
         print(f"  Overhead: {overhead:.1f}%")
         print(f"  QPS ratio: {pgwire.qps / dbapi.qps:.2f}x" if dbapi.qps > 0 else "")
 
     if pgwire and postgres:
-        diff = ((pgwire.avg_ms - postgres.avg_ms) / postgres.avg_ms * 100) if postgres.avg_ms > 0 else 0
-        print(f"\nPGWire vs PostgreSQL native:")
+        diff = (
+            ((pgwire.avg_ms - postgres.avg_ms) / postgres.avg_ms * 100)
+            if postgres.avg_ms > 0
+            else 0
+        )
+        print("\nPGWire vs PostgreSQL native:")
         print(f"  Difference: {diff:+.1f}%")
         print(f"  QPS ratio: {pgwire.qps / postgres.qps:.2f}x" if postgres.qps > 0 else "")
 
@@ -292,9 +314,9 @@ def print_comparison_table(results: List[BenchmarkResult]):
 
 
 def main():
-    print("="*80)
+    print("=" * 80)
     print("3-Way Vector Database Performance Benchmark")
-    print("="*80)
+    print("=" * 80)
     print(f"Queries per benchmark: {BENCHMARK_QUERIES}")
     print(f"Warmup queries: {WARMUP_QUERIES}")
     print()

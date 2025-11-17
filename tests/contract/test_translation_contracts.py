@@ -7,23 +7,25 @@ These tests MUST FAIL until the implementation is complete (TDD requirement).
 Contract specification: /specs/004-iris-sql-constructs/contracts/translation_api.yaml
 """
 
+from typing import Any
+
 import pytest
-import json
-from typing import Dict, Any
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.sql_translator import (
         SQLTranslator,
+        TranslationError,
         TranslationRequest,
         TranslationResult,
-        TranslationError
     )
+
     TRANSLATOR_AVAILABLE = True
 except ImportError:
     TRANSLATOR_AVAILABLE = False
 
 pytestmark = pytest.mark.contract
+
 
 @pytest.fixture
 def translator():
@@ -32,26 +34,23 @@ def translator():
         pytest.skip("Translation module not implemented yet")
     return SQLTranslator()
 
-@pytest.fixture
-def sample_translation_request() -> Dict[str, Any]:
-    """Sample translation request matching contract schema"""
-    return {
-        "original_sql": "SELECT %SYSTEM.Version.GetNumber()",
-        "debug_mode": False
-    }
 
 @pytest.fixture
-def complex_translation_request() -> Dict[str, Any]:
+def sample_translation_request() -> dict[str, Any]:
+    """Sample translation request matching contract schema"""
+    return {"original_sql": "SELECT %SYSTEM.Version.GetNumber()", "debug_mode": False}
+
+
+@pytest.fixture
+def complex_translation_request() -> dict[str, Any]:
     """Complex translation request with parameters"""
     return {
         "original_sql": "SELECT TOP 10 %SQLUPPER(name) FROM users WHERE id = ?",
         "parameters": {"1": 123},
-        "session_context": {
-            "timezone": "UTC",
-            "client_encoding": "UTF8"
-        },
-        "debug_mode": True
+        "session_context": {"timezone": "UTC", "client_encoding": "UTF8"},
+        "debug_mode": True,
     }
+
 
 class TestTranslationRequestContract:
     """Test translation request structure matches OpenAPI schema"""
@@ -62,14 +61,16 @@ class TestTranslationRequestContract:
             pytest.skip("Implementation not available yet")
 
         # This will fail until TranslationRequest is implemented
-        assert hasattr(TranslationRequest, '__dataclass_fields__'), \
-            "TranslationRequest should be a dataclass"
+        assert hasattr(
+            TranslationRequest, "__dataclass_fields__"
+        ), "TranslationRequest should be a dataclass"
 
         # Verify required fields from contract
-        required_fields = {'original_sql'}
+        required_fields = {"original_sql"}
         actual_fields = set(TranslationRequest.__dataclass_fields__.keys())
-        assert required_fields.issubset(actual_fields), \
-            f"Missing required fields: {required_fields - actual_fields}"
+        assert required_fields.issubset(
+            actual_fields
+        ), f"Missing required fields: {required_fields - actual_fields}"
 
     def test_translation_request_validation(self, sample_translation_request):
         """TranslationRequest should validate input according to contract"""
@@ -99,6 +100,7 @@ class TestTranslationRequestContract:
         with pytest.raises(ValueError, match="original_sql must be non-empty"):
             TranslationRequest(original_sql="")
 
+
 class TestTranslationResultContract:
     """Test translation result structure matches OpenAPI schema"""
 
@@ -108,14 +110,16 @@ class TestTranslationResultContract:
             pytest.skip("Implementation not available yet")
 
         # This will fail until TranslationResult is implemented
-        assert hasattr(TranslationResult, '__dataclass_fields__'), \
-            "TranslationResult should be a dataclass"
+        assert hasattr(
+            TranslationResult, "__dataclass_fields__"
+        ), "TranslationResult should be a dataclass"
 
         # Verify required fields from contract
-        required_fields = {'translated_sql', 'construct_mappings', 'performance_stats'}
+        required_fields = {"translated_sql", "construct_mappings", "performance_stats"}
         actual_fields = set(TranslationResult.__dataclass_fields__.keys())
-        assert required_fields.issubset(actual_fields), \
-            f"Missing required fields: {required_fields - actual_fields}"
+        assert required_fields.issubset(
+            actual_fields
+        ), f"Missing required fields: {required_fields - actual_fields}"
 
     def test_construct_mapping_structure(self):
         """ConstructMapping should match contract schema"""
@@ -125,12 +129,16 @@ class TestTranslationResultContract:
         from iris_pgwire.sql_translator import ConstructMapping
 
         required_fields = {
-            'construct_type', 'original_syntax', 'translated_syntax',
-            'confidence', 'source_location'
+            "construct_type",
+            "original_syntax",
+            "translated_syntax",
+            "confidence",
+            "source_location",
         }
         actual_fields = set(ConstructMapping.__dataclass_fields__.keys())
-        assert required_fields.issubset(actual_fields), \
-            f"Missing required fields: {required_fields - actual_fields}"
+        assert required_fields.issubset(
+            actual_fields
+        ), f"Missing required fields: {required_fields - actual_fields}"
 
     def test_performance_stats_structure(self):
         """PerformanceStats should match contract schema"""
@@ -140,12 +148,16 @@ class TestTranslationResultContract:
         from iris_pgwire.sql_translator import PerformanceStats
 
         required_fields = {
-            'translation_time_ms', 'cache_hit',
-            'constructs_detected', 'constructs_translated'
+            "translation_time_ms",
+            "cache_hit",
+            "constructs_detected",
+            "constructs_translated",
         }
         actual_fields = set(PerformanceStats.__dataclass_fields__.keys())
-        assert required_fields.issubset(actual_fields), \
-            f"Missing required fields: {required_fields - actual_fields}"
+        assert required_fields.issubset(
+            actual_fields
+        ), f"Missing required fields: {required_fields - actual_fields}"
+
 
 class TestTranslateEndpointContract:
     """Test /translate endpoint behavior matches OpenAPI contract"""
@@ -255,6 +267,7 @@ class TestTranslateEndpointContract:
         assert actual_time_ms <= 50.0, f"Translation took {actual_time_ms}ms, exceeds 50ms SLA"
         assert result.performance_stats.translation_time_ms <= 50.0
 
+
 class TestTranslationErrorContract:
     """Test error response structure matches OpenAPI contract"""
 
@@ -264,14 +277,13 @@ class TestTranslationErrorContract:
             pytest.skip("Implementation not available yet")
 
         # This will fail until TranslationError is implemented
-        assert hasattr(TranslationError, '__init__'), \
-            "TranslationError should be an exception class"
+        assert hasattr(
+            TranslationError, "__init__"
+        ), "TranslationError should be an exception class"
 
         # Test error creation matches contract
         error = TranslationError(
-            error_code="PARSE_ERROR",
-            message="Test error",
-            original_sql="SELECT INVALID"
+            error_code="PARSE_ERROR", message="Test error", original_sql="SELECT INVALID"
         )
 
         assert error.error_code == "PARSE_ERROR"
@@ -285,13 +297,16 @@ class TestTranslationErrorContract:
 
         # Contract specifies these error codes
         valid_error_codes = {
-            "PARSE_ERROR", "UNSUPPORTED_CONSTRUCT",
-            "VALIDATION_ERROR", "TIMEOUT_ERROR"
+            "PARSE_ERROR",
+            "UNSUPPORTED_CONSTRUCT",
+            "VALIDATION_ERROR",
+            "TIMEOUT_ERROR",
         }
 
         for error_code in valid_error_codes:
             error = TranslationError(error_code=error_code, message="Test")
             assert error.error_code == error_code
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_tdd_validation():

@@ -5,19 +5,21 @@ Tests the complete flow: parameter → optimizer → iris.sql.exec()
 """
 
 import sys
-import os
 
 # Add /tmp to path to import vector_optimizer
-sys.path.insert(0, '/tmp')
+sys.path.insert(0, "/tmp")
 
 try:
     import iris
 except ImportError:
     print("ERROR: iris module not available - must run with irispython")
-    print("Usage: docker exec iris-pgwire-db /usr/irissys/bin/irispython /tmp/test_e2e_vector_iris.py")
+    print(
+        "Usage: docker exec iris-pgwire-db /usr/irissys/bin/irispython /tmp/test_e2e_vector_iris.py"
+    )
     sys.exit(1)
 
 from vector_optimizer import optimize_vector_query
+
 
 def test_vector_optimizer_e2e():
     """Test vector optimizer with actual IRIS execution"""
@@ -53,7 +55,7 @@ def test_vector_optimizer_e2e():
         if rows:
             score = rows[0][0]
             print(f"✅ SUCCESS: Query executed, score = {score}")
-            expected = 0.1*0.1 + 0.2*0.2 + 0.3*0.3  # dot product
+            expected = 0.1 * 0.1 + 0.2 * 0.2 + 0.3 * 0.3  # dot product
             if abs(score - expected) < 0.001:
                 print(f"✅ Dot product correct: {score} ≈ {expected}")
                 return True
@@ -67,6 +69,7 @@ def test_vector_optimizer_e2e():
     except Exception as e:
         print(f"❌ FAILED: {e}")
         return False
+
 
 def test_vector_cosine_e2e():
     """Test VECTOR_COSINE with optimizer"""
@@ -109,6 +112,7 @@ def test_vector_cosine_e2e():
         print(f"❌ FAILED: {e}")
         return False
 
+
 def test_order_by_vector_e2e():
     """Test ORDER BY with vector function"""
 
@@ -142,6 +146,7 @@ def test_order_by_vector_e2e():
     except Exception as e:
         print(f"❌ FAILED: {e}")
         return False
+
 
 if __name__ == "__main__":
     print("Testing vector optimizer with IRIS embedded Python...")

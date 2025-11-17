@@ -1,0 +1,153 @@
+name: Package Quality Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  validate-package:
+    name: Validate Package Quality
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for git-based checks
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install package and validation tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install pyroma check-manifest black ruff interrogate bandit pip-audit trove-classifiers
+
+    - name: Run package metadata validation
+      id: metadata
+      run: |
+        echo "::group::Package Metadata Validation"
+        pyroma .
+        check-manifest
+        echo "::endgroup::"
+
+    - name: Run code quality validation
+      id: quality
+      run: |
+        echo "::group::Code Quality Validation"
+        black --check src/ tests/ || echo "::warning::Black formatting issues found"
+        ruff check src/ tests/ || echo "::warning::Ruff linting issues found"
+        echo "::endgroup::"
+
+    - name: Run security validation
+      id: security
+      run: |
+        echo "::group::Security Validation"
+        bandit -r src/iris_pgwire/ -ll || echo "::warning::Security issues found"
+        pip-audit --desc || echo "::warning::Vulnerability scan found issues"
+        echo "::endgroup::"
+
+    - name: Run documentation validation
+      id: documentation
+      run: |
+        echo "::group::Documentation Validation"
+        interrogate -vv src/iris_pgwire/ --fail-under=80
+        echo "::endgroup::"
+
+    - name: Run comprehensive validation
+      id: comprehensive
+      run: |
+        echo "::group::Comprehensive Package Validation"
+        python -m iris_pgwire.quality --verbose
+        echo "::endgroup::"
+
+    - name: Upload validation report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: validation-report-py${{ matrix.python-version }}
+        path: |
+          interrogate_badge.svg
+        retention-days: 30
+
+    - name: Comment validation results on PR
+      if: github.event_name == 'pull_request' && failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '⚠️ Package quality validation failed. Please run `python -m iris_pgwire.quality --verbose` locally to see details.'
+          })
+
+  validate-cross-platform:
+    name: Validate on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.11']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install package
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install pyroma interrogate
+
+    - name: Quick validation check
+      run: |
+        pyroma .
+        interrogate src/iris_pgwire/ --fail-under=80
+
+  security-only:
+    name: Security Scan (Production Dependencies)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install production dependencies only
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+
+    - name: Run pip-audit on production dependencies
+      run: |
+        pip install pip-audit
+        pip-audit --desc --require-hashes --disable-pip
+
+    - name: Upload security report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-report
+        path: |
+          pip-audit.json
+        retention-days: 90

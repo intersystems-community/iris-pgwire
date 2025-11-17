@@ -7,30 +7,32 @@ OpenTelemetry (OTEL), Prometheus, and internal monitoring for constitutional com
 Constitutional Compliance: Real-time performance metrics and SLA monitoring.
 """
 
-import time
 import threading
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Union
-from dataclasses import dataclass, field
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from typing import Any
 
 # Optional OpenTelemetry imports
 try:
-    from opentelemetry import trace, metrics as otel_metrics
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry import metrics as otel_metrics
+    from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
     from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
 
 # Optional Prometheus imports
 try:
-    from prometheus_client import Counter, Histogram, Gauge, Summary, CollectorRegistry
+    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Summary
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -38,6 +40,7 @@ except ImportError:
 
 class MetricType(Enum):
     """Types of metrics to collect"""
+
     COUNTER = "counter"
     HISTOGRAM = "histogram"
     GAUGE = "gauge"
@@ -47,19 +50,21 @@ class MetricType(Enum):
 @dataclass
 class MetricDefinition:
     """Definition of a metric to collect"""
+
     name: str
     metric_type: MetricType
     description: str
     unit: str = ""
-    labels: List[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass
 class MetricEvent:
     """Individual metric event"""
+
     name: str
-    value: Union[int, float]
-    labels: Dict[str, str] = field(default_factory=dict)
+    value: int | float
+    labels: dict[str, str] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -75,8 +80,13 @@ class TranslationMetricsCollector:
     - Custom metric definitions
     """
 
-    def __init__(self, enable_otel: bool = False, enable_prometheus: bool = False,
-                 otel_endpoint: Optional[str] = None, iris_connection = None):
+    def __init__(
+        self,
+        enable_otel: bool = False,
+        enable_prometheus: bool = False,
+        otel_endpoint: str | None = None,
+        iris_connection=None,
+    ):
         """
         Initialize metrics collector
 
@@ -100,21 +110,25 @@ class TranslationMetricsCollector:
                 # IRIS 2025.2+ with native OpenTelemetry
                 self.enable_otel = True
                 self.otel_endpoint = otel_endpoint or self._get_iris_otlp_endpoint()
-                logger.info("Using IRIS native OpenTelemetry (IRIS 2025.2+)",
-                           endpoint=self.otel_endpoint)
+                logger.info(
+                    "Using IRIS native OpenTelemetry (IRIS 2025.2+)", endpoint=self.otel_endpoint
+                )
             elif self.iris_monitor_api_fallback:
                 # IRIS 2025.1 with /api/monitor fallback
                 self.enable_otel = True
                 self.otel_endpoint = otel_endpoint  # External OTEL collector
-                logger.info("Using IRIS /api/monitor fallback with external OTEL (IRIS 2025.1)",
-                           endpoint=self.otel_endpoint,
-                           monitor_api=True)
+                logger.info(
+                    "Using IRIS /api/monitor fallback with external OTEL (IRIS 2025.1)",
+                    endpoint=self.otel_endpoint,
+                    monitor_api=True,
+                )
             else:
                 # Pre-2025.1 IRIS - external OTEL only
                 self.enable_otel = enable_otel
                 self.otel_endpoint = otel_endpoint
-                logger.info("Using external OpenTelemetry only (IRIS < 2025.1)",
-                           endpoint=self.otel_endpoint)
+                logger.info(
+                    "Using external OpenTelemetry only (IRIS < 2025.1)", endpoint=self.otel_endpoint
+                )
         else:
             self.enable_otel = enable_otel and OTEL_AVAILABLE
             self.otel_endpoint = otel_endpoint
@@ -123,9 +137,9 @@ class TranslationMetricsCollector:
 
         # Internal metrics storage
         self._lock = threading.RLock()
-        self._counters: Dict[str, int] = defaultdict(int)
-        self._histograms: Dict[str, deque] = defaultdict(lambda: deque(maxlen=10000))
-        self._gauges: Dict[str, float] = {}
+        self._counters: dict[str, int] = defaultdict(int)
+        self._histograms: dict[str, deque] = defaultdict(lambda: deque(maxlen=10000))
+        self._gauges: dict[str, float] = {}
         self._metric_events: deque = deque(maxlen=50000)
 
         # Initialize backends
@@ -155,8 +169,7 @@ class TranslationMetricsCollector:
             # Setup metrics
             if self.otel_endpoint:
                 metric_reader = PeriodicExportingMetricReader(
-                    OTLPMetricExporter(endpoint=self.otel_endpoint),
-                    export_interval_millis=5000
+                    OTLPMetricExporter(endpoint=self.otel_endpoint), export_interval_millis=5000
                 )
                 otel_metrics.set_meter_provider(MeterProvider(metric_readers=[metric_reader]))
 
@@ -190,72 +203,63 @@ class TranslationMetricsCollector:
         """Define standard SQL translation metrics"""
         self.metric_definitions = {
             # Translation performance
-            'translation_requests_total': MetricDefinition(
-                'translation_requests_total',
+            "translation_requests_total": MetricDefinition(
+                "translation_requests_total",
                 MetricType.COUNTER,
-                'Total number of SQL translation requests',
-                labels=['status', 'session_id']
+                "Total number of SQL translation requests",
+                labels=["status", "session_id"],
             ),
-            'translation_duration_ms': MetricDefinition(
-                'translation_duration_ms',
+            "translation_duration_ms": MetricDefinition(
+                "translation_duration_ms",
                 MetricType.HISTOGRAM,
-                'SQL translation duration in milliseconds',
-                'ms',
-                ['cache_hit', 'constructs_found']
+                "SQL translation duration in milliseconds",
+                "ms",
+                ["cache_hit", "constructs_found"],
             ),
-            'constructs_translated_total': MetricDefinition(
-                'constructs_translated_total',
+            "constructs_translated_total": MetricDefinition(
+                "constructs_translated_total",
                 MetricType.COUNTER,
-                'Total number of IRIS constructs translated',
-                labels=['construct_type']
+                "Total number of IRIS constructs translated",
+                labels=["construct_type"],
             ),
-            'cache_operations_total': MetricDefinition(
-                'cache_operations_total',
+            "cache_operations_total": MetricDefinition(
+                "cache_operations_total",
                 MetricType.COUNTER,
-                'Total cache operations',
-                labels=['operation', 'result']
+                "Total cache operations",
+                labels=["operation", "result"],
             ),
-            'cache_hit_rate': MetricDefinition(
-                'cache_hit_rate',
-                MetricType.GAUGE,
-                'Cache hit rate percentage',
-                '%'
+            "cache_hit_rate": MetricDefinition(
+                "cache_hit_rate", MetricType.GAUGE, "Cache hit rate percentage", "%"
             ),
-
             # Constitutional compliance
-            'sla_violations_total': MetricDefinition(
-                'sla_violations_total',
+            "sla_violations_total": MetricDefinition(
+                "sla_violations_total",
                 MetricType.COUNTER,
-                'Total SLA violations (>5ms)',
-                labels=['component', 'violation_type']
+                "Total SLA violations (>5ms)",
+                labels=["component", "violation_type"],
             ),
-            'sla_compliance_rate': MetricDefinition(
-                'sla_compliance_rate',
-                MetricType.GAUGE,
-                'SLA compliance rate percentage',
-                '%'
+            "sla_compliance_rate": MetricDefinition(
+                "sla_compliance_rate", MetricType.GAUGE, "SLA compliance rate percentage", "%"
             ),
-
             # Validation metrics
-            'validation_success_total': MetricDefinition(
-                'validation_success_total',
+            "validation_success_total": MetricDefinition(
+                "validation_success_total",
                 MetricType.COUNTER,
-                'Total successful validations',
-                labels=['validation_level']
+                "Total successful validations",
+                labels=["validation_level"],
             ),
-            'validation_failures_total': MetricDefinition(
-                'validation_failures_total',
+            "validation_failures_total": MetricDefinition(
+                "validation_failures_total",
                 MetricType.COUNTER,
-                'Total validation failures',
-                labels=['validation_level', 'issue_type']
+                "Total validation failures",
+                labels=["validation_level", "issue_type"],
             ),
-
             # Error metrics
-            'translation_errors_total': MetricDefinition(
-                'translation_errors_total',
+            "translation_errors_total": MetricDefinition(
+                "translation_errors_total",
                 MetricType.COUNTER,
-                'Total translation errors',
-                labels=['error_type', 'component']
+                "Total translation errors",
+                labels=["error_type", "component"],
             ),
         }
 
@@ -277,7 +281,7 @@ class TranslationMetricsCollector:
 
         try:
             # Detect IRIS version using %SYSTEM.Version
-            if hasattr(self.iris_connection, 'execute'):
+            if hasattr(self.iris_connection, "execute"):
                 # Embedded Python connection
                 result = self.iris_connection.execute("SELECT %Version FROM %SYSTEM.Version")
                 version_string = result.fetchone()[0] if result else None
@@ -313,7 +317,7 @@ class TranslationMetricsCollector:
             self.iris_otel_native = False
             self.iris_monitor_api_fallback = False
 
-    def _get_iris_otlp_endpoint(self) -> Optional[str]:
+    def _get_iris_otlp_endpoint(self) -> str | None:
         """
         Get IRIS native OpenTelemetry OTLP endpoint for IRIS 2025.2+
 
@@ -366,21 +370,15 @@ class TranslationMetricsCollector:
         try:
             if definition.metric_type == MetricType.COUNTER:
                 self._otel_counters[name] = self.meter.create_counter(
-                    name=name,
-                    description=definition.description,
-                    unit=definition.unit
+                    name=name, description=definition.description, unit=definition.unit
                 )
             elif definition.metric_type == MetricType.HISTOGRAM:
                 self._otel_histograms[name] = self.meter.create_histogram(
-                    name=name,
-                    description=definition.description,
-                    unit=definition.unit
+                    name=name, description=definition.description, unit=definition.unit
                 )
             elif definition.metric_type == MetricType.GAUGE:
                 self._otel_gauges[name] = self.meter.create_gauge(
-                    name=name,
-                    description=definition.description,
-                    unit=definition.unit
+                    name=name, description=definition.description, unit=definition.unit
                 )
         except Exception as e:
             print(f"Failed to create OTEL metric {name}: {e}")
@@ -396,21 +394,21 @@ class TranslationMetricsCollector:
                     name=name,
                     documentation=definition.description,
                     labelnames=definition.labels,
-                    registry=self.prometheus_registry
+                    registry=self.prometheus_registry,
                 )
             elif definition.metric_type == MetricType.HISTOGRAM:
                 self._prometheus_histograms[name] = Histogram(
                     name=name,
                     documentation=definition.description,
                     labelnames=definition.labels,
-                    registry=self.prometheus_registry
+                    registry=self.prometheus_registry,
                 )
             elif definition.metric_type == MetricType.GAUGE:
                 self._prometheus_gauges[name] = Gauge(
                     name=name,
                     documentation=definition.description,
                     labelnames=definition.labels,
-                    registry=self.prometheus_registry
+                    registry=self.prometheus_registry,
                 )
         except Exception as e:
             print(f"Failed to create Prometheus metric {name}: {e}")
@@ -418,62 +416,64 @@ class TranslationMetricsCollector:
     # Metric recording methods
     def record_translation_request(self, status: str, session_id: str = "unknown"):
         """Record a translation request"""
-        labels = {'status': status, 'session_id': session_id}
-        self._record_counter('translation_requests_total', 1, labels)
+        labels = {"status": status, "session_id": session_id}
+        self._record_counter("translation_requests_total", 1, labels)
 
-    def record_translation_duration(self, duration_ms: float, cache_hit: bool = False,
-                                  constructs_found: int = 0):
+    def record_translation_duration(
+        self, duration_ms: float, cache_hit: bool = False, constructs_found: int = 0
+    ):
         """Record translation duration"""
         labels = {
-            'cache_hit': str(cache_hit),
-            'constructs_found': str(min(constructs_found, 10))  # Bucket large numbers
+            "cache_hit": str(cache_hit),
+            "constructs_found": str(min(constructs_found, 10)),  # Bucket large numbers
         }
-        self._record_histogram('translation_duration_ms', duration_ms, labels)
+        self._record_histogram("translation_duration_ms", duration_ms, labels)
 
         # Check for SLA violation
         if duration_ms > 5.0:
-            self.record_sla_violation('translator', 'duration_exceeded', duration_ms)
+            self.record_sla_violation("translator", "duration_exceeded", duration_ms)
 
     def record_construct_translated(self, construct_type: str):
         """Record a translated construct"""
-        labels = {'construct_type': construct_type}
-        self._record_counter('constructs_translated_total', 1, labels)
+        labels = {"construct_type": construct_type}
+        self._record_counter("constructs_translated_total", 1, labels)
 
     def record_cache_operation(self, operation: str, result: str):
         """Record cache operation"""
-        labels = {'operation': operation, 'result': result}
-        self._record_counter('cache_operations_total', 1, labels)
+        labels = {"operation": operation, "result": result}
+        self._record_counter("cache_operations_total", 1, labels)
 
     def record_sla_violation(self, component: str, violation_type: str, actual_value: float):
         """Record SLA violation"""
-        labels = {'component': component, 'violation_type': violation_type}
-        self._record_counter('sla_violations_total', 1, labels)
+        labels = {"component": component, "violation_type": violation_type}
+        self._record_counter("sla_violations_total", 1, labels)
 
-    def record_validation_result(self, success: bool, validation_level: str,
-                               issue_type: Optional[str] = None):
+    def record_validation_result(
+        self, success: bool, validation_level: str, issue_type: str | None = None
+    ):
         """Record validation result"""
         if success:
-            labels = {'validation_level': validation_level}
-            self._record_counter('validation_success_total', 1, labels)
+            labels = {"validation_level": validation_level}
+            self._record_counter("validation_success_total", 1, labels)
         else:
-            labels = {'validation_level': validation_level, 'issue_type': issue_type or 'unknown'}
-            self._record_counter('validation_failures_total', 1, labels)
+            labels = {"validation_level": validation_level, "issue_type": issue_type or "unknown"}
+            self._record_counter("validation_failures_total", 1, labels)
 
     def record_translation_error(self, error_type: str, component: str):
         """Record translation error"""
-        labels = {'error_type': error_type, 'component': component}
-        self._record_counter('translation_errors_total', 1, labels)
+        labels = {"error_type": error_type, "component": component}
+        self._record_counter("translation_errors_total", 1, labels)
 
     def update_cache_hit_rate(self, hit_rate: float):
         """Update cache hit rate gauge"""
-        self._record_gauge('cache_hit_rate', hit_rate * 100)  # Convert to percentage
+        self._record_gauge("cache_hit_rate", hit_rate * 100)  # Convert to percentage
 
     def update_sla_compliance_rate(self, compliance_rate: float):
         """Update SLA compliance rate gauge"""
-        self._record_gauge('sla_compliance_rate', compliance_rate * 100)  # Convert to percentage
+        self._record_gauge("sla_compliance_rate", compliance_rate * 100)  # Convert to percentage
 
     # Internal recording methods
-    def _record_counter(self, name: str, value: Union[int, float], labels: Dict[str, str] = None):
+    def _record_counter(self, name: str, value: int | float, labels: dict[str, str] = None):
         """Record counter metric"""
         labels = labels or {}
 
@@ -502,7 +502,7 @@ class TranslationMetricsCollector:
             except Exception as e:
                 print(f"Prometheus counter error: {e}")
 
-    def _record_histogram(self, name: str, value: float, labels: Dict[str, str] = None):
+    def _record_histogram(self, name: str, value: float, labels: dict[str, str] = None):
         """Record histogram metric"""
         labels = labels or {}
 
@@ -531,7 +531,7 @@ class TranslationMetricsCollector:
             except Exception as e:
                 print(f"Prometheus histogram error: {e}")
 
-    def _record_gauge(self, name: str, value: float, labels: Dict[str, str] = None):
+    def _record_gauge(self, name: str, value: float, labels: dict[str, str] = None):
         """Record gauge metric"""
         labels = labels or {}
 
@@ -561,7 +561,7 @@ class TranslationMetricsCollector:
                 print(f"Prometheus gauge error: {e}")
 
     # OpenTelemetry tracing support
-    def start_translation_span(self, sql: str, session_id: str) -> Optional[Any]:
+    def start_translation_span(self, sql: str, session_id: str) -> Any | None:
         """Start OpenTelemetry span for translation"""
         if not self.enable_otel:
             return None
@@ -589,31 +589,32 @@ class TranslationMetricsCollector:
             print(f"Failed to end OTEL span: {e}")
 
     # Metrics retrieval
-    def get_metrics_summary(self) -> Dict[str, Any]:
+    def get_metrics_summary(self) -> dict[str, Any]:
         """Get summary of all collected metrics"""
         with self._lock:
             return {
-                'counters': dict(self._counters),
-                'gauges': dict(self._gauges),
-                'histogram_counts': {k: len(v) for k, v in self._histograms.items()},
-                'total_events': len(self._metric_events),
-                'backends': {
-                    'otel_enabled': self.enable_otel,
-                    'prometheus_enabled': self.enable_prometheus,
-                    'otel_available': OTEL_AVAILABLE,
-                    'prometheus_available': PROMETHEUS_AVAILABLE
+                "counters": dict(self._counters),
+                "gauges": dict(self._gauges),
+                "histogram_counts": {k: len(v) for k, v in self._histograms.items()},
+                "total_events": len(self._metric_events),
+                "backends": {
+                    "otel_enabled": self.enable_otel,
+                    "prometheus_enabled": self.enable_prometheus,
+                    "otel_available": OTEL_AVAILABLE,
+                    "prometheus_available": PROMETHEUS_AVAILABLE,
                 },
-                'collection_timestamp': datetime.utcnow().isoformat()
+                "collection_timestamp": datetime.utcnow().isoformat(),
             }
 
-    def get_prometheus_metrics(self) -> Optional[str]:
+    def get_prometheus_metrics(self) -> str | None:
         """Get Prometheus metrics in text format"""
         if not self.enable_prometheus:
             return None
 
         try:
             from prometheus_client import generate_latest
-            return generate_latest(self.prometheus_registry).decode('utf-8')
+
+            return generate_latest(self.prometheus_registry).decode("utf-8")
         except Exception as e:
             print(f"Failed to generate Prometheus metrics: {e}")
             return None
@@ -631,27 +632,27 @@ class TranslationMetricsCollector:
         try:
             # Collect current metrics in a format suitable for IRIS /api/monitor
             metrics_data = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'source': 'iris_pgwire_translator',
-                'metrics': {}
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "iris_pgwire_translator",
+                "metrics": {},
             }
 
             with self._lock:
                 # Export counters
                 for key, value in self._counters.items():
-                    metrics_data['metrics'][f"counter_{key}"] = value
+                    metrics_data["metrics"][f"counter_{key}"] = value
 
                 # Export gauges
                 for key, value in self._gauges.items():
-                    metrics_data['metrics'][f"gauge_{key}"] = value
+                    metrics_data["metrics"][f"gauge_{key}"] = value
 
                 # Export histogram stats
                 for key, values in self._histograms.items():
                     if values:
-                        metrics_data['metrics'][f"histogram_{key}_count"] = len(values)
-                        metrics_data['metrics'][f"histogram_{key}_avg"] = sum(values) / len(values)
-                        metrics_data['metrics'][f"histogram_{key}_max"] = max(values)
-                        metrics_data['metrics'][f"histogram_{key}_min"] = min(values)
+                        metrics_data["metrics"][f"histogram_{key}_count"] = len(values)
+                        metrics_data["metrics"][f"histogram_{key}_avg"] = sum(values) / len(values)
+                        metrics_data["metrics"][f"histogram_{key}_max"] = max(values)
+                        metrics_data["metrics"][f"histogram_{key}_min"] = min(values)
 
             # TODO: In production, POST this data to IRIS /api/monitor endpoint
             # import requests
@@ -666,8 +667,9 @@ class TranslationMetricsCollector:
             #     return True
 
             # For now, log the metrics that would be exported
-            logger.debug("IRIS /api/monitor export (simulated)",
-                        metrics_count=len(metrics_data['metrics']))
+            logger.debug(
+                "IRIS /api/monitor export (simulated)", metrics_count=len(metrics_data["metrics"])
+            )
 
             return True
 
@@ -675,27 +677,31 @@ class TranslationMetricsCollector:
             logger.warning(f"Failed to export metrics to IRIS /api/monitor: {e}")
             return False
 
-    def get_iris_integration_status(self) -> Dict[str, Any]:
+    def get_iris_integration_status(self) -> dict[str, Any]:
         """
         Get status of IRIS OpenTelemetry integration
 
         Returns current state of IRIS version detection and telemetry capabilities
         """
         return {
-            'iris_version': self.iris_version,
-            'iris_otel_native': self.iris_otel_native,
-            'iris_monitor_api_fallback': self.iris_monitor_api_fallback,
-            'otel_endpoint': self.otel_endpoint,
-            'integration_mode': (
-                'native_otel' if self.iris_otel_native
-                else 'monitor_api_fallback' if self.iris_monitor_api_fallback
-                else 'external_otel_only'
+            "iris_version": self.iris_version,
+            "iris_otel_native": self.iris_otel_native,
+            "iris_monitor_api_fallback": self.iris_monitor_api_fallback,
+            "otel_endpoint": self.otel_endpoint,
+            "integration_mode": (
+                "native_otel"
+                if self.iris_otel_native
+                else (
+                    "monitor_api_fallback"
+                    if self.iris_monitor_api_fallback
+                    else "external_otel_only"
+                )
             ),
-            'capabilities': {
-                'native_otlp_export': self.iris_otel_native,
-                'monitor_api_polling': self.iris_monitor_api_fallback,
-                'external_otel_collectors': True
-            }
+            "capabilities": {
+                "native_otlp_export": self.iris_otel_native,
+                "monitor_api_polling": self.iris_monitor_api_fallback,
+                "external_otel_collectors": True,
+            },
         }
 
 
@@ -711,9 +717,12 @@ def get_metrics_collector() -> TranslationMetricsCollector:
     return _metrics_collector
 
 
-def configure_metrics(enable_otel: bool = False, enable_prometheus: bool = False,
-                     otel_endpoint: Optional[str] = None,
-                     iris_connection = None) -> TranslationMetricsCollector:
+def configure_metrics(
+    enable_otel: bool = False,
+    enable_prometheus: bool = False,
+    otel_endpoint: str | None = None,
+    iris_connection=None,
+) -> TranslationMetricsCollector:
     """
     Configure metrics collection with IRIS integration
 
@@ -731,19 +740,19 @@ def configure_metrics(enable_otel: bool = False, enable_prometheus: bool = False
         enable_otel=enable_otel,
         enable_prometheus=enable_prometheus,
         otel_endpoint=otel_endpoint,
-        iris_connection=iris_connection
+        iris_connection=iris_connection,
     )
     return _metrics_collector
 
 
 # Export main components
 __all__ = [
-    'TranslationMetricsCollector',
-    'MetricDefinition',
-    'MetricEvent',
-    'MetricType',
-    'get_metrics_collector',
-    'configure_metrics',
-    'OTEL_AVAILABLE',
-    'PROMETHEUS_AVAILABLE'
+    "TranslationMetricsCollector",
+    "MetricDefinition",
+    "MetricEvent",
+    "MetricType",
+    "get_metrics_collector",
+    "configure_metrics",
+    "OTEL_AVAILABLE",
+    "PROMETHEUS_AVAILABLE",
 ]

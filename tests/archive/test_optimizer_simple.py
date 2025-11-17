@@ -4,12 +4,13 @@ Simple test to verify vector optimizer generates correct TO_VECTOR syntax.
 Direct import to avoid dependency issues.
 """
 
-import sys
 import os
+import sys
 
 # Import just the vector optimizer module directly
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src/iris_pgwire'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src/iris_pgwire"))
 from vector_optimizer import optimize_vector_query
+
 
 def test_single_parameter_syntax():
     """Test that optimizer generates TO_VECTOR with single parameter"""
@@ -37,15 +38,18 @@ def test_single_parameter_syntax():
         print("⚠️  Single parameter (works but data type not specified)")
         return True
     else:
-        print(f"⚠️  UNEXPECTED: Could not find expected TO_VECTOR in optimized SQL")
+        print("⚠️  UNEXPECTED: Could not find expected TO_VECTOR in optimized SQL")
         return False
+
 
 def test_json_array_conversion():
     """Test that JSON arrays are converted to comma-separated"""
 
     print("\nTesting JSON array conversion...")
 
-    sql = "SELECT TOP 5 id, VECTOR_COSINE(vec, TO_VECTOR(?)) AS score FROM table ORDER BY score DESC"
+    sql = (
+        "SELECT TOP 5 id, VECTOR_COSINE(vec, TO_VECTOR(?)) AS score FROM table ORDER BY score DESC"
+    )
     params = ["[0.1,0.2,0.3]"]
 
     optimized_sql, optimized_params = optimize_vector_query(sql, params)
@@ -63,6 +67,7 @@ def test_json_array_conversion():
     else:
         print(f"❌ FAIL: Unexpected vector format in SQL: {optimized_sql}")
         return False
+
 
 if __name__ == "__main__":
     results = []

@@ -7,14 +7,16 @@ to verify that P2 Extended Protocol works with real PostgreSQL clients.
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -32,17 +34,19 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server in background thread"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER'
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
         )
 
         print(f"🚀 Starting server on 127.0.0.1:{port}...")
@@ -60,6 +64,7 @@ def run_server(port, ready_event):
             pass
 
     asyncio.run(start_server())
+
 
 def test_psycopg2_p2_protocol():
     """Test P2 Extended Protocol with psycopg2"""
@@ -82,7 +87,7 @@ def test_psycopg2_p2_protocol():
         return False
 
     # Wait for port to be actually available
-    if not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server port not available")
         return False
 
@@ -98,11 +103,7 @@ def test_psycopg2_p2_protocol():
 
         # Test connection
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         print("✅ psycopg2 connection successful!")
@@ -115,7 +116,7 @@ def test_psycopg2_p2_protocol():
         cur.execute("SELECT 42 as answer")
         result = cur.fetchone()
         print(f"   Result: {result}")
-        assert result[0] == '42', f"Expected '42', got {result[0]}"
+        assert result[0] == "42", f"Expected '42', got {result[0]}"
         print("✅ Simple query test passed!")
 
         # Test 2: Parameterized query (P2 Extended Protocol)
@@ -123,7 +124,7 @@ def test_psycopg2_p2_protocol():
         cur.execute("SELECT %s as param_value", (99,))
         result = cur.fetchone()
         print(f"   Result: {result}")
-        assert result[0] == '99', f"Expected '99', got {result[0]}"
+        assert result[0] == "99", f"Expected '99', got {result[0]}"
         print("✅ Parameterized query test passed!")
 
         # Test 3: Multiple parameters
@@ -131,7 +132,7 @@ def test_psycopg2_p2_protocol():
         cur.execute("SELECT %s + %s as sum", (10, 32))
         result = cur.fetchone()
         print(f"   Result: {result}")
-        assert result[0] == '42', f"Expected '42', got {result[0]}"
+        assert result[0] == "42", f"Expected '42', got {result[0]}"
         print("✅ Multiple parameters test passed!")
 
         # Test 4: String parameter
@@ -168,8 +169,10 @@ def test_psycopg2_p2_protocol():
     except Exception as e:
         print(f"❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 if __name__ == "__main__":
     success = test_psycopg2_p2_protocol()

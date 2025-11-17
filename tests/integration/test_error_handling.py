@@ -7,28 +7,34 @@ unsupported IRIS constructs. These tests MUST FAIL until implementation is compl
 Constitutional Requirement: Test-First Development with comprehensive error scenarios
 """
 
-import pytest
 import time
-import logging
-from typing import Any, Dict, List, Optional, Union
+
+import pytest
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.server import PGWireServer
-    from iris_pgwire.sql_translator import SQLTranslator, TranslationError, UnsupportedConstructError
+    from iris_pgwire.sql_translator import (
+        SQLTranslator,
+        TranslationError,
+        UnsupportedConstructError,
+    )
     from iris_pgwire.sql_translator.error_handler import ErrorHandler, FallbackStrategy
     from iris_pgwire.sql_translator.recovery import ErrorRecovery
+
     SERVER_AVAILABLE = True
 except ImportError:
     SERVER_AVAILABLE = False
 
 try:
     import psycopg
+
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_iris, pytest.mark.error_handling]
+
 
 @pytest.fixture(scope="session")
 def pgwire_server():
@@ -42,7 +48,7 @@ def pgwire_server():
         enable_translation=True,
         error_strategy="HYBRID",  # Support multiple fallback strategies
         enable_error_logging=True,
-        enable_recovery_mode=True
+        enable_recovery_mode=True,
     )
     server.start()
 
@@ -52,6 +58,7 @@ def pgwire_server():
 
     server.stop()
 
+
 @pytest.fixture
 def connection_params():
     """Connection parameters for error handling testing"""
@@ -60,8 +67,9 @@ def connection_params():
         "port": 5438,
         "user": "postgres",
         "password": "iris",
-        "dbname": "iris"
+        "dbname": "iris",
     }
+
 
 class TestUnsupportedConstructErrors:
     """Test error handling for unsupported IRIS constructs"""
@@ -79,7 +87,7 @@ class TestUnsupportedConstructErrors:
                     "ANALYZE TABLE users",
                     "REINDEX TABLE users",
                     "TRUNCATE TABLE users CASCADE",
-                    "ALTER SYSTEM SET parameter = value"
+                    "ALTER SYSTEM SET parameter = value",
                 ]
 
                 for command in unsupported_commands:
@@ -88,9 +96,15 @@ class TestUnsupportedConstructErrors:
 
                     error_msg = str(exc_info.value).lower()
                     # Verify meaningful error messages
-                    assert any(keyword in error_msg for keyword in [
-                        "unsupported", "not supported", "administrative", "operation"
-                    ]), f"Error message should indicate unsupported operation: {error_msg}"
+                    assert any(
+                        keyword in error_msg
+                        for keyword in [
+                            "unsupported",
+                            "not supported",
+                            "administrative",
+                            "operation",
+                        ]
+                    ), f"Error message should indicate unsupported operation: {error_msg}"
 
                 # Connection should remain usable after errors
                 cur.execute("SELECT 1 AS recovery_test")
@@ -110,7 +124,7 @@ class TestUnsupportedConstructErrors:
                     "SELECT $HOROLOG AS current_horolog",
                     "SELECT * FROM %Dictionary.ClassDefinition",
                     "KILL ^GlobalVariable",
-                    "SET ^GlobalVar = 'value'"
+                    "SET ^GlobalVar = 'value'",
                 ]
 
                 for syntax in unsupported_syntax:
@@ -119,9 +133,10 @@ class TestUnsupportedConstructErrors:
 
                     error_msg = str(exc_info.value).lower()
                     # Should provide specific error information
-                    assert any(keyword in error_msg for keyword in [
-                        "unsupported", "iris", "construct", "syntax", "translation"
-                    ]), f"Error should indicate unsupported IRIS construct: {error_msg}"
+                    assert any(
+                        keyword in error_msg
+                        for keyword in ["unsupported", "iris", "construct", "syntax", "translation"]
+                    ), f"Error should indicate unsupported IRIS construct: {error_msg}"
 
     def test_unsupported_system_functions(self, pgwire_server, connection_params):
         """Test error handling for unsupported IRIS system functions"""
@@ -136,7 +151,7 @@ class TestUnsupportedConstructErrors:
                     "SELECT %SYSTEM.Process.Terminate(123) AS terminate",
                     "SELECT %SYSTEM.Database.Compact() AS compact_result",
                     "SELECT %SYSTEM.Encryption.GenerateKey() AS key",
-                    "SELECT %SYSTEM.Backup.CreateBackup() AS backup"
+                    "SELECT %SYSTEM.Backup.CreateBackup() AS backup",
                 ]
 
                 for func_query in unsupported_functions:
@@ -145,8 +160,10 @@ class TestUnsupportedConstructErrors:
 
                     error_msg = str(exc_info.value)
                     # Should indicate specific function issue
-                    assert "function" in error_msg.lower() or "system" in error_msg.lower(), \
-                        f"Error should indicate function issue: {error_msg}"
+                    assert (
+                        "function" in error_msg.lower() or "system" in error_msg.lower()
+                    ), f"Error should indicate function issue: {error_msg}"
+
 
 class TestFallbackStrategies:
     """Test different fallback strategies for unsupported constructs"""
@@ -209,6 +226,7 @@ class TestFallbackStrategies:
                 cur.execute("SELECT 1 AS standard_sql")
                 result = cur.fetchone()[0]
                 assert result == 1, "Standard SQL should always work"
+
 
 class TestErrorRecovery:
     """Test error recovery mechanisms"""
@@ -291,6 +309,7 @@ class TestErrorRecovery:
                 mem_result = cur.fetchone()[0]
                 assert "64MB" in mem_result or mem_result == "64MB"
 
+
 class TestErrorLogging:
     """Test error logging and diagnostics"""
 
@@ -317,6 +336,7 @@ class TestErrorLogging:
         # This would test debug mode providing additional error context
         # Implementation-dependent: might require special connection params
         pass
+
 
 class TestErrorContextualInformation:
     """Test error messages provide contextual information"""
@@ -369,6 +389,7 @@ class TestErrorContextualInformation:
                     # Exact matching depends on implementation
                     assert len(error_msg) > 0, f"Should provide error for {expected_type} construct"
 
+
 class TestErrorPerformance:
     """Test performance characteristics of error handling"""
 
@@ -391,8 +412,9 @@ class TestErrorPerformance:
                 error_handling_time = (time.perf_counter() - start_time) * 1000
 
                 # Error handling should be fast
-                assert error_handling_time < 1000.0, \
-                    f"Error handling took {error_handling_time}ms, should be < 1000ms for 10 errors"
+                assert (
+                    error_handling_time < 1000.0
+                ), f"Error handling took {error_handling_time}ms, should be < 1000ms for 10 errors"
 
                 # Verify connection still works efficiently
                 start_time = time.perf_counter()
@@ -403,6 +425,7 @@ class TestErrorPerformance:
                 assert result is not None, "Should recover successfully"
                 assert recovery_time < 100.0, f"Recovery took {recovery_time}ms, should be < 100ms"
 
+
 class TestConcurrentErrorHandling:
     """Test error handling under concurrent access"""
 
@@ -411,8 +434,8 @@ class TestConcurrentErrorHandling:
         if not SERVER_AVAILABLE:
             pytest.skip("Implementation not available yet")
 
-        import threading
         import queue
+        import threading
 
         results = queue.Queue()
 
@@ -460,6 +483,7 @@ class TestConcurrentErrorHandling:
             if status == "success":
                 assert result is not None, f"Connection {conn_id} should have valid result"
 
+
 class TestErrorBoundaries:
     """Test error boundaries and containment"""
 
@@ -473,7 +497,8 @@ class TestErrorBoundaries:
                 # Query with mix of valid and invalid constructs
                 # Behavior depends on implementation strategy
                 try:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             id,
                             %SYSTEM.Version.GetNumber() AS version,  -- Valid
@@ -481,7 +506,8 @@ class TestErrorBoundaries:
                             name
                         FROM users
                         LIMIT 1
-                    """)
+                    """
+                    )
                     # If this succeeds, verify partial execution handling
                     result = cur.fetchone()
                     assert result is not None
@@ -503,28 +529,33 @@ class TestErrorBoundaries:
             with conn.cursor() as cur:
                 # Error in subquery
                 with pytest.raises(psycopg.Error):
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             id,
                             name,
                             (SELECT %INVALID.FUNCTION() FROM dual) AS invalid_sub
                         FROM users
                         LIMIT 1
-                    """)
+                    """
+                    )
 
                 # Error in CTE
                 with pytest.raises(psycopg.Error):
-                    cur.execute("""
+                    cur.execute(
+                        """
                         WITH invalid_cte AS (
                             SELECT %INVALID.FUNCTION() AS invalid
                         )
                         SELECT * FROM invalid_cte
-                    """)
+                    """
+                    )
 
                 # Connection should recover from nested errors
                 cur.execute("SELECT %SYSTEM.Version.GetNumber() AS version")
                 result = cur.fetchone()
                 assert result is not None, "Should recover from nested errors"
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_error_handling_tdd_validation():

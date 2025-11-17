@@ -7,14 +7,16 @@ with real PostgreSQL clients using pgvector-compatible syntax.
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -32,18 +34,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for vector testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False  # Use trust auth for testing
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,  # Use trust auth for testing
         )
 
         print(f"🚀 Starting server for P5 testing on 127.0.0.1:{port}...")
@@ -62,6 +66,7 @@ def run_server(port, ready_event):
 
     asyncio.run(start_server())
 
+
 def test_vector_function_mapping():
     """Test that vector function mappings work"""
     PORT = 15500
@@ -75,7 +80,7 @@ def test_vector_function_mapping():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -88,11 +93,7 @@ def test_vector_function_mapping():
         print("📱 Testing vector function mapping...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -125,6 +126,7 @@ def test_vector_function_mapping():
         print(f"❌ Vector function mapping test failed: {e}")
         return False
 
+
 def test_vector_operators():
     """Test pgvector-compatible operators"""
     PORT = 15501
@@ -138,7 +140,7 @@ def test_vector_operators():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -151,11 +153,7 @@ def test_vector_operators():
         print("📱 Testing pgvector-compatible operators...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -167,7 +165,7 @@ def test_vector_operators():
             # Basic similarity queries that should be rewritten
             "SELECT 'cosine distance test' as test_type",
             "SELECT 'inner product test' as test_type",
-            "SELECT 'vector literal test' as test_type"
+            "SELECT 'vector literal test' as test_type",
         ]
 
         for i, query in enumerate(vector_queries, 1):
@@ -188,6 +186,7 @@ def test_vector_operators():
         print(f"❌ Vector operators test failed: {e}")
         return False
 
+
 def test_vector_translation():
     """Test vector query translation (unit test style)"""
     print("\n🧪 P5 Test 3: Vector Query Translation")
@@ -198,11 +197,11 @@ def test_vector_translation():
 
         # Create executor (without actual IRIS connection for translation testing)
         iris_config = {
-            'host': 'localhost',
-            'port': 1972,
-            'username': '_SYSTEM',
-            'password': 'SYS',
-            'namespace': 'USER'
+            "host": "localhost",
+            "port": 1972,
+            "username": "_SYSTEM",
+            "password": "SYS",
+            "namespace": "USER",
         }
 
         executor = IRISExecutor(iris_config)
@@ -212,16 +211,17 @@ def test_vector_translation():
         # Test vector operator translation
         test_queries = [
             # pgvector <-> operator (L2/cosine distance)
-            ("SELECT * FROM docs ORDER BY embedding <-> '[0.1,0.2,0.3]' LIMIT 5",
-             "cosine distance operator"),
-
+            (
+                "SELECT * FROM docs ORDER BY embedding <-> '[0.1,0.2,0.3]' LIMIT 5",
+                "cosine distance operator",
+            ),
             # pgvector <#> operator (negative inner product)
-            ("SELECT id FROM vectors WHERE embedding <#> '[1,2,3]' < 0.5",
-             "inner product operator"),
-
+            (
+                "SELECT id FROM vectors WHERE embedding <#> '[1,2,3]' < 0.5",
+                "inner product operator",
+            ),
             # Vector function mapping
-            ("SELECT vector_dims(embedding) FROM docs",
-             "vector dimension function")
+            ("SELECT vector_dims(embedding) FROM docs", "vector dimension function"),
         ]
 
         successful_translations = 0
@@ -234,10 +234,10 @@ def test_vector_translation():
 
                 # Check if translation occurred
                 if translated != original_query:
-                    print(f"     ✅ Translation applied")
+                    print("     ✅ Translation applied")
                     successful_translations += 1
                 else:
-                    print(f"     ⚠️  No translation (may be expected)")
+                    print("     ⚠️  No translation (may be expected)")
                 print()
 
             except Exception as e:
@@ -254,6 +254,7 @@ def test_vector_translation():
         print(f"❌ Vector translation test failed: {e}")
         return False
 
+
 def test_vector_type_support():
     """Test vector type system support"""
     PORT = 15502
@@ -267,7 +268,7 @@ def test_vector_type_support():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -280,11 +281,7 @@ def test_vector_type_support():
         print("📱 Testing vector type support...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -295,7 +292,7 @@ def test_vector_type_support():
         vector_tests = [
             ("SELECT 'Vector type system test' as message", "basic query"),
             ("SELECT '[1,2,3]' as vector_text", "vector literal"),
-            ("SELECT 42 as dimension_count", "numeric type")
+            ("SELECT 42 as dimension_count", "numeric type"),
         ]
 
         successful_tests = 0
@@ -315,12 +312,15 @@ def test_vector_type_support():
             print("🎉 Vector type support test passed!")
             return True
         else:
-            print(f"⚠️  Partial vector type support: {successful_tests}/{len(vector_tests)} tests passed")
+            print(
+                f"⚠️  Partial vector type support: {successful_tests}/{len(vector_tests)} tests passed"
+            )
             return True
 
     except Exception as e:
         print(f"❌ Vector type support test failed: {e}")
         return False
+
 
 def main():
     """Run comprehensive P5 Types & Vectors tests"""
@@ -355,11 +355,11 @@ def main():
         "Vector Function Mapping",
         "Vector Operators",
         "Vector Query Translation",
-        "Vector Type Support"
+        "Vector Type Support",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -380,6 +380,7 @@ def main():
         print(f"\n💥 {len(results) - passed} P5 tests failed")
         print("🔧 Additional implementation work may be needed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

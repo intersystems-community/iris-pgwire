@@ -7,14 +7,16 @@ with SCRAM-SHA-256 authentication against real PostgreSQL clients.
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -32,18 +34,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server_with_scram(port, ready_event):
     """Run server with SCRAM authentication enabled"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=True  # Enable SCRAM-SHA-256 authentication
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=True,  # Enable SCRAM-SHA-256 authentication
         )
 
         print(f"🚀 Starting server with SCRAM-SHA-256 authentication on 127.0.0.1:{port}...")
@@ -61,6 +65,7 @@ def run_server_with_scram(port, ready_event):
             pass
 
     asyncio.run(start_server())
+
 
 def test_trust_authentication():
     """Test trust authentication (P0 baseline)"""
@@ -83,7 +88,7 @@ def test_trust_authentication():
         return False
 
     # Wait for port to be actually available
-    if not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server port not available")
         return False
 
@@ -97,12 +102,12 @@ def test_trust_authentication():
 
         # Test connection without password (trust mode)
         conn = psycopg2.connect(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=PORT,
-            database='USER',
-            user='test_user',
+            database="USER",
+            user="test_user",
             # No password in trust mode
-            connect_timeout=5
+            connect_timeout=5,
         )
 
         print("✅ Trust authentication successful!")
@@ -123,18 +128,20 @@ def test_trust_authentication():
         print(f"❌ Trust authentication test failed: {e}")
         return False
 
+
 def run_server_with_trust(port, ready_event):
     """Run server with trust authentication (baseline)"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False  # Trust authentication
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,  # Trust authentication
         )
 
         print(f"🚀 Starting server with trust authentication on 127.0.0.1:{port}...")
@@ -148,6 +155,7 @@ def run_server_with_trust(port, ready_event):
             pass
 
     asyncio.run(start_server())
+
 
 def test_scram_authentication():
     """Test SCRAM-SHA-256 authentication"""
@@ -170,7 +178,7 @@ def test_scram_authentication():
         return False
 
     # Wait for port to be actually available
-    if not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ SCRAM server port not available")
         return False
 
@@ -185,12 +193,12 @@ def test_scram_authentication():
         # Test connection with password (SCRAM mode)
         # Note: Current implementation uses simplified SCRAM for testing
         conn = psycopg2.connect(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=PORT,
-            database='USER',
-            user='test_user',
-            password='test_password',  # SCRAM requires password
-            connect_timeout=10
+            database="USER",
+            user="test_user",
+            password="test_password",  # SCRAM requires password
+            connect_timeout=10,
         )
 
         print("✅ SCRAM-SHA-256 authentication successful!")
@@ -216,8 +224,10 @@ def test_scram_authentication():
     except Exception as e:
         print(f"❌ SCRAM authentication test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 def test_authentication_failure():
     """Test authentication failure scenarios"""
@@ -233,7 +243,7 @@ def test_authentication_failure():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Test server failed to start")
         return False
 
@@ -248,12 +258,12 @@ def test_authentication_failure():
         # This should fail (missing password)
         try:
             conn = psycopg2.connect(
-                host='127.0.0.1',
+                host="127.0.0.1",
                 port=PORT,
-                database='USER',
-                user='test_user',
+                database="USER",
+                user="test_user",
                 # No password - should fail with SCRAM
-                connect_timeout=5
+                connect_timeout=5,
             )
             print("❌ Expected authentication failure but connection succeeded")
             conn.close()
@@ -265,6 +275,7 @@ def test_authentication_failure():
     except Exception as e:
         print(f"❌ Authentication failure test error: {e}")
         return False
+
 
 def main():
     """Run comprehensive P3 Authentication tests"""
@@ -293,11 +304,11 @@ def main():
     test_names = [
         "Trust Authentication",
         "SCRAM-SHA-256 Authentication",
-        "Authentication Failure Handling"
+        "Authentication Failure Handling",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -316,6 +327,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} authentication tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

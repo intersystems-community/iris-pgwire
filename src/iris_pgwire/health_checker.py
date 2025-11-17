@@ -12,9 +12,7 @@ Research: R5 (Exponential backoff reconnection)
 """
 
 import asyncio
-import logging
 import time
-from typing import Optional
 
 import structlog
 
@@ -40,7 +38,7 @@ class HealthChecker:
         """
         self.pool = connection_pool
         self.is_healthy = True
-        self.last_check_time: Optional[float] = None
+        self.last_check_time: float | None = None
         self.consecutive_failures = 0
 
         # Exponential backoff configuration
@@ -56,9 +54,7 @@ class HealthChecker:
         """
         try:
             # Acquire connection and execute test query
-            conn_wrapper = await asyncio.wait_for(
-                self.pool.acquire(), timeout=5.0
-            )
+            conn_wrapper = await asyncio.wait_for(self.pool.acquire(), timeout=5.0)
 
             try:
                 # Execute simple test query
@@ -88,7 +84,7 @@ class HealthChecker:
             finally:
                 await self.pool.release(conn_wrapper)
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Health check timeout - IRIS not responding")
             self.consecutive_failures += 1
             self.is_healthy = False
@@ -96,7 +92,7 @@ class HealthChecker:
 
         except Exception as e:
             logger.error(
-                f"IRIS health check failed",
+                "IRIS health check failed",
                 error=str(e),
                 consecutive_failures=self.consecutive_failures + 1,
             )
@@ -143,7 +139,7 @@ class HealthChecker:
 
             if is_healthy:
                 logger.info(
-                    f"✅ Reconnection successful",
+                    "✅ Reconnection successful",
                     attempt=attempt,
                     total_delay_seconds=sum(2**i for i in range(attempt - 1)),
                 )
@@ -151,7 +147,9 @@ class HealthChecker:
 
             logger.warning(
                 f"Reconnection attempt {attempt} failed",
-                next_delay_seconds=min(2**attempt, 1024) if attempt < self.max_reconnect_attempts else None,
+                next_delay_seconds=(
+                    min(2**attempt, 1024) if attempt < self.max_reconnect_attempts else None
+                ),
             )
 
         # All reconnection attempts failed
@@ -194,7 +192,7 @@ class HealthChecker:
 
             except Exception as e:
                 logger.error(
-                    f"Health monitoring error",
+                    "Health monitoring error",
                     error=str(e),
                     interval_seconds=interval_seconds,
                 )
@@ -212,8 +210,6 @@ class HealthChecker:
             "last_check_time": self.last_check_time,
             "consecutive_failures": self.consecutive_failures,
             "time_since_last_check": (
-                time.time() - self.last_check_time
-                if self.last_check_time
-                else None
+                time.time() - self.last_check_time if self.last_check_time else None
             ),
         }

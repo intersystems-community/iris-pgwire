@@ -3,17 +3,17 @@ Constitutional Compliance Tests for Authentication
 Tests authentication flows against constitutional requirements (<5ms SLA)
 """
 
-import pytest
 import asyncio
 import time
-from unittest.mock import Mock, patch, AsyncMock
+from unittest.mock import Mock, patch
+
+import pytest
 
 from iris_pgwire.auth import (
-    PostgreSQLAuthenticator,
     AuthenticationMethod,
-    AuthenticationResult,
     IRISAuthenticationProvider,
-    SCRAMAuthenticator
+    PostgreSQLAuthenticator,
+    SCRAMAuthenticator,
 )
 from iris_pgwire.constitutional import get_governor
 from iris_pgwire.performance_monitor import get_monitor
@@ -25,25 +25,23 @@ class TestAuthenticationConstitutionalCompliance:
     @pytest.fixture
     def mock_iris_config(self):
         return {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER',
-            'system_user': '_SYSTEM',
-            'system_password': 'SYS'
+            "host": "localhost",
+            "port": "1972",
+            "namespace": "USER",
+            "system_user": "_SYSTEM",
+            "system_password": "SYS",
         }
 
     @pytest.fixture
     def authenticator(self, mock_iris_config):
         return PostgreSQLAuthenticator(
-            auth_method=AuthenticationMethod.SCRAM_SHA_256,
-            iris_config=mock_iris_config
+            auth_method=AuthenticationMethod.SCRAM_SHA_256, iris_config=mock_iris_config
         )
 
     @pytest.fixture
     def trust_authenticator(self, mock_iris_config):
         return PostgreSQLAuthenticator(
-            auth_method=AuthenticationMethod.TRUST,
-            iris_config=mock_iris_config
+            auth_method=AuthenticationMethod.TRUST, iris_config=mock_iris_config
         )
 
     @pytest.mark.asyncio
@@ -52,8 +50,7 @@ class TestAuthenticationConstitutionalCompliance:
         start_time = time.perf_counter()
 
         result = await trust_authenticator.authenticate(
-            connection_id="test-conn-1",
-            username="testuser"
+            connection_id="test-conn-1", username="testuser"
         )
 
         end_time = time.perf_counter()
@@ -74,8 +71,7 @@ class TestAuthenticationConstitutionalCompliance:
         monitor.reset_stats()
 
         result = await trust_authenticator.authenticate(
-            connection_id="test-conn-2",
-            username="testuser"
+            connection_id="test-conn-2", username="testuser"
         )
 
         assert result.success
@@ -88,7 +84,7 @@ class TestAuthenticationConstitutionalCompliance:
     @pytest.mark.asyncio
     async def test_authentication_sla_violation_logging(self, authenticator):
         """Test SLA violation triggers constitutional compliance check"""
-        with patch('iris_pgwire.auth.asyncio.to_thread') as mock_thread:
+        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
             # Mock slow IRIS authentication (>5ms)
             async def slow_iris_auth():
                 await asyncio.sleep(0.006)  # 6ms delay
@@ -96,14 +92,12 @@ class TestAuthenticationConstitutionalCompliance:
 
             mock_thread.return_value = slow_iris_auth()
 
-            with patch('iris_pgwire.auth.get_governor') as mock_governor:
+            with patch("iris_pgwire.auth.get_governor") as mock_governor:
                 mock_gov = Mock()
                 mock_governor.return_value = mock_gov
 
                 result = await authenticator.authenticate(
-                    connection_id="test-conn-3",
-                    username="testuser",
-                    auth_data=b"test-auth-data"
+                    connection_id="test-conn-3", username="testuser", auth_data=b"test-auth-data"
                 )
 
                 # Verify SLA violation was detected
@@ -118,7 +112,7 @@ class TestAuthenticationConstitutionalCompliance:
         """Test IRIS authentication provider constitutional compliance"""
         provider = IRISAuthenticationProvider(mock_iris_config)
 
-        with patch('iris_pgwire.auth.asyncio.to_thread') as mock_thread:
+        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
             # Mock fast IRIS authentication
             async def fast_iris_auth():
                 return True, "session_456"
@@ -169,8 +163,7 @@ class TestAuthenticationConstitutionalCompliance:
         tasks = []
         for i in range(10):
             task = trust_authenticator.authenticate(
-                connection_id=f"test-conn-{i}",
-                username=f"user{i}"
+                connection_id=f"test-conn-{i}", username=f"user{i}"
             )
             tasks.append(task)
 
@@ -189,7 +182,7 @@ class TestAuthenticationConstitutionalCompliance:
     @pytest.mark.asyncio
     async def test_authentication_error_constitutional_compliance(self, authenticator):
         """Test constitutional compliance even during authentication errors"""
-        with patch('iris_pgwire.auth.asyncio.to_thread') as mock_thread:
+        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
             # Mock IRIS authentication failure
             async def failing_iris_auth():
                 raise Exception("IRIS connection failed")
@@ -198,9 +191,7 @@ class TestAuthenticationConstitutionalCompliance:
 
             start_time = time.perf_counter()
             result = await authenticator.authenticate(
-                connection_id="test-conn-error",
-                username="testuser",
-                auth_data=b"test-auth-data"
+                connection_id="test-conn-error", username="testuser", auth_data=b"test-auth-data"
             )
             end_time = time.perf_counter()
 
@@ -217,13 +208,13 @@ class TestAuthenticationConstitutionalCompliance:
         requirements = governor.requirements
 
         # Verify authentication-related constitutional requirements exist
-        assert 'sla_compliance' in requirements
-        assert requirements['sla_compliance'].threshold_value == 5.0
-        assert requirements['sla_compliance'].unit == 'milliseconds'
+        assert "sla_compliance" in requirements
+        assert requirements["sla_compliance"].threshold_value == 5.0
+        assert requirements["sla_compliance"].unit == "milliseconds"
 
         # Verify production readiness requirements
-        assert 'error_rate' in requirements
-        assert 'availability' in requirements
+        assert "error_rate" in requirements
+        assert "availability" in requirements
 
     def test_constitutional_compliance_check_authentication(self):
         """Test constitutional compliance check includes authentication metrics"""
@@ -239,8 +230,8 @@ class TestAuthenticationConstitutionalCompliance:
         compliance_results = governor.check_compliance()
 
         # Verify SLA compliance is checked
-        assert 'sla_compliance' in compliance_results
-        sla_status = compliance_results['sla_compliance']
+        assert "sla_compliance" in compliance_results
+        sla_status = compliance_results["sla_compliance"]
         assert sla_status.compliant  # Should be compliant with fast operations
         assert sla_status.current_value < 5.0
 
@@ -257,18 +248,20 @@ class TestAuthenticationConstitutionalCompliance:
         report = governor.generate_constitutional_report()
 
         # Verify report structure
-        assert 'constitutional_governance' in report
-        assert 'compliance_by_principle' in report
-        assert 'summary' in report
+        assert "constitutional_governance" in report
+        assert "compliance_by_principle" in report
+        assert "summary" in report
 
         # Verify production readiness principle includes authentication SLA
-        production_readiness = report['compliance_by_principle'].get('production_readiness', [])
-        sla_requirements = [req for req in production_readiness if req['requirement_id'] == 'sla_compliance']
+        production_readiness = report["compliance_by_principle"].get("production_readiness", [])
+        sla_requirements = [
+            req for req in production_readiness if req["requirement_id"] == "sla_compliance"
+        ]
         assert len(sla_requirements) > 0
 
         sla_req = sla_requirements[0]
-        assert sla_req['threshold'] == 5.0
-        assert sla_req['unit'] == 'milliseconds'
+        assert sla_req["threshold"] == 5.0
+        assert sla_req["unit"] == "milliseconds"
 
     @pytest.mark.asyncio
     async def test_authentication_performance_benchmark(self, trust_authenticator):
@@ -300,8 +293,8 @@ class TestAuthenticationConstitutionalCompliance:
         assert p95_time < 5.0, f"P95 time {p95_time:.2f}ms exceeds 5ms constitutional SLA"
         assert max_time < 10.0, f"Max time {max_time:.2f}ms exceeds 10ms absolute limit"
 
-        print(f"Authentication Performance Benchmark:")
+        print("Authentication Performance Benchmark:")
         print(f"  Average: {avg_time:.2f}ms")
         print(f"  P95: {p95_time:.2f}ms")
         print(f"  Max: {max_time:.2f}ms")
-        print(f"  Constitutional SLA Compliance: ✅")
+        print("  Constitutional SLA Compliance: ✅")

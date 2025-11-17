@@ -14,12 +14,13 @@ import re
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 # Define types locally (previously imported from test contracts)
 class CommandType(Enum):
     """Transaction command types"""
+
     BEGIN = "BEGIN"
     COMMIT = "COMMIT"
     ROLLBACK = "ROLLBACK"
@@ -28,9 +29,10 @@ class CommandType(Enum):
 @dataclass
 class TransactionCommand:
     """Value object representing a parsed transaction command"""
+
     command_text: str
     command_type: CommandType
-    modifiers: Optional[str]
+    modifiers: str | None
     translated_text: str
 
 
@@ -47,6 +49,14 @@ class TransactionTranslator:
     COMMIT_PATTERN = re.compile(r"^\s*COMMIT(?:\s+WORK|\s+TRANSACTION)?$", re.IGNORECASE)
 
     ROLLBACK_PATTERN = re.compile(r"^\s*ROLLBACK(?:\s+WORK|\s+TRANSACTION)?$", re.IGNORECASE)
+
+    # CRITICAL FIX (2025-11-14): SAVEPOINT syntax translation for IRIS compatibility
+    # PostgreSQL: ROLLBACK TO savepoint_name (SAVEPOINT keyword optional)
+    # IRIS: ROLLBACK TO SAVEPOINT savepoint_name (SAVEPOINT keyword REQUIRED)
+    ROLLBACK_TO_PATTERN = re.compile(
+        r"^\s*ROLLBACK\s+TO\s+(?!SAVEPOINT\s+)(\S+)\s*$", re.IGNORECASE
+    )
+    RELEASE_PATTERN = re.compile(r"^\s*RELEASE\s+(?!SAVEPOINT\s+)(\S+)\s*$", re.IGNORECASE)
 
     # String literal detection (to avoid translating inside strings)
     STRING_LITERAL_PATTERN = re.compile(r"'[^']*'", re.DOTALL)
@@ -81,8 +91,8 @@ class TransactionTranslator:
         """
         start_time = time.perf_counter()
 
-        # Strip leading/trailing whitespace
-        sql_stripped = sql.strip()
+        # Strip leading/trailing whitespace and semicolons
+        sql_stripped = sql.strip().rstrip(";").strip()
 
         # FR-006: Check if this is inside a string literal
         # If the entire command is a string literal, don't translate
@@ -109,6 +119,23 @@ class TransactionTranslator:
         if self.ROLLBACK_PATTERN.match(sql_stripped):
             self._record_translation_time(start_time)
             return "ROLLBACK"
+
+        # CRITICAL FIX (2025-11-14): ROLLBACK TO savepoint → ROLLBACK TO SAVEPOINT savepoint
+        # IRIS requires explicit SAVEPOINT keyword, PostgreSQL makes it optional
+        match = self.ROLLBACK_TO_PATTERN.match(sql_stripped)
+        if match:
+            savepoint_name = match.group(1)
+            result = f"ROLLBACK TO SAVEPOINT {savepoint_name}"
+            self._record_translation_time(start_time)
+            return result
+
+        # RELEASE savepoint → RELEASE SAVEPOINT savepoint
+        match = self.RELEASE_PATTERN.match(sql_stripped)
+        if match:
+            savepoint_name = match.group(1)
+            result = f"RELEASE SAVEPOINT {savepoint_name}"
+            self._record_translation_time(start_time)
+            return result
 
         # Not a transaction command - return unchanged
         self._record_translation_time(start_time)

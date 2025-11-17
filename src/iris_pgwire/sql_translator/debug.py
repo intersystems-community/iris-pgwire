@@ -8,19 +8,19 @@ Constitutional Compliance: Complete transparency in translation decisions.
 """
 
 import json
-import time
 import logging
 import threading
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Any, TextIO
-from dataclasses import dataclass, asdict
 from enum import Enum
+from typing import Any
 
-from .models import DebugTrace, ParsingStep, MappingDecision, PerformanceTimer
+from .models import DebugTrace
 
 
 class LogLevel(Enum):
     """Debug log levels"""
+
     TRACE = "TRACE"
     DEBUG = "DEBUG"
     INFO = "INFO"
@@ -31,13 +31,14 @@ class LogLevel(Enum):
 @dataclass
 class TraceEvent:
     """Individual trace event with timing and context"""
+
     timestamp: datetime
     level: LogLevel
     component: str
     event_type: str
     message: str
-    data: Dict[str, Any]
-    duration_ms: Optional[float] = None
+    data: dict[str, Any]
+    duration_ms: float | None = None
 
 
 class DebugTracer:
@@ -61,8 +62,8 @@ class DebugTracer:
         """
         self.enabled = enabled
         self._lock = threading.Lock()
-        self._traces: Dict[str, DebugTrace] = {}
-        self._events: List[TraceEvent] = []
+        self._traces: dict[str, DebugTrace] = {}
+        self._events: list[TraceEvent] = []
         self._session_start = datetime.utcnow()
 
         # Setup structured logging
@@ -70,13 +71,11 @@ class DebugTracer:
 
     def _setup_logging(self):
         """Setup structured logging for debug output"""
-        self.logger = logging.getLogger('iris_pgwire.sql_translator.debug')
+        self.logger = logging.getLogger("iris_pgwire.sql_translator.debug")
 
         if not self.logger.handlers:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
+            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.DEBUG)
@@ -97,10 +96,10 @@ class DebugTracer:
 
         with self._lock:
             trace = DebugTrace()
-            trace.metadata['trace_id'] = trace_id
-            trace.metadata['original_sql'] = original_sql
-            trace.metadata['start_time'] = datetime.utcnow().isoformat()
-            trace.metadata['session_duration_ms'] = 0.0
+            trace.metadata["trace_id"] = trace_id
+            trace.metadata["original_sql"] = original_sql
+            trace.metadata["start_time"] = datetime.utcnow().isoformat()
+            trace.metadata["session_duration_ms"] = 0.0
 
             self._traces[trace_id] = trace
 
@@ -108,18 +107,27 @@ class DebugTracer:
                 LogLevel.INFO,
                 "tracer",
                 "trace_started",
-                f"Started debug trace for SQL translation",
+                "Started debug trace for SQL translation",
                 {
-                    'trace_id': trace_id,
-                    'sql_length': len(original_sql),
-                    'sql_preview': original_sql[:100] + '...' if len(original_sql) > 100 else original_sql
-                }
+                    "trace_id": trace_id,
+                    "sql_length": len(original_sql),
+                    "sql_preview": (
+                        original_sql[:100] + "..." if len(original_sql) > 100 else original_sql
+                    ),
+                },
             )
 
             return trace
 
-    def add_parsing_step(self, trace_id: str, step_name: str, input_sql: str,
-                        output_sql: str, duration_ms: float, **metadata) -> None:
+    def add_parsing_step(
+        self,
+        trace_id: str,
+        step_name: str,
+        input_sql: str,
+        output_sql: str,
+        duration_ms: float,
+        **metadata,
+    ) -> None:
         """
         Add a parsing step to the trace
 
@@ -144,13 +152,13 @@ class DebugTracer:
                 "parsing_step",
                 f"Parsing step: {step_name}",
                 {
-                    'trace_id': trace_id,
-                    'step_name': step_name,
-                    'duration_ms': duration_ms,
-                    'input_length': len(input_sql),
-                    'output_length': len(output_sql),
-                    'metadata': metadata
-                }
+                    "trace_id": trace_id,
+                    "step_name": step_name,
+                    "duration_ms": duration_ms,
+                    "input_length": len(input_sql),
+                    "output_length": len(output_sql),
+                    "metadata": metadata,
+                },
             )
 
             # Constitutional requirement: track slow parsing steps
@@ -161,16 +169,23 @@ class DebugTracer:
                     "slow_parsing_step",
                     f"Slow parsing step detected: {step_name} took {duration_ms}ms",
                     {
-                        'trace_id': trace_id,
-                        'step_name': step_name,
-                        'duration_ms': duration_ms,
-                        'sla_threshold_ms': 1.0
-                    }
+                        "trace_id": trace_id,
+                        "step_name": step_name,
+                        "duration_ms": duration_ms,
+                        "sla_threshold_ms": 1.0,
+                    },
                 )
 
-    def add_mapping_decision(self, trace_id: str, construct: str, available_mappings: List[str],
-                           chosen_mapping: str, confidence: float, reasoning: str,
-                           **metadata) -> None:
+    def add_mapping_decision(
+        self,
+        trace_id: str,
+        construct: str,
+        available_mappings: list[str],
+        chosen_mapping: str,
+        confidence: float,
+        reasoning: str,
+        **metadata,
+    ) -> None:
         """
         Add a mapping decision to the trace
 
@@ -198,14 +213,14 @@ class DebugTracer:
                 "mapping_decision",
                 f"Mapping decision: {construct} -> {chosen_mapping}",
                 {
-                    'trace_id': trace_id,
-                    'construct': construct,
-                    'chosen_mapping': chosen_mapping,
-                    'confidence': confidence,
-                    'available_options': len(available_mappings),
-                    'reasoning': reasoning,
-                    'metadata': metadata
-                }
+                    "trace_id": trace_id,
+                    "construct": construct,
+                    "chosen_mapping": chosen_mapping,
+                    "confidence": confidence,
+                    "available_options": len(available_mappings),
+                    "reasoning": reasoning,
+                    "metadata": metadata,
+                },
             )
 
             # Constitutional requirement: flag low-confidence mappings
@@ -216,16 +231,17 @@ class DebugTracer:
                     "low_confidence_mapping",
                     f"Low confidence mapping: {construct} -> {chosen_mapping} (confidence: {confidence})",
                     {
-                        'trace_id': trace_id,
-                        'construct': construct,
-                        'chosen_mapping': chosen_mapping,
-                        'confidence': confidence,
-                        'confidence_threshold': 0.7
-                    }
+                        "trace_id": trace_id,
+                        "construct": construct,
+                        "chosen_mapping": chosen_mapping,
+                        "confidence": confidence,
+                        "confidence_threshold": 0.7,
+                    },
                 )
 
-    def add_warning(self, trace_id: str, warning_message: str, component: str = "translator",
-                   **metadata) -> None:
+    def add_warning(
+        self, trace_id: str, warning_message: str, component: str = "translator", **metadata
+    ) -> None:
         """
         Add a warning to the trace
 
@@ -247,15 +263,17 @@ class DebugTracer:
                 component,
                 "translation_warning",
                 warning_message,
-                {
-                    'trace_id': trace_id,
-                    'component': component,
-                    'metadata': metadata
-                }
+                {"trace_id": trace_id, "component": component, "metadata": metadata},
             )
 
-    def add_error(self, trace_id: str, error_message: str, error_type: str = "TranslationError",
-                 component: str = "translator", **metadata) -> None:
+    def add_error(
+        self,
+        trace_id: str,
+        error_message: str,
+        error_type: str = "TranslationError",
+        component: str = "translator",
+        **metadata,
+    ) -> None:
         """
         Add an error to the trace
 
@@ -280,15 +298,16 @@ class DebugTracer:
                 "translation_error",
                 error_message,
                 {
-                    'trace_id': trace_id,
-                    'error_type': error_type,
-                    'component': component,
-                    'metadata': metadata
-                }
+                    "trace_id": trace_id,
+                    "error_type": error_type,
+                    "component": component,
+                    "metadata": metadata,
+                },
             )
 
-    def complete_trace(self, trace_id: str, final_sql: str, success: bool,
-                      total_duration_ms: float) -> Optional[DebugTrace]:
+    def complete_trace(
+        self, trace_id: str, final_sql: str, success: bool, total_duration_ms: float
+    ) -> DebugTrace | None:
         """
         Complete a debug trace session
 
@@ -308,17 +327,17 @@ class DebugTracer:
             trace = self._traces[trace_id]
 
             # Update metadata
-            trace.metadata['end_time'] = datetime.utcnow().isoformat()
-            trace.metadata['total_duration_ms'] = total_duration_ms
-            trace.metadata['success'] = success
-            trace.metadata['final_sql'] = final_sql
-            trace.metadata['final_sql_length'] = len(final_sql)
+            trace.metadata["end_time"] = datetime.utcnow().isoformat()
+            trace.metadata["total_duration_ms"] = total_duration_ms
+            trace.metadata["success"] = success
+            trace.metadata["final_sql"] = final_sql
+            trace.metadata["final_sql_length"] = len(final_sql)
 
             # Calculate summary statistics
-            trace.metadata['parsing_steps_count'] = len(trace.parsing_steps)
-            trace.metadata['mapping_decisions_count'] = len(trace.mapping_decisions)
-            trace.metadata['warnings_count'] = len(trace.warnings)
-            trace.metadata['total_parsing_time_ms'] = trace.total_parsing_time_ms
+            trace.metadata["parsing_steps_count"] = len(trace.parsing_steps)
+            trace.metadata["mapping_decisions_count"] = len(trace.mapping_decisions)
+            trace.metadata["warnings_count"] = len(trace.warnings)
+            trace.metadata["total_parsing_time_ms"] = trace.total_parsing_time_ms
 
             self._log_event(
                 LogLevel.INFO,
@@ -326,17 +345,17 @@ class DebugTracer:
                 "trace_completed",
                 f"Completed debug trace - Success: {success}",
                 {
-                    'trace_id': trace_id,
-                    'success': success,
-                    'total_duration_ms': total_duration_ms,
-                    'parsing_steps': len(trace.parsing_steps),
-                    'mapping_decisions': len(trace.mapping_decisions),
-                    'warnings': len(trace.warnings),
-                    'constitutional_compliance': {
-                        'sla_compliant': total_duration_ms <= 5.0,
-                        'sla_requirement_ms': 5.0
-                    }
-                }
+                    "trace_id": trace_id,
+                    "success": success,
+                    "total_duration_ms": total_duration_ms,
+                    "parsing_steps": len(trace.parsing_steps),
+                    "mapping_decisions": len(trace.mapping_decisions),
+                    "warnings": len(trace.warnings),
+                    "constitutional_compliance": {
+                        "sla_compliant": total_duration_ms <= 5.0,
+                        "sla_requirement_ms": 5.0,
+                    },
+                },
             )
 
             # Constitutional requirement: flag SLA violations
@@ -347,18 +366,18 @@ class DebugTracer:
                     "sla_violation",
                     f"Translation exceeded 5ms SLA: {total_duration_ms}ms",
                     {
-                        'trace_id': trace_id,
-                        'actual_duration_ms': total_duration_ms,
-                        'sla_requirement_ms': 5.0,
-                        'violation_amount_ms': total_duration_ms - 5.0
-                    }
+                        "trace_id": trace_id,
+                        "actual_duration_ms": total_duration_ms,
+                        "sla_requirement_ms": 5.0,
+                        "violation_amount_ms": total_duration_ms - 5.0,
+                    },
                 )
 
             # Remove from active traces (keep completed for analysis)
             completed_trace = self._traces.pop(trace_id)
             return completed_trace
 
-    def get_trace_summary(self, trace_id: str) -> Optional[Dict[str, Any]]:
+    def get_trace_summary(self, trace_id: str) -> dict[str, Any] | None:
         """
         Get summary of a trace session
 
@@ -374,13 +393,13 @@ class DebugTracer:
         with self._lock:
             trace = self._traces[trace_id]
             return {
-                'trace_id': trace_id,
-                'metadata': trace.metadata,
-                'parsing_steps_count': len(trace.parsing_steps),
-                'mapping_decisions_count': len(trace.mapping_decisions),
-                'warnings_count': len(trace.warnings),
-                'total_parsing_time_ms': trace.total_parsing_time_ms,
-                'active': True
+                "trace_id": trace_id,
+                "metadata": trace.metadata,
+                "parsing_steps_count": len(trace.parsing_steps),
+                "mapping_decisions_count": len(trace.mapping_decisions),
+                "warnings_count": len(trace.warnings),
+                "total_parsing_time_ms": trace.total_parsing_time_ms,
+                "active": True,
             }
 
     def export_trace_json(self, trace: DebugTrace) -> str:
@@ -399,10 +418,10 @@ class DebugTracer:
         try:
             # Convert to dictionary with proper serialization
             trace_dict = {
-                'parsing_steps': [asdict(step) for step in trace.parsing_steps],
-                'mapping_decisions': [asdict(decision) for decision in trace.mapping_decisions],
-                'warnings': trace.warnings,
-                'metadata': trace.metadata
+                "parsing_steps": [asdict(step) for step in trace.parsing_steps],
+                "mapping_decisions": [asdict(decision) for decision in trace.mapping_decisions],
+                "warnings": trace.warnings,
+                "metadata": trace.metadata,
             }
 
             return json.dumps(trace_dict, indent=2, default=str)
@@ -435,21 +454,25 @@ class DebugTracer:
                 ".metadata { background-color: #f8f9fa; padding: 5px; }",
                 "pre { white-space: pre-wrap; word-wrap: break-word; }",
                 "</style></head><body>",
-                f"<h1>IRIS SQL Translation Debug Trace</h1>",
-                f"<div class='metadata'><h2>Metadata</h2><pre>{json.dumps(trace.metadata, indent=2)}</pre></div>"
+                "<h1>IRIS SQL Translation Debug Trace</h1>",
+                f"<div class='metadata'><h2>Metadata</h2><pre>{json.dumps(trace.metadata, indent=2)}</pre></div>",
             ]
 
             # Parsing steps
             if trace.parsing_steps:
                 html_parts.append("<h2>Parsing Steps</h2>")
                 for i, step in enumerate(trace.parsing_steps):
-                    html_parts.append(f"<div class='step'>")
+                    html_parts.append("<div class='step'>")
                     html_parts.append(f"<h3>Step {i+1}: {step.step_name}</h3>")
                     html_parts.append(f"<p><strong>Duration:</strong> {step.duration_ms}ms</p>")
                     html_parts.append(f"<p><strong>Input:</strong></p><pre>{step.input_sql}</pre>")
-                    html_parts.append(f"<p><strong>Output:</strong></p><pre>{step.output_sql}</pre>")
+                    html_parts.append(
+                        f"<p><strong>Output:</strong></p><pre>{step.output_sql}</pre>"
+                    )
                     if step.metadata:
-                        html_parts.append(f"<p><strong>Metadata:</strong></p><pre>{json.dumps(step.metadata, indent=2)}</pre>")
+                        html_parts.append(
+                            f"<p><strong>Metadata:</strong></p><pre>{json.dumps(step.metadata, indent=2)}</pre>"
+                        )
                     html_parts.append("</div>")
 
             # Mapping decisions
@@ -459,19 +482,25 @@ class DebugTracer:
                     css_class = "warning" if decision.confidence < 0.7 else "step"
                     html_parts.append(f"<div class='{css_class}'>")
                     html_parts.append(f"<h3>Decision {i+1}: {decision.construct}</h3>")
-                    html_parts.append(f"<p><strong>Chosen Mapping:</strong> {decision.chosen_mapping}</p>")
+                    html_parts.append(
+                        f"<p><strong>Chosen Mapping:</strong> {decision.chosen_mapping}</p>"
+                    )
                     html_parts.append(f"<p><strong>Confidence:</strong> {decision.confidence}</p>")
-                    html_parts.append(f"<p><strong>Available Mappings:</strong> {', '.join(decision.available_mappings)}</p>")
+                    html_parts.append(
+                        f"<p><strong>Available Mappings:</strong> {', '.join(decision.available_mappings)}</p>"
+                    )
                     html_parts.append(f"<p><strong>Reasoning:</strong> {decision.reasoning}</p>")
                     if decision.metadata:
-                        html_parts.append(f"<p><strong>Metadata:</strong></p><pre>{json.dumps(decision.metadata, indent=2)}</pre>")
+                        html_parts.append(
+                            f"<p><strong>Metadata:</strong></p><pre>{json.dumps(decision.metadata, indent=2)}</pre>"
+                        )
                     html_parts.append("</div>")
 
             # Warnings
             if trace.warnings:
                 html_parts.append("<h2>Warnings</h2>")
                 for i, warning in enumerate(trace.warnings):
-                    html_parts.append(f"<div class='warning'>")
+                    html_parts.append("<div class='warning'>")
                     html_parts.append(f"<h3>Warning {i+1}</h3>")
                     html_parts.append(f"<p>{warning}</p>")
                     html_parts.append("</div>")
@@ -483,7 +512,7 @@ class DebugTracer:
             self.logger.error(f"Failed to export trace to HTML: {e}")
             return f"<html><body>Error generating HTML trace: {e}</body></html>"
 
-    def get_session_stats(self) -> Dict[str, Any]:
+    def get_session_stats(self) -> dict[str, Any]:
         """
         Get statistics for the current debug session
 
@@ -494,27 +523,40 @@ class DebugTracer:
             session_duration = (datetime.utcnow() - self._session_start).total_seconds()
 
             return {
-                'session_start': self._session_start.isoformat(),
-                'session_duration_seconds': session_duration,
-                'active_traces': len(self._traces),
-                'total_events': len(self._events),
-                'events_by_level': {
+                "session_start": self._session_start.isoformat(),
+                "session_duration_seconds": session_duration,
+                "active_traces": len(self._traces),
+                "total_events": len(self._events),
+                "events_by_level": {
                     level.value: len([e for e in self._events if e.level == level])
                     for level in LogLevel
                 },
-                'events_by_component': {
+                "events_by_component": {
                     component: len([e for e in self._events if e.component == component])
                     for component in set(e.component for e in self._events)
                 },
-                'constitutional_compliance': {
-                    'sla_violations': len([e for e in self._events if e.event_type == "sla_violation"]),
-                    'low_confidence_mappings': len([e for e in self._events if e.event_type == "low_confidence_mapping"]),
-                    'slow_parsing_steps': len([e for e in self._events if e.event_type == "slow_parsing_step"])
-                }
+                "constitutional_compliance": {
+                    "sla_violations": len(
+                        [e for e in self._events if e.event_type == "sla_violation"]
+                    ),
+                    "low_confidence_mappings": len(
+                        [e for e in self._events if e.event_type == "low_confidence_mapping"]
+                    ),
+                    "slow_parsing_steps": len(
+                        [e for e in self._events if e.event_type == "slow_parsing_step"]
+                    ),
+                },
             }
 
-    def _log_event(self, level: LogLevel, component: str, event_type: str,
-                  message: str, data: Dict[str, Any], duration_ms: Optional[float] = None):
+    def _log_event(
+        self,
+        level: LogLevel,
+        component: str,
+        event_type: str,
+        message: str,
+        data: dict[str, Any],
+        duration_ms: float | None = None,
+    ):
         """Log a trace event"""
         event = TraceEvent(
             timestamp=datetime.utcnow(),
@@ -523,14 +565,14 @@ class DebugTracer:
             event_type=event_type,
             message=message,
             data=data,
-            duration_ms=duration_ms
+            duration_ms=duration_ms,
         )
 
         self._events.append(event)
 
         # Log to standard logger
         log_level = getattr(logging, level.value)
-        self.logger.log(log_level, f"[{component}] {message}", extra={'data': data})
+        self.logger.log(log_level, f"[{component}] {message}", extra={"data": data})
 
 
 # Global tracer instance
@@ -547,33 +589,43 @@ def start_debug_trace(trace_id: str, original_sql: str) -> DebugTrace:
     return _tracer.start_trace(trace_id, original_sql)
 
 
-def add_parsing_step(trace_id: str, step_name: str, input_sql: str,
-                    output_sql: str, duration_ms: float, **metadata) -> None:
+def add_parsing_step(
+    trace_id: str, step_name: str, input_sql: str, output_sql: str, duration_ms: float, **metadata
+) -> None:
     """Add parsing step to trace (convenience function)"""
     _tracer.add_parsing_step(trace_id, step_name, input_sql, output_sql, duration_ms, **metadata)
 
 
-def add_mapping_decision(trace_id: str, construct: str, available_mappings: List[str],
-                        chosen_mapping: str, confidence: float, reasoning: str, **metadata) -> None:
+def add_mapping_decision(
+    trace_id: str,
+    construct: str,
+    available_mappings: list[str],
+    chosen_mapping: str,
+    confidence: float,
+    reasoning: str,
+    **metadata,
+) -> None:
     """Add mapping decision to trace (convenience function)"""
-    _tracer.add_mapping_decision(trace_id, construct, available_mappings, chosen_mapping,
-                               confidence, reasoning, **metadata)
+    _tracer.add_mapping_decision(
+        trace_id, construct, available_mappings, chosen_mapping, confidence, reasoning, **metadata
+    )
 
 
-def complete_debug_trace(trace_id: str, final_sql: str, success: bool,
-                        total_duration_ms: float) -> Optional[DebugTrace]:
+def complete_debug_trace(
+    trace_id: str, final_sql: str, success: bool, total_duration_ms: float
+) -> DebugTrace | None:
     """Complete debug trace (convenience function)"""
     return _tracer.complete_trace(trace_id, final_sql, success, total_duration_ms)
 
 
 # Export main components
 __all__ = [
-    'DebugTracer',
-    'TraceEvent',
-    'LogLevel',
-    'get_tracer',
-    'start_debug_trace',
-    'add_parsing_step',
-    'add_mapping_decision',
-    'complete_debug_trace'
+    "DebugTracer",
+    "TraceEvent",
+    "LogLevel",
+    "get_tracer",
+    "start_debug_trace",
+    "add_parsing_step",
+    "add_mapping_decision",
+    "complete_debug_trace",
 ]

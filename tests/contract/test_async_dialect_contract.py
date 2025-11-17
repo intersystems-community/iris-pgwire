@@ -14,15 +14,16 @@ Test Sequence (T003-T007):
 Expected Status: ALL TESTS SHOULD FAIL until T010-T017 implementation is complete.
 """
 
-import pytest
 import time
-from sqlalchemy import text, create_engine, MetaData, Table, Column, Integer, String
-from sqlalchemy.ext.asyncio import create_async_engine
 
+import pytest
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 # ==============================================================================
 # T003: Contract Test - DBAPI Import
 # ==============================================================================
+
 
 def test_async_dialect_import_dbapi():
     """
@@ -39,13 +40,14 @@ def test_async_dialect_import_dbapi():
     from sqlalchemy_iris.psycopg import IRISDialectAsync_psycopg
 
     dbapi = IRISDialectAsync_psycopg.import_dbapi()
-    assert dbapi.__name__ == 'psycopg', "DBAPI module must be psycopg"
-    assert hasattr(dbapi, 'AsyncConnection'), "psycopg must have AsyncConnection for async mode"
+    assert dbapi.__name__ == "psycopg", "DBAPI module must be psycopg"
+    assert hasattr(dbapi, "AsyncConnection"), "psycopg must have AsyncConnection for async mode"
 
 
 # ==============================================================================
 # T004: Contract Test - Async Engine Creation
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_engine_creation():
@@ -62,8 +64,9 @@ async def test_async_engine_creation():
     engine = create_async_engine("iris+psycopg://localhost:5432/USER")
 
     assert engine.dialect.is_async == True, "Dialect must be async mode"
-    assert engine.dialect.__class__.__name__ == 'IRISDialectAsync_psycopg', \
-        f"Expected IRISDialectAsync_psycopg, got {engine.dialect.__class__.__name__}"
+    assert (
+        engine.dialect.__class__.__name__ == "IRISDialectAsync_psycopg"
+    ), f"Expected IRISDialectAsync_psycopg, got {engine.dialect.__class__.__name__}"
 
     await engine.dispose()
 
@@ -71,6 +74,7 @@ async def test_async_engine_creation():
 # ==============================================================================
 # T005: Contract Test - Async Query Execution
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_query_execution():
@@ -92,7 +96,7 @@ async def test_async_query_execution():
         result = await conn.execute(text("SELECT 1"))
         value = result.scalar()
         # IRIS may return '1' (string) or 1 (int) depending on PGWire type mapping
-        assert value in (1, '1'), f"Query should return 1 or '1', got {value!r}"
+        assert value in (1, "1"), f"Query should return 1 or '1', got {value!r}"
 
     await engine.dispose()
 
@@ -100,6 +104,7 @@ async def test_async_query_execution():
 # ==============================================================================
 # T006: Contract Test - Async Bulk Insert
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_bulk_insert():
@@ -117,9 +122,11 @@ async def test_async_bulk_insert():
     """
     engine = create_async_engine("iris+psycopg://localhost:5432/USER")
     metadata = MetaData()
-    test_table = Table('async_bulk_test', metadata,
-        Column('id', Integer, primary_key=True, autoincrement=False),
-        Column('name', String(16))
+    test_table = Table(
+        "async_bulk_test",
+        metadata,
+        Column("id", Integer, primary_key=True, autoincrement=False),
+        Column("name", String(16)),
     )
 
     async with engine.begin() as conn:
@@ -137,13 +144,12 @@ async def test_async_bulk_insert():
 
         # Bulk insert with timing
         start = time.time()
-        await conn.execute(test_table.insert(), [
-            {'id': i, 'name': f'record_{i}'} for i in range(100)
-        ])
+        await conn.execute(
+            test_table.insert(), [{"id": i, "name": f"record_{i}"} for i in range(100)]
+        )
         elapsed = time.time() - start
 
-        assert elapsed < 10, \
-            f"Bulk insert took {elapsed:.2f}s (should be <10s, not 5+ minutes)"
+        assert elapsed < 10, f"Bulk insert took {elapsed:.2f}s (should be <10s, not 5+ minutes)"
 
     await engine.dispose()
 
@@ -151,6 +157,7 @@ async def test_async_bulk_insert():
 # ==============================================================================
 # T007: Contract Test - 10% Performance Threshold (FR-013)
 # ==============================================================================
+
 
 @pytest.mark.asyncio
 async def test_async_performance_within_10_percent():
@@ -198,11 +205,12 @@ async def test_async_performance_within_10_percent():
     # Validate 10% threshold
     threshold = sync_avg * 1.10
 
-    assert async_avg <= threshold, \
-        f"Async {async_avg*1000:.2f}ms > Sync {sync_avg*1000:.2f}ms × 1.10 = {threshold*1000:.2f}ms " \
+    assert async_avg <= threshold, (
+        f"Async {async_avg*1000:.2f}ms > Sync {sync_avg*1000:.2f}ms × 1.10 = {threshold*1000:.2f}ms "
         f"(exceeds 10% threshold)"
+    )
 
-    print(f"\n✅ Performance validated:")
+    print("\n✅ Performance validated:")
     print(f"   Sync average:  {sync_avg*1000:.2f}ms")
     print(f"   Async average: {async_avg*1000:.2f}ms")
     print(f"   Threshold:     {threshold*1000:.2f}ms (110% of sync)")

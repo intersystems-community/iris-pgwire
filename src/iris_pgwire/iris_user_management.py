@@ -9,17 +9,18 @@ Constitutional Compliance: All operations maintain <5ms SLA requirement.
 
 import asyncio
 import logging
-import time
 import secrets
-from typing import Dict, List, Optional, Tuple, Set, Any
+import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class UserSyncMode(Enum):
     """User synchronization modes"""
+
     BIDIRECTIONAL = "bidirectional"  # Sync both ways
     IRIS_TO_PGWIRE = "iris_to_pgwire"  # IRIS is source of truth
     PGWIRE_TO_IRIS = "pgwire_to_iris"  # PGWire is source of truth
@@ -28,6 +29,7 @@ class UserSyncMode(Enum):
 
 class UserRole(Enum):
     """User roles for IRIS/PostgreSQL mapping"""
+
     ADMIN = "admin"
     READ_WRITE = "read_write"
     READ_ONLY = "read_only"
@@ -37,14 +39,15 @@ class UserRole(Enum):
 @dataclass
 class IRISUserInfo:
     """IRIS user information"""
+
     username: str
     enabled: bool
-    roles: List[str]
-    namespace_access: List[str]
-    last_login: Optional[str] = None
-    created_date: Optional[str] = None
-    iris_internal_id: Optional[str] = None
-    metadata: Dict[str, Any] = None
+    roles: list[str]
+    namespace_access: list[str]
+    last_login: str | None = None
+    created_date: str | None = None
+    iris_internal_id: str | None = None
+    metadata: dict[str, Any] = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -54,13 +57,14 @@ class IRISUserInfo:
 @dataclass
 class PGWireUserInfo:
     """PGWire user information"""
+
     username: str
     has_scram_credentials: bool
     role: UserRole
     enabled: bool
-    last_auth: Optional[str] = None
-    created_date: Optional[str] = None
-    metadata: Dict[str, Any] = None
+    last_auth: str | None = None
+    created_date: str | None = None
+    metadata: dict[str, Any] = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -70,12 +74,13 @@ class PGWireUserInfo:
 @dataclass
 class UserSyncResult:
     """Result of user synchronization operation"""
+
     success: bool
     users_synced: int = 0
     users_created: int = 0
     users_updated: int = 0
     users_disabled: int = 0
-    errors: List[str] = None
+    errors: list[str] = None
     sync_time_ms: float = 0.0
     sla_compliant: bool = True
 
@@ -87,14 +92,14 @@ class UserSyncResult:
 class IRISUserManager:
     """Manages IRIS user operations and synchronization"""
 
-    def __init__(self, iris_config: Dict[str, str], iris_provider):
+    def __init__(self, iris_config: dict[str, str], iris_provider):
         self.iris_config = iris_config
         self.iris_provider = iris_provider
         self.sync_mode = UserSyncMode.IRIS_TO_PGWIRE  # Default: IRIS is source of truth
-        self._user_cache: Dict[str, IRISUserInfo] = {}
+        self._user_cache: dict[str, IRISUserInfo] = {}
         self._cache_ttl = 300  # 5 minutes cache TTL
 
-    async def get_iris_users(self, namespace: Optional[str] = None) -> List[IRISUserInfo]:
+    async def get_iris_users(self, namespace: str | None = None) -> list[IRISUserInfo]:
         """
         Get all users from IRIS Security.Users table
         Returns list of IRIS user information
@@ -102,16 +107,17 @@ class IRISUserManager:
         start_time = time.perf_counter()
 
         try:
+
             def iris_query():
                 try:
                     import iris
 
                     connection = iris.createConnection(
-                        hostname=self.iris_config['host'],
-                        port=int(self.iris_config['port']),
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config.get('system_user', '_SYSTEM'),
-                        password=self.iris_config.get('system_password', 'SYS')
+                        hostname=self.iris_config["host"],
+                        port=int(self.iris_config["port"]),
+                        namespace=self.iris_config["namespace"],
+                        username=self.iris_config.get("system_user", "_SYSTEM"),
+                        password=self.iris_config.get("system_password", "SYS"),
                     )
 
                     cursor = connection.cursor()
@@ -142,12 +148,14 @@ class IRISUserManager:
                         # Parse roles (might be comma-separated)
                         role_list = []
                         if roles:
-                            role_list = [r.strip() for r in roles.split(',') if r.strip()]
+                            role_list = [r.strip() for r in roles.split(",") if r.strip()]
 
                         # Parse namespace access
                         namespace_list = []
                         if namespaces:
-                            namespace_list = [ns.strip() for ns in namespaces.split(',') if ns.strip()]
+                            namespace_list = [
+                                ns.strip() for ns in namespaces.split(",") if ns.strip()
+                            ]
 
                         user_info = IRISUserInfo(
                             username=name,
@@ -155,7 +163,7 @@ class IRISUserManager:
                             roles=role_list,
                             namespace_access=namespace_list,
                             last_login=str(last_login) if last_login else None,
-                            created_date=str(created) if created else None
+                            created_date=str(created) if created else None,
                         )
                         users.append(user_info)
 
@@ -183,7 +191,7 @@ class IRISUserManager:
             logger.error(f"Error getting IRIS users: {e}")
             return []
 
-    async def get_iris_user(self, username: str) -> Optional[IRISUserInfo]:
+    async def get_iris_user(self, username: str) -> IRISUserInfo | None:
         """Get specific IRIS user information"""
         # Check cache first
         if username in self._user_cache:
@@ -197,8 +205,9 @@ class IRISUserManager:
 
         return None
 
-    async def create_iris_user(self, username: str, password: str, roles: List[str] = None,
-                              namespaces: List[str] = None) -> Tuple[bool, str]:
+    async def create_iris_user(
+        self, username: str, password: str, roles: list[str] = None, namespaces: list[str] = None
+    ) -> tuple[bool, str]:
         """
         Create new user in IRIS
         Returns (success, message)
@@ -209,16 +218,17 @@ class IRISUserManager:
         start_time = time.perf_counter()
 
         try:
+
             def iris_create():
                 try:
                     import iris
 
                     connection = iris.createConnection(
-                        hostname=self.iris_config['host'],
-                        port=int(self.iris_config['port']),
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config.get('system_user', '_SYSTEM'),
-                        password=self.iris_config.get('system_password', 'SYS')
+                        hostname=self.iris_config["host"],
+                        port=int(self.iris_config["port"]),
+                        namespace=self.iris_config["namespace"],
+                        username=self.iris_config.get("system_user", "_SYSTEM"),
+                        password=self.iris_config.get("system_password", "SYS"),
                     )
 
                     cursor = connection.cursor()
@@ -232,8 +242,10 @@ class IRISUserManager:
                         return False, "User already exists"
 
                     # Create user record (simplified - actual IRIS user creation is more complex)
-                    role_str = ','.join(roles) if roles else ''
-                    namespace_str = ','.join(namespaces) if namespaces else self.iris_config['namespace']
+                    role_str = ",".join(roles) if roles else ""
+                    namespace_str = (
+                        ",".join(namespaces) if namespaces else self.iris_config["namespace"]
+                    )
 
                     # Note: This is a simplified example. Real IRIS user creation should use:
                     # ##class(Security.Users).Create() method or similar IRIS Security APIs
@@ -267,7 +279,7 @@ class IRISUserManager:
             logger.error(f"Error creating IRIS user {username}: {e}")
             return False, f"Error creating user: {str(e)}"
 
-    async def update_iris_user_password(self, username: str, new_password: str) -> Tuple[bool, str]:
+    async def update_iris_user_password(self, username: str, new_password: str) -> tuple[bool, str]:
         """Update IRIS user password"""
         if self.sync_mode == UserSyncMode.READ_ONLY:
             return False, "Password updates disabled in read-only mode"
@@ -275,16 +287,17 @@ class IRISUserManager:
         start_time = time.perf_counter()
 
         try:
+
             def iris_update():
                 try:
                     import iris
 
                     connection = iris.createConnection(
-                        hostname=self.iris_config['host'],
-                        port=int(self.iris_config['port']),
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config.get('system_user', '_SYSTEM'),
-                        password=self.iris_config.get('system_password', 'SYS')
+                        hostname=self.iris_config["host"],
+                        port=int(self.iris_config["port"]),
+                        namespace=self.iris_config["namespace"],
+                        username=self.iris_config.get("system_user", "_SYSTEM"),
+                        password=self.iris_config.get("system_password", "SYS"),
                     )
 
                     cursor = connection.cursor()
@@ -313,7 +326,7 @@ class IRISUserManager:
             logger.error(f"Error updating IRIS user password for {username}: {e}")
             return False, f"Error updating password: {str(e)}"
 
-    async def disable_iris_user(self, username: str) -> Tuple[bool, str]:
+    async def disable_iris_user(self, username: str) -> tuple[bool, str]:
         """Disable IRIS user account"""
         if self.sync_mode == UserSyncMode.READ_ONLY:
             return False, "User modifications disabled in read-only mode"
@@ -321,20 +334,23 @@ class IRISUserManager:
         start_time = time.perf_counter()
 
         try:
+
             def iris_disable():
                 try:
                     import iris
 
                     connection = iris.createConnection(
-                        hostname=self.iris_config['host'],
-                        port=int(self.iris_config['port']),
-                        namespace=self.iris_config['namespace'],
-                        username=self.iris_config.get('system_user', '_SYSTEM'),
-                        password=self.iris_config.get('system_password', 'SYS')
+                        hostname=self.iris_config["host"],
+                        port=int(self.iris_config["port"]),
+                        namespace=self.iris_config["namespace"],
+                        username=self.iris_config.get("system_user", "_SYSTEM"),
+                        password=self.iris_config.get("system_password", "SYS"),
                     )
 
                     cursor = connection.cursor()
-                    cursor.execute("UPDATE Security.Users SET Enabled = 0 WHERE Name = ?", [username])
+                    cursor.execute(
+                        "UPDATE Security.Users SET Enabled = 0 WHERE Name = ?", [username]
+                    )
 
                     # Clear cache
                     if username in self._user_cache:
@@ -360,12 +376,12 @@ class IRISUserManager:
             logger.error(f"Error disabling IRIS user {username}: {e}")
             return False, f"Error disabling user: {str(e)}"
 
-    def map_iris_role_to_pgwire(self, iris_roles: List[str]) -> UserRole:
+    def map_iris_role_to_pgwire(self, iris_roles: list[str]) -> UserRole:
         """Map IRIS roles to PGWire user role"""
         # IRIS role mapping (customize based on your IRIS role structure)
-        admin_roles = ['%All', '%Manager', 'AdminRole']
-        write_roles = ['%Developer', '%Operator', 'WriteRole']
-        read_roles = ['%DB_USER', 'ReadRole']
+        admin_roles = ["%All", "%Manager", "AdminRole"]
+        write_roles = ["%Developer", "%Operator", "WriteRole"]
+        read_roles = ["%DB_USER", "ReadRole"]
 
         has_admin = any(role in admin_roles for role in iris_roles)
         has_write = any(role in write_roles for role in iris_roles)
@@ -385,12 +401,12 @@ class IRISUserManager:
         self.sync_mode = mode
         logger.info(f"User sync mode set to: {mode.value}")
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get user cache statistics"""
         return {
             "cached_users": len(self._user_cache),
             "cache_ttl_seconds": self._cache_ttl,
-            "sync_mode": self.sync_mode.value
+            "sync_mode": self.sync_mode.value,
         }
 
     def clear_cache(self):
@@ -405,11 +421,7 @@ class PGWireUserSynchronizer:
     def __init__(self, iris_user_manager: IRISUserManager, auth_provider):
         self.iris_manager = iris_user_manager
         self.auth_provider = auth_provider
-        self._sync_stats = {
-            'last_sync': None,
-            'total_syncs': 0,
-            'last_sync_duration_ms': 0.0
-        }
+        self._sync_stats = {"last_sync": None, "total_syncs": 0, "last_sync_duration_ms": 0.0}
 
     async def sync_users(self, dry_run: bool = False) -> UserSyncResult:
         """
@@ -420,7 +432,9 @@ class PGWireUserSynchronizer:
         result = UserSyncResult(success=False)
 
         try:
-            logger.info(f"Starting user sync (dry_run={dry_run}, mode={self.iris_manager.sync_mode.value})")
+            logger.info(
+                f"Starting user sync (dry_run={dry_run}, mode={self.iris_manager.sync_mode.value})"
+            )
 
             # Get IRIS users
             iris_users = await self.iris_manager.get_iris_users()
@@ -446,9 +460,9 @@ class PGWireUserSynchronizer:
             result.sla_compliant = sync_time < 5.0
 
             # Update statistics
-            self._sync_stats['last_sync'] = time.time()
-            self._sync_stats['total_syncs'] += 1
-            self._sync_stats['last_sync_duration_ms'] = sync_time
+            self._sync_stats["last_sync"] = time.time()
+            self._sync_stats["total_syncs"] += 1
+            self._sync_stats["last_sync_duration_ms"] = sync_time
 
             if not result.sla_compliant:
                 logger.warning(f"User sync SLA violation: {sync_time:.2f}ms")
@@ -462,24 +476,24 @@ class PGWireUserSynchronizer:
             result.sync_time_ms = (time.perf_counter() - start_time) * 1000
             return result
 
-    def _get_pgwire_users(self) -> List[PGWireUserInfo]:
+    def _get_pgwire_users(self) -> list[PGWireUserInfo]:
         """Get users from PGWire credential cache"""
         users = []
-        if hasattr(self.auth_provider, '_credential_cache'):
+        if hasattr(self.auth_provider, "_credential_cache"):
             for username, credentials in self.auth_provider._credential_cache.items():
                 user_info = PGWireUserInfo(
                     username=username,
                     has_scram_credentials=True,
                     role=UserRole.READ_WRITE,  # Default role
                     enabled=True,
-                    metadata={'credential_source': 'scram_cache'}
+                    metadata={"credential_source": "scram_cache"},
                 )
                 users.append(user_info)
         return users
 
-    async def _sync_iris_to_pgwire(self, iris_users: List[IRISUserInfo],
-                                  pgwire_users: List[PGWireUserInfo],
-                                  dry_run: bool) -> UserSyncResult:
+    async def _sync_iris_to_pgwire(
+        self, iris_users: list[IRISUserInfo], pgwire_users: list[PGWireUserInfo], dry_run: bool
+    ) -> UserSyncResult:
         """Sync from IRIS to PGWire (IRIS is source of truth)"""
         result = UserSyncResult(success=True)
 
@@ -499,7 +513,9 @@ class PGWireUserSynchronizer:
                             result.users_created += 1
                             logger.info(f"Created PGWire user: {iris_user.username}")
                         else:
-                            result.errors.append(f"Failed to create PGWire user: {iris_user.username}")
+                            result.errors.append(
+                                f"Failed to create PGWire user: {iris_user.username}"
+                            )
                     else:
                         result.users_created += 1
                         logger.info(f"[DRY RUN] Would create PGWire user: {iris_user.username}")
@@ -513,9 +529,9 @@ class PGWireUserSynchronizer:
 
         return result
 
-    async def _sync_pgwire_to_iris(self, iris_users: List[IRISUserInfo],
-                                  pgwire_users: List[PGWireUserInfo],
-                                  dry_run: bool) -> UserSyncResult:
+    async def _sync_pgwire_to_iris(
+        self, iris_users: list[IRISUserInfo], pgwire_users: list[PGWireUserInfo], dry_run: bool
+    ) -> UserSyncResult:
         """Sync from PGWire to IRIS (PGWire is source of truth)"""
         result = UserSyncResult(success=True)
 
@@ -530,14 +546,16 @@ class PGWireUserSynchronizer:
                         success, message = await self.iris_manager.create_iris_user(
                             pgwire_user.username,
                             temp_password,
-                            roles=['%DB_USER'],  # Default role
-                            namespaces=[self.iris_manager.iris_config['namespace']]
+                            roles=["%DB_USER"],  # Default role
+                            namespaces=[self.iris_manager.iris_config["namespace"]],
                         )
                         if success:
                             result.users_created += 1
                             logger.info(f"Created IRIS user: {pgwire_user.username}")
                         else:
-                            result.errors.append(f"Failed to create IRIS user {pgwire_user.username}: {message}")
+                            result.errors.append(
+                                f"Failed to create IRIS user {pgwire_user.username}: {message}"
+                            )
                     else:
                         result.users_created += 1
                         logger.info(f"[DRY RUN] Would create IRIS user: {pgwire_user.username}")
@@ -551,9 +569,9 @@ class PGWireUserSynchronizer:
 
         return result
 
-    async def _sync_bidirectional(self, iris_users: List[IRISUserInfo],
-                                 pgwire_users: List[PGWireUserInfo],
-                                 dry_run: bool) -> UserSyncResult:
+    async def _sync_bidirectional(
+        self, iris_users: list[IRISUserInfo], pgwire_users: list[PGWireUserInfo], dry_run: bool
+    ) -> UserSyncResult:
         """Bidirectional sync (merge both sources)"""
         # Sync IRIS to PGWire first
         result1 = await self._sync_iris_to_pgwire(iris_users, pgwire_users, dry_run)
@@ -568,16 +586,16 @@ class PGWireUserSynchronizer:
             users_created=result1.users_created + result2.users_created,
             users_updated=result1.users_updated + result2.users_updated,
             users_disabled=result1.users_disabled + result2.users_disabled,
-            errors=result1.errors + result2.errors
+            errors=result1.errors + result2.errors,
         )
 
         return combined_result
 
-    def get_sync_stats(self) -> Dict[str, Any]:
+    def get_sync_stats(self) -> dict[str, Any]:
         """Get synchronization statistics"""
         return self._sync_stats.copy()
 
-    async def validate_user_consistency(self) -> Dict[str, Any]:
+    async def validate_user_consistency(self) -> dict[str, Any]:
         """Validate consistency between IRIS and PGWire users"""
         iris_users = await self.iris_manager.get_iris_users()
         pgwire_users = self._get_pgwire_users()
@@ -590,22 +608,22 @@ class PGWireUserSynchronizer:
         in_both = iris_usernames & pgwire_usernames
 
         return {
-            'total_iris_users': len(iris_users),
-            'total_pgwire_users': len(pgwire_users),
-            'users_in_both': len(in_both),
-            'only_in_iris': list(only_in_iris),
-            'only_in_pgwire': list(only_in_pgwire),
-            'consistency_score': len(in_both) / max(len(iris_usernames | pgwire_usernames), 1)
+            "total_iris_users": len(iris_users),
+            "total_pgwire_users": len(pgwire_users),
+            "users_in_both": len(in_both),
+            "only_in_iris": list(only_in_iris),
+            "only_in_pgwire": list(only_in_pgwire),
+            "consistency_score": len(in_both) / max(len(iris_usernames | pgwire_usernames), 1),
         }
 
 
 # Export main components
 __all__ = [
-    'IRISUserManager',
-    'PGWireUserSynchronizer',
-    'IRISUserInfo',
-    'PGWireUserInfo',
-    'UserSyncResult',
-    'UserSyncMode',
-    'UserRole'
+    "IRISUserManager",
+    "PGWireUserSynchronizer",
+    "IRISUserInfo",
+    "PGWireUserInfo",
+    "UserSyncResult",
+    "UserSyncMode",
+    "UserRole",
 ]

@@ -11,9 +11,9 @@ Feature: 018-add-dbapi-option
 """
 
 import logging
-import structlog
-from typing import Any, Dict
+from typing import Any
 
+import structlog
 from opentelemetry import trace
 from opentelemetry.instrumentation.asyncio import AsyncioInstrumentor
 
@@ -59,7 +59,7 @@ def setup_logging(service_name: str = "iris-pgwire", log_level: str = "INFO") ->
     )
 
 
-def add_otel_context(logger: Any, method_name: str, event_dict: Dict) -> Dict:
+def add_otel_context(logger: Any, method_name: str, event_dict: dict) -> dict:
     """
     Add OpenTelemetry trace context to log events.
 

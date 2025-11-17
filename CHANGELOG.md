@@ -8,7 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial PyPI release preparation
+- **P6 COPY Protocol** (Feature 023): PostgreSQL COPY FROM STDIN and COPY TO STDOUT for bulk data operations
+  - Bulk data import/export with CSV processing and streaming
+  - 1000-row batching for memory efficiency (<100MB for 1M rows)
+  - Transaction integration with automatic rollback on errors
+  - Query-based export support (`COPY (SELECT ...) TO STDOUT`)
+  - Performance: 600+ rows/second sustained throughput
+- **Package Quality Validation System** (Feature 025): Automated PyPI readiness validation
+  - Comprehensive validators for metadata, code quality, security, and documentation
+  - CLI tool: `python -m iris_pgwire.quality` with JSON/Markdown output
+  - Integration with pyroma, black, ruff, mypy, bandit, pip-audit, interrogate
+  - 95.4% docstring coverage (exceeds 80% target)
+  - PEP 621 dynamic versioning support
+- **PostgreSQL Parameter Placeholders** (Feature 018): Support for `$1, $2` parameter syntax with type inference
+  - Automatic type inference from CAST expressions (`$1::INTEGER`)
+  - Translation to IRIS `?` placeholders with proper type mapping
+  - asyncpg client compatibility improvements
+- **PostgreSQL Transaction Verbs** (Feature 022): BEGIN/COMMIT/ROLLBACK translation
+  - Translation of PostgreSQL `BEGIN` to IRIS `START TRANSACTION`
+  - Full transaction state management
+  - Constitutional compliance: <0.1ms translation overhead
+
+### Fixed
+- Dynamic versioning recognition in package metadata validation
+- Python bytecode cleanup (95+ artifacts removed from git)
+- Black code formatting (20 files reformatted to compliance)
+- asyncpg parameter type OID inference from CAST expressions
+- PostgreSQL compatibility documentation improvements
+
+### Security
+- Upgraded authlib to 1.6.5 (fixes 3 HIGH severity CVEs)
+- Upgraded cryptography to 46.0.3 (fixes 1 HIGH severity CVE)
+
+### Performance
+- IRIS executemany() optimization for 4-10× performance improvement in bulk operations
+- COPY protocol optimized for 600+ rows/second sustained throughput
+- Memory-efficient streaming for large result sets
 
 ## [0.1.0] - 2025-01-05
 

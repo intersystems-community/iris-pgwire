@@ -7,15 +7,16 @@ contract specifications and supporting constitutional performance requirements.
 Constitutional Compliance: All models enforce 5ms SLA and provide debug tracing.
 """
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
-import time
+from typing import Any
 
 
 class ConstructType(Enum):
     """Types of IRIS constructs that can be translated"""
+
     FUNCTION = "FUNCTION"
     SYSTEM_FUNCTION = "SYSTEM_FUNCTION"
     DATA_TYPE = "DATA_TYPE"
@@ -28,6 +29,7 @@ class ConstructType(Enum):
 
 class ErrorCode(Enum):
     """Error codes for translation failures"""
+
     PARSE_ERROR = "PARSE_ERROR"
     UNSUPPORTED_CONSTRUCT = "UNSUPPORTED_CONSTRUCT"
     VALIDATION_ERROR = "VALIDATION_ERROR"
@@ -38,16 +40,18 @@ class ErrorCode(Enum):
 
 class FallbackStrategy(Enum):
     """Strategies for handling unsupported constructs"""
-    ERROR = "ERROR"          # Fail immediately
-    WARNING = "WARNING"      # Log warning, attempt execution
-    IGNORE = "IGNORE"        # Silently skip unsupported parts
-    PRESERVE = "PRESERVE"    # Keep original syntax
-    HYBRID = "HYBRID"        # Intelligent fallback based on context
+
+    ERROR = "ERROR"  # Fail immediately
+    WARNING = "WARNING"  # Log warning, attempt execution
+    IGNORE = "IGNORE"  # Silently skip unsupported parts
+    PRESERVE = "PRESERVE"  # Keep original syntax
+    HYBRID = "HYBRID"  # Intelligent fallback based on context
 
 
 @dataclass
 class SourceLocation:
     """Location information for SQL construct in original query"""
+
     line: int
     column: int
     length: int
@@ -66,12 +70,13 @@ class SourceLocation:
 @dataclass
 class ConstructMapping:
     """Mapping information for a translated IRIS construct"""
+
     construct_type: ConstructType
     original_syntax: str
     translated_syntax: str
     confidence: float
     source_location: SourceLocation
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate construct mapping"""
@@ -86,6 +91,7 @@ class ConstructMapping:
 @dataclass
 class PerformanceStats:
     """Performance statistics for translation operations"""
+
     translation_time_ms: float
     cache_hit: bool
     constructs_detected: int
@@ -109,6 +115,7 @@ class PerformanceStats:
         if self.translation_time_ms > 5.0:
             # Log SLA violation for constitutional monitoring
             import logging
+
             logger = logging.getLogger(__name__)
             logger.warning(
                 f"Constitutional SLA violation: Translation took {self.translation_time_ms}ms, "
@@ -131,9 +138,10 @@ class PerformanceStats:
 @dataclass
 class CacheEntry:
     """Cache entry for translated SQL queries"""
+
     original_sql: str
     translated_sql: str
-    construct_mappings: List[ConstructMapping]
+    construct_mappings: list[ConstructMapping]
     performance_stats: PerformanceStats
     created_at: datetime = field(default_factory=datetime.utcnow)
     last_accessed: datetime = field(default_factory=datetime.utcnow)
@@ -169,11 +177,12 @@ class CacheEntry:
 @dataclass
 class ParsingStep:
     """Individual step in SQL parsing process"""
+
     step_name: str
     input_sql: str
     output_sql: str
     duration_ms: float
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate parsing step"""
@@ -184,12 +193,13 @@ class ParsingStep:
 @dataclass
 class MappingDecision:
     """Decision made during construct mapping"""
+
     construct: str
-    available_mappings: List[str]
+    available_mappings: list[str]
     chosen_mapping: str
     confidence: float
     reasoning: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate mapping decision"""
@@ -202,26 +212,34 @@ class MappingDecision:
 @dataclass
 class DebugTrace:
     """Debug trace information for translation process"""
-    parsing_steps: List[ParsingStep] = field(default_factory=list)
-    mapping_decisions: List[MappingDecision] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
 
-    def add_parsing_step(self, step_name: str, input_sql: str, output_sql: str,
-                        duration_ms: float, **metadata):
+    parsing_steps: list[ParsingStep] = field(default_factory=list)
+    mapping_decisions: list[MappingDecision] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def add_parsing_step(
+        self, step_name: str, input_sql: str, output_sql: str, duration_ms: float, **metadata
+    ):
         """Add a parsing step to the trace"""
         step = ParsingStep(
             step_name=step_name,
             input_sql=input_sql,
             output_sql=output_sql,
             duration_ms=duration_ms,
-            metadata=metadata
+            metadata=metadata,
         )
         self.parsing_steps.append(step)
 
-    def add_mapping_decision(self, construct: str, available_mappings: List[str],
-                           chosen_mapping: str, confidence: float, reasoning: str,
-                           **metadata):
+    def add_mapping_decision(
+        self,
+        construct: str,
+        available_mappings: list[str],
+        chosen_mapping: str,
+        confidence: float,
+        reasoning: str,
+        **metadata,
+    ):
         """Add a mapping decision to the trace"""
         decision = MappingDecision(
             construct=construct,
@@ -229,7 +247,7 @@ class DebugTrace:
             chosen_mapping=chosen_mapping,
             confidence=confidence,
             reasoning=reasoning,
-            metadata=metadata
+            metadata=metadata,
         )
         self.mapping_decisions.append(decision)
 
@@ -246,9 +264,10 @@ class DebugTrace:
 @dataclass
 class TranslationRequest:
     """Request for SQL translation"""
+
     original_sql: str
-    parameters: Optional[Dict[str, Any]] = None
-    session_context: Optional[Dict[str, Any]] = None
+    parameters: dict[str, Any] | None = None
+    session_context: dict[str, Any] | None = None
     debug_mode: bool = False
     cache_enabled: bool = True
     fallback_strategy: FallbackStrategy = FallbackStrategy.HYBRID
@@ -266,6 +285,7 @@ class TranslationRequest:
     def get_cache_key(self) -> str:
         """Generate cache key for this request"""
         import hashlib
+
         content = f"{self.original_sql}:{self.parameters}:{self.session_context}"
         return hashlib.sha256(content.encode()).hexdigest()
 
@@ -273,45 +293,54 @@ class TranslationRequest:
 @dataclass
 class ValidationIssue:
     """Validation issue found during translation validation"""
+
     severity: str
     message: str
-    location: Optional[SourceLocation] = None
-    recommendation: Optional[str] = None
+    location: SourceLocation | None = None
+    recommendation: str | None = None
+
 
 @dataclass
 class IssueSeverity:
     """Severity levels for validation issues"""
+
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
 
+
 @dataclass
 class ValidationResult:
     """Result of SQL translation validation"""
+
     success: bool
     confidence: float
-    issues: List[ValidationIssue] = field(default_factory=list)
-    performance_impact: Optional[str] = None
-    recommendations: List[str] = field(default_factory=list)
+    issues: list[ValidationIssue] = field(default_factory=list)
+    performance_impact: str | None = None
+    recommendations: list[str] = field(default_factory=list)
+
 
 @dataclass
 class QueryEquivalenceReport:
     """Report on query equivalence between original and translated SQL"""
+
     equivalent: bool
     confidence: float
-    differences: List[str] = field(default_factory=list)
-    analysis: Optional[str] = None
+    differences: list[str] = field(default_factory=list)
+    analysis: str | None = None
+
 
 @dataclass
 class TranslationResult:
     """Result of SQL translation"""
+
     translated_sql: str
-    construct_mappings: List[ConstructMapping]
+    construct_mappings: list[ConstructMapping]
     performance_stats: PerformanceStats
-    warnings: List[str] = field(default_factory=list)
-    debug_trace: Optional[DebugTrace] = None
-    validation_result: Optional[ValidationResult] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    debug_trace: DebugTrace | None = None
+    validation_result: ValidationResult | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Validate translation result"""
@@ -331,31 +360,32 @@ class TranslationResult:
     def is_successful(self) -> bool:
         """Check if translation was successful"""
         return (
-            self.performance_stats.constructs_translated ==
-            self.performance_stats.constructs_detected
+            self.performance_stats.constructs_translated
+            == self.performance_stats.constructs_detected
         )
 
     @property
-    def constitutional_compliance(self) -> Dict[str, Any]:
+    def constitutional_compliance(self) -> dict[str, Any]:
         """Get constitutional compliance status"""
         return {
             "sla_compliant": self.performance_stats.is_sla_compliant,
             "translation_time_ms": self.performance_stats.translation_time_ms,
             "success_rate": self.performance_stats.translation_success_rate,
             "has_warnings": self.has_warnings,
-            "constructs_processed": self.performance_stats.constructs_detected
+            "constructs_processed": self.performance_stats.constructs_detected,
         }
 
 
 @dataclass
 class FunctionMapping:
     """Mapping definition for IRIS function translation"""
+
     iris_function: str
     postgresql_function: str
-    parameter_mapping: Optional[Dict[str, str]] = None
+    parameter_mapping: dict[str, str] | None = None
     confidence: float = 1.0
     notes: str = ""
-    examples: List[Dict[str, str]] = field(default_factory=list)
+    examples: list[dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate function mapping"""
@@ -368,20 +398,19 @@ class FunctionMapping:
 
     def add_example(self, iris_example: str, postgresql_example: str, description: str = ""):
         """Add usage example"""
-        self.examples.append({
-            "iris": iris_example,
-            "postgresql": postgresql_example,
-            "description": description
-        })
+        self.examples.append(
+            {"iris": iris_example, "postgresql": postgresql_example, "description": description}
+        )
 
 
 @dataclass
 class TypeMapping:
     """Mapping definition for IRIS data type translation"""
+
     iris_type: str
     postgresql_type: str
-    conversion_function: Optional[str] = None
-    size_mapping: Optional[Dict[str, str]] = None
+    conversion_function: str | None = None
+    size_mapping: dict[str, str] | None = None
     confidence: float = 1.0
     notes: str = ""
 
@@ -398,11 +427,15 @@ class TypeMapping:
 class TranslationError(Exception):
     """Exception raised during SQL translation"""
 
-    def __init__(self, error_code: ErrorCode, message: str,
-                 original_sql: Optional[str] = None,
-                 construct_type: Optional[ConstructType] = None,
-                 source_location: Optional[SourceLocation] = None,
-                 fallback_strategy: Optional[FallbackStrategy] = None):
+    def __init__(
+        self,
+        error_code: ErrorCode,
+        message: str,
+        original_sql: str | None = None,
+        construct_type: ConstructType | None = None,
+        source_location: SourceLocation | None = None,
+        fallback_strategy: FallbackStrategy | None = None,
+    ):
         self.error_code = error_code
         self.message = message
         self.original_sql = original_sql
@@ -411,36 +444,44 @@ class TranslationError(Exception):
         self.fallback_strategy = fallback_strategy
         super().__init__(message)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert error to dictionary for API responses"""
         return {
             "error_code": self.error_code.value,
             "message": self.message,
             "original_sql": self.original_sql,
             "construct_type": self.construct_type.value if self.construct_type else None,
-            "source_location": {
-                "line": self.source_location.line,
-                "column": self.source_location.column,
-                "length": self.source_location.length,
-                "original_text": self.source_location.original_text
-            } if self.source_location else None,
-            "fallback_strategy": self.fallback_strategy.value if self.fallback_strategy else None
+            "source_location": (
+                {
+                    "line": self.source_location.line,
+                    "column": self.source_location.column,
+                    "length": self.source_location.length,
+                    "original_text": self.source_location.original_text,
+                }
+                if self.source_location
+                else None
+            ),
+            "fallback_strategy": self.fallback_strategy.value if self.fallback_strategy else None,
         }
 
 
 class UnsupportedConstructError(TranslationError):
     """Exception for unsupported IRIS constructs"""
 
-    def __init__(self, construct: str, construct_type: ConstructType,
-                 fallback_strategy: FallbackStrategy = FallbackStrategy.ERROR,
-                 source_location: Optional[SourceLocation] = None):
+    def __init__(
+        self,
+        construct: str,
+        construct_type: ConstructType,
+        fallback_strategy: FallbackStrategy = FallbackStrategy.ERROR,
+        source_location: SourceLocation | None = None,
+    ):
         message = f"Unsupported {construct_type.value} construct: {construct}"
         super().__init__(
             error_code=ErrorCode.UNSUPPORTED_CONSTRUCT,
             message=message,
             construct_type=construct_type,
             source_location=source_location,
-            fallback_strategy=fallback_strategy
+            fallback_strategy=fallback_strategy,
         )
         self.construct = construct
 
@@ -448,6 +489,7 @@ class UnsupportedConstructError(TranslationError):
 @dataclass
 class CacheStats:
     """Statistics for translation cache"""
+
     total_entries: int
     hit_rate: float
     average_lookup_ms: float
@@ -471,6 +513,7 @@ class CacheStats:
 @dataclass
 class InvalidationResult:
     """Result of cache invalidation operation"""
+
     invalidated_count: int
 
     def __post_init__(self):
@@ -508,9 +551,7 @@ def validate_sql_syntax(sql: str) -> bool:
         return False
 
     # Basic checks for SQL injection patterns
-    dangerous_patterns = [
-        ';--', '/*', '*/', 'xp_', 'sp_', 'exec', 'execute'
-    ]
+    dangerous_patterns = [";--", "/*", "*/", "xp_", "sp_", "exec", "execute"]
 
     lower_sql = sql.lower()
     for pattern in dangerous_patterns:
@@ -520,25 +561,39 @@ def validate_sql_syntax(sql: str) -> bool:
     return True
 
 
-def create_performance_stats(timer: PerformanceTimer, cache_hit: bool,
-                           detected: int, translated: int) -> PerformanceStats:
+def create_performance_stats(
+    timer: PerformanceTimer, cache_hit: bool, detected: int, translated: int
+) -> PerformanceStats:
     """Create performance stats from timer and counts"""
     return PerformanceStats(
         translation_time_ms=timer.elapsed_ms,
         cache_hit=cache_hit,
         constructs_detected=detected,
-        constructs_translated=translated
+        constructs_translated=translated,
     )
 
 
 # Export all models for easy importing
 __all__ = [
-    'ConstructType', 'ErrorCode', 'FallbackStrategy',
-    'SourceLocation', 'ConstructMapping', 'PerformanceStats',
-    'CacheEntry', 'ParsingStep', 'MappingDecision', 'DebugTrace',
-    'TranslationRequest', 'TranslationResult',
-    'FunctionMapping', 'TypeMapping',
-    'TranslationError', 'UnsupportedConstructError',
-    'CacheStats', 'InvalidationResult',
-    'PerformanceTimer', 'validate_sql_syntax', 'create_performance_stats'
+    "ConstructType",
+    "ErrorCode",
+    "FallbackStrategy",
+    "SourceLocation",
+    "ConstructMapping",
+    "PerformanceStats",
+    "CacheEntry",
+    "ParsingStep",
+    "MappingDecision",
+    "DebugTrace",
+    "TranslationRequest",
+    "TranslationResult",
+    "FunctionMapping",
+    "TypeMapping",
+    "TranslationError",
+    "UnsupportedConstructError",
+    "CacheStats",
+    "InvalidationResult",
+    "PerformanceTimer",
+    "validate_sql_syntax",
+    "create_performance_stats",
 ]

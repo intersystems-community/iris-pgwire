@@ -6,14 +6,16 @@ This test verifies real pgvector-style queries work end-to-end with PostgreSQL c
 """
 
 import asyncio
-import socket
-import time
-import threading
 import logging
+import socket
+import threading
+import time
+
 from iris_pgwire.server import PGWireServer
 
 # Disable excessive logging for cleaner output
-logging.getLogger('iris_pgwire').setLevel(logging.WARNING)
+logging.getLogger("iris_pgwire").setLevel(logging.WARNING)
+
 
 def wait_for_port(host, port, timeout=10):
     """Wait for a port to become available"""
@@ -31,18 +33,20 @@ def wait_for_port(host, port, timeout=10):
         time.sleep(0.1)
     return False
 
+
 def run_server(port, ready_event):
     """Run server for pgvector testing"""
+
     async def start_server():
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=port,
-            iris_host='localhost',
+            iris_host="localhost",
             iris_port=1972,
-            iris_username='_SYSTEM',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_scram=False
+            iris_username="_SYSTEM",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_scram=False,
         )
 
         print(f"🚀 Starting server for pgvector testing on 127.0.0.1:{port}...")
@@ -61,6 +65,7 @@ def run_server(port, ready_event):
 
     asyncio.run(start_server())
 
+
 def test_pgvector_similarity_queries():
     """Test real pgvector similarity queries"""
     PORT = 15510
@@ -74,7 +79,7 @@ def test_pgvector_similarity_queries():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -87,11 +92,7 @@ def test_pgvector_similarity_queries():
         print("📱 Testing pgvector similarity queries...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -137,6 +138,7 @@ def test_pgvector_similarity_queries():
         print(f"❌ pgvector similarity queries test failed: {e}")
         return False
 
+
 def test_vector_operators_translation():
     """Test that vector operators are properly translated in the protocol"""
     PORT = 15511
@@ -150,7 +152,7 @@ def test_vector_operators_translation():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -163,11 +165,7 @@ def test_vector_operators_translation():
         print("📱 Testing vector operator translation...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='test_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="test_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -177,7 +175,7 @@ def test_vector_operators_translation():
             # Note: These will be parsed as text but should trigger the translation logic
             ("SELECT 'cosine distance operator test' as operation_type", "cosine distance"),
             ("SELECT 'inner product operator test' as operation_type", "inner product"),
-            ("SELECT 'vector function test' as operation_type", "vector function")
+            ("SELECT 'vector function test' as operation_type", "vector function"),
         ]
 
         successful_queries = 0
@@ -204,6 +202,7 @@ def test_vector_operators_translation():
         print(f"❌ Vector operator translation test failed: {e}")
         return False
 
+
 def test_vector_ml_workload_simulation():
     """Test AI/ML workload patterns"""
     PORT = 15512
@@ -217,7 +216,7 @@ def test_vector_ml_workload_simulation():
     server_thread.daemon = True
     server_thread.start()
 
-    if not ready_event.wait(timeout=10) or not wait_for_port('127.0.0.1', PORT, timeout=5):
+    if not ready_event.wait(timeout=10) or not wait_for_port("127.0.0.1", PORT, timeout=5):
         print("❌ Server failed to start")
         return False
 
@@ -230,11 +229,7 @@ def test_vector_ml_workload_simulation():
         print("📱 Testing AI/ML workload patterns...")
 
         conn = psycopg2.connect(
-            host='127.0.0.1',
-            port=PORT,
-            database='USER',
-            user='ai_ml_user',
-            connect_timeout=5
+            host="127.0.0.1", port=PORT, database="USER", user="ai_ml_user", connect_timeout=5
         )
 
         cur = conn.cursor()
@@ -243,15 +238,12 @@ def test_vector_ml_workload_simulation():
         ml_queries = [
             # Document retrieval with embeddings
             ("SELECT 'Document embedding search' as workload_type", "document search"),
-
             # Recommendation system query
             ("SELECT 'Recommendation system query' as workload_type", "recommendations"),
-
             # Similarity clustering
             ("SELECT 'Vector clustering operation' as workload_type", "clustering"),
-
             # Multi-dimensional analysis
-            ("SELECT 'Multi-dimensional vector analysis' as workload_type", "analysis")
+            ("SELECT 'Multi-dimensional vector analysis' as workload_type", "analysis"),
         ]
 
         successful_ml_queries = 0
@@ -271,12 +263,15 @@ def test_vector_ml_workload_simulation():
             print("🎉 AI/ML workload simulation test passed!")
             return True
         else:
-            print(f"⚠️  Partial ML workload support: {successful_ml_queries}/{len(ml_queries)} queries passed")
+            print(
+                f"⚠️  Partial ML workload support: {successful_ml_queries}/{len(ml_queries)} queries passed"
+            )
             return True
 
     except Exception as e:
         print(f"❌ AI/ML workload simulation test failed: {e}")
         return False
+
 
 def test_vector_compatibility_assessment():
     """Test pgvector compatibility assessment"""
@@ -287,11 +282,11 @@ def test_vector_compatibility_assessment():
         from iris_pgwire.iris_executor import IRISExecutor
 
         iris_config = {
-            'host': 'localhost',
-            'port': 1972,
-            'username': '_SYSTEM',
-            'password': 'SYS',
-            'namespace': 'USER'
+            "host": "localhost",
+            "port": 1972,
+            "username": "_SYSTEM",
+            "password": "SYS",
+            "namespace": "USER",
         }
 
         executor = IRISExecutor(iris_config)
@@ -304,9 +299,9 @@ def test_vector_compatibility_assessment():
 
         # Show key mappings
         key_mappings = [
-            ('cosine_distance', vector_functions.get('cosine_distance')),
-            ('vector_dims', vector_functions.get('vector_dims')),
-            ('to_vector', vector_functions.get('to_vector'))
+            ("cosine_distance", vector_functions.get("cosine_distance")),
+            ("vector_dims", vector_functions.get("vector_dims")),
+            ("to_vector", vector_functions.get("to_vector")),
         ]
 
         for pg_func, iris_func in key_mappings:
@@ -321,7 +316,7 @@ def test_vector_compatibility_assessment():
         test_patterns = [
             "embedding <-> '[0.1,0.2]'",
             "vector_col <#> '[1,2,3]'",
-            "vector_dims(embedding)"
+            "vector_dims(embedding)",
         ]
 
         for pattern in test_patterns:
@@ -341,6 +336,7 @@ def test_vector_compatibility_assessment():
     except Exception as e:
         print(f"❌ pgvector compatibility assessment failed: {e}")
         return False
+
 
 def main():
     """Run comprehensive P5 pgvector real client tests"""
@@ -375,11 +371,11 @@ def main():
         "pgvector Similarity Queries",
         "Vector Operator Translation",
         "AI/ML Workload Simulation",
-        "pgvector Compatibility Assessment"
+        "pgvector Compatibility Assessment",
     ]
 
     passed = 0
-    for i, (name, result) in enumerate(zip(test_names, results)):
+    for i, (name, result) in enumerate(zip(test_names, results, strict=False)):
         status = "✅ PASSED" if result else "❌ FAILED"
         print(f"{i+1}. {name}: {status}")
         if result:
@@ -400,6 +396,7 @@ def main():
     else:
         print(f"\n💥 {len(results) - passed} P5 pgvector tests failed")
         return False
+
 
 if __name__ == "__main__":
     success = main()

@@ -17,7 +17,6 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
@@ -72,8 +71,8 @@ class IRISConnectionPool:
 
         # Health status
         self._is_healthy = True
-        self._last_health_check: Optional[datetime] = None
-        self._last_error: Optional[str] = None
+        self._last_health_check: datetime | None = None
+        self._last_error: str | None = None
 
         logger.info(
             "IRIS connection pool initialized",
@@ -112,7 +111,7 @@ class IRISConnectionPool:
                 # Check if connection needs recycling
                 if conn_wrapper.should_recycle():
                     logger.info(
-                        f"Connection recycling triggered",
+                        "Connection recycling triggered",
                         extra={
                             "connection_id": conn_wrapper.connection_id,
                             "age_seconds": conn_wrapper.age_seconds(),
@@ -151,7 +150,7 @@ class IRISConnectionPool:
                 self._record_acquisition(start_time)
                 return conn_wrapper
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(
                 f"Connection acquisition timeout after {self.config.pool_timeout}s",
                 extra={
@@ -186,7 +185,7 @@ class IRISConnectionPool:
 
         if not is_healthy:
             logger.warning(
-                f"Unhealthy connection removed from pool",
+                "Unhealthy connection removed from pool",
                 extra={"connection_id": conn_wrapper.connection_id},
             )
             await self._remove_connection(conn_wrapper)
@@ -300,7 +299,7 @@ class IRISConnectionPool:
             self._total_created += 1
 
             logger.info(
-                f"Created new connection",
+                "Created new connection",
                 extra={
                     "connection_id": conn_wrapper.connection_id,
                     "total_connections": len(self._connections),
@@ -327,7 +326,7 @@ class IRISConnectionPool:
         self._total_recycled += 1
 
         logger.info(
-            f"Connection recycled",
+            "Connection recycled",
             extra={
                 "connection_id": conn_wrapper.connection_id,
                 "age_seconds": conn_wrapper.age_seconds(),
@@ -404,7 +403,7 @@ class IRISConnectionPool:
         # Log if acquisition time exceeds 1ms SLA
         if elapsed_ms > 1.0:
             logger.warning(
-                f"Slow connection acquisition",
+                "Slow connection acquisition",
                 extra={"acquisition_ms": round(elapsed_ms, 3)},
             )
 

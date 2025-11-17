@@ -7,16 +7,16 @@ Handles TOP clauses, special operators, and IRIS-specific syntax patterns.
 Constitutional Compliance: Comprehensive syntax translation preserving query semantics.
 """
 
-from typing import Dict, List, Optional, Tuple, Set, Pattern
-from ..models import ConstructMapping, ConstructType, SourceLocation
 import re
+
+from ..models import ConstructMapping, ConstructType, SourceLocation
 
 
 class IRISSQLConstructRegistry:
     """Registry for IRIS SQL construct to PostgreSQL syntax mappings"""
 
     def __init__(self):
-        self._construct_patterns: Dict[str, Dict] = {}
+        self._construct_patterns: dict[str, dict] = {}
         self._initialize_constructs()
 
     def _initialize_constructs(self):
@@ -44,21 +44,21 @@ class IRISSQLConstructRegistry:
         # IRIS LIMIT with OFFSET syntax variations
         self.add_construct(
             name="IRIS_LIMIT_OFFSET",
-            pattern=r'\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\b',
-            replacement=r'LIMIT \1 OFFSET \2',
+            pattern=r"\bLIMIT\s+(\d+)\s+OFFSET\s+(\d+)\b",
+            replacement=r"LIMIT \1 OFFSET \2",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Ensure PostgreSQL-compatible LIMIT OFFSET syntax"
+            notes="Ensure PostgreSQL-compatible LIMIT OFFSET syntax",
         )
 
         # IRIS %ROWNUM pseudo-column
         self.add_construct(
             name="ROWNUM_PSEUDO_COLUMN",
-            pattern=r'\b%ROWNUM\b',
-            replacement=r'ROW_NUMBER() OVER (ORDER BY (SELECT NULL))',
+            pattern=r"\b%ROWNUM\b",
+            replacement=r"ROW_NUMBER() OVER (ORDER BY (SELECT NULL))",
             confidence=0.8,
             construct_type=ConstructType.SYNTAX,
-            notes="Convert %ROWNUM to ROW_NUMBER() window function"
+            notes="Convert %ROWNUM to ROW_NUMBER() window function",
         )
 
     def _add_join_constructs(self):
@@ -67,22 +67,22 @@ class IRISSQLConstructRegistry:
         # IRIS (+) outer join syntax (Oracle-style)
         self.add_construct(
             name="ORACLE_STYLE_OUTER_JOIN",
-            pattern=r'(\w+)\.\w+\s*\(\+\)\s*=\s*(\w+)\.\w+',
+            pattern=r"(\w+)\.\w+\s*\(\+\)\s*=\s*(\w+)\.\w+",
             replacement=None,  # Complex transformation needed
             post_process=self._convert_oracle_outer_join,
             confidence=0.7,
             construct_type=ConstructType.SYNTAX,
-            notes="Convert Oracle-style (+) outer join to ANSI JOIN syntax"
+            notes="Convert Oracle-style (+) outer join to ANSI JOIN syntax",
         )
 
         # IRIS table hints
         self.add_construct(
             name="TABLE_HINTS",
-            pattern=r'\bFROM\s+(\w+)\s+WITH\s*\([^)]+\)',
-            replacement=r'FROM \1',
+            pattern=r"\bFROM\s+(\w+)\s+WITH\s*\([^)]+\)",
+            replacement=r"FROM \1",
             confidence=0.9,
             construct_type=ConstructType.SYNTAX,
-            notes="Remove IRIS table hints - not supported in PostgreSQL"
+            notes="Remove IRIS table hints - not supported in PostgreSQL",
         )
 
     def _add_case_constructs(self):
@@ -91,22 +91,22 @@ class IRISSQLConstructRegistry:
         # IRIS DECODE function (Oracle-style)
         self.add_construct(
             name="DECODE_FUNCTION",
-            pattern=r'\bDECODE\s*\(',
-            replacement=r'CASE ',
+            pattern=r"\bDECODE\s*\(",
+            replacement=r"CASE ",
             post_process=self._convert_decode_to_case,
             confidence=0.9,
             construct_type=ConstructType.FUNCTION,
-            notes="Convert DECODE function to CASE statement"
+            notes="Convert DECODE function to CASE statement",
         )
 
         # IRIS IIF function (SQL Server-style)
         self.add_construct(
             name="IIF_FUNCTION",
-            pattern=r'\bIIF\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)',
-            replacement=r'CASE WHEN \1 THEN \2 ELSE \3 END',
+            pattern=r"\bIIF\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)",
+            replacement=r"CASE WHEN \1 THEN \2 ELSE \3 END",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Convert IIF function to CASE statement"
+            notes="Convert IIF function to CASE statement",
         )
 
     def _add_conditional_constructs(self):
@@ -115,31 +115,31 @@ class IRISSQLConstructRegistry:
         # IRIS ISNULL function
         self.add_construct(
             name="ISNULL_FUNCTION",
-            pattern=r'\bISNULL\s*\(\s*([^,]+),\s*([^)]+)\)',
-            replacement=r'COALESCE(\1, \2)',
+            pattern=r"\bISNULL\s*\(\s*([^,]+),\s*([^)]+)\)",
+            replacement=r"COALESCE(\1, \2)",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Convert ISNULL to COALESCE"
+            notes="Convert ISNULL to COALESCE",
         )
 
         # IRIS IFNULL function
         self.add_construct(
             name="IFNULL_FUNCTION",
-            pattern=r'\bIFNULL\s*\(\s*([^,]+),\s*([^)]+)\)',
-            replacement=r'COALESCE(\1, \2)',
+            pattern=r"\bIFNULL\s*\(\s*([^,]+),\s*([^)]+)\)",
+            replacement=r"COALESCE(\1, \2)",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Convert IFNULL to COALESCE"
+            notes="Convert IFNULL to COALESCE",
         )
 
         # IRIS NVL function (Oracle-style)
         self.add_construct(
             name="NVL_FUNCTION",
-            pattern=r'\bNVL\s*\(\s*([^,]+),\s*([^)]+)\)',
-            replacement=r'COALESCE(\1, \2)',
+            pattern=r"\bNVL\s*\(\s*([^,]+),\s*([^)]+)\)",
+            replacement=r"COALESCE(\1, \2)",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Convert NVL to COALESCE"
+            notes="Convert NVL to COALESCE",
         )
 
     def _add_subquery_constructs(self):
@@ -148,21 +148,21 @@ class IRISSQLConstructRegistry:
         # IRIS EXISTS with correlated subqueries
         self.add_construct(
             name="CORRELATED_EXISTS",
-            pattern=r'\bEXISTS\s*\(\s*SELECT\s+1\s+FROM\s+',
-            replacement=r'EXISTS (SELECT 1 FROM ',
+            pattern=r"\bEXISTS\s*\(\s*SELECT\s+1\s+FROM\s+",
+            replacement=r"EXISTS (SELECT 1 FROM ",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Ensure standard EXISTS syntax"
+            notes="Ensure standard EXISTS syntax",
         )
 
         # IRIS ALL/ANY/SOME operators
         self.add_construct(
             name="QUANTIFIED_COMPARISONS",
-            pattern=r'([<>=!]+)\s+(ALL|ANY|SOME)\s*\(',
-            replacement=r'\1 \2 (',
+            pattern=r"([<>=!]+)\s+(ALL|ANY|SOME)\s*\(",
+            replacement=r"\1 \2 (",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Preserve quantified comparison operators"
+            notes="Preserve quantified comparison operators",
         )
 
     def _add_set_operations(self):
@@ -171,21 +171,21 @@ class IRISSQLConstructRegistry:
         # IRIS MINUS operator (Oracle-style)
         self.add_construct(
             name="MINUS_OPERATOR",
-            pattern=r'\bMINUS\b',
-            replacement=r'EXCEPT',
+            pattern=r"\bMINUS\b",
+            replacement=r"EXCEPT",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Convert MINUS to EXCEPT (PostgreSQL standard)"
+            notes="Convert MINUS to EXCEPT (PostgreSQL standard)",
         )
 
         # IRIS INTERSECT operator
         self.add_construct(
             name="INTERSECT_OPERATOR",
-            pattern=r'\bINTERSECT\b',
-            replacement=r'INTERSECT',
+            pattern=r"\bINTERSECT\b",
+            replacement=r"INTERSECT",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Preserve INTERSECT operator"
+            notes="Preserve INTERSECT operator",
         )
 
     def _add_window_functions(self):
@@ -194,21 +194,21 @@ class IRISSQLConstructRegistry:
         # IRIS RANK() variations
         self.add_construct(
             name="RANK_FUNCTION",
-            pattern=r'\bRANK\s*\(\s*\)\s+OVER\s*\(',
-            replacement=r'RANK() OVER (',
+            pattern=r"\bRANK\s*\(\s*\)\s+OVER\s*\(",
+            replacement=r"RANK() OVER (",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Ensure standard RANK syntax"
+            notes="Ensure standard RANK syntax",
         )
 
         # IRIS ROW_NUMBER() variations
         self.add_construct(
             name="ROW_NUMBER_FUNCTION",
-            pattern=r'\bROW_NUMBER\s*\(\s*\)\s+OVER\s*\(',
-            replacement=r'ROW_NUMBER() OVER (',
+            pattern=r"\bROW_NUMBER\s*\(\s*\)\s+OVER\s*\(",
+            replacement=r"ROW_NUMBER() OVER (",
             confidence=1.0,
             construct_type=ConstructType.FUNCTION,
-            notes="Ensure standard ROW_NUMBER syntax"
+            notes="Ensure standard ROW_NUMBER syntax",
         )
 
     def _add_common_table_expressions(self):
@@ -217,26 +217,33 @@ class IRISSQLConstructRegistry:
         # IRIS WITH clause variations
         self.add_construct(
             name="CTE_WITH_CLAUSE",
-            pattern=r'\bWITH\s+(\w+)\s*\(\s*([^)]+)\s*\)\s+AS\s*\(',
-            replacement=r'WITH \1(\2) AS (',
+            pattern=r"\bWITH\s+(\w+)\s*\(\s*([^)]+)\s*\)\s+AS\s*\(",
+            replacement=r"WITH \1(\2) AS (",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Ensure standard CTE syntax"
+            notes="Ensure standard CTE syntax",
         )
 
         # IRIS RECURSIVE CTE
         self.add_construct(
             name="RECURSIVE_CTE",
-            pattern=r'\bWITH\s+RECURSIVE\s+',
-            replacement=r'WITH RECURSIVE ',
+            pattern=r"\bWITH\s+RECURSIVE\s+",
+            replacement=r"WITH RECURSIVE ",
             confidence=1.0,
             construct_type=ConstructType.SYNTAX,
-            notes="Preserve RECURSIVE CTE syntax"
+            notes="Preserve RECURSIVE CTE syntax",
         )
 
-    def add_construct(self, name: str, pattern: str, replacement: Optional[str],
-                     confidence: float = 1.0, construct_type: ConstructType = ConstructType.SYNTAX,
-                     notes: str = "", post_process=None):
+    def add_construct(
+        self,
+        name: str,
+        pattern: str,
+        replacement: str | None,
+        confidence: float = 1.0,
+        construct_type: ConstructType = ConstructType.SYNTAX,
+        notes: str = "",
+        post_process=None,
+    ):
         """Add a SQL construct mapping"""
         self._construct_patterns[name] = {
             "pattern": re.compile(pattern, re.IGNORECASE),
@@ -244,10 +251,10 @@ class IRISSQLConstructRegistry:
             "confidence": confidence,
             "construct_type": construct_type,
             "notes": notes,
-            "post_process": post_process
+            "post_process": post_process,
         }
 
-    def translate_constructs(self, sql: str) -> Tuple[str, List[ConstructMapping]]:
+    def translate_constructs(self, sql: str) -> tuple[str, list[ConstructMapping]]:
         """
         Translate IRIS SQL constructs to PostgreSQL equivalents
         Returns (translated_sql, list_of_mappings)
@@ -280,10 +287,10 @@ class IRISSQLConstructRegistry:
 
                 # Create mapping record
                 source_location = SourceLocation(
-                    line=translated_sql[:start].count('\n') + 1,
-                    column=len(translated_sql[:start].split('\n')[-1]) + 1,
+                    line=translated_sql[:start].count("\n") + 1,
+                    column=len(translated_sql[:start].split("\n")[-1]) + 1,
                     length=len(original_text),
-                    original_text=original_text
+                    original_text=original_text,
                 )
 
                 mapping = ConstructMapping(
@@ -292,12 +299,11 @@ class IRISSQLConstructRegistry:
                     translated_syntax=new_text,
                     confidence=construct_info["confidence"],
                     source_location=source_location,
-                    metadata={"construct_name": name, "notes": construct_info["notes"]}
+                    metadata={"construct_name": name, "notes": construct_info["notes"]},
                 )
                 mappings.append(mapping)
 
         return translated_sql, mappings
-
 
     def _convert_oracle_outer_join(self, match, full_sql: str) -> str:
         """Convert Oracle-style (+) outer join to ANSI syntax"""
@@ -315,23 +321,22 @@ class IRISSQLConstructRegistry:
         """Check if construct mapping exists"""
         return construct_name in self._construct_patterns
 
-    def get_construct_info(self, construct_name: str) -> Optional[Dict]:
+    def get_construct_info(self, construct_name: str) -> dict | None:
         """Get information about a construct mapping"""
         return self._construct_patterns.get(construct_name)
 
-    def search_constructs(self, pattern: str) -> List[str]:
+    def search_constructs(self, pattern: str) -> list[str]:
         """Search for construct mappings by name or notes"""
         pattern_lower = pattern.lower()
         matches = []
 
         for name, info in self._construct_patterns.items():
-            if (pattern_lower in name.lower() or
-                pattern_lower in info["notes"].lower()):
+            if pattern_lower in name.lower() or pattern_lower in info["notes"].lower():
                 matches.append(name)
 
         return matches
 
-    def get_construct_categories(self) -> Dict[str, List[str]]:
+    def get_construct_categories(self) -> dict[str, list[str]]:
         """Get constructs organized by category"""
         categories = {
             "pagination": [],
@@ -342,7 +347,7 @@ class IRISSQLConstructRegistry:
             "set_operations": [],
             "window_functions": [],
             "cte": [],
-            "other": []
+            "other": [],
         }
 
         for name in self._construct_patterns.keys():
@@ -369,34 +374,32 @@ class IRISSQLConstructRegistry:
 
         return categories
 
-    def get_all_construct_names(self) -> Set[str]:
+    def get_all_construct_names(self) -> set[str]:
         """Get all registered construct names"""
         return set(self._construct_patterns.keys())
 
-    def validate_construct_pattern(self, pattern: str) -> Dict[str, any]:
+    def validate_construct_pattern(self, pattern: str) -> dict[str, any]:
         """Validate a regex pattern for construct matching"""
         try:
             compiled_pattern = re.compile(pattern, re.IGNORECASE)
-            return {
-                "valid": True,
-                "compiled_pattern": compiled_pattern,
-                "warnings": []
-            }
+            return {"valid": True, "compiled_pattern": compiled_pattern, "warnings": []}
         except re.error as e:
-            return {
-                "valid": False,
-                "error": str(e),
-                "warnings": ["Invalid regex pattern"]
-            }
+            return {"valid": False, "error": str(e), "warnings": ["Invalid regex pattern"]}
 
-    def get_mapping_stats(self) -> Dict[str, any]:
+    def get_mapping_stats(self) -> dict[str, any]:
         """Get statistics about construct mappings"""
         total_constructs = len(self._construct_patterns)
 
         # Count by confidence levels
-        high_confidence = len([c for c in self._construct_patterns.values() if c["confidence"] >= 0.9])
-        medium_confidence = len([c for c in self._construct_patterns.values() if 0.7 <= c["confidence"] < 0.9])
-        low_confidence = len([c for c in self._construct_patterns.values() if c["confidence"] < 0.7])
+        high_confidence = len(
+            [c for c in self._construct_patterns.values() if c["confidence"] >= 0.9]
+        )
+        medium_confidence = len(
+            [c for c in self._construct_patterns.values() if 0.7 <= c["confidence"] < 0.9]
+        )
+        low_confidence = len(
+            [c for c in self._construct_patterns.values() if c["confidence"] < 0.7]
+        )
 
         # Count by construct type
         type_counts = {}
@@ -413,11 +416,12 @@ class IRISSQLConstructRegistry:
             "confidence_distribution": {
                 "high": high_confidence,
                 "medium": medium_confidence,
-                "low": low_confidence
+                "low": low_confidence,
             },
             "type_distribution": type_counts,
             "category_counts": category_counts,
-            "average_confidence": sum(c["confidence"] for c in self._construct_patterns.values()) / total_constructs
+            "average_confidence": sum(c["confidence"] for c in self._construct_patterns.values())
+            / total_constructs,
         }
 
 
@@ -430,7 +434,7 @@ def get_construct_registry() -> IRISSQLConstructRegistry:
     return _construct_registry
 
 
-def translate_sql_constructs(sql: str) -> Tuple[str, List[ConstructMapping]]:
+def translate_sql_constructs(sql: str) -> tuple[str, list[ConstructMapping]]:
     """Translate IRIS SQL constructs to PostgreSQL (convenience function)"""
     return _construct_registry.translate_constructs(sql)
 
@@ -442,8 +446,8 @@ def has_sql_construct(construct_name: str) -> bool:
 
 # Export main components
 __all__ = [
-    'IRISSQLConstructRegistry',
-    'get_construct_registry',
-    'translate_sql_constructs',
-    'has_sql_construct'
+    "IRISSQLConstructRegistry",
+    "get_construct_registry",
+    "translate_sql_constructs",
+    "has_sql_construct",
 ]

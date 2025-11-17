@@ -5,50 +5,49 @@ Handles translation of IRIS-specific SQL syntax, functions, and data types
 to PostgreSQL equivalents for wire protocol compatibility.
 """
 
-import re
 import logging
+import re
 import time
-from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
+from typing import Any
 
+from .debug_tracer import TraceLevel, get_tracer
 from .performance_monitor import get_monitor
-from .debug_tracer import get_tracer, TraceLevel
 
 logger = logging.getLogger(__name__)
 
+
 class IRISConstructType(Enum):
     """Types of IRIS constructs we handle"""
+
     SYSTEM_FUNCTION = "system_function"
     SQL_EXTENSION = "sql_extension"
     DATA_TYPE = "data_type"
     IRIS_FUNCTION = "iris_function"
     JSON_FUNCTION = "json_function"
 
+
 class IRISSystemFunctionTranslator:
     """Translates IRIS %SYSTEM.* functions to PostgreSQL equivalents"""
 
     SYSTEM_FUNCTION_MAP = {
         # Version and system info
-        '%SYSTEM.Version.%GetNumber': 'version()',
-        '%SYSTEM.Version.GetNumber': 'version()',
-
+        "%SYSTEM.Version.%GetNumber": "version()",
+        "%SYSTEM.Version.GetNumber": "version()",
         # Security and user functions
-        '%SYSTEM.Security.%GetUser': 'current_user',
-        '%SYSTEM.Security.GetUser': 'current_user',
-
+        "%SYSTEM.Security.%GetUser": "current_user",
+        "%SYSTEM.Security.GetUser": "current_user",
         # SQL system functions
-        '%SYSTEM.SQL.%GetStatement': 'current_query()',
-        '%SYSTEM.SQL.GetStatement': 'current_query()',
-
+        "%SYSTEM.SQL.%GetStatement": "current_query()",
+        "%SYSTEM.SQL.GetStatement": "current_query()",
         # ML system functions (custom implementations)
-        '%SYSTEM.ML.%ModelExists': 'iris_ml_model_exists',
-        '%SYSTEM.ML.ModelExists': 'iris_ml_model_exists',
-        '%SYSTEM.ML.%GetModelList': 'iris_ml_get_model_list',
-        '%SYSTEM.ML.GetModelList': 'iris_ml_get_model_list',
-
+        "%SYSTEM.ML.%ModelExists": "iris_ml_model_exists",
+        "%SYSTEM.ML.ModelExists": "iris_ml_model_exists",
+        "%SYSTEM.ML.%GetModelList": "iris_ml_get_model_list",
+        "%SYSTEM.ML.GetModelList": "iris_ml_get_model_list",
         # Utility functions
-        '%SYSTEM.SQL.%PARALLEL': 'iris_sql_parallel_info',
-        '%SYSTEM.SQL.PARALLEL': 'iris_sql_parallel_info',
+        "%SYSTEM.SQL.%PARALLEL": "iris_sql_parallel_info",
+        "%SYSTEM.SQL.PARALLEL": "iris_sql_parallel_info",
     }
 
     def __init__(self):
@@ -58,7 +57,7 @@ class IRISSystemFunctionTranslator:
             # Create pattern that matches function calls with optional parameters
             # Use (?<!\w) instead of \b to avoid issues with % character
             escaped_func = re.escape(iris_func)
-            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf"(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)"
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -69,50 +68,52 @@ class IRISSystemFunctionTranslator:
             pattern = self.patterns[iris_func]
 
             def replace_func(match):
-                params = match.group(1).strip() if match.group(1) else ''
+                params = match.group(1).strip() if match.group(1) else ""
                 if params:
                     return f"{pg_func}({params})"
                 else:
-                    return pg_func if pg_func.endswith('()') else f"{pg_func}()"
+                    return pg_func if pg_func.endswith("()") else f"{pg_func}()"
 
             result = pattern.sub(replace_func, result)
 
         return result
+
 
 class IRISSQLExtensionTranslator:
     """Translates IRIS SQL extensions to PostgreSQL equivalents"""
 
     def __init__(self):
         # TOP clause patterns
-        self.top_pattern = re.compile(r'\bSELECT\s+TOP\s+(\d+)(?:\s+PERCENT)?\s+', re.IGNORECASE)
-        self.top_percent_pattern = re.compile(r'\bSELECT\s+TOP\s+(\d+)\s+PERCENT\s+', re.IGNORECASE)
+        self.top_pattern = re.compile(r"\bSELECT\s+TOP\s+(\d+)(?:\s+PERCENT)?\s+", re.IGNORECASE)
+        self.top_percent_pattern = re.compile(r"\bSELECT\s+TOP\s+(\d+)\s+PERCENT\s+", re.IGNORECASE)
 
         # FOR UPDATE extensions
-        self.for_update_pattern = re.compile(r'\bFOR\s+UPDATE\s+NOWAIT\b', re.IGNORECASE)
+        self.for_update_pattern = re.compile(r"\bFOR\s+UPDATE\s+NOWAIT\b", re.IGNORECASE)
 
         # IRIS-specific JOIN syntax
-        self.full_outer_join_pattern = re.compile(r'%FULL\s+OUTER\s+JOIN', re.IGNORECASE)
+        self.full_outer_join_pattern = re.compile(r"%FULL\s+OUTER\s+JOIN", re.IGNORECASE)
 
     def translate_top_clause(self, sql: str) -> str:
         """Translate TOP clause to LIMIT"""
+
         # Handle TOP n PERCENT
         def replace_top_percent(match):
             percent = int(match.group(1))
             # For PERCENT, we need to calculate based on total rows
             # This is complex, so we'll use a subquery approach
-            return f"SELECT * FROM (SELECT "
+            return "SELECT * FROM (SELECT "
 
         # Handle regular TOP n
         def replace_top(match):
             limit = match.group(1)
-            return f"SELECT "
+            return "SELECT "
 
         # First handle PERCENT case
         if self.top_percent_pattern.search(sql):
             logger.warning("TOP n PERCENT not fully supported, converting to approximate LIMIT")
             sql = self.top_percent_pattern.sub(replace_top_percent, sql)
             # Add LIMIT at the end - this is approximate
-            percent_pattern = r'TOP\s+(\d+)\s+PERCENT'
+            percent_pattern = r"TOP\s+(\d+)\s+PERCENT"
             match = re.search(percent_pattern, sql, re.IGNORECASE)
             if match:
                 sql += f" LIMIT {int(match.group(1))}"
@@ -122,7 +123,7 @@ class IRISSQLExtensionTranslator:
             limit_value = self.top_pattern.search(sql).group(1)
             sql = self.top_pattern.sub("SELECT ", sql)
             # Add LIMIT at the end
-            if not re.search(r'\bLIMIT\s+\d+', sql, re.IGNORECASE):
+            if not re.search(r"\bLIMIT\s+\d+", sql, re.IGNORECASE):
                 sql += f" LIMIT {limit_value}"
 
         return sql
@@ -130,7 +131,7 @@ class IRISSQLExtensionTranslator:
     def translate_joins(self, sql: str) -> str:
         """Translate IRIS-specific JOIN syntax"""
         # Convert %FULL OUTER JOIN to standard FULL OUTER JOIN
-        sql = self.full_outer_join_pattern.sub('FULL OUTER JOIN', sql)
+        sql = self.full_outer_join_pattern.sub("FULL OUTER JOIN", sql)
         return sql
 
     def translate_for_update(self, sql: str) -> str:
@@ -145,33 +146,31 @@ class IRISSQLExtensionTranslator:
         sql = self.translate_for_update(sql)
         return sql
 
+
 class IRISFunctionTranslator:
     """Translates IRIS-specific functions to PostgreSQL equivalents"""
 
     FUNCTION_MAP = {
         # String functions
-        '%SQLUPPER': 'UPPER',
-        '%SQLLOWER': 'LOWER',
-        'SQLUPPER': 'UPPER',
-        'SQLLOWER': 'LOWER',
-
+        "%SQLUPPER": "UPPER",
+        "%SQLLOWER": "LOWER",
+        "SQLUPPER": "UPPER",
+        "SQLLOWER": "LOWER",
         # Date/time functions
-        'DATEDIFF_MICROSECONDS': 'iris_datediff_microseconds',
-        'DATEPART_TIMEZONE': 'iris_datepart_timezone',
-        '%HOROLOG': 'iris_horolog',
-        'HOROLOG': 'iris_horolog',
-
+        "DATEDIFF_MICROSECONDS": "iris_datediff_microseconds",
+        "DATEPART_TIMEZONE": "iris_datepart_timezone",
+        "%HOROLOG": "iris_horolog",
+        "HOROLOG": "iris_horolog",
         # Conversion functions
-        '%EXTERNAL': 'iris_external_format',
-        '%INTERNAL': 'iris_internal_format',
-        'EXTERNAL': 'iris_external_format',
-        'INTERNAL': 'iris_internal_format',
-
+        "%EXTERNAL": "iris_external_format",
+        "%INTERNAL": "iris_internal_format",
+        "EXTERNAL": "iris_external_format",
+        "INTERNAL": "iris_internal_format",
         # Pattern matching
-        '%PATTERN.MATCH': 'iris_pattern_match',
-        'PATTERN.MATCH': 'iris_pattern_match',
-        '%EXACT': 'iris_exact_match',
-        'EXACT': 'iris_exact_match',
+        "%PATTERN.MATCH": "iris_pattern_match",
+        "PATTERN.MATCH": "iris_pattern_match",
+        "%EXACT": "iris_exact_match",
+        "EXACT": "iris_exact_match",
     }
 
     def __init__(self):
@@ -179,7 +178,7 @@ class IRISFunctionTranslator:
         self.patterns = {}
         for iris_func in self.FUNCTION_MAP.keys():
             escaped_func = re.escape(iris_func)
-            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf"(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)"
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -197,24 +196,24 @@ class IRISFunctionTranslator:
 
         return result
 
+
 class IRISDataTypeTranslator:
     """Translates IRIS data types to PostgreSQL equivalents"""
 
     TYPE_MAP = {
         # IRIS-specific types
-        'SERIAL': 'SERIAL',  # PostgreSQL SERIAL behavior differs but close enough
-        'ROWVERSION': 'BIGINT',  # Will need version tracking metadata
-        '%List': 'BYTEA',  # Binary compressed lists
-        '%Stream': 'BYTEA',  # Large binary objects
-        'MONEY': 'NUMERIC(19,4)',  # Currency with precision
-        'POSIXTIME': 'TIMESTAMP',  # Unix timestamp
-        '%TimeStamp': 'TIMESTAMP',  # IRIS timestamp format
-        '%Date': 'DATE',  # IRIS date format
-        '%Time': 'TIME',  # IRIS time format
-
+        "SERIAL": "SERIAL",  # PostgreSQL SERIAL behavior differs but close enough
+        "ROWVERSION": "BIGINT",  # Will need version tracking metadata
+        "%List": "BYTEA",  # Binary compressed lists
+        "%Stream": "BYTEA",  # Large binary objects
+        "MONEY": "NUMERIC(19,4)",  # Currency with precision
+        "POSIXTIME": "TIMESTAMP",  # Unix timestamp
+        "%TimeStamp": "TIMESTAMP",  # IRIS timestamp format
+        "%Date": "DATE",  # IRIS date format
+        "%Time": "TIME",  # IRIS time format
         # Vector types (already implemented)
-        'VECTOR': 'VECTOR',  # Pass through our existing vector support
-        'EMBEDDING': 'VECTOR',  # Map to vector type
+        "VECTOR": "VECTOR",  # Pass through our existing vector support
+        "EMBEDDING": "VECTOR",  # Map to vector type
     }
 
     def __init__(self):
@@ -223,7 +222,7 @@ class IRISDataTypeTranslator:
         for iris_type in self.TYPE_MAP.keys():
             escaped_type = re.escape(iris_type)
             # Match type declarations with optional parameters
-            pattern = rf'(?<!\w){escaped_type}(?:\s*\([^)]+\))?(?!\w)'
+            pattern = rf"(?<!\w){escaped_type}(?:\s*\([^)]+\))?(?!\w)"
             self.type_patterns[iris_type] = re.compile(pattern, re.IGNORECASE)
 
     def translate(self, sql: str) -> str:
@@ -231,79 +230,76 @@ class IRISDataTypeTranslator:
         result = sql
 
         # Only translate in CREATE TABLE or ALTER TABLE statements
-        if re.search(r'\b(CREATE\s+TABLE|ALTER\s+TABLE)\b', sql, re.IGNORECASE):
+        if re.search(r"\b(CREATE\s+TABLE|ALTER\s+TABLE)\b", sql, re.IGNORECASE):
             for iris_type, pg_type in self.TYPE_MAP.items():
                 pattern = self.type_patterns[iris_type]
                 result = pattern.sub(pg_type, result)
 
         return result
 
+
 class IRISJSONFunctionTranslator:
     """Translates IRIS JSON functions and JSON_TABLE to PostgreSQL equivalents"""
 
     FUNCTION_MAP = {
         # Basic JSON functions
-        'JSON_OBJECT': 'json_build_object',
-        'JSON_ARRAY': 'json_build_array',
-        'JSON_SET': 'jsonb_set',
-        'JSON_GET': 'jsonb_extract_path_text',
-        'JSON_VALUE': 'jsonb_extract_path_text',
-        'JSON_QUERY': 'jsonb_extract_path',
-
+        "JSON_OBJECT": "json_build_object",
+        "JSON_ARRAY": "json_build_array",
+        "JSON_SET": "jsonb_set",
+        "JSON_GET": "jsonb_extract_path_text",
+        "JSON_VALUE": "jsonb_extract_path_text",
+        "JSON_QUERY": "jsonb_extract_path",
         # Document Database functions
-        'JSON_EXISTS': 'jsonb_path_exists',
-        'JSON_MODIFY': 'jsonb_set',
-        'JSON_REMOVE': 'jsonb_path_delete',
-        'JSON_LENGTH': 'jsonb_array_length',
-        'JSON_KEYS': 'jsonb_object_keys',
-        'JSON_EACH': 'jsonb_each',
-        'JSON_EACH_TEXT': 'jsonb_each_text',
-
+        "JSON_EXISTS": "jsonb_path_exists",
+        "JSON_MODIFY": "jsonb_set",
+        "JSON_REMOVE": "jsonb_path_delete",
+        "JSON_LENGTH": "jsonb_array_length",
+        "JSON_KEYS": "jsonb_object_keys",
+        "JSON_EACH": "jsonb_each",
+        "JSON_EACH_TEXT": "jsonb_each_text",
         # Document Database filter operations
-        'JSON_EXTRACT': 'jsonb_path_query',
-        'JSON_EXTRACT_SCALAR': 'jsonb_path_query_first',
-        'JSON_SEARCH': 'jsonb_path_query',
-        'JSON_CONTAINS': 'jsonb_path_match',
-        'JSON_CONTAINS_PATH': 'jsonb_path_exists',
-        'JSON_TYPE': 'jsonb_typeof',
-        'JSON_VALID': 'iris_json_valid',
-
+        "JSON_EXTRACT": "jsonb_path_query",
+        "JSON_EXTRACT_SCALAR": "jsonb_path_query_first",
+        "JSON_SEARCH": "jsonb_path_query",
+        "JSON_CONTAINS": "jsonb_path_match",
+        "JSON_CONTAINS_PATH": "jsonb_path_exists",
+        "JSON_TYPE": "jsonb_typeof",
+        "JSON_VALID": "iris_json_valid",
         # IRIS-specific JSON functions
-        'JSON_ARRAYAGG': 'json_agg',
-        'JSON_OBJECTAGG': 'json_object_agg',
+        "JSON_ARRAYAGG": "json_agg",
+        "JSON_OBJECTAGG": "json_object_agg",
     }
 
     def __init__(self):
         self.patterns = {}
         for iris_func in self.FUNCTION_MAP.keys():
             escaped_func = re.escape(iris_func)
-            pattern = rf'(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)'
+            pattern = rf"(?<!\w){escaped_func}\s*\(\s*([^)]*)\s*\)"
             self.patterns[iris_func] = re.compile(pattern, re.IGNORECASE)
 
         # JSON_TABLE pattern - more complex (IRIS standard syntax)
         self.json_table_pattern = re.compile(
             r'\bJSON_TABLE\s*\(\s*([^,]+),\s*([\'"][^\'\"]*[\'"])\s+COLUMNS\s*\(\s*([^)]+)\s*\)\s*\)',
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE | re.DOTALL,
         )
 
         # IRIS Cloud Document Service pattern
         self.json_table_collection_pattern = re.compile(
             r'\bJSON_TABLE\s*\(\s*(\w+)\s+FORMAT\s+COLLECTION,\s*([\'"][^\'\"]*[\'"])\s+COLUMNS\s*\(\s*([^)]+)\s*\)\s*\)',
-            re.IGNORECASE | re.DOTALL
+            re.IGNORECASE | re.DOTALL,
         )
 
         # Document Database filter patterns
         self.docdb_filter_pattern = re.compile(
-            r"(\w+)\s*->\s*'([^']+)'\s*(=|!=|<|>|<=|>=|LIKE|CONTAINS)\s*(.+)",
-            re.IGNORECASE
+            r"(\w+)\s*->\s*'([^']+)'\s*(=|!=|<|>|<=|>=|LIKE|CONTAINS)\s*(.+)", re.IGNORECASE
         )
 
         # JSON path patterns for IRIS DocDB
         self.json_path_operators = {
-            '->': '->',      # JSON field access
-            '->>': '->>',    # JSON field access as text
-            '#>': '#>',      # JSON path access
-            '#>>': '#>>',    # JSON path access as text
+            "->": "->",  # JSON field access
+            "->>": "->>",  # JSON field access as text
+            "#>": "#>",  # JSON path access
+            "#>>": "#>>",  # JSON path access as text
         }
 
     def translate_json_table(self, sql: str) -> str:
@@ -312,7 +308,7 @@ class IRISJSONFunctionTranslator:
         # Handle standard JSON_TABLE
         def replace_json_table(match):
             json_data = match.group(1).strip()
-            json_path = match.group(2).strip().strip('\'"')
+            json_path = match.group(2).strip().strip("'\"")
             columns_def = match.group(3).strip()
 
             # Parse columns definition to extract column names and paths
@@ -320,23 +316,23 @@ class IRISJSONFunctionTranslator:
             column_entries = []
 
             # Simple parsing - could be enhanced for complex cases
-            for entry in columns_def.split(','):
+            for entry in columns_def.split(","):
                 entry = entry.strip()
                 # Extract column name, type, and path
                 parts = entry.split()
-                if len(parts) >= 4 and 'PATH' in parts:
+                if len(parts) >= 4 and "PATH" in parts:
                     col_name = parts[0]
                     col_type = parts[1]
-                    path_idx = parts.index('PATH') + 1
+                    path_idx = parts.index("PATH") + 1
                     if path_idx < len(parts):
-                        col_path = parts[path_idx].strip('\'"')
+                        col_path = parts[path_idx].strip("'\"")
                         column_entries.append(f"{col_name} {col_type}")
 
             # Convert to PostgreSQL syntax using jsonb_to_recordset
-            pg_columns = ', '.join(column_entries) if column_entries else columns_def
+            pg_columns = ", ".join(column_entries) if column_entries else columns_def
 
             # Use jsonb_path_query_array for path-based extraction
-            if json_path == '$':
+            if json_path == "$":
                 # Simple case - entire document
                 return f"SELECT * FROM jsonb_to_recordset({json_data}) AS ({pg_columns})"
             else:
@@ -346,7 +342,7 @@ class IRISJSONFunctionTranslator:
         # Handle collection-based JSON_TABLE (Cloud Document Service)
         def replace_collection_table(match):
             collection_name = match.group(1).strip()
-            json_path = match.group(2).strip().strip('\'"')
+            json_path = match.group(2).strip().strip("'\"")
             columns_def = match.group(3).strip()
 
             # For collections, we'd need to query a collection table
@@ -374,14 +370,14 @@ class IRISJSONFunctionTranslator:
             # Convert IRIS path syntax to PostgreSQL JSONPath
             # Simple path: field -> {field}
             # Nested path: field.subfield -> {field,subfield}
-            path_parts = path.split('.')
-            pg_path = '{' + ','.join(path_parts) + '}'
+            path_parts = path.split(".")
+            pg_path = "{" + ",".join(path_parts) + "}"
 
             # Handle different operators
-            if operator.upper() == 'CONTAINS':
+            if operator.upper() == "CONTAINS":
                 # IRIS CONTAINS -> PostgreSQL @>
                 return f"{column} @> {value}"
-            elif operator.upper() == 'LIKE':
+            elif operator.upper() == "LIKE":
                 # Use text extraction for LIKE operations
                 return f"({column} #>> '{pg_path}') LIKE {value}"
             else:
@@ -394,8 +390,7 @@ class IRISJSONFunctionTranslator:
         # IRIS: column[*].field = value
         # PostgreSQL: jsonb_path_exists(column, '$[*].field ? (@ == value)')
         array_filter_pattern = re.compile(
-            r"(\w+)\[\*\]\.(\w+)\s*(=|!=|<|>|<=|>=)\s*(.+)",
-            re.IGNORECASE
+            r"(\w+)\[\*\]\.(\w+)\s*(=|!=|<|>|<=|>=)\s*(.+)", re.IGNORECASE
         )
 
         def replace_array_filter(match):
@@ -448,7 +443,7 @@ class IRISJSONFunctionTranslator:
             def replace_func(match):
                 params = match.group(1)
                 # Special handling for some functions
-                if iris_func == 'JSON_LENGTH' and 'jsonb_array_length' in pg_func:
+                if iris_func == "JSON_LENGTH" and "jsonb_array_length" in pg_func:
                     # JSON_LENGTH can work on objects too, need conditional
                     return f"CASE WHEN jsonb_typeof({params}) = 'array' THEN jsonb_array_length({params}) ELSE jsonb_object_keys({params}) END"
                 return f"{pg_func}({params})"
@@ -456,6 +451,7 @@ class IRISJSONFunctionTranslator:
             result = pattern.sub(replace_func, result)
 
         return result
+
 
 class IRISConstructTranslator:
     """Main coordinator for all IRIS construct translations"""
@@ -473,14 +469,14 @@ class IRISConstructTranslator:
 
         # Statistics tracking
         self.translation_stats = {
-            'system_functions': 0,
-            'sql_extensions': 0,
-            'iris_functions': 0,
-            'data_types': 0,
-            'json_functions': 0
+            "system_functions": 0,
+            "sql_extensions": 0,
+            "iris_functions": 0,
+            "data_types": 0,
+            "json_functions": 0,
         }
 
-    def translate_sql(self, sql: str) -> Tuple[str, Dict[str, int]]:
+    def translate_sql(self, sql: str) -> tuple[str, dict[str, int]]:
         """
         Translate all IRIS constructs in SQL statement
 
@@ -504,11 +500,11 @@ class IRISConstructTranslator:
 
                 # Reset translation stats for this operation
                 self.translation_stats = {
-                    'system_functions': 0,
-                    'sql_extensions': 0,
-                    'iris_functions': 0,
-                    'data_types': 0,
-                    'json_functions': 0
+                    "system_functions": 0,
+                    "sql_extensions": 0,
+                    "iris_functions": 0,
+                    "data_types": 0,
+                    "json_functions": 0,
                 }
 
                 if tracer:
@@ -517,7 +513,7 @@ class IRISConstructTranslator:
                         {"sql": sql, "length": len(sql)},
                         {"needs_translation": constructs_detected > 0},
                         0.1,
-                        {"sql_type": "DDL" if "CREATE" in sql.upper() else "DML"}
+                        {"sql_type": "DDL" if "CREATE" in sql.upper() else "DML"},
                     )
 
                 # Apply translations in order
@@ -527,7 +523,7 @@ class IRISConstructTranslator:
                 duration_ms = (time.perf_counter() - start_time) * 1000
 
                 if sql != original_sql:
-                    self.translation_stats['data_types'] += 1
+                    self.translation_stats["data_types"] += 1
                     if tracer:
                         tracer.add_mapping_decision(
                             "data_type_translation",
@@ -536,17 +532,12 @@ class IRISConstructTranslator:
                             sql,
                             "DIRECT_MAPPING",
                             1.0,
-                            "IRIS data types mapped to PostgreSQL equivalents"
+                            "IRIS data types mapped to PostgreSQL equivalents",
                         )
                     original_sql = sql
 
                 if tracer:
-                    tracer.add_parsing_step(
-                        "data_type_translation",
-                        original_sql,
-                        sql,
-                        duration_ms
-                    )
+                    tracer.add_parsing_step("data_type_translation", original_sql, sql, duration_ms)
 
                 # 2. SQL extensions (affects query structure)
                 start_time = time.perf_counter()
@@ -554,7 +545,7 @@ class IRISConstructTranslator:
                 duration_ms = (time.perf_counter() - start_time) * 1000
 
                 if sql != original_sql:
-                    self.translation_stats['sql_extensions'] += 1
+                    self.translation_stats["sql_extensions"] += 1
                     if tracer:
                         tracer.add_mapping_decision(
                             "sql_extension_translation",
@@ -563,16 +554,13 @@ class IRISConstructTranslator:
                             sql,
                             "DIRECT_MAPPING",
                             1.0,
-                            "IRIS SQL extensions (TOP, JOIN) mapped to PostgreSQL"
+                            "IRIS SQL extensions (TOP, JOIN) mapped to PostgreSQL",
                         )
                     original_sql = sql
 
                 if tracer:
                     tracer.add_parsing_step(
-                        "sql_extension_translation",
-                        original_sql,
-                        sql,
-                        duration_ms
+                        "sql_extension_translation", original_sql, sql, duration_ms
                     )
 
                 # 3. System functions
@@ -581,7 +569,7 @@ class IRISConstructTranslator:
                 duration_ms = (time.perf_counter() - start_time) * 1000
 
                 if sql != original_sql:
-                    self.translation_stats['system_functions'] += 1
+                    self.translation_stats["system_functions"] += 1
                     if tracer:
                         tracer.add_mapping_decision(
                             "system_function_translation",
@@ -590,16 +578,13 @@ class IRISConstructTranslator:
                             sql,
                             "DIRECT_MAPPING",
                             1.0,
-                            "IRIS %SYSTEM.* functions mapped to PostgreSQL equivalents"
+                            "IRIS %SYSTEM.* functions mapped to PostgreSQL equivalents",
                         )
                     original_sql = sql
 
                 if tracer:
                     tracer.add_parsing_step(
-                        "system_function_translation",
-                        original_sql,
-                        sql,
-                        duration_ms
+                        "system_function_translation", original_sql, sql, duration_ms
                     )
 
                 # 4. IRIS functions
@@ -608,7 +593,7 @@ class IRISConstructTranslator:
                 duration_ms = (time.perf_counter() - start_time) * 1000
 
                 if sql != original_sql:
-                    self.translation_stats['iris_functions'] += 1
+                    self.translation_stats["iris_functions"] += 1
                     if tracer:
                         tracer.add_mapping_decision(
                             "iris_function_translation",
@@ -617,16 +602,13 @@ class IRISConstructTranslator:
                             sql,
                             "DIRECT_MAPPING",
                             1.0,
-                            "IRIS functions (%SQLUPPER, %HOROLOG) mapped to PostgreSQL"
+                            "IRIS functions (%SQLUPPER, %HOROLOG) mapped to PostgreSQL",
                         )
                     original_sql = sql
 
                 if tracer:
                     tracer.add_parsing_step(
-                        "iris_function_translation",
-                        original_sql,
-                        sql,
-                        duration_ms
+                        "iris_function_translation", original_sql, sql, duration_ms
                     )
 
                 # 5. JSON functions
@@ -635,7 +617,7 @@ class IRISConstructTranslator:
                 duration_ms = (time.perf_counter() - start_time) * 1000
 
                 if sql != original_sql:
-                    self.translation_stats['json_functions'] += 1
+                    self.translation_stats["json_functions"] += 1
                     if tracer:
                         tracer.add_mapping_decision(
                             "json_function_translation",
@@ -644,22 +626,19 @@ class IRISConstructTranslator:
                             sql,
                             "DIRECT_MAPPING",
                             1.0,
-                            "IRIS JSON functions mapped to PostgreSQL JSONB equivalents"
+                            "IRIS JSON functions mapped to PostgreSQL JSONB equivalents",
                         )
 
                 if tracer:
                     tracer.add_parsing_step(
-                        "json_function_translation",
-                        original_sql,
-                        sql,
-                        duration_ms
+                        "json_function_translation", original_sql, sql, duration_ms
                     )
 
                 # Update measurement context for monitoring
                 total_constructs = sum(self.translation_stats.values())
-                measurement['constructs_translated'] = total_constructs
-                measurement['construct_types'] = self.translation_stats.copy()
-                measurement['cache_hit'] = False  # No caching implemented yet
+                measurement["constructs_translated"] = total_constructs
+                measurement["construct_types"] = self.translation_stats.copy()
+                measurement["cache_hit"] = False  # No caching implemented yet
 
             # Finalize debug trace if enabled
             if tracer:
@@ -667,7 +646,7 @@ class IRISConstructTranslator:
                     translated_sql=sql,
                     constructs_detected=constructs_detected,
                     constructs_translated=total_constructs,
-                    success=True
+                    success=True,
                 )
 
             return sql, self.translation_stats.copy()
@@ -676,11 +655,11 @@ class IRISConstructTranslator:
             # Handle errors with debug tracing
             if tracer:
                 tracer.finish_trace(
-                    translated_sql=sql if 'sql' in locals() else "",
+                    translated_sql=sql if "sql" in locals() else "",
                     constructs_detected=constructs_detected,
                     constructs_translated=sum(self.translation_stats.values()),
                     success=False,
-                    error_message=str(e)
+                    error_message=str(e),
                 )
             raise
 
@@ -688,17 +667,17 @@ class IRISConstructTranslator:
         """Check if SQL contains any IRIS-specific constructs"""
         # Quick check for common IRIS patterns
         iris_patterns = [
-            r'%SYSTEM\.',
-            r'\bTOP\s+\d+',
-            r'%SQLUPPER|%SQLLOWER',
-            r'DATEDIFF_MICROSECONDS',
-            r'JSON_OBJECT|JSON_ARRAY|JSON_TABLE|JSON_VALUE|JSON_QUERY',
-            r'JSON_EXISTS|JSON_MODIFY|JSON_REMOVE|JSON_LENGTH',
-            r'JSON_ARRAYAGG|JSON_OBJECTAGG',
-            r'\bSERIAL\b|\bROWVERSION\b|%List|%Stream',
-            r'%PATTERN\.|%EXACT',
-            r'%HOROLOG',
-            r'%EXTERNAL|%INTERNAL',
+            r"%SYSTEM\.",
+            r"\bTOP\s+\d+",
+            r"%SQLUPPER|%SQLLOWER",
+            r"DATEDIFF_MICROSECONDS",
+            r"JSON_OBJECT|JSON_ARRAY|JSON_TABLE|JSON_VALUE|JSON_QUERY",
+            r"JSON_EXISTS|JSON_MODIFY|JSON_REMOVE|JSON_LENGTH",
+            r"JSON_ARRAYAGG|JSON_OBJECTAGG",
+            r"\bSERIAL\b|\bROWVERSION\b|%List|%Stream",
+            r"%PATTERN\.|%EXACT",
+            r"%HOROLOG",
+            r"%EXTERNAL|%INTERNAL",
         ]
 
         for pattern in iris_patterns:
@@ -707,24 +686,30 @@ class IRISConstructTranslator:
 
         return False
 
-    def get_translation_summary(self) -> Dict[str, Any]:
+    def get_translation_summary(self) -> dict[str, Any]:
         """Get summary of translation statistics"""
         total_translations = sum(self.translation_stats.values())
         return {
-            'total_translations': total_translations,
-            'by_type': self.translation_stats.copy(),
-            'most_common': max(self.translation_stats.items(), key=lambda x: x[1]) if total_translations > 0 else None
+            "total_translations": total_translations,
+            "by_type": self.translation_stats.copy(),
+            "most_common": (
+                max(self.translation_stats.items(), key=lambda x: x[1])
+                if total_translations > 0
+                else None
+            ),
         }
 
+
 # Utility functions for custom PostgreSQL functions
-def create_custom_iris_functions() -> List[str]:
+def create_custom_iris_functions() -> list[str]:
     """
     Generate SQL to create custom PostgreSQL functions for IRIS compatibility
     """
     functions = []
 
     # IRIS parallel info function
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_sql_parallel_info()
         RETURNS INTEGER AS $$
         BEGIN
@@ -732,10 +717,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN COALESCE(current_setting('max_parallel_workers_per_gather')::INTEGER, 1);
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS ML model exists function
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_ml_model_exists(model_name TEXT)
         RETURNS BOOLEAN AS $$
         BEGIN
@@ -747,20 +734,24 @@ def create_custom_iris_functions() -> List[str]:
             );
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS date difference in microseconds
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_datediff_microseconds(date1 TIMESTAMP, date2 TIMESTAMP)
         RETURNS BIGINT AS $$
         BEGIN
             RETURN EXTRACT(EPOCH FROM (date2 - date1)) * 1000000;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS pattern matching
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_pattern_match(text_value TEXT, pattern TEXT)
         RETURNS BOOLEAN AS $$
         BEGIN
@@ -768,10 +759,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN text_value ~ pattern;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # JSON validation function
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_json_valid(json_text TEXT)
         RETURNS BOOLEAN AS $$
         BEGIN
@@ -784,10 +777,12 @@ def create_custom_iris_functions() -> List[str]:
             END;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS external format conversion
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_external_format(value_text TEXT)
         RETURNS TEXT AS $$
         BEGIN
@@ -795,10 +790,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN value_text;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS internal format conversion
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_internal_format(value_text TEXT)
         RETURNS TEXT AS $$
         BEGIN
@@ -806,10 +803,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN value_text;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS $HOROLOG function (date/time in IRIS format)
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_horolog()
         RETURNS TEXT AS $$
         BEGIN
@@ -818,10 +817,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN EXTRACT(EPOCH FROM NOW())::TEXT;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS timezone part function
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_datepart_timezone(ts TIMESTAMP)
         RETURNS TEXT AS $$
         BEGIN
@@ -829,10 +830,12 @@ def create_custom_iris_functions() -> List[str]:
             RETURN EXTRACT(TIMEZONE FROM ts)::TEXT;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     # IRIS exact match (case-sensitive)
-    functions.append("""
+    functions.append(
+        """
         CREATE OR REPLACE FUNCTION iris_exact_match(text_value TEXT)
         RETURNS TEXT AS $$
         BEGIN
@@ -840,6 +843,7 @@ def create_custom_iris_functions() -> List[str]:
             RETURN text_value;
         END;
         $$ LANGUAGE plpgsql;
-    """)
+    """
+    )
 
     return functions

@@ -7,8 +7,6 @@ specs/017-correct-testing-framework/contracts/pytest-fixtures.md
 TDD: These tests MUST FAIL until fixtures are implemented.
 """
 
-import pytest
-
 
 def test_embedded_iris_fixture_provides_connection(embedded_iris):
     """
@@ -46,8 +44,8 @@ def test_embedded_iris_fixture_cleanup_releases_resources(embedded_iris):
     # Verify iris module is working
     # Embedded Python doesn't require explicit cleanup like external connections
     # The iris module is part of the irispython runtime
-    assert hasattr(embedded_iris, 'sql'), "iris module must have sql attribute"
-    assert hasattr(embedded_iris, 'system'), "iris module must have system attribute"
+    assert hasattr(embedded_iris, "sql"), "iris module must have sql attribute"
+    assert hasattr(embedded_iris, "system"), "iris module must have system attribute"
 
 
 def test_iris_clean_namespace_isolates_test_data(iris_clean_namespace):
@@ -60,12 +58,14 @@ def test_iris_clean_namespace_isolates_test_data(iris_clean_namespace):
     - Cleanup time: <2 seconds
     """
     # Create test table that should be cleaned up
-    iris_clean_namespace.sql.exec("""
+    iris_clean_namespace.sql.exec(
+        """
         CREATE TABLE IF NOT EXISTS test_isolation_check (
             id INT PRIMARY KEY,
             value VARCHAR(50)
         )
-    """)
+    """
+    )
 
     # Clear any existing data first (in case cleanup didn't run)
     iris_clean_namespace.sql.exec("DELETE FROM test_isolation_check")
@@ -116,8 +116,9 @@ def test_pgwire_client_connects_successfully(pgwire_client):
     import psycopg
 
     assert pgwire_client is not None, "pgwire_client fixture must return a connection"
-    assert pgwire_client.status == psycopg.Connection.OK, \
-        f"Connection status must be OK, got {pgwire_client.status}"
+    assert (
+        pgwire_client.status == psycopg.Connection.OK
+    ), f"Connection status must be OK, got {pgwire_client.status}"
 
     # Verify connection works by executing simple query
     with pgwire_client.cursor() as cursor:

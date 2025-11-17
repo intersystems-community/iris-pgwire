@@ -8,17 +8,18 @@ Contract specification: /specs/004-iris-sql-constructs/contracts/translation_api
 """
 
 import pytest
-from typing import Dict, Any
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.sql_translator import SQLTranslator
     from iris_pgwire.sql_translator.cache import TranslationCache
+
     CACHE_AVAILABLE = True
 except ImportError:
     CACHE_AVAILABLE = False
 
 pytestmark = pytest.mark.contract
+
 
 @pytest.fixture
 def cache():
@@ -27,12 +28,14 @@ def cache():
         pytest.skip("Cache module not implemented yet")
     return TranslationCache()
 
+
 @pytest.fixture
 def translator_with_cache():
     """Translator with cache for testing"""
     if not CACHE_AVAILABLE:
         pytest.skip("Translation module not implemented yet")
     return SQLTranslator()
+
 
 class TestCacheStatsContract:
     """Test cache statistics structure matches OpenAPI schema"""
@@ -48,13 +51,15 @@ class TestCacheStatsContract:
 
         # Verify required fields from contract
         required_fields = {
-            'total_entries', 'hit_rate', 'average_lookup_ms',
-            'memory_usage_mb', 'oldest_entry_age_minutes'
+            "total_entries",
+            "hit_rate",
+            "average_lookup_ms",
+            "memory_usage_mb",
+            "oldest_entry_age_minutes",
         }
 
         for field in required_fields:
-            assert hasattr(stats, field) or field in stats, \
-                f"Missing required field: {field}"
+            assert hasattr(stats, field) or field in stats, f"Missing required field: {field}"
 
     def test_cache_stats_field_types(self):
         """Cache stats fields should have correct types per contract"""
@@ -65,15 +70,15 @@ class TestCacheStatsContract:
         stats = cache.get_stats()
 
         # Verify field types match OpenAPI specification
-        if hasattr(stats, 'total_entries'):
+        if hasattr(stats, "total_entries"):
             assert isinstance(stats.total_entries, int), "total_entries should be integer"
-        elif 'total_entries' in stats:
-            assert isinstance(stats['total_entries'], int), "total_entries should be integer"
+        elif "total_entries" in stats:
+            assert isinstance(stats["total_entries"], int), "total_entries should be integer"
 
-        if hasattr(stats, 'hit_rate'):
+        if hasattr(stats, "hit_rate"):
             hit_rate = stats.hit_rate
         else:
-            hit_rate = stats['hit_rate']
+            hit_rate = stats["hit_rate"]
 
         assert isinstance(hit_rate, (int, float)), "hit_rate should be numeric"
         assert 0.0 <= hit_rate <= 1.0, "hit_rate should be between 0.0 and 1.0"
@@ -87,10 +92,10 @@ class TestCacheStatsContract:
         stats = cache.get_stats()
 
         # Empty cache expectations
-        total_entries = getattr(stats, 'total_entries', stats.get('total_entries'))
+        total_entries = getattr(stats, "total_entries", stats.get("total_entries"))
         assert total_entries == 0, "Empty cache should have 0 entries"
 
-        hit_rate = getattr(stats, 'hit_rate', stats.get('hit_rate'))
+        hit_rate = getattr(stats, "hit_rate", stats.get("hit_rate"))
         assert hit_rate == 0.0, "Empty cache should have 0% hit rate"
 
     def test_cache_stats_with_entries(self, translator_with_cache):
@@ -104,7 +109,7 @@ class TestCacheStatsContract:
         requests = [
             TranslationRequest(original_sql="SELECT %SYSTEM.Version.GetNumber()"),
             TranslationRequest(original_sql="SELECT TOP 5 * FROM users"),
-            TranslationRequest(original_sql="SELECT %SQLUPPER(name) FROM users")
+            TranslationRequest(original_sql="SELECT %SQLUPPER(name) FROM users"),
         ]
 
         # Execute translations to populate cache
@@ -115,7 +120,7 @@ class TestCacheStatsContract:
         cache = translator_with_cache.cache  # Assuming translator exposes cache
         stats = cache.get_stats()
 
-        total_entries = getattr(stats, 'total_entries', stats.get('total_entries'))
+        total_entries = getattr(stats, "total_entries", stats.get("total_entries"))
         assert total_entries >= 3, "Cache should contain at least 3 entries"
 
         # Execute same queries again to test hit rate
@@ -123,8 +128,9 @@ class TestCacheStatsContract:
             translator_with_cache.translate(request)
 
         stats = cache.get_stats()
-        hit_rate = getattr(stats, 'hit_rate', stats.get('hit_rate'))
+        hit_rate = getattr(stats, "hit_rate", stats.get("hit_rate"))
         assert hit_rate > 0.0, "Cache should have positive hit rate after repeated queries"
+
 
 class TestCacheStatsEndpoint:
     """Test cache stats endpoint behavior"""
@@ -139,18 +145,19 @@ class TestCacheStatsEndpoint:
 
         # Verify response structure matches OpenAPI schema
         expected_fields = {
-            'total_entries': int,
-            'hit_rate': (int, float),
-            'average_lookup_ms': (int, float),
-            'memory_usage_mb': (int, float),
-            'oldest_entry_age_minutes': int
+            "total_entries": int,
+            "hit_rate": (int, float),
+            "average_lookup_ms": (int, float),
+            "memory_usage_mb": (int, float),
+            "oldest_entry_age_minutes": int,
         }
 
         for field_name, expected_type in expected_fields.items():
             value = getattr(stats, field_name, stats.get(field_name))
             assert value is not None, f"Field {field_name} should not be None"
-            assert isinstance(value, expected_type), \
-                f"Field {field_name} should be {expected_type}, got {type(value)}"
+            assert isinstance(
+                value, expected_type
+            ), f"Field {field_name} should be {expected_type}, got {type(value)}"
 
     def test_cache_stats_constraints(self, cache):
         """Cache stats should respect contract constraints"""
@@ -160,19 +167,21 @@ class TestCacheStatsEndpoint:
         stats = cache.get_stats()
 
         # Validate constraints from OpenAPI schema
-        hit_rate = getattr(stats, 'hit_rate', stats.get('hit_rate'))
+        hit_rate = getattr(stats, "hit_rate", stats.get("hit_rate"))
         assert 0.0 <= hit_rate <= 1.0, f"hit_rate {hit_rate} violates constraint [0.0, 1.0]"
 
-        total_entries = getattr(stats, 'total_entries', stats.get('total_entries'))
+        total_entries = getattr(stats, "total_entries", stats.get("total_entries"))
         assert total_entries >= 0, f"total_entries {total_entries} should be non-negative"
 
-        avg_lookup = getattr(stats, 'average_lookup_ms', stats.get('average_lookup_ms'))
+        avg_lookup = getattr(stats, "average_lookup_ms", stats.get("average_lookup_ms"))
         assert avg_lookup >= 0, f"average_lookup_ms {avg_lookup} should be non-negative"
 
-        memory_usage = getattr(stats, 'memory_usage_mb', stats.get('memory_usage_mb'))
+        memory_usage = getattr(stats, "memory_usage_mb", stats.get("memory_usage_mb"))
         assert memory_usage >= 0, f"memory_usage_mb {memory_usage} should be non-negative"
 
-        oldest_age = getattr(stats, 'oldest_entry_age_minutes', stats.get('oldest_entry_age_minutes'))
+        oldest_age = getattr(
+            stats, "oldest_entry_age_minutes", stats.get("oldest_entry_age_minutes")
+        )
         assert oldest_age >= 0, f"oldest_entry_age_minutes {oldest_age} should be non-negative"
 
     def test_cache_performance_monitoring(self, translator_with_cache):
@@ -180,8 +189,9 @@ class TestCacheStatsEndpoint:
         if not CACHE_AVAILABLE:
             pytest.skip("Implementation not available yet")
 
-        from iris_pgwire.sql_translator import TranslationRequest
         import time
+
+        from iris_pgwire.sql_translator import TranslationRequest
 
         # Measure cache lookup performance
         request = TranslationRequest(original_sql="SELECT %SYSTEM.Version.GetNumber()")
@@ -197,15 +207,15 @@ class TestCacheStatsEndpoint:
         second_call_time = (time.perf_counter() - start_time) * 1000
 
         # Cache hit should be faster
-        assert second_call_time < first_call_time, \
-            "Cache hit should be faster than cache miss"
+        assert second_call_time < first_call_time, "Cache hit should be faster than cache miss"
 
         # Verify stats reflect performance
         cache = translator_with_cache.cache
         stats = cache.get_stats()
 
-        avg_lookup = getattr(stats, 'average_lookup_ms', stats.get('average_lookup_ms'))
+        avg_lookup = getattr(stats, "average_lookup_ms", stats.get("average_lookup_ms"))
         assert avg_lookup > 0, "Should track actual lookup times"
+
 
 class TestCacheStatsIntegration:
     """Integration tests for cache statistics"""
@@ -221,12 +231,12 @@ class TestCacheStatsIntegration:
         common_queries = [
             "SELECT %SYSTEM.Version.GetNumber()",
             "SELECT TOP 10 * FROM users",
-            "SELECT %SQLUPPER(name) FROM users WHERE active = 1"
+            "SELECT %SQLUPPER(name) FROM users WHERE active = 1",
         ]
 
         rare_queries = [
             "SELECT %SYSTEM.Security.GetUser()",
-            "SELECT COUNT(*) FROM orders WHERE date > CURRENT_DATE - 7"
+            "SELECT COUNT(*) FROM orders WHERE date > CURRENT_DATE - 7",
         ]
 
         # Execute common queries multiple times
@@ -244,13 +254,14 @@ class TestCacheStatsIntegration:
         cache = translator_with_cache.cache
         stats = cache.get_stats()
 
-        total_entries = getattr(stats, 'total_entries', stats.get('total_entries'))
+        total_entries = getattr(stats, "total_entries", stats.get("total_entries"))
         assert total_entries == 5, f"Should cache 5 unique queries, got {total_entries}"
 
-        hit_rate = getattr(stats, 'hit_rate', stats.get('hit_rate'))
+        hit_rate = getattr(stats, "hit_rate", stats.get("hit_rate"))
         # With 5 queries executed 5 times each (15 hits) + 2 rare queries (2 misses)
         # Expected pattern: 15 hits out of 17 total = ~88% hit rate
         assert hit_rate > 0.8, f"Hit rate {hit_rate} should be high with repeated queries"
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_cache_tdd_validation():

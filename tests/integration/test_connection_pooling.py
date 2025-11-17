@@ -17,7 +17,7 @@ Test Scenarios: Based on FR-003 (connection pooling) and FR-005 (health checks)
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -73,7 +73,9 @@ async def test_pool_handles_1000_concurrent_connections(pool_config):
 
     # Log performance for monitoring
     avg_query_time_ms = elapsed_ms / 1000
-    print(f"✅ 1000 concurrent queries completed in {elapsed_ms:.2f}ms (avg {avg_query_time_ms:.2f}ms per query)")
+    print(
+        f"✅ 1000 concurrent queries completed in {elapsed_ms:.2f}ms (avg {avg_query_time_ms:.2f}ms per query)"
+    )
 
     await executor.close()
 
@@ -117,7 +119,9 @@ async def test_pool_exhaustion_timeout_handling(pool_config):
     timeout_duration = time.perf_counter() - start_time
 
     # Verify timeout occurred near pool_timeout (2 seconds)
-    assert 1.8 <= timeout_duration <= 2.5, f"Timeout duration {timeout_duration:.2f}s outside expected range"
+    assert (
+        1.8 <= timeout_duration <= 2.5
+    ), f"Timeout duration {timeout_duration:.2f}s outside expected range"
 
     # Cleanup
     for task in tasks:
@@ -177,11 +181,15 @@ async def test_health_check_detects_degraded_pool(pool_config):
     # Initial health check should pass
     health_status = await executor.health_check()
     assert health_status["status"] == "healthy"
-    assert health_status["pool"]["available"] >= 0  # Field name is "available" not "available_connections"
+    assert (
+        health_status["pool"]["available"] >= 0
+    )  # Field name is "available" not "available_connections"
 
     # Simulate pool degradation by closing IRIS connections
     # (In real scenario, this would be IRIS instance restart or network failure)
-    with patch.object(executor.pool, "execute_query", side_effect=ConnectionError("IRIS unavailable")):
+    with patch.object(
+        executor.pool, "execute_query", side_effect=ConnectionError("IRIS unavailable")
+    ):
         # Execute query - should fail and mark pool as degraded
         with pytest.raises(ConnectionError):
             await executor.execute_query("SELECT 1")
@@ -221,11 +229,13 @@ async def test_connection_acquisition_performance_sla(pool_config):
     p95_acquisition_ms = sorted(acquisition_times)[94]  # 95th percentile
 
     # Verify SLA compliance
-    assert avg_acquisition_ms < 1.0, (
-        f"Average acquisition time {avg_acquisition_ms:.3f}ms exceeds 1ms SLA"
-    )
+    assert (
+        avg_acquisition_ms < 1.0
+    ), f"Average acquisition time {avg_acquisition_ms:.3f}ms exceeds 1ms SLA"
 
-    print(f"✅ Connection acquisition performance: avg={avg_acquisition_ms:.3f}ms, p95={p95_acquisition_ms:.3f}ms")
+    print(
+        f"✅ Connection acquisition performance: avg={avg_acquisition_ms:.3f}ms, p95={p95_acquisition_ms:.3f}ms"
+    )
 
     await executor.close()
 

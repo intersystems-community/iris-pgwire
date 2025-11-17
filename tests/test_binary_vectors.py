@@ -5,9 +5,11 @@ Test binary parameter encoding for large vectors.
 Verifies that binary encoding bypasses the ~2550 char SQL query size limit.
 """
 
-import sys
 import random
+import sys
+
 import psycopg
+
 
 def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
     """Test binary parameter encoding for vectors of specified dimensions."""
@@ -22,7 +24,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
     vector = [random.random() for _ in range(dimensions)]
 
     # Calculate text query size
-    vector_text = '[' + ','.join(str(v) for v in vector) + ']'
+    vector_text = "[" + ",".join(str(v) for v in vector) + "]"
     sql = f"SELECT id FROM benchmark_vectors ORDER BY embedding <=> '{vector_text}' LIMIT 5"
     print(f"Text query size: {len(sql)} chars")
 
@@ -37,11 +39,11 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                 print(f"   ✅ Connection OK - {count} vectors in table")
 
                 # Test 2: Vector query with text parameter (for comparison)
-                print(f"\n2. Testing vector query with TEXT parameter...")
+                print("\n2. Testing vector query with TEXT parameter...")
                 try:
                     cur.execute(
                         "SELECT id FROM benchmark_vectors ORDER BY embedding <=> %s LIMIT 5",
-                        (vector_text,)
+                        (vector_text,),
                     )
                     results_text = cur.fetchall()
                     print(f"   ✅ Text parameter succeeded: {results_text[:2]}...")
@@ -50,7 +52,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                     results_text = None
 
                 # Test 3: Vector query with binary parameter
-                print(f"\n3. Testing vector query with BINARY parameter...")
+                print("\n3. Testing vector query with BINARY parameter...")
                 try:
                     # Use psycopg's binary parameter support
                     # Note: psycopg3 should auto-detect list as array and send binary
@@ -60,7 +62,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                         ),
                         (vector,),
                         # Force binary format for parameter
-                        binary=True
+                        binary=True,
                     )
                     results_binary = cur.fetchall()
                     print(f"   ✅ Binary parameter succeeded: {results_binary[:2]}...")
@@ -68,13 +70,16 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                     # Verify results match
                     if results_text and results_binary:
                         if results_text == results_binary:
-                            print(f"   ✅ Results match text vs binary!")
+                            print("   ✅ Results match text vs binary!")
                         else:
-                            print(f"   ⚠️  Results differ: text={results_text} binary={results_binary}")
+                            print(
+                                f"   ⚠️  Results differ: text={results_text} binary={results_binary}"
+                            )
 
                 except Exception as e:
                     print(f"   ❌ Binary parameter failed: {e}")
                     import traceback
+
                     traceback.print_exc()
 
         print(f"\n{'='*60}")
@@ -85,6 +90,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
     except Exception as e:
         print(f"\n❌ Test failed for {path_name}: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -93,7 +99,7 @@ def main():
     """Run binary parameter tests against both PGWire paths."""
 
     print("🧪 Binary Parameter Encoding Test for Large Vectors")
-    print("="*60)
+    print("=" * 60)
 
     # Test configurations
     tests = [
@@ -113,9 +119,9 @@ def main():
         results.append((name, dims, success))
 
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("SUMMARY")
-    print("="*60)
+    print("=" * 60)
     for name, dims, success in results:
         status = "✅ PASS" if success else "❌ FAIL"
         print(f"{status} - {name} ({dims}D)")

@@ -12,9 +12,8 @@ Feature: 018-add-dbapi-option
 Data Model: Entity #4 - DBAPIConnection
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,10 +49,8 @@ class DBAPIConnection(BaseModel):
     created_at: datetime = Field(
         default_factory=datetime.utcnow, description="When connection was created"
     )
-    last_used_at: Optional[datetime] = Field(
-        default=None, description="When connection was last used"
-    )
-    last_recycled_at: Optional[datetime] = Field(
+    last_used_at: datetime | None = Field(default=None, description="When connection was last used")
+    last_recycled_at: datetime | None = Field(
         default=None, description="When connection was last recycled"
     )
 
@@ -66,10 +63,10 @@ class DBAPIConnection(BaseModel):
 
     # Health Status
     is_healthy: bool = Field(default=True, description="Connection health status")
-    last_error: Optional[str] = Field(
+    last_error: str | None = Field(
         default=None, description="Last error message if is_healthy=False"
     )
-    last_health_check_at: Optional[datetime] = Field(
+    last_health_check_at: datetime | None = Field(
         default=None, description="When connection was last health-checked"
     )
 
@@ -166,7 +163,7 @@ class DBAPIConnection(BaseModel):
         if not success:
             self.total_errors += 1
 
-    def record_health_check(self, is_healthy: bool, error_message: Optional[str] = None) -> None:
+    def record_health_check(self, is_healthy: bool, error_message: str | None = None) -> None:
         """
         Record health check result.
 

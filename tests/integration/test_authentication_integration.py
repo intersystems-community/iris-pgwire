@@ -5,19 +5,17 @@ Tests authentication against real IRIS instances and protocol integration.
 These tests require a running IRIS instance and validate end-to-end flows.
 """
 
-import pytest
 import asyncio
-import secrets
 import time
-from unittest.mock import patch, MagicMock
-from typing import Dict, Any
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from iris_pgwire.auth import (
-    PostgreSQLAuthenticator,
-    IRISAuthenticationProvider,
     AuthenticationMethod,
     AuthenticationState,
-    AuthenticationResult
+    IRISAuthenticationProvider,
+    PostgreSQLAuthenticator,
 )
 
 
@@ -27,13 +25,15 @@ class TestAuthenticationIntegration:
     def setup_method(self):
         """Setup integration test environment"""
         self.iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER',
-            'system_user': '_SYSTEM',
-            'system_password': 'SYS'
+            "host": "localhost",
+            "port": "1972",
+            "namespace": "USER",
+            "system_user": "_SYSTEM",
+            "system_password": "SYS",
         }
-        self.authenticator = PostgreSQLAuthenticator(self.iris_config, AuthenticationMethod.SCRAM_SHA_256)
+        self.authenticator = PostgreSQLAuthenticator(
+            self.iris_config, AuthenticationMethod.SCRAM_SHA_256
+        )
 
     @pytest.mark.iris_integration
     @pytest.mark.asyncio
@@ -42,12 +42,15 @@ class TestAuthenticationIntegration:
         # This test requires a real IRIS instance
         try:
             import iris
+
             iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
         # Test with system user (should exist)
-        success, session_id = await self.authenticator.iris_provider.validate_iris_user_exists("_SYSTEM")
+        success, session_id = await self.authenticator.iris_provider.validate_iris_user_exists(
+            "_SYSTEM"
+        )
 
         if success:
             # IRIS is available and responsive
@@ -61,22 +64,26 @@ class TestAuthenticationIntegration:
     @pytest.mark.asyncio
     async def test_real_iris_connection_performance(self):
         """Test IRIS connection performance for constitutional compliance"""
-        import time
 
         try:
             import iris
+
             iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
         # Test constitutional 5ms SLA compliance
         start_time = time.perf_counter()
-        success, session_id = await self.authenticator.iris_provider.validate_iris_user_exists("_SYSTEM")
+        success, session_id = await self.authenticator.iris_provider.validate_iris_user_exists(
+            "_SYSTEM"
+        )
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         if success:
             # Connection worked - verify SLA compliance
-            assert elapsed_ms < 50.0, f"IRIS connection too slow: {elapsed_ms}ms (should be <50ms for integration test)"
+            assert (
+                elapsed_ms < 50.0
+            ), f"IRIS connection too slow: {elapsed_ms}ms (should be <50ms for integration test)"
         else:
             pytest.skip("IRIS instance not available for performance testing")
 
@@ -91,7 +98,9 @@ class TestAuthenticationIntegration:
         self.authenticator.register_user_credentials(username, password)
 
         # Mock IRIS user existence check for this test
-        with patch.object(self.authenticator.iris_provider, 'validate_iris_user_exists') as mock_iris:
+        with patch.object(
+            self.authenticator.iris_provider, "validate_iris_user_exists"
+        ) as mock_iris:
             mock_iris.return_value = (True, "mock_iris_session_123")
 
             # Step 1: Initial authentication request
@@ -113,12 +122,18 @@ class TestAuthenticationIntegration:
             # For this integration test, we'll mock the verification
             def mock_verify_func(message, session_data):
                 # Set the server signature that would be calculated during verification
-                session_data['server_signature'] = b'mock_server_signature'
+                session_data["server_signature"] = b"mock_server_signature"
                 return (True, None)
 
-            with patch.object(self.authenticator.scram_authenticator, 'verify_client_final_message', side_effect=mock_verify_func):
+            with patch.object(
+                self.authenticator.scram_authenticator,
+                "verify_client_final_message",
+                side_effect=mock_verify_func,
+            ):
                 client_final = b"c=biws,r=clientnonce123456servernonce,p=calculated_proof"
-                result3 = await self.authenticator.authenticate(connection_id, username, client_final)
+                result3 = await self.authenticator.authenticate(
+                    connection_id, username, client_final
+                )
 
                 assert result3.success is True
                 assert result3.username == username
@@ -147,7 +162,7 @@ class TestAuthenticationIntegration:
 
         # Start concurrent authentication flows
         tasks = []
-        for session, username in zip(sessions, usernames):
+        for session, username in zip(sessions, usernames, strict=False):
             task = self.authenticator.authenticate(session, username)
             tasks.append(task)
 
@@ -182,7 +197,9 @@ class TestAuthenticationIntegration:
 
         # Test with invalid client-first-message
         invalid_client_first = b"invalid_message_format"
-        result2 = await self.authenticator.authenticate(connection_id, "testuser", invalid_client_first)
+        result2 = await self.authenticator.authenticate(
+            connection_id, "testuser", invalid_client_first
+        )
 
         assert result2.success is False
         assert "Invalid client-first-message" in result2.error_message
@@ -215,7 +232,7 @@ class TestAuthenticationIntegration:
         result = await self.authenticator.authenticate(connection_id, "testuser")
 
         # Verify SLA compliance is monitored
-        assert hasattr(result, 'sla_compliant')
+        assert hasattr(result, "sla_compliant")
         assert result.sla_compliant is True
         assert result.auth_time_ms < 5.0  # Constitutional requirement
 
@@ -229,7 +246,7 @@ class TestAuthenticationIntegration:
             create_authentication_sasl,
             create_authentication_sasl_continue,
             create_authentication_sasl_final,
-            create_error_response
+            create_error_response,
         )
 
         # Test all message types can be created
@@ -249,11 +266,11 @@ class TestAuthenticationIntegration:
         assert len(error_response) > 0
 
         # All messages should start with appropriate type indicators
-        assert auth_ok[0:1] == b'R'
-        assert auth_sasl[0:1] == b'R'
-        assert auth_continue[0:1] == b'R'
-        assert auth_final[0:1] == b'R'
-        assert error_response[0:1] == b'E'
+        assert auth_ok[0:1] == b"R"
+        assert auth_sasl[0:1] == b"R"
+        assert auth_continue[0:1] == b"R"
+        assert auth_final[0:1] == b"R"
+        assert error_response[0:1] == b"E"
 
 
 class TestIRISProviderIntegration:
@@ -262,11 +279,11 @@ class TestIRISProviderIntegration:
     def setup_method(self):
         """Setup IRIS provider for integration tests"""
         self.iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER',
-            'system_user': '_SYSTEM',
-            'system_password': 'SYS'
+            "host": "localhost",
+            "port": "1972",
+            "namespace": "USER",
+            "system_user": "_SYSTEM",
+            "system_password": "SYS",
         }
         self.provider = IRISAuthenticationProvider(self.iris_config)
 
@@ -276,7 +293,7 @@ class TestIRISProviderIntegration:
         """Test IRIS connection retry and error handling"""
         # Test with invalid host (should fail gracefully)
         invalid_config = self.iris_config.copy()
-        invalid_config['host'] = 'nonexistent.host'
+        invalid_config["host"] = "nonexistent.host"
 
         invalid_provider = IRISAuthenticationProvider(invalid_config)
 
@@ -292,12 +309,13 @@ class TestIRISProviderIntegration:
         """Test IRIS Security.Users query structure"""
         try:
             import iris
+
             iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
         # Mock the IRIS connection to test query structure
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.execute.return_value = None
@@ -344,7 +362,7 @@ class TestIRISProviderIntegration:
     async def test_thread_safety_iris_calls(self):
         """Test thread safety of IRIS calls via asyncio.to_thread"""
         # This test verifies that concurrent IRIS calls don't interfere
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.execute.return_value = None
@@ -374,17 +392,14 @@ class TestAuthenticationMetrics:
 
     def setup_method(self):
         """Setup authenticator for metrics testing"""
-        iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER'
-        }
-        self.authenticator = PostgreSQLAuthenticator(iris_config, AuthenticationMethod.SCRAM_SHA_256)
+        iris_config = {"host": "localhost", "port": "1972", "namespace": "USER"}
+        self.authenticator = PostgreSQLAuthenticator(
+            iris_config, AuthenticationMethod.SCRAM_SHA_256
+        )
 
     @pytest.mark.asyncio
     async def test_authentication_timing_accuracy(self):
         """Test authentication timing measurement accuracy"""
-        import time
 
         # Measure external timing
         start_time = time.perf_counter()
@@ -395,8 +410,9 @@ class TestAuthenticationMetrics:
         internal_elapsed = result.auth_time_ms
 
         # Allow for some measurement variance (±2ms)
-        assert abs(internal_elapsed - external_elapsed) < 2.0, \
-            f"Timing mismatch: internal={internal_elapsed}ms, external={external_elapsed}ms"
+        assert (
+            abs(internal_elapsed - external_elapsed) < 2.0
+        ), f"Timing mismatch: internal={internal_elapsed}ms, external={external_elapsed}ms"
 
     @pytest.mark.asyncio
     async def test_sla_violation_detection(self):
@@ -408,7 +424,9 @@ class TestAuthenticationMetrics:
             await asyncio.sleep(0.006)  # 6ms delay (exceeds 5ms SLA)
             return True, "slow_iris_session"  # Return success but slowly
 
-        with patch.object(self.authenticator.iris_provider, 'validate_iris_user_exists', side_effect=slow_validate):
+        with patch.object(
+            self.authenticator.iris_provider, "validate_iris_user_exists", side_effect=slow_validate
+        ):
             # This would occur in the final message step, so we need to set up the flow
             connection_id = "sla_test"
             self.authenticator.register_user_credentials("testuser", "password")
@@ -422,12 +440,18 @@ class TestAuthenticationMetrics:
 
             # Mock successful verification and test SLA with slow IRIS
             def mock_verify_func(message, session_data):
-                session_data['server_signature'] = b'mock_server_signature'
+                session_data["server_signature"] = b"mock_server_signature"
                 return (True, None)
 
-            with patch.object(self.authenticator.scram_authenticator, 'verify_client_final_message', side_effect=mock_verify_func):
+            with patch.object(
+                self.authenticator.scram_authenticator,
+                "verify_client_final_message",
+                side_effect=mock_verify_func,
+            ):
                 client_final = b"c=biws,r=clientnonceserver,p=proof"
-                result = await self.authenticator.authenticate(connection_id, "testuser", client_final)
+                result = await self.authenticator.authenticate(
+                    connection_id, "testuser", client_final
+                )
 
                 # Authentication should succeed but take longer than expected due to slow IRIS
                 # The 6ms sleep should cause overall time to exceed 5ms
@@ -453,11 +477,11 @@ class TestAuthenticationMetrics:
         asyncio.run(self.authenticator.authenticate(connection_id, "testuser"))
         session = self.authenticator.get_session_state(connection_id)
         assert session is not None
-        assert session['state'] == AuthenticationState.SASL_STARTED
+        assert session["state"] == AuthenticationState.SASL_STARTED
 
         # State transitions should be tracked
-        assert session['username'] == "testuser"
-        assert 'start_time' in session
+        assert session["username"] == "testuser"
+        assert "start_time" in session
 
     @pytest.mark.asyncio
     async def test_session_isolation(self):
@@ -473,8 +497,8 @@ class TestAuthenticationMetrics:
         session1 = self.authenticator.get_session_state(conn1)
         session2 = self.authenticator.get_session_state(conn2)
 
-        assert session1['username'] == user1
-        assert session2['username'] == user2
+        assert session1["username"] == user1
+        assert session2["username"] == user2
         assert session1 is not session2
 
         # Cleanup one session shouldn't affect the other
@@ -491,11 +515,11 @@ class TestAuthenticationMetrics:
 def iris_config():
     """Shared IRIS configuration for integration tests"""
     return {
-        'host': 'localhost',
-        'port': '1972',
-        'namespace': 'USER',
-        'system_user': '_SYSTEM',
-        'system_password': 'SYS'
+        "host": "localhost",
+        "port": "1972",
+        "namespace": "USER",
+        "system_user": "_SYSTEM",
+        "system_password": "SYS",
     }
 
 
