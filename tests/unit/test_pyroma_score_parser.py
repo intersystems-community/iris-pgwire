@@ -7,8 +7,10 @@ various pyroma output formats and handle edge cases.
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from iris_pgwire.quality.package_metadata_validator import PackageMetadataValidator
 
 

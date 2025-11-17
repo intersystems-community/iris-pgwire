@@ -7,9 +7,11 @@ package quality issues and failures.
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
+
 from iris_pgwire.quality.validator import PackageQualityValidator
 
 

@@ -7,8 +7,10 @@ for validating Keep a Changelog format compliance.
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
+from unittest.mock import mock_open, patch
+
 import pytest
-from unittest.mock import patch, mock_open
+
 from iris_pgwire.quality.documentation_validator import DocumentationValidator
 
 
