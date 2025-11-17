@@ -10,9 +10,9 @@ Tests with REALISTIC 1024-dimensional vectors!
 Run with: docker exec iris-pgwire-db /usr/irissys/bin/irispython /tmp/benchmark_embedded_iris.py
 """
 
-import time
-import statistics
 import random
+import statistics
+import time
 
 # Configuration
 BENCHMARK_QUERIES = 1000
@@ -23,7 +23,7 @@ VECTOR_DIMENSIONS = 1024
 def generate_random_vector(dimensions: int = VECTOR_DIMENSIONS) -> str:
     """Generate random vector as comma-separated string"""
     values = [str(random.uniform(-1.0, 1.0)) for _ in range(dimensions)]
-    return ','.join(values)
+    return ",".join(values)
 
 
 def benchmark_simple_queries():
@@ -31,9 +31,9 @@ def benchmark_simple_queries():
 
     import iris
 
-    print("="*80)
+    print("=" * 80)
     print("IRIS Embedded Python Benchmark - iris.sql.exec()")
-    print("="*80)
+    print("=" * 80)
     print(f"IRIS Version: {iris.system.Version.GetNumber()}")
     print(f"Queries: {BENCHMARK_QUERIES}")
     print(f"Warmup: {WARMUP_QUERIES}")
@@ -73,7 +73,7 @@ def benchmark_simple_queries():
     print(f"Total queries: {BENCHMARK_QUERIES}")
     print(f"Total time: {total_time:.2f}s")
     print(f"Throughput: {qps:.2f} QPS")
-    print(f"\nLatency:")
+    print("\nLatency:")
     print(f"  Min:     {min_ms:.2f}ms")
     print(f"  Average: {avg_ms:.2f}ms")
     print(f"  P50:     {p50_ms:.2f}ms")
@@ -82,13 +82,13 @@ def benchmark_simple_queries():
     print(f"  Max:     {max_ms:.2f}ms")
 
     return {
-        'qps': qps,
-        'avg_ms': avg_ms,
-        'p50_ms': p50_ms,
-        'p95_ms': p95_ms,
-        'p99_ms': p99_ms,
-        'min_ms': min_ms,
-        'max_ms': max_ms
+        "qps": qps,
+        "avg_ms": avg_ms,
+        "p50_ms": p50_ms,
+        "p95_ms": p95_ms,
+        "p99_ms": p99_ms,
+        "min_ms": min_ms,
+        "max_ms": max_ms,
     }
 
 
@@ -97,9 +97,9 @@ def benchmark_vector_queries():
 
     import iris
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print(f"IRIS Embedded Python Benchmark - Vector Queries ({VECTOR_DIMENSIONS}D)")
-    print("="*80)
+    print("=" * 80)
 
     # Generate realistic 1024-dimensional vectors
     print(f"Generating {VECTOR_DIMENSIONS}-dimensional vectors...")
@@ -144,19 +144,13 @@ def benchmark_vector_queries():
     print(f"Total queries: {BENCHMARK_QUERIES}")
     print(f"Total time: {total_time:.2f}s")
     print(f"Throughput: {qps:.2f} QPS")
-    print(f"\nLatency:")
+    print("\nLatency:")
     print(f"  Average: {avg_ms:.2f}ms")
     print(f"  P50:     {p50_ms:.2f}ms")
     print(f"  P95:     {p95_ms:.2f}ms")
     print(f"  P99:     {p99_ms:.2f}ms")
 
-    return {
-        'qps': qps,
-        'avg_ms': avg_ms,
-        'p50_ms': p50_ms,
-        'p95_ms': p95_ms,
-        'p99_ms': p99_ms
-    }
+    return {"qps": qps, "avg_ms": avg_ms, "p50_ms": p50_ms, "p95_ms": p95_ms, "p99_ms": p99_ms}
 
 
 if __name__ == "__main__":
@@ -164,14 +158,16 @@ if __name__ == "__main__":
         import iris
     except ImportError:
         print("ERROR: iris module not available - must run with irispython")
-        print("Usage: docker exec iris-pgwire-db /usr/irissys/bin/irispython /tmp/benchmark_embedded_iris.py")
+        print(
+            "Usage: docker exec iris-pgwire-db /usr/irissys/bin/irispython /tmp/benchmark_embedded_iris.py"
+        )
         exit(1)
 
     simple_results = benchmark_simple_queries()
     vector_results = benchmark_vector_queries()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("SUMMARY")
-    print("="*80)
+    print("=" * 80)
     print(f"Simple queries: {simple_results['qps']:.2f} QPS (avg {simple_results['avg_ms']:.2f}ms)")
     print(f"Vector queries: {vector_results['qps']:.2f} QPS (avg {vector_results['avg_ms']:.2f}ms)")

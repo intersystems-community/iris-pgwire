@@ -5,20 +5,19 @@ Tests user synchronization between IRIS and PGWire authentication systems
 with comprehensive coverage of sync modes and user operations.
 """
 
-import pytest
-import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, List
+
+import pytest
 
 from iris_pgwire.iris_user_management import (
-    IRISUserManager,
-    PGWireUserSynchronizer,
     IRISUserInfo,
+    IRISUserManager,
     PGWireUserInfo,
-    UserSyncResult,
+    PGWireUserSynchronizer,
+    UserRole,
     UserSyncMode,
-    UserRole
+    UserSyncResult,
 )
 
 
@@ -31,7 +30,7 @@ class TestIRISUserInfo:
             username="testuser",
             enabled=True,
             roles=["ReadRole", "WriteRole"],
-            namespace_access=["USER", "SAMPLES"]
+            namespace_access=["USER", "SAMPLES"],
         )
 
         assert user_info.username == "testuser"
@@ -50,7 +49,7 @@ class TestIRISUserInfo:
             enabled=True,
             roles=["EmployeeRole"],
             namespace_access=["CORP"],
-            metadata=metadata
+            metadata=metadata,
         )
 
         assert user_info.metadata == metadata
@@ -62,10 +61,7 @@ class TestPGWireUserInfo:
     def test_pgwire_user_info_creation(self):
         """Test PGWireUserInfo creation and defaults"""
         user_info = PGWireUserInfo(
-            username="pguser",
-            has_scram_credentials=True,
-            role=UserRole.READ_WRITE,
-            enabled=True
+            username="pguser", has_scram_credentials=True, role=UserRole.READ_WRITE, enabled=True
         )
 
         assert user_info.username == "pguser"
@@ -105,7 +101,7 @@ class TestUserSyncMode:
             UserSyncMode.BIDIRECTIONAL,
             UserSyncMode.IRIS_TO_PGWIRE,
             UserSyncMode.PGWIRE_TO_IRIS,
-            UserSyncMode.READ_ONLY
+            UserSyncMode.READ_ONLY,
         ]
 
         for mode in modes:
@@ -119,11 +115,11 @@ class TestIRISUserManager:
     def setup_method(self):
         """Setup IRIS user manager for each test"""
         self.iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER',
-            'system_user': '_SYSTEM',
-            'system_password': 'SYS'
+            "host": "localhost",
+            "port": "1972",
+            "namespace": "USER",
+            "system_user": "_SYSTEM",
+            "system_password": "SYS",
         }
         self.iris_provider = MagicMock()
         self.user_manager = IRISUserManager(self.iris_config, self.iris_provider)
@@ -135,10 +131,10 @@ class TestIRISUserManager:
         mock_results = [
             ("user1", 1, "ReadRole,WriteRole", "USER,SAMPLES", "2024-01-15", "2024-01-01"),
             ("user2", 0, "AdminRole", "USER", "2024-01-14", "2024-01-02"),
-            ("user3", 1, "", "USER", None, "2024-01-03")
+            ("user3", 1, "", "USER", None, "2024-01-03"),
         ]
 
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = mock_results
@@ -170,7 +166,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_get_iris_users_with_namespace_filter(self):
         """Test IRIS user retrieval with namespace filter"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = []
@@ -190,10 +186,7 @@ class TestIRISUserManager:
         """Test getting user from cache"""
         # Pre-populate cache
         cached_user = IRISUserInfo(
-            username="cached_user",
-            enabled=True,
-            roles=["TestRole"],
-            namespace_access=["USER"]
+            username="cached_user", enabled=True, roles=["TestRole"], namespace_access=["USER"]
         )
         self.user_manager._user_cache["cached_user"] = cached_user
 
@@ -205,7 +198,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_create_iris_user_success(self):
         """Test successful IRIS user creation"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = [0]  # User doesn't exist
@@ -225,7 +218,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_create_iris_user_already_exists(self):
         """Test IRIS user creation when user already exists"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = [1]  # User exists
@@ -244,9 +237,7 @@ class TestIRISUserManager:
         """Test IRIS user creation in read-only mode"""
         self.user_manager.set_sync_mode(UserSyncMode.READ_ONLY)
 
-        success, message = await self.user_manager.create_iris_user(
-            "newuser", "password123"
-        )
+        success, message = await self.user_manager.create_iris_user("newuser", "password123")
 
         assert success is False
         assert "read-only mode" in message
@@ -254,7 +245,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_update_iris_user_password(self):
         """Test IRIS user password update"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor
@@ -276,7 +267,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_disable_iris_user(self):
         """Test IRIS user disable"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor
@@ -336,10 +327,7 @@ class TestIRISUserManager:
 
         # Add user to cache
         user = IRISUserInfo(
-            username="cached_user",
-            enabled=True,
-            roles=["TestRole"],
-            namespace_access=["USER"]
+            username="cached_user", enabled=True, roles=["TestRole"], namespace_access=["USER"]
         )
         self.user_manager._user_cache["cached_user"] = user
 
@@ -354,7 +342,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_constitutional_compliance_sla(self):
         """Test constitutional compliance SLA requirement"""
-        with patch('iris.createConnection') as mock_create_conn:
+        with patch("iris.createConnection") as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = []
@@ -374,11 +362,7 @@ class TestPGWireUserSynchronizer:
 
     def setup_method(self):
         """Setup synchronizer for each test"""
-        iris_config = {
-            'host': 'localhost',
-            'port': '1972',
-            'namespace': 'USER'
-        }
+        iris_config = {"host": "localhost", "port": "1972", "namespace": "USER"}
         self.iris_provider = MagicMock()
         self.auth_provider = MagicMock()
         self.iris_manager = IRISUserManager(iris_config, self.iris_provider)
@@ -387,11 +371,7 @@ class TestPGWireUserSynchronizer:
     def test_get_pgwire_users(self):
         """Test retrieval of PGWire users from credential cache"""
         # Mock credential cache
-        mock_credentials = {
-            "user1": MagicMock(),
-            "user2": MagicMock(),
-            "user3": MagicMock()
-        }
+        mock_credentials = {"user1": MagicMock(), "user2": MagicMock(), "user3": MagicMock()}
         self.auth_provider._credential_cache = mock_credentials
 
         users = self.synchronizer._get_pgwire_users()
@@ -432,23 +412,25 @@ class TestPGWireUserSynchronizer:
         iris_users = [
             IRISUserInfo("iris_user1", True, ["ReadRole"], ["USER"]),
             IRISUserInfo("iris_user2", True, ["WriteRole"], ["USER"]),
-            IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"])
+            IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"]),
         ]
 
         # Mock PGWire users
         pgwire_users = [
             PGWireUserInfo("pgwire_user1", True, UserRole.READ_WRITE, True),
-            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True)
+            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True),
         ]
 
         # Mock successful credential registration
         self.auth_provider.register_user_credentials.return_value = True
 
-        result = await self.synchronizer._sync_iris_to_pgwire(iris_users, pgwire_users, dry_run=False)
+        result = await self.synchronizer._sync_iris_to_pgwire(
+            iris_users, pgwire_users, dry_run=False
+        )
 
         assert result.success is True
         assert result.users_created == 2  # iris_user1 and iris_user2
-        assert result.users_synced == 3   # All IRIS users processed
+        assert result.users_synced == 3  # All IRIS users processed
 
         # Verify credential registration calls
         assert self.auth_provider.register_user_credentials.call_count == 2
@@ -456,12 +438,12 @@ class TestPGWireUserSynchronizer:
     @pytest.mark.asyncio
     async def test_sync_iris_to_pgwire_dry_run(self):
         """Test IRIS to PGWire sync in dry-run mode"""
-        iris_users = [
-            IRISUserInfo("new_iris_user", True, ["ReadRole"], ["USER"])
-        ]
+        iris_users = [IRISUserInfo("new_iris_user", True, ["ReadRole"], ["USER"])]
         pgwire_users = []
 
-        result = await self.synchronizer._sync_iris_to_pgwire(iris_users, pgwire_users, dry_run=True)
+        result = await self.synchronizer._sync_iris_to_pgwire(
+            iris_users, pgwire_users, dry_run=True
+        )
 
         assert result.success is True
         assert result.users_created == 1
@@ -473,14 +455,12 @@ class TestPGWireUserSynchronizer:
     @pytest.mark.asyncio
     async def test_sync_pgwire_to_iris(self):
         """Test synchronization from PGWire to IRIS"""
-        iris_users = [
-            IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"])
-        ]
+        iris_users = [IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"])]
 
         pgwire_users = [
             PGWireUserInfo("pgwire_user1", True, UserRole.READ_WRITE, True),
             PGWireUserInfo("pgwire_user2", True, UserRole.READ_ONLY, True),
-            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True)
+            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True),
         ]
 
         # Mock successful IRIS user creation
@@ -489,11 +469,13 @@ class TestPGWireUserSynchronizer:
 
         self.iris_manager.create_iris_user = AsyncMock(side_effect=mock_create_user)
 
-        result = await self.synchronizer._sync_pgwire_to_iris(iris_users, pgwire_users, dry_run=False)
+        result = await self.synchronizer._sync_pgwire_to_iris(
+            iris_users, pgwire_users, dry_run=False
+        )
 
         assert result.success is True
         assert result.users_created == 2  # pgwire_user1 and pgwire_user2
-        assert result.users_synced == 3   # All PGWire users processed
+        assert result.users_synced == 3  # All PGWire users processed
 
         # Verify IRIS user creation calls
         assert self.iris_manager.create_iris_user.call_count == 2
@@ -508,11 +490,13 @@ class TestPGWireUserSynchronizer:
         self.auth_provider.register_user_credentials.return_value = True
         self.iris_manager.create_iris_user = AsyncMock(return_value=(True, "Success"))
 
-        result = await self.synchronizer._sync_bidirectional(iris_users, pgwire_users, dry_run=False)
+        result = await self.synchronizer._sync_bidirectional(
+            iris_users, pgwire_users, dry_run=False
+        )
 
         assert result.success is True
         assert result.users_created == 2  # One in each direction
-        assert result.users_synced == 2   # Both users processed
+        assert result.users_synced == 2  # Both users processed
 
     @pytest.mark.asyncio
     async def test_sync_with_errors(self):
@@ -523,7 +507,9 @@ class TestPGWireUserSynchronizer:
         # Mock failed credential registration
         self.auth_provider.register_user_credentials.return_value = False
 
-        result = await self.synchronizer._sync_iris_to_pgwire(iris_users, pgwire_users, dry_run=False)
+        result = await self.synchronizer._sync_iris_to_pgwire(
+            iris_users, pgwire_users, dry_run=False
+        )
 
         assert result.success is True  # Continues despite errors
         assert result.users_created == 0
@@ -537,14 +523,14 @@ class TestPGWireUserSynchronizer:
         iris_users = [
             IRISUserInfo("user1", True, ["ReadRole"], ["USER"]),
             IRISUserInfo("user2", True, ["WriteRole"], ["USER"]),
-            IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"])
+            IRISUserInfo("shared_user", True, ["ReadRole"], ["USER"]),
         ]
 
         # Mock PGWire users
         pgwire_users = [
             PGWireUserInfo("user3", True, UserRole.READ_WRITE, True),
             PGWireUserInfo("user4", True, UserRole.READ_ONLY, True),
-            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True)
+            PGWireUserInfo("shared_user", True, UserRole.READ_WRITE, True),
         ]
 
         self.iris_manager.get_iris_users = AsyncMock(return_value=iris_users)
@@ -552,21 +538,21 @@ class TestPGWireUserSynchronizer:
 
         consistency = await self.synchronizer.validate_user_consistency()
 
-        assert consistency['total_iris_users'] == 3
-        assert consistency['total_pgwire_users'] == 3
-        assert consistency['users_in_both'] == 1  # shared_user
-        assert set(consistency['only_in_iris']) == {"user1", "user2"}
-        assert set(consistency['only_in_pgwire']) == {"user3", "user4"}
-        assert consistency['consistency_score'] == 1/5  # 1 shared out of 5 total unique
+        assert consistency["total_iris_users"] == 3
+        assert consistency["total_pgwire_users"] == 3
+        assert consistency["users_in_both"] == 1  # shared_user
+        assert set(consistency["only_in_iris"]) == {"user1", "user2"}
+        assert set(consistency["only_in_pgwire"]) == {"user3", "user4"}
+        assert consistency["consistency_score"] == 1 / 5  # 1 shared out of 5 total unique
 
     def test_sync_stats(self):
         """Test synchronization statistics"""
         stats = self.synchronizer.get_sync_stats()
 
-        assert 'last_sync' in stats
-        assert 'total_syncs' in stats
-        assert 'last_sync_duration_ms' in stats
-        assert stats['total_syncs'] == 0
+        assert "last_sync" in stats
+        assert "total_syncs" in stats
+        assert "last_sync_duration_ms" in stats
+        assert stats["total_syncs"] == 0
 
     @pytest.mark.asyncio
     async def test_constitutional_compliance_sync(self):
@@ -610,7 +596,7 @@ class TestUserSyncResult:
             users_created=1,
             errors=errors,
             sync_time_ms=10.5,
-            sla_compliant=False
+            sla_compliant=False,
         )
 
         assert result.success is False

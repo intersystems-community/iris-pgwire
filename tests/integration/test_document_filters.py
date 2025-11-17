@@ -7,28 +7,31 @@ through PostgreSQL wire protocol. These tests MUST FAIL until implementation is 
 Constitutional Requirement: Test-First Development for Document Database compatibility
 """
 
-import pytest
-import time
 import json
-from typing import Any, Dict, List, Optional
+import time
+
+import pytest
 
 # These imports will fail until implementation exists - expected in TDD
 try:
+    from iris_pgwire.iris_executor import IRISExecutor
     from iris_pgwire.server import PGWireServer
     from iris_pgwire.sql_translator import SQLTranslator
     from iris_pgwire.sql_translator.document_filters import DocumentFilterTranslator
-    from iris_pgwire.iris_executor import IRISExecutor
+
     SERVER_AVAILABLE = True
 except ImportError:
     SERVER_AVAILABLE = False
 
 try:
     import psycopg
+
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_iris, pytest.mark.document_db]
+
 
 @pytest.fixture(scope="session")
 def pgwire_server():
@@ -41,7 +44,7 @@ def pgwire_server():
         port=5437,  # Different port for document testing
         enable_translation=True,
         enable_document_filters=True,  # Key feature for document operations
-        iris_namespace="USER"  # IRIS namespace with document support
+        iris_namespace="USER",  # IRIS namespace with document support
     )
     server.start()
 
@@ -51,6 +54,7 @@ def pgwire_server():
 
     server.stop()
 
+
 @pytest.fixture
 def connection_params():
     """Connection parameters for document filter testing"""
@@ -59,8 +63,9 @@ def connection_params():
         "port": 5437,
         "user": "postgres",
         "password": "iris",
-        "dbname": "iris"
+        "dbname": "iris",
     }
+
 
 @pytest.fixture(scope="session")
 def sample_document_data():
@@ -69,14 +74,33 @@ def sample_document_data():
         "users": [
             {"id": 1, "name": "John Doe", "email": "john@example.com", "age": 30, "active": True},
             {"id": 2, "name": "Jane Smith", "email": "jane@example.com", "age": 25, "active": True},
-            {"id": 3, "name": "Bob Johnson", "email": "bob@example.com", "age": 35, "active": False}
+            {
+                "id": 3,
+                "name": "Bob Johnson",
+                "email": "bob@example.com",
+                "age": 35,
+                "active": False,
+            },
         ],
         "orders": [
-            {"id": 101, "user_id": 1, "items": ["laptop", "mouse"], "total": 1200.50, "status": "shipped"},
-            {"id": 102, "user_id": 2, "items": ["book", "pen"], "total": 25.99, "status": "pending"},
-            {"id": 103, "user_id": 1, "items": ["monitor"], "total": 300.00, "status": "delivered"}
-        ]
+            {
+                "id": 101,
+                "user_id": 1,
+                "items": ["laptop", "mouse"],
+                "total": 1200.50,
+                "status": "shipped",
+            },
+            {
+                "id": 102,
+                "user_id": 2,
+                "items": ["book", "pen"],
+                "total": 25.99,
+                "status": "pending",
+            },
+            {"id": 103, "user_id": 1, "items": ["monitor"], "total": 300.00, "status": "delivered"},
+        ],
     }
+
 
 class TestIRISDocumentFilterBasics:
     """Test basic IRIS Document Database filter operations"""
@@ -89,7 +113,8 @@ class TestIRISDocumentFilterBasics:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # IRIS JSON_TABLE syntax should be translated to PostgreSQL jsonb
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT *
                     FROM JSON_TABLE(
                         '{"users": [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]}',
@@ -99,7 +124,8 @@ class TestIRISDocumentFilterBasics:
                             name VARCHAR(100) PATH '$.name'
                         )
                     ) AS jt
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) == 2, "Should extract 2 users from JSON"
@@ -115,9 +141,24 @@ class TestIRISDocumentFilterBasics:
             with conn.cursor() as cur:
                 # Test various JSON_EXTRACT patterns
                 test_cases = [
-                    ("SELECT JSON_EXTRACT('{}', '$.name') AS extracted".format('{"name": "test"}'), "test"),
-                    ("SELECT JSON_EXTRACT('{}', '$.user.age') AS age".format('{"user": {"age": 30}}'), 30),
-                    ("SELECT JSON_EXTRACT('{}', '$.items[0]') AS first_item".format('{"items": ["a", "b"]}'), "a"),
+                    (
+                        "SELECT JSON_EXTRACT('{}', '$.name') AS extracted".format(
+                            '{"name": "test"}'
+                        ),
+                        "test",
+                    ),
+                    (
+                        "SELECT JSON_EXTRACT('{}', '$.user.age') AS age".format(
+                            '{"user": {"age": 30}}'
+                        ),
+                        30,
+                    ),
+                    (
+                        "SELECT JSON_EXTRACT('{}', '$.items[0]') AS first_item".format(
+                            '{"items": ["a", "b"]}'
+                        ),
+                        "a",
+                    ),
                 ]
 
                 for query, expected in test_cases:
@@ -133,18 +174,21 @@ class TestIRISDocumentFilterBasics:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Test JSON_EXISTS for filtering
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT doc_id, document
                     FROM documents
                     WHERE JSON_EXISTS(document, '$.active' RETURNING BOOLEAN) = TRUE
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 # Should return documents that have 'active' field
                 for doc_id, document in results:
                     doc_obj = json.loads(document) if isinstance(document, str) else document
-                    assert 'active' in doc_obj, "Document should have 'active' field"
+                    assert "active" in doc_obj, "Document should have 'active' field"
+
 
 class TestIRISDocumentQueryOperations:
     """Test IRIS Document Database query operations"""
@@ -157,7 +201,8 @@ class TestIRISDocumentQueryOperations:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # IRIS document field access patterns
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         id,
                         document->>'name' AS user_name,
@@ -168,7 +213,8 @@ class TestIRISDocumentQueryOperations:
                     WHERE document->>'active' = 'true'
                     ORDER BY CAST(document->>'age' AS INTEGER) DESC
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "LIMIT should be respected"
@@ -188,7 +234,8 @@ class TestIRISDocumentQueryOperations:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Array operations within documents
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         order_id,
                         document->>'total' AS order_total,
@@ -199,7 +246,8 @@ class TestIRISDocumentQueryOperations:
                     AND CAST(document->>'total' AS DECIMAL) > 100.00
                     ORDER BY CAST(document->>'total' AS DECIMAL) DESC
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -216,7 +264,8 @@ class TestIRISDocumentQueryOperations:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Nested object access and filtering
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         user_id,
                         document->'profile'->>'name' AS profile_name,
@@ -228,13 +277,15 @@ class TestIRISDocumentQueryOperations:
                     AND document->'profile'->>'department' = 'Engineering'
                     ORDER BY document->'profile'->>'name'
                     LIMIT 20
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
                 for user_id, name, title, city, country in results:
-                    assert country == 'USA', "Should filter by country"
+                    assert country == "USA", "Should filter by country"
                     assert name is not None, "Profile name should exist"
+
 
 class TestIRISDocumentAggregations:
     """Test document database aggregation operations"""
@@ -247,7 +298,8 @@ class TestIRISDocumentAggregations:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Aggregations on document fields
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         document->>'department' AS department,
                         COUNT(*) AS employee_count,
@@ -259,7 +311,8 @@ class TestIRISDocumentAggregations:
                     GROUP BY document->>'department'
                     HAVING COUNT(*) >= 5
                     ORDER BY avg_salary DESC
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -276,7 +329,8 @@ class TestIRISDocumentAggregations:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Aggregations with array functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         document->>'category' AS product_category,
                         COUNT(*) AS product_count,
@@ -287,7 +341,8 @@ class TestIRISDocumentAggregations:
                     GROUP BY document->>'category'
                     ORDER BY total_value DESC
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -295,6 +350,7 @@ class TestIRISDocumentAggregations:
                     assert count > 0, "Should have products in category"
                     assert avg_tags > 0, "Should have tags (filtered by WHERE)"
                     assert total_val > 0, "Total value should be positive"
+
 
 class TestIRISDocumentComplexQueries:
     """Test complex document database queries"""
@@ -307,7 +363,8 @@ class TestIRISDocumentComplexQueries:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Join document table with relational table
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         u.id AS user_id,
                         u.username,
@@ -323,7 +380,8 @@ class TestIRISDocumentComplexQueries:
                     GROUP BY u.id, u.username, ud.document
                     ORDER BY post_count DESC
                     LIMIT 15
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -340,7 +398,8 @@ class TestIRISDocumentComplexQueries:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # CTE with document operations
-                cur.execute("""
+                cur.execute(
+                    """
                     WITH user_metrics AS (
                         SELECT
                             user_id,
@@ -378,7 +437,8 @@ class TestIRISDocumentComplexQueries:
                     FROM city_stats cs
                     ORDER BY cs.users_in_city DESC
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -388,8 +448,8 @@ class TestIRISDocumentComplexQueries:
 
                     # Verify JSON summary structure
                     summary_obj = json.loads(summary)
-                    assert summary_obj['city'] == city
-                    assert 'stats' in summary_obj
+                    assert summary_obj["city"] == city
+                    assert "stats" in summary_obj
 
     def test_document_window_functions(self, pgwire_server, connection_params):
         """Test window functions with document field operations"""
@@ -399,7 +459,8 @@ class TestIRISDocumentComplexQueries:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Window functions with document fields
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         employee_id,
                         document->>'name' AS employee_name,
@@ -419,7 +480,8 @@ class TestIRISDocumentComplexQueries:
                     WHERE document->>'active' = 'true'
                     ORDER BY document->>'department', salary_rank_in_dept
                     LIMIT 25
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -428,6 +490,7 @@ class TestIRISDocumentComplexQueries:
                     for emp_id, name, dept, salary, rank, avg_sal, prev_emp in results:
                         assert rank >= 1, "Rank should start from 1"
                         assert avg_sal > 0, "Department average should be positive"
+
 
 class TestIRISDocumentPerformance:
     """Test performance characteristics of document operations"""
@@ -442,7 +505,8 @@ class TestIRISDocumentPerformance:
                 # Performance test for document field access
                 start_time = time.perf_counter()
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         doc_id,
                         document->>'name' AS name,
@@ -455,7 +519,8 @@ class TestIRISDocumentPerformance:
                     AND jsonb_array_length(document->'interests') >= 3
                     ORDER BY document->>'name'
                     LIMIT 100
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 execution_time_ms = (time.perf_counter() - start_time) * 1000
@@ -463,8 +528,9 @@ class TestIRISDocumentPerformance:
                 assert len(results) <= 100, "LIMIT should be respected"
 
                 # Constitutional requirement: document queries should be reasonably fast
-                assert execution_time_ms < 1500.0, \
-                    f"Document query took {execution_time_ms}ms, should be < 1500ms"
+                assert (
+                    execution_time_ms < 1500.0
+                ), f"Document query took {execution_time_ms}ms, should be < 1500ms"
 
     def test_document_aggregation_performance(self, pgwire_server, connection_params):
         """Test performance of document aggregation operations"""
@@ -476,7 +542,8 @@ class TestIRISDocumentPerformance:
                 # Performance test for document aggregations
                 start_time = time.perf_counter()
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         document->>'category' AS category,
                         COUNT(*) AS item_count,
@@ -490,20 +557,23 @@ class TestIRISDocumentPerformance:
                     GROUP BY document->>'category'
                     HAVING COUNT(*) >= 5
                     ORDER BY avg_price DESC
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 execution_time_ms = (time.perf_counter() - start_time) * 1000
 
                 # Document aggregations should complete in reasonable time
-                assert execution_time_ms < 2000.0, \
-                    f"Document aggregation took {execution_time_ms}ms, should be < 2000ms"
+                assert (
+                    execution_time_ms < 2000.0
+                ), f"Document aggregation took {execution_time_ms}ms, should be < 2000ms"
 
                 if results:
                     # Verify aggregation results
                     for category, count, avg_price, features, first, last in results:
                         assert count >= 5, "Should meet HAVING criteria"
                         assert avg_price > 0, "Average price should be positive"
+
 
 class TestIRISDocumentErrorHandling:
     """Test error handling for document operations"""
@@ -516,7 +586,8 @@ class TestIRISDocumentErrorHandling:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Invalid JSON path should handle gracefully
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         doc_id,
                         document->>'name' AS name,
@@ -524,7 +595,8 @@ class TestIRISDocumentErrorHandling:
                     FROM user_documents
                     WHERE document->>'name' IS NOT NULL
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -541,7 +613,8 @@ class TestIRISDocumentErrorHandling:
             with conn.cursor() as cur:
                 # Type conversion errors should be handled gracefully
                 try:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             doc_id,
                             CAST(document->>'age' AS INTEGER) AS age,
@@ -549,7 +622,8 @@ class TestIRISDocumentErrorHandling:
                         FROM user_documents
                         WHERE document->>'age' IS NOT NULL
                         LIMIT 5
-                    """)
+                    """
+                    )
                     results = cur.fetchall()
                     # If successful, verify data integrity
                     for doc_id, age, bad_date in results:
@@ -568,13 +642,15 @@ class TestIRISDocumentErrorHandling:
             with conn.cursor() as cur:
                 # Query should handle malformed JSON gracefully
                 try:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT doc_id, document
                         FROM user_documents
                         WHERE jsonb_typeof(document) = 'object'
                         AND document IS NOT NULL
                         LIMIT 10
-                    """)
+                    """
+                    )
                     results = cur.fetchall()
 
                     for doc_id, document in results:
@@ -587,12 +663,15 @@ class TestIRISDocumentErrorHandling:
                     # JSON errors should be handled meaningfully
                     assert "json" in str(e).lower() or "format" in str(e).lower()
 
+
 # TDD Validation: These tests should fail until implementation exists
 def test_document_filters_tdd_validation():
     """Verify document filter tests fail appropriately before implementation"""
     if SERVER_AVAILABLE:
         # If this passes, implementation already exists
-        pytest.fail("TDD violation: Document filter implementation exists before tests were written")
+        pytest.fail(
+            "TDD violation: Document filter implementation exists before tests were written"
+        )
     else:
         # Expected state: tests exist, implementation doesn't
         assert True, "TDD compliant: Document filter tests written before implementation"

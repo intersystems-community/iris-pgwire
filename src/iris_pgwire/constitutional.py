@@ -12,49 +12,57 @@ This module provides utilities for constitutional compliance validation,
 reporting, and governance enforcement.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
-from enum import Enum
 import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
 import structlog
 
-from .performance_monitor import get_monitor, PerformanceStats
-from .debug_tracer import get_tracer, TraceLevel
+from .debug_tracer import TraceLevel, get_tracer
 from .iris_constructs import IRISConstructTranslator
+from .performance_monitor import get_monitor
 
 logger = structlog.get_logger(__name__)
 
+
 class ConstitutionalPrinciple(Enum):
     """The 5 core constitutional principles"""
+
     PROTOCOL_FIDELITY = "protocol_fidelity"
     TEST_FIRST_DEVELOPMENT = "test_first_development"
     PHASED_IMPLEMENTATION = "phased_implementation"
     IRIS_INTEGRATION = "iris_integration"
     PRODUCTION_READINESS = "production_readiness"
 
+
 @dataclass
 class ComplianceRequirement:
     """Individual constitutional requirement"""
+
     principle: ConstitutionalPrinciple
     requirement_id: str
     description: str
     mandatory: bool
-    metric_name: Optional[str] = None
-    threshold_value: Optional[float] = None
-    unit: Optional[str] = None
+    metric_name: str | None = None
+    threshold_value: float | None = None
+    unit: str | None = None
+
 
 @dataclass
 class ComplianceStatus:
     """Status of constitutional compliance"""
+
     requirement: ComplianceRequirement
     compliant: bool
-    current_value: Optional[float] = None
+    current_value: float | None = None
     last_checked: float = field(default_factory=time.time)
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def status_text(self) -> str:
         return "✅ COMPLIANT" if self.compliant else "❌ NON-COMPLIANT"
+
 
 class ConstitutionalGovernor:
     """
@@ -66,9 +74,9 @@ class ConstitutionalGovernor:
 
     def __init__(self):
         self.requirements = self._define_requirements()
-        self.compliance_history: List[Tuple[float, Dict[str, ComplianceStatus]]] = []
+        self.compliance_history: list[tuple[float, dict[str, ComplianceStatus]]] = []
 
-    def _define_requirements(self) -> Dict[str, ComplianceRequirement]:
+    def _define_requirements(self) -> dict[str, ComplianceRequirement]:
         """Define all constitutional requirements"""
         return {
             # Production Readiness Requirements
@@ -79,9 +87,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="translation_time_ms",
                 threshold_value=5.0,
-                unit="milliseconds"
+                unit="milliseconds",
             ),
-
             "error_rate": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PRODUCTION_READINESS,
                 requirement_id="error_rate",
@@ -89,9 +96,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="error_rate",
                 threshold_value=1.0,
-                unit="percent"
+                unit="percent",
             ),
-
             "availability": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PRODUCTION_READINESS,
                 requirement_id="availability",
@@ -99,9 +105,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="availability_rate",
                 threshold_value=99.9,
-                unit="percent"
+                unit="percent",
             ),
-
             # IRIS Integration Requirements
             "construct_coverage": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.IRIS_INTEGRATION,
@@ -110,9 +115,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="supported_constructs",
                 threshold_value=87.0,
-                unit="constructs"
+                unit="constructs",
             ),
-
             "translation_accuracy": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.IRIS_INTEGRATION,
                 requirement_id="translation_accuracy",
@@ -120,9 +124,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="translation_accuracy",
                 threshold_value=95.0,
-                unit="percent"
+                unit="percent",
             ),
-
             # Protocol Fidelity Requirements
             "protocol_compliance": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PROTOCOL_FIDELITY,
@@ -131,9 +134,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="protocol_compliance_rate",
                 threshold_value=100.0,
-                unit="percent"
+                unit="percent",
             ),
-
             # Test-First Development Requirements
             "e2e_coverage": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.TEST_FIRST_DEVELOPMENT,
@@ -142,9 +144,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="e2e_test_coverage",
                 threshold_value=90.0,
-                unit="percent"
+                unit="percent",
             ),
-
             "integration_tests": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.TEST_FIRST_DEVELOPMENT,
                 requirement_id="integration_tests",
@@ -152,9 +153,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="integration_test_pass_rate",
                 threshold_value=100.0,
-                unit="percent"
+                unit="percent",
             ),
-
             # Phased Implementation Requirements
             "phase_progression": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PHASED_IMPLEMENTATION,
@@ -163,9 +163,8 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="phase_completion_rate",
                 threshold_value=100.0,
-                unit="percent"
+                unit="percent",
             ),
-
             # Transparency and Governance
             "debug_tracing": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PRODUCTION_READINESS,
@@ -174,9 +173,8 @@ class ConstitutionalGovernor:
                 mandatory=False,
                 metric_name="debug_trace_availability",
                 threshold_value=100.0,
-                unit="percent"
+                unit="percent",
             ),
-
             "monitoring_coverage": ComplianceRequirement(
                 principle=ConstitutionalPrinciple.PRODUCTION_READINESS,
                 requirement_id="monitoring_coverage",
@@ -184,11 +182,11 @@ class ConstitutionalGovernor:
                 mandatory=True,
                 metric_name="monitoring_coverage",
                 threshold_value=100.0,
-                unit="percent"
-            )
+                unit="percent",
+            ),
         }
 
-    def check_compliance(self, include_optional: bool = False) -> Dict[str, ComplianceStatus]:
+    def check_compliance(self, include_optional: bool = False) -> dict[str, ComplianceStatus]:
         """
         Check current constitutional compliance across all requirements
 
@@ -212,20 +210,20 @@ class ConstitutionalGovernor:
                 compliance_results[req_id] = status
 
                 if not status.compliant and requirement.mandatory:
-                    logger.warning("Constitutional violation detected",
-                                 requirement_id=req_id,
-                                 principle=requirement.principle.value,
-                                 current_value=status.current_value,
-                                 threshold=requirement.threshold_value)
+                    logger.warning(
+                        "Constitutional violation detected",
+                        requirement_id=req_id,
+                        principle=requirement.principle.value,
+                        current_value=status.current_value,
+                        threshold=requirement.threshold_value,
+                    )
 
             except Exception as e:
-                logger.error("Error checking constitutional requirement",
-                           requirement_id=req_id,
-                           error=str(e))
+                logger.error(
+                    "Error checking constitutional requirement", requirement_id=req_id, error=str(e)
+                )
                 compliance_results[req_id] = ComplianceStatus(
-                    requirement=requirement,
-                    compliant=False,
-                    details={"error": str(e)}
+                    requirement=requirement, compliant=False, details={"error": str(e)}
                 )
 
         # Store in compliance history
@@ -235,9 +233,11 @@ class ConstitutionalGovernor:
         if len(self.compliance_history) > 100:
             self.compliance_history = self.compliance_history[-100:]
 
-        logger.info("Constitutional compliance check completed",
-                   total_requirements=len(compliance_results),
-                   violations=sum(1 for s in compliance_results.values() if not s.compliant))
+        logger.info(
+            "Constitutional compliance check completed",
+            total_requirements=len(compliance_results),
+            violations=sum(1 for s in compliance_results.values() if not s.compliant),
+        )
 
         return compliance_results
 
@@ -269,9 +269,7 @@ class ConstitutionalGovernor:
         else:
             # Default: assume compliant for unknown requirements
             return ComplianceStatus(
-                requirement=requirement,
-                compliant=True,
-                details={"status": "not_implemented"}
+                requirement=requirement, compliant=True, details={"status": "not_implemented"}
             )
 
     def _check_sla_compliance(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -292,8 +290,8 @@ class ConstitutionalGovernor:
                 "p95_time_ms": stats.p95_time_ms,
                 "p99_time_ms": stats.p99_time_ms,
                 "total_operations": stats.total_translations,
-                "sla_violations": stats.sla_violations
-            }
+                "sla_violations": stats.sla_violations,
+            },
         )
 
     def _check_error_rate(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -308,10 +306,7 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=compliant,
             current_value=current_value,
-            details={
-                "total_operations": stats.total_translations,
-                "error_rate": stats.error_rate
-            }
+            details={"total_operations": stats.total_translations, "error_rate": stats.error_rate},
         )
 
     def _check_construct_coverage(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -328,7 +323,9 @@ class ConstitutionalGovernor:
         # SQL extensions are harder to count, estimate 5
         sql_extensions = 5
 
-        total_constructs = system_functions + iris_functions + data_types + json_functions + sql_extensions
+        total_constructs = (
+            system_functions + iris_functions + data_types + json_functions + sql_extensions
+        )
         current_value = float(total_constructs)
         compliant = current_value >= requirement.threshold_value
 
@@ -342,8 +339,8 @@ class ConstitutionalGovernor:
                 "data_types": data_types,
                 "json_functions": json_functions,
                 "sql_extensions": sql_extensions,
-                "total_constructs": total_constructs
-            }
+                "total_constructs": total_constructs,
+            },
         )
 
     def _check_translation_accuracy(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -355,7 +352,9 @@ class ConstitutionalGovernor:
         if stats.total_translations == 0:
             accuracy = 100.0
         else:
-            successful_ops = stats.total_translations - (stats.sla_violations + int(stats.error_rate * stats.total_translations / 100))
+            successful_ops = stats.total_translations - (
+                stats.sla_violations + int(stats.error_rate * stats.total_translations / 100)
+            )
             accuracy = (successful_ops / stats.total_translations) * 100
 
         current_value = accuracy
@@ -367,8 +366,8 @@ class ConstitutionalGovernor:
             current_value=current_value,
             details={
                 "total_operations": stats.total_translations,
-                "accuracy_calculation": "successful_ops / total_ops * 100"
-            }
+                "accuracy_calculation": "successful_ops / total_ops * 100",
+            },
         )
 
     def _check_debug_tracing(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -384,14 +383,14 @@ class ConstitutionalGovernor:
                 requirement=requirement,
                 compliant=available,
                 current_value=current_value,
-                details={"tracer_available": available}
+                details={"tracer_available": available},
             )
         except Exception as e:
             return ComplianceStatus(
                 requirement=requirement,
                 compliant=False,
                 current_value=0.0,
-                details={"error": str(e)}
+                details={"error": str(e)},
             )
 
     def _check_monitoring_coverage(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -409,15 +408,15 @@ class ConstitutionalGovernor:
                 current_value=current_value,
                 details={
                     "monitor_available": available,
-                    "total_operations_monitored": stats.total_translations
-                }
+                    "total_operations_monitored": stats.total_translations,
+                },
             )
         except Exception as e:
             return ComplianceStatus(
                 requirement=requirement,
                 compliant=False,
                 current_value=0.0,
-                details={"error": str(e)}
+                details={"error": str(e)},
             )
 
     def _check_e2e_coverage(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -429,7 +428,7 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=True,  # Placeholder
             current_value=95.0,  # Placeholder
-            details={"status": "placeholder_implementation"}
+            details={"status": "placeholder_implementation"},
         )
 
     def _check_integration_tests(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -438,7 +437,7 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=True,  # Placeholder
             current_value=100.0,  # Placeholder
-            details={"status": "placeholder_implementation"}
+            details={"status": "placeholder_implementation"},
         )
 
     def _check_phase_progression(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -447,7 +446,7 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=True,  # Placeholder
             current_value=100.0,  # Placeholder
-            details={"status": "placeholder_implementation"}
+            details={"status": "placeholder_implementation"},
         )
 
     def _check_protocol_compliance(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -456,7 +455,7 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=True,  # Placeholder
             current_value=100.0,  # Placeholder
-            details={"status": "placeholder_implementation"}
+            details={"status": "placeholder_implementation"},
         )
 
     def _check_availability(self, requirement: ComplianceRequirement) -> ComplianceStatus:
@@ -465,21 +464,24 @@ class ConstitutionalGovernor:
             requirement=requirement,
             compliant=True,  # Placeholder
             current_value=99.95,  # Placeholder
-            details={"status": "placeholder_implementation"}
+            details={"status": "placeholder_implementation"},
         )
 
-    def generate_constitutional_report(self) -> Dict[str, Any]:
+    def generate_constitutional_report(self) -> dict[str, Any]:
         """Generate comprehensive constitutional compliance report"""
         compliance_results = self.check_compliance(include_optional=True)
 
         # Calculate overall compliance
         mandatory_requirements = [r for r in self.requirements.values() if r.mandatory]
-        mandatory_results = {k: v for k, v in compliance_results.items()
-                           if self.requirements[k].mandatory}
+        mandatory_results = {
+            k: v for k, v in compliance_results.items() if self.requirements[k].mandatory
+        }
 
         total_mandatory = len(mandatory_results)
         compliant_mandatory = sum(1 for s in mandatory_results.values() if s.compliant)
-        overall_compliance_rate = (compliant_mandatory / total_mandatory) * 100 if total_mandatory > 0 else 0
+        overall_compliance_rate = (
+            (compliant_mandatory / total_mandatory) * 100 if total_mandatory > 0 else 0
+        )
 
         # Group by principle
         by_principle = {}
@@ -487,46 +489,54 @@ class ConstitutionalGovernor:
             principle = status.requirement.principle.value
             if principle not in by_principle:
                 by_principle[principle] = []
-            by_principle[principle].append({
-                "requirement_id": req_id,
-                "description": status.requirement.description,
-                "mandatory": status.requirement.mandatory,
-                "compliant": status.compliant,
-                "current_value": status.current_value,
-                "threshold": status.requirement.threshold_value,
-                "unit": status.requirement.unit,
-                "status": status.status_text,
-                "details": status.details
-            })
+            by_principle[principle].append(
+                {
+                    "requirement_id": req_id,
+                    "description": status.requirement.description,
+                    "mandatory": status.requirement.mandatory,
+                    "compliant": status.compliant,
+                    "current_value": status.current_value,
+                    "threshold": status.requirement.threshold_value,
+                    "unit": status.requirement.unit,
+                    "status": status.status_text,
+                    "details": status.details,
+                }
+            )
 
         return {
             "constitutional_governance": {
                 "overall_compliance_rate": overall_compliance_rate,
                 "mandatory_compliant": compliant_mandatory,
                 "mandatory_total": total_mandatory,
-                "status": "CONSTITUTIONAL" if overall_compliance_rate >= 95.0 else "NON_CONSTITUTIONAL",
-                "timestamp": time.time()
+                "status": (
+                    "CONSTITUTIONAL" if overall_compliance_rate >= 95.0 else "NON_CONSTITUTIONAL"
+                ),
+                "timestamp": time.time(),
             },
             "compliance_by_principle": by_principle,
             "summary": {
                 "total_requirements": len(compliance_results),
-                "compliant_requirements": sum(1 for s in compliance_results.values() if s.compliant),
+                "compliant_requirements": sum(
+                    1 for s in compliance_results.values() if s.compliant
+                ),
                 "violation_count": sum(1 for s in compliance_results.values() if not s.compliant),
                 "critical_violations": [
                     {
                         "requirement_id": req_id,
                         "description": status.requirement.description,
                         "current_value": status.current_value,
-                        "threshold": status.requirement.threshold_value
+                        "threshold": status.requirement.threshold_value,
                     }
                     for req_id, status in mandatory_results.items()
                     if not status.compliant
-                ]
-            }
+                ],
+            },
         }
 
+
 # Global constitutional governor instance
-_global_governor: Optional[ConstitutionalGovernor] = None
+_global_governor: ConstitutionalGovernor | None = None
+
 
 def get_governor() -> ConstitutionalGovernor:
     """Get global constitutional governor instance"""

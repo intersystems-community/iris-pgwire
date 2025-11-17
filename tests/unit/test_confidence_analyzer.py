@@ -5,30 +5,27 @@ Tests the confidence analysis system that evaluates translation quality,
 reliability, and provides actionable insights for IRIS SQL translations.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock
+
+import pytest
 
 from iris_pgwire.sql_translator.confidence_analyzer import (
-    TranslationConfidenceAnalyzer,
     ConfidenceLevel,
-    RiskCategory,
     ConfidenceMetrics,
-    ConfidenceInsight,
     ConfidenceReport,
-    ConfidenceTrend,
+    RiskCategory,
+    TranslationConfidenceAnalyzer,
+    analyze_translation_confidence,
     get_confidence_analyzer,
-    analyze_translation_confidence
 )
 from iris_pgwire.sql_translator.models import (
-    TranslationResult,
     ConstructMapping,
     ConstructType,
     PerformanceStats,
-    ValidationResult,
-    ValidationIssue,
     SourceLocation,
-    DebugTrace
+    TranslationResult,
+    ValidationIssue,
+    ValidationResult,
 )
 
 
@@ -56,27 +53,21 @@ class TestTranslationConfidenceAnalyzer:
                 original_syntax="%SQLUPPER(name)",
                 translated_syntax="UPPER(name)",
                 confidence=0.95,
-                source_location=SourceLocation(line=1, column=8, length=15)
+                source_location=SourceLocation(line=1, column=8, length=15),
             )
         ]
 
         performance_stats = PerformanceStats(
-            translation_time_ms=2.5,
-            cache_hit=False,
-            constructs_detected=1,
-            constructs_translated=1
+            translation_time_ms=2.5, cache_hit=False, constructs_detected=1, constructs_translated=1
         )
 
-        validation_result = ValidationResult(
-            success=True,
-            confidence=0.9
-        )
+        validation_result = ValidationResult(success=True, confidence=0.9)
 
         result = TranslationResult(
             translated_sql="SELECT UPPER(name) FROM users;",
             construct_mappings=mappings,
             performance_stats=performance_stats,
-            validation_result=validation_result
+            validation_result=validation_result,
         )
 
         # Analyze confidence
@@ -98,30 +89,28 @@ class TestTranslationConfidenceAnalyzer:
                 original_syntax="JSON_COMPLEX_FUNCTION(data, path)",
                 translated_syntax="jsonb_path_query(data, path)",  # Hypothetical low-confidence mapping
                 confidence=0.3,
-                source_location=SourceLocation(line=1, column=8, length=25)
+                source_location=SourceLocation(line=1, column=8, length=25),
             ),
             ConstructMapping(
                 construct_type=ConstructType.SYNTAX,
                 original_syntax="TOP 10 PERCENT",
                 translated_syntax="LIMIT (0.1 * COUNT(*))",  # Complex, low-confidence conversion
                 confidence=0.2,
-                source_location=SourceLocation(line=1, column=40, length=12)
-            )
+                source_location=SourceLocation(line=1, column=40, length=12),
+            ),
         ]
 
         performance_stats = PerformanceStats(
             translation_time_ms=8.5,  # SLA violation
             cache_hit=False,
             constructs_detected=2,
-            constructs_translated=1  # One construct failed
+            constructs_translated=1,  # One construct failed
         )
 
         validation_result = ValidationResult(
             success=False,
             confidence=0.4,
-            issues=[
-                ValidationIssue(severity="error", message="Semantic mismatch detected")
-            ]
+            issues=[ValidationIssue(severity="error", message="Semantic mismatch detected")],
         )
 
         result = TranslationResult(
@@ -129,7 +118,7 @@ class TestTranslationConfidenceAnalyzer:
             construct_mappings=mappings,
             performance_stats=performance_stats,
             validation_result=validation_result,
-            warnings=["Complex construct translation may be inaccurate"]
+            warnings=["Complex construct translation may be inaccurate"],
         )
 
         # Analyze confidence
@@ -150,35 +139,32 @@ class TestTranslationConfidenceAnalyzer:
                 original_syntax="%SQLUPPER(name)",
                 translated_syntax="UPPER(name)",
                 confidence=0.95,
-                source_location=SourceLocation(line=1, column=8, length=15)
+                source_location=SourceLocation(line=1, column=8, length=15),
             ),
             ConstructMapping(
                 construct_type=ConstructType.DATA_TYPE,
                 original_syntax="LONGVARCHAR",
                 translated_syntax="TEXT",
                 confidence=0.85,
-                source_location=SourceLocation(line=2, column=15, length=11)
+                source_location=SourceLocation(line=2, column=15, length=11),
             ),
             ConstructMapping(
                 construct_type=ConstructType.JSON_FUNCTION,
                 original_syntax="JSON_EXTRACT(data, '$.field')",
                 translated_syntax="data->>'field'",
                 confidence=0.6,  # Medium confidence
-                source_location=SourceLocation(line=3, column=8, length=28)
-            )
+                source_location=SourceLocation(line=3, column=8, length=28),
+            ),
         ]
 
         performance_stats = PerformanceStats(
-            translation_time_ms=3.2,
-            cache_hit=True,
-            constructs_detected=3,
-            constructs_translated=3
+            translation_time_ms=3.2, cache_hit=True, constructs_detected=3, constructs_translated=3
         )
 
         result = TranslationResult(
             translated_sql="SELECT UPPER(name) FROM users WHERE data->>'field' = 'value';",
             construct_mappings=mappings,
-            performance_stats=performance_stats
+            performance_stats=performance_stats,
         )
 
         # Analyze confidence
@@ -194,10 +180,7 @@ class TestTranslationConfidenceAnalyzer:
         """Test performance confidence calculation"""
         # High performance stats
         high_perf_stats = PerformanceStats(
-            translation_time_ms=1.5,
-            cache_hit=True,
-            constructs_detected=5,
-            constructs_translated=5
+            translation_time_ms=1.5, cache_hit=True, constructs_detected=5, constructs_translated=5
         )
 
         high_confidence = self.analyzer._calculate_performance_confidence(high_perf_stats)
@@ -208,7 +191,7 @@ class TestTranslationConfidenceAnalyzer:
             translation_time_ms=7.5,  # SLA violation
             cache_hit=False,
             constructs_detected=5,
-            constructs_translated=3  # Some failures
+            constructs_translated=3,  # Some failures
         )
 
         low_confidence = self.analyzer._calculate_performance_confidence(low_perf_stats)
@@ -223,7 +206,7 @@ class TestTranslationConfidenceAnalyzer:
                 original_syntax="COMPLEX_OPERATION",
                 translated_syntax="complex_translation",
                 confidence=0.3,  # Critical confidence
-                source_location=SourceLocation(line=1, column=1, length=10)
+                source_location=SourceLocation(line=1, column=1, length=10),
             )
         ]
 
@@ -231,20 +214,17 @@ class TestTranslationConfidenceAnalyzer:
             translation_time_ms=12.0,  # SLA violation
             cache_hit=False,
             constructs_detected=2,
-            constructs_translated=1  # Incomplete translation
+            constructs_translated=1,  # Incomplete translation
         )
 
-        validation_result = ValidationResult(
-            success=False,  # Validation failure
-            confidence=0.5
-        )
+        validation_result = ValidationResult(success=False, confidence=0.5)  # Validation failure
 
         result = TranslationResult(
             translated_sql="SELECT complex_translation FROM table;",
             construct_mappings=mappings,
             performance_stats=performance_stats,
             validation_result=validation_result,
-            warnings=["Translation warning"]  # Has warnings
+            warnings=["Translation warning"],  # Has warnings
         )
 
         metrics = self.analyzer._calculate_confidence_metrics(result)
@@ -288,15 +268,15 @@ class TestTranslationConfidenceAnalyzer:
                 translated_syntax="UPPER(name)",
                 confidence=0.95,
                 source_location=SourceLocation(line=1, column=8, length=15),
-                metadata={"function_name": "%SQLUPPER"}
+                metadata={"function_name": "%SQLUPPER"},
             ),
             ConstructMapping(
                 construct_type=ConstructType.DATA_TYPE,
                 original_syntax="LONGVARCHAR",
                 translated_syntax="TEXT",
                 confidence=0.4,  # Low confidence
-                source_location=SourceLocation(line=2, column=15, length=11)
-            )
+                source_location=SourceLocation(line=2, column=15, length=11),
+            ),
         ]
 
         analysis = self.analyzer._analyze_construct_confidence(mappings)
@@ -305,23 +285,21 @@ class TestTranslationConfidenceAnalyzer:
 
         function_key = "FUNCTION:%SQLUPPER(name)"
         assert function_key in analysis
-        assert analysis[function_key]['confidence'] == 0.95
-        assert analysis[function_key]['confidence_level'] == ConfidenceLevel.EXCELLENT.value
-        assert analysis[function_key]['risk_assessment'] == "minimal"
+        assert analysis[function_key]["confidence"] == 0.95
+        assert analysis[function_key]["confidence_level"] == ConfidenceLevel.EXCELLENT.value
+        assert analysis[function_key]["risk_assessment"] == "minimal"
 
         datatype_key = "DATA_TYPE:LONGVARCHAR"
         assert datatype_key in analysis
-        assert analysis[datatype_key]['confidence'] == 0.4
-        assert analysis[datatype_key]['confidence_level'] == ConfidenceLevel.LOW.value
-        assert analysis[datatype_key]['risk_assessment'] == "high"
+        assert analysis[datatype_key]["confidence"] == 0.4
+        assert analysis[datatype_key]["confidence_level"] == ConfidenceLevel.LOW.value
+        assert analysis[datatype_key]["risk_assessment"] == "high"
 
     def test_insight_generation(self):
         """Test generation of confidence insights"""
         # Create result with various insight triggers
         result = self._create_test_result(
-            sla_violation=True,
-            validation_failure=True,
-            low_confidence_constructs=True
+            sla_violation=True, validation_failure=True, low_confidence_constructs=True
         )
 
         metrics = self.analyzer._calculate_confidence_metrics(result)
@@ -334,7 +312,10 @@ class TestTranslationConfidenceAnalyzer:
         categories = {insight.category for insight in insights}
         severities = {insight.severity for insight in insights}
 
-        assert RiskCategory.PERFORMANCE_IMPACT in categories or RiskCategory.SEMANTIC_ACCURACY in categories
+        assert (
+            RiskCategory.PERFORMANCE_IMPACT in categories
+            or RiskCategory.SEMANTIC_ACCURACY in categories
+        )
         assert "warning" in severities or "error" in severities
 
     def test_confidence_trends_analysis(self):
@@ -345,14 +326,19 @@ class TestTranslationConfidenceAnalyzer:
         # Simulate improving trend - ensure all timestamps are within the last 24 hours
         confidence_values = [0.6, 0.65, 0.7, 0.75, 0.8, 0.85]
         for i, confidence in enumerate(confidence_values):
-            timestamp = base_time - timedelta(hours=i*3)  # Each entry 3 hours apart, all within 24h
+            timestamp = base_time - timedelta(
+                hours=i * 3
+            )  # Each entry 3 hours apart, all within 24h
             self.analyzer._record_confidence_data(timestamp, confidence, f"query_{i}")
 
         # Analyze trend
         trend = self.analyzer.analyze_confidence_trends("24h")
 
         assert trend.sample_count == len(confidence_values)
-        assert trend.confidence_trend in ["improving", "stable"]  # Might be stable due to small diff
+        assert trend.confidence_trend in [
+            "improving",
+            "stable",
+        ]  # Might be stable due to small diff
         assert trend.trend_confidence > 0.5
         assert trend.average_confidence > 0.7
 
@@ -362,9 +348,7 @@ class TestTranslationConfidenceAnalyzer:
         confidence_values = [0.9, 0.8, 0.7, 0.6, 0.3, 0.95, 0.85]
         for i, confidence in enumerate(confidence_values):
             self.analyzer._record_confidence_data(
-                datetime.utcnow() - timedelta(minutes=i),
-                confidence,
-                f"query_{i}"
+                datetime.utcnow() - timedelta(minutes=i), confidence, f"query_{i}"
             )
 
         stats = self.analyzer.get_confidence_statistics()
@@ -399,7 +383,7 @@ class TestTranslationConfidenceAnalyzer:
                 construct_confidence_avg=0.8,
                 validation_confidence_avg=0.8,
                 low_confidence_count=0,
-                critical_confidence_count=0
+                critical_confidence_count=0,
             )
 
     def test_weighted_confidence_calculation(self):
@@ -420,29 +404,33 @@ class TestTranslationConfidenceAnalyzer:
         """Test integration with constitutional compliance requirements"""
         # Test translation that meets constitutional requirements
         compliant_result = self._create_test_result(
-            translation_time=2.0,  # Under 5ms SLA
-            high_confidence=True
+            translation_time=2.0, high_confidence=True  # Under 5ms SLA
         )
 
         report = self.analyzer.analyze_translation_confidence(compliant_result)
 
-        assert report.performance_analysis['constitutional_compliance']['sla_violation'] is False
+        assert report.performance_analysis["constitutional_compliance"]["sla_violation"] is False
 
         # Test translation that violates constitutional requirements
         non_compliant_result = self._create_test_result(
-            translation_time=8.0,  # Over 5ms SLA
-            high_confidence=False
+            translation_time=8.0, high_confidence=False  # Over 5ms SLA
         )
 
         report_nc = self.analyzer.analyze_translation_confidence(non_compliant_result)
 
-        assert report_nc.performance_analysis['constitutional_compliance']['sla_violation'] is True
+        assert report_nc.performance_analysis["constitutional_compliance"]["sla_violation"] is True
         assert any("constitutional" in risk.lower() for risk in report_nc.metrics.risk_factors)
 
-    def _create_test_result(self, overall_confidence=0.8, sla_violation=False,
-                           validation_failure=False, low_confidence_constructs=False,
-                           constructs_count=3, translation_time=3.0,
-                           high_confidence=True) -> TranslationResult:
+    def _create_test_result(
+        self,
+        overall_confidence=0.8,
+        sla_violation=False,
+        validation_failure=False,
+        low_confidence_constructs=False,
+        constructs_count=3,
+        translation_time=3.0,
+        high_confidence=True,
+    ) -> TranslationResult:
         """Helper to create test translation results"""
 
         # Create mappings based on parameters
@@ -452,20 +440,22 @@ class TestTranslationConfidenceAnalyzer:
             if i == 0 and low_confidence_constructs:
                 confidence = 0.3  # Ensure at least one low confidence
 
-            mappings.append(ConstructMapping(
-                construct_type=ConstructType.FUNCTION,
-                original_syntax=f"FUNCTION_{i}()",
-                translated_syntax=f"function_{i}()",
-                confidence=confidence,
-                source_location=SourceLocation(line=i+1, column=1, length=10)
-            ))
+            mappings.append(
+                ConstructMapping(
+                    construct_type=ConstructType.FUNCTION,
+                    original_syntax=f"FUNCTION_{i}()",
+                    translated_syntax=f"function_{i}()",
+                    confidence=confidence,
+                    source_location=SourceLocation(line=i + 1, column=1, length=10),
+                )
+            )
 
         # Create performance stats
         performance_stats = PerformanceStats(
             translation_time_ms=translation_time if not sla_violation else 8.0,
             cache_hit=False,
             constructs_detected=constructs_count,
-            constructs_translated=constructs_count
+            constructs_translated=constructs_count,
         )
 
         # Create validation result
@@ -474,7 +464,7 @@ class TestTranslationConfidenceAnalyzer:
             validation_result = ValidationResult(
                 success=False,
                 confidence=0.4,
-                issues=[ValidationIssue(severity="error", message="Test validation error")]
+                issues=[ValidationIssue(severity="error", message="Test validation error")],
             )
         else:
             validation_result = ValidationResult(success=True, confidence=0.9)
@@ -483,7 +473,7 @@ class TestTranslationConfidenceAnalyzer:
             translated_sql="SELECT function_0() FROM test;",
             construct_mappings=mappings,
             performance_stats=performance_stats,
-            validation_result=validation_result
+            validation_result=validation_result,
         )
 
 
@@ -501,22 +491,22 @@ class TestConfidenceAnalyzerIntegration:
                 original_syntax="%SQLUPPER(name)",
                 translated_syntax="UPPER(name)",
                 confidence=0.95,
-                source_location=SourceLocation(line=1, column=8, length=15)
+                source_location=SourceLocation(line=1, column=8, length=15),
             ),
             ConstructMapping(
                 construct_type=ConstructType.DATA_TYPE,
                 original_syntax="LONGVARCHAR",
                 translated_syntax="TEXT",
                 confidence=0.85,
-                source_location=SourceLocation(line=2, column=20, length=11)
+                source_location=SourceLocation(line=2, column=20, length=11),
             ),
             ConstructMapping(
                 construct_type=ConstructType.DOCUMENT_FILTER,
                 original_syntax="JSON_EXTRACT(data, '$.field')",
                 translated_syntax="data->>'field'",
                 confidence=0.75,
-                source_location=SourceLocation(line=3, column=15, length=28)
-            )
+                source_location=SourceLocation(line=3, column=15, length=28),
+            ),
         ]
 
         performance_stats = PerformanceStats(
@@ -526,20 +516,18 @@ class TestConfidenceAnalyzerIntegration:
             constructs_translated=3,
             parsing_time_ms=1.0,
             mapping_time_ms=1.5,
-            validation_time_ms=0.7
+            validation_time_ms=0.7,
         )
 
         validation_result = ValidationResult(
-            success=True,
-            confidence=0.85,
-            performance_impact="minimal"
+            success=True, confidence=0.85, performance_impact="minimal"
         )
 
         result = TranslationResult(
             translated_sql="SELECT UPPER(name) FROM users WHERE data->>'field' = 'test';",
             construct_mappings=mappings,
             performance_stats=performance_stats,
-            validation_result=validation_result
+            validation_result=validation_result,
         )
 
         # Perform analysis
@@ -549,8 +537,8 @@ class TestConfidenceAnalyzerIntegration:
         assert isinstance(report, ConfidenceReport)
         assert report.metrics.confidence_level in [ConfidenceLevel.HIGH, ConfidenceLevel.EXCELLENT]
         assert len(report.construct_analysis) == 3
-        assert report.performance_analysis['sla_compliant'] is True
-        assert report.validation_analysis['success'] is True
+        assert report.performance_analysis["sla_compliant"] is True
+        assert report.validation_analysis["success"] is True
         assert "reliable" in report.summary.lower() or "high" in report.summary.lower()
 
         # Test trend analysis after multiple translations

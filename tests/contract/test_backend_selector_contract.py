@@ -97,7 +97,7 @@ def test_backend_selector_requires_credentials_for_dbapi():
     with pytest.raises(ValueError, match="iris_password"):
         BackendConfig(
             backend_type=BackendType.DBAPI,
-            iris_hostname="localhost"
+            iris_hostname="localhost",
             # Missing iris_password
         )
 

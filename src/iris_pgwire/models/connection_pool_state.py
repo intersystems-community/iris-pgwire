@@ -13,7 +13,6 @@ Data Model: Entity #2 - ConnectionPoolState
 """
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -43,21 +42,19 @@ class ConnectionPoolState(BaseModel):
     connections_recycled: int = Field(
         default=0, ge=0, description="Connections recycled due to pool_recycle timeout"
     )
-    connections_failed: int = Field(
-        default=0, ge=0, description="Connection attempts that failed"
-    )
+    connections_failed: int = Field(default=0, ge=0, description="Connection attempts that failed")
 
     # Health Status
     is_healthy: bool = Field(description="Overall pool health status")
-    degraded_reason: Optional[str] = Field(
+    degraded_reason: str | None = Field(
         default=None, description="Reason for degraded state (if is_healthy=False)"
     )
 
     # Performance Metrics
-    avg_acquisition_time_ms: Optional[float] = Field(
+    avg_acquisition_time_ms: float | None = Field(
         default=None, ge=0, description="Average connection acquisition time in milliseconds"
     )
-    avg_query_time_ms: Optional[float] = Field(
+    avg_query_time_ms: float | None = Field(
         default=None, ge=0, description="Average query execution time in milliseconds"
     )
 
@@ -137,9 +134,7 @@ class ConnectionPoolState(BaseModel):
             },
             "performance": {
                 "avg_acquisition_ms": (
-                    round(self.avg_acquisition_time_ms, 3)
-                    if self.avg_acquisition_time_ms
-                    else None
+                    round(self.avg_acquisition_time_ms, 3) if self.avg_acquisition_time_ms else None
                 ),
                 "avg_query_ms": (
                     round(self.avg_query_time_ms, 3) if self.avg_query_time_ms else None

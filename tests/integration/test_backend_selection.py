@@ -8,8 +8,6 @@ Feature: 018-add-dbapi-option
 Test Scenarios: Based on quickstart.md Step 2 (Configure DBAPI Backend)
 """
 
-import os
-
 import pytest
 
 from iris_pgwire.config_schema import BackendConfig, BackendType
