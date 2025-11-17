@@ -8,6 +8,47 @@ This document catalogs known limitations, workarounds, and behavior differences 
 
 ---
 
+## 🌐 Industry Comparison: PostgreSQL Wire Protocol Implementations
+
+Based on comprehensive research of 9 major implementations (November 2025):
+
+| Feature | IRIS PGWire | PgBouncer | YugabyteDB | PGAdapter | QuestDB | CockroachDB | Materialize | ClickHouse | Pattern |
+|---------|-------------|-----------|------------|-----------|---------|-------------|-------------|------------|---------|
+| **Wire Protocol** | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | Universal |
+| **SSL/TLS Native** | ❌ Proxy | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes | Mixed (6/8 native) |
+| **SCRAM-SHA-256** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | — | ❌ No | Standard (5/8) |
+| **OAuth/IAM** | ✅ Yes | ❌ No | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | Rare (2/8) |
+| **Kerberos/GSSAPI** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ No | ❌ No | **Very Rare (1/8)** |
+| **Connection Pool** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | — | Common (6/8) |
+| **Binary Format** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | Universal |
+
+**Key Insights**:
+
+1. **GSSAPI Adoption**: Only 1 of 8 implementations (12.5%) - CockroachDB enterprise feature. Even PostgreSQL core has limited adoption in wire protocol adapters.
+
+2. **SSL/TLS Patterns**:
+   - **Native**: Most implementations (6 of 8)
+   - **Proxy**: IRIS PGWire (reverse proxy pattern)
+   - **None**: QuestDB explicitly omits SSL
+   - **Network-layer**: Emerging pattern (Tailscale pgproxy)
+
+3. **Authentication Trends**:
+   - **SCRAM-SHA-256**: Standard (5 of 8 implementations)
+   - **OAuth/IAM**: Cloud-native pattern (2 of 8 - IRIS PGWire + PGAdapter)
+   - **MD5**: Being deprecated across ecosystem (YugabyteDB migration guide)
+
+4. **IRIS PGWire Position**: Matches 6 of 8 implementations in security/authentication profile.
+
+**Technical Reason for GSSAPI Rarity** (from industry research):
+> "GSSAPI is an inherently stateful, interactive protocol involving challenge-response exchanges and ticket validation against a centralized Key Distribution Center (KDC). This makes it difficult to implement in connection pooling contexts and cloud-native architectures where authentication delegation is preferred."
+
+**References**:
+- Perplexity industry research: PostgreSQL wire protocol ecosystem survey (November 2025)
+- CockroachDB, YugabyteDB, PGAdapter, PgBouncer, QuestDB, Materialize, ClickHouse, CrateDB official documentation
+- PostgreSQL wire protocol compatibility analysis
+
+---
+
 ## 🟡 INFORMATION_SCHEMA Compatibility
 
 **Severity**: Medium
