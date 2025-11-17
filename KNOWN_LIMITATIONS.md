@@ -199,6 +199,8 @@ irispython -m iris_pgwire.server
 **Severity**: Medium
 **Affects**: Connection transport encryption
 
+**Industry Context**: Many PostgreSQL wire protocol implementations omit SSL/TLS support (e.g., QuestDB) or delegate to network-layer security (e.g., Tailscale's pgproxy). This is a common architectural decision for protocol adapters.
+
 ### Issue Description
 
 PGWire responds with 'N' (no SSL) to PostgreSQL client SSL probes. The wire protocol does not support TLS encryption. Authentication security is provided by:
