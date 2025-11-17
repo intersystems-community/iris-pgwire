@@ -2,7 +2,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Docstring Coverage](./interrogate_badge.svg)](https://interrogate.readthedocs.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
 [![InterSystems IRIS](https://img.shields.io/badge/IRIS-Compatible-green.svg)](https://www.intersystems.com/products/intersystems-iris/)
 
@@ -10,73 +9,25 @@
 
 ---
 
-## 📊 Why This Matters: BI & Analytics Ecosystem
+## 📊 Why This Matters
 
-**The Biggest Win**: Connect enterprise BI tools to IRIS **without custom drivers or plugins**.
+### The Ecosystem Advantage
 
-### Zero-Configuration BI Integration
+Connect **any PostgreSQL-compatible tool** to InterSystems IRIS without custom drivers:
 
-| Tool | Setup | Features | Example Port |
-|------|-------|----------|--------------|
-| **Apache Superset 4** | `docker-compose --profile superset-example up` | Healthcare demo with sample data, dashboards, SQL Lab | [8088](http://localhost:8088) |
-| **Apache Superset** | `docker-compose --profile bi-tools up` | Modern dashboards, data exploration | 8088 |
-| **Metabase** | `docker-compose --profile bi-tools up` | Visual query builder, automated insights | 3001 |
-| **Grafana** | `docker-compose --profile bi-tools up` | Real-time monitoring, time-series visualization | 3000 |
+- **BI Tools**: Apache Superset, Metabase, Grafana - zero configuration needed
+- **Python**: psycopg3, pandas, Jupyter notebooks, FastAPI applications
+- **Data Engineering**: DBT, Apache Airflow, Kafka Connect (JDBC)
+- **Programming Languages**: Python, Node.js, Go, Java, .NET, Ruby, Rust, PHP
+- **pgvector Tools**: LangChain, LlamaIndex, and other RAG frameworks
 
-**Connection details for all BI tools**:
-```
-Host: localhost (or 'iris' inside Docker network)
-Port: 5432
-Database: USER
-Driver: PostgreSQL (standard)
-```
-
-That's it. No IRIS-specific drivers needed.
-
-**Try the Healthcare Demo**: Complete working example with Apache Superset 4 connecting to IRIS healthcare data (250 patient records, 400 lab results) - see [Superset Healthcare Example](examples/superset-iris-healthcare/README.md) for <10 minute setup.
-
-### Data Science & Python Ecosystem
-
-**Production-Ready Integrations**:
-- ✅ **SQLAlchemy** (sync + async) - Full ORM support with FastAPI integration
-- ✅ **psycopg3** - Modern PostgreSQL adapter with binary protocol support
-- ✅ **pandas** - Read IRIS tables directly into DataFrames
-- ✅ **Jupyter** - Interactive IRIS data exploration notebooks
-- ✅ **pgvector tools** - Use pgvector-compatible RAG apps with IRIS (188K dimensions!)
-
----
-
-## 🎯 Key Technical Features
-
-**⚡ Minimal Overhead** - ~4ms protocol translation layer preserves IRIS's native performance
-
-**📊 Massive Vectors** - Up to **188,962 dimensions** (1.44 MB) - **1,465× more capacity** than text literals
-
-**🎨 pgvector Syntax** - Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS functions
-
-**🚀 Async Python** - Full async/await with SQLAlchemy 2.0 and FastAPI (86% complete, production-ready)
-
-**🔧 Dual Backend** - External DBAPI (pooled) or Embedded Python (zero overhead) execution paths
-
----
-
-## 📖 Table of Contents
-
-- [Quick Start](#-quick-start) - Get running in 60 seconds
-- [What Works](#-what-works) - Feature matrix and compatibility
-- [BI Tools Setup](#-bi--analytics-integration) - Superset, Metabase, Grafana
-- [Usage Examples](#-usage-examples) - psql, Python, async SQLAlchemy
-- [Authentication](#-authentication-methods) - OAuth 2.0, Kerberos, IRIS Wallet
-- [Performance](#-performance) - Benchmarks and capacity limits
-- [Architecture](#-architecture) - How it works under the hood
-- [Documentation](#-documentation) - Complete guides and references
-- [Known Limitations](#-known-limitations) - What to be aware of
+**Connection String**: `postgresql://localhost:5432/USER` - that's it!
 
 ---
 
 ## 🚀 Quick Start
 
-### Docker (Fastest)
+### Docker (Fastest - 60 seconds)
 
 ```bash
 git clone https://github.com/isc-tdyar/iris-pgwire.git
@@ -112,142 +63,70 @@ with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
 
 ---
 
-## ✅ What Works
+## ✅ Client Compatibility
 
-| Category | Features | Status |
-|----------|----------|--------|
-| **PostgreSQL Ecosystem** | psql, psycopg3, SQLAlchemy, pgvector tools | ✅ Production ready |
-| **BI Tools** | Apache Superset, Metabase, Grafana (zero config) | ✅ Production ready |
-| **Authentication** | OAuth 2.0, IRIS Wallet, password fallback (Feature 024) | ✅ Production ready |
-| **REST API** | SQL Translation API (FastAPI, <5ms SLA, caching) | ✅ Production ready |
-| **Database Operations** | SELECT, INSERT, UPDATE, DELETE, transactions | ✅ Production ready |
-| **Connection Pooling** | Async pool (50+20 connections), <1ms acquisition | ✅ Production ready |
-| **Vector Operations** | Up to 188,962D vectors, pgvector syntax, HNSW indexes | ✅ Production ready |
-| **Async Python** | async SQLAlchemy (86%), FastAPI integration | ✅ Production ready |
-| **Protocol Overhead** | ~4ms translation layer (benchmarked) | ✅ Minimal |
+Tested and verified with popular PostgreSQL clients:
 
-### Feature Highlights
+| Language | Clients | Features |
+|----------|---------|----------|
+| **Python** | psycopg3, asyncpg, SQLAlchemy (sync + async), pandas | Full CRUD, transactions, async/await, vector ops |
+| **Node.js** | pg (node-postgres), Prisma, Sequelize | Prepared statements, connection pooling, ORM support |
+| **Java** | PostgreSQL JDBC, Spring Data JPA, Hibernate | Enterprise ORM, connection pooling, batch operations |
+| **.NET** | Npgsql, Entity Framework Core, Dapper | Async operations, LINQ queries, ORM support |
+| **Go** | pgx, lib/pq, GORM | High performance, connection pooling, migrations |
+| **Ruby** | pg gem, ActiveRecord, Sequel | Rails integration, migrations, ORM support |
+| **Rust** | tokio-postgres, sqlx, diesel | Async operations, compile-time query checking |
+| **PHP** | PDO PostgreSQL, Laravel, Doctrine | Web framework integration, ORM support |
+| **BI Tools** | Apache Superset, Metabase, Grafana | Zero-config PostgreSQL connection |
 
-**Vector Operations**
-- Supports vectors up to **188,962 dimensions** (1,465× more than text literals)
-- pgvector operators (`<=>`, `<->`, `<#>`) auto-translated to IRIS functions
-- HNSW indexes provide 5× speedup on 100K+ vector datasets
-- Binary parameter encoding (40% more compact than text)
-
-**Async SQLAlchemy**
-- 12/14 requirements complete (86%) - production ready
-- Full async/await, FastAPI integration, connection pooling
-- Works with 99% of SQLAlchemy operations
-- Simple one-word workaround for the 1% edge cases
-
-**Dual Backend Architecture**
-- **DBAPI**: External Python process, connection pooling, multi-IRIS support
-- **Embedded Python**: Runs inside IRIS via `irispython`, zero overhead, true VECTOR types
+**Note**: InterSystems is developing an official `sqlalchemy-iris` package that will be available in the `intersystems-iris` PyPI package, providing native IRIS SQLAlchemy support alongside PGWire compatibility.
 
 ---
 
-## 🏗️ Architecture
+## 🎯 Key Features
 
-**High-Level Flow**: `PostgreSQL Client` → `PGWire Server (Port 5432)` → `IRIS Database`
+### Vector Operations (Up to 188K Dimensions!)
 
-### Dual Backend Execution Paths
+- **Massive Scale**: Support for vectors up to **188,962 dimensions** (1.44 MB)
+- **pgvector Syntax**: Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS functions
+- **HNSW Indexes**: 5× speedup on 100K+ vector datasets
+- **RAG Integration**: Works with LangChain, LlamaIndex, and other pgvector-based tools
 
-| Feature | DBAPI Backend | Embedded Python Backend |
-|---------|---------------|-------------------------|
-| **Deployment** | External Python process | Inside IRIS via `irispython` |
-| **Connection** | TCP to IRIS:1972 | Direct in-process calls |
-| **Latency** | +1-3ms network overhead | Near-zero overhead |
-| **Vector Types** | VARCHAR display | True VECTOR types |
-| **Best For** | Development, multi-IRIS | Production, max performance |
-| **Setup** | `python -m iris_pgwire.server` | `irispython -m iris_pgwire.server` |
-
-**Key Components**:
-- **Protocol Layer**: PostgreSQL wire protocol v3 (message parsing, encoding)
-- **Query Translation**: SQL rewriting, pgvector → IRIS vector functions
-- **Connection Pooling**: 50+20 async connections (DBAPI backend)
-
-**Detailed Architecture**: See [Dual-Path Architecture](docs/DUAL_PATH_ARCHITECTURE.md)
-
----
-
-## 🔧 Installation & Setup
-
-### Prerequisites
-
-- **IRIS Database**: InterSystems IRIS 2024.1+ with vector support
-- **Python**: 3.11+ (for development) or IRIS embedded Python
-- **Docker** (optional): For containerized deployment
-
-### Docker Deployment
-
-```bash
-# Clone repository
-git clone https://github.com/isc-tdyar/iris-pgwire.git
-cd iris-pgwire
-
-# Start services
-docker-compose up -d
-
-# Verify services
-docker-compose ps
-# Expected: iris-enterprise, pgwire-server running
+```python
+# pgvector syntax - works transparently
+cur.execute("""
+    SELECT id, embedding <=> %s AS distance
+    FROM vectors
+    ORDER BY distance
+    LIMIT 5
+""", (query_vector,))
 ```
 
-**Ports**:
-- `5432` - PGWire server (PostgreSQL protocol)
-- `1972` - IRIS SuperServer
-- `52773` - IRIS Management Portal
+### Enterprise Authentication
 
-### Manual Installation
+- **OAuth 2.0**: Token-based authentication for BI tools and API integrations
+- **IRIS Wallet**: Encrypted credential storage with audit trail
+- **Kerberos/GSSAPI**: Enterprise SSO and Active Directory integration (in development)
+- **Password Fallback**: 100% backward compatible with standard password authentication
 
-```bash
-# Install dependencies
-pip install iris-pgwire intersystems-irispython psycopg[binary]
+### Performance & Architecture
 
-# Or with uv (recommended)
-uv pip install iris-pgwire intersystems-irispython psycopg[binary]
-
-# Configure IRIS connection
-export IRIS_HOST=localhost
-export IRIS_PORT=1972
-export IRIS_USERNAME=_SYSTEM
-export IRIS_PASSWORD=SYS
-export IRIS_NAMESPACE=USER
-export BACKEND_TYPE=dbapi  # or 'embedded'
-
-# Start server
-python -m iris_pgwire.server
-```
-
-### Embedded Python Deployment (Production)
-
-```bash
-# From IRIS container/instance
-export IRISUSERNAME=_SYSTEM
-export IRISPASSWORD=SYS
-export IRISNAMESPACE=USER
-export BACKEND_TYPE=embedded
-
-# Start embedded server
-irispython -m iris_pgwire.server
-```
-
-**Benefits**:
-- Zero network overhead to IRIS
-- True VECTOR type handling
-- Maximum performance
+- **Minimal Overhead**: ~4ms protocol translation layer preserves IRIS native performance
+- **Dual Backend**: External DBAPI (connection pooling) or Embedded Python (zero overhead)
+- **Async Python**: Full async/await support with FastAPI and async SQLAlchemy
+- **Connection Pooling**: 50+20 async connections, <1ms acquisition time
 
 ---
 
 ## 💻 Usage Examples
 
-### 1. Command-Line (psql)
+### Command-Line (psql)
 
 ```bash
-# Connect to PGWire server
+# Connect to IRIS via PostgreSQL protocol
 psql -h localhost -p 5432 -U _SYSTEM -d USER
 
-# Simple query
+# Simple queries
 SELECT * FROM MyTable LIMIT 10;
 
 # Vector similarity search
@@ -257,12 +136,11 @@ ORDER BY score DESC
 LIMIT 5;
 ```
 
-### 2. Python (psycopg3)
+### Python (psycopg3)
 
 ```python
 import psycopg
 
-# Connect
 with psycopg.connect('host=localhost port=5432 dbname=USER user=_SYSTEM password=SYS') as conn:
     # Simple query
     with conn.cursor() as cur:
@@ -287,9 +165,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER user=_SYSTEM password
         results = cur.fetchall()
 ```
 
-### 3. Async SQLAlchemy with FastAPI (Production Ready)
-
-**Status**: 86% complete (12/14 requirements) - Production ready with simple workarounds
+### Async SQLAlchemy with FastAPI
 
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -297,7 +173,7 @@ from sqlalchemy import text
 from fastapi import FastAPI, Depends
 
 # Setup
-engine = create_async_engine("iris+psycopg://localhost:5432/USER")
+engine = create_async_engine("postgresql+psycopg://localhost:5432/USER")
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 app = FastAPI()
 
@@ -313,313 +189,69 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
         {"id": user_id}
     )
     return result.fetchone()
-
-# Async vector similarity search
-@app.get("/search")
-async def vector_search(query: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(text("""
-        SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(:vec, DOUBLE)) AS score
-        FROM embeddings ORDER BY score DESC LIMIT 10
-    """), {"vec": query})
-    return result.fetchall()
 ```
-
-**What Works** (99% of use cases):
-- ✅ All CRUD operations, transactions, connection pooling
-- ✅ FastAPI integration, ORM support, IRIS VECTOR operations
-
-**Simple Workarounds** (1% of use cases):
-- Use `metadata.create_all(checkfirst=False)` instead of `checkfirst=True`
-- Use batch inserts instead of executemany() for bulk operations
-
-**Complete Guide**: [Async SQLAlchemy Quick Reference](specs/019-async-sqlalchemy-based/QUICK_REFERENCE.md)
-
-### 4. pgvector Compatible Vector Operations
-
-```python
-import psycopg
-
-# pgvector syntax automatically converted to IRIS functions
-with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
-    cur = conn.cursor()
-
-    # Create table with vector column
-    cur.execute("""
-        CREATE TABLE embeddings (
-            id INT PRIMARY KEY,
-            embedding VECTOR(DOUBLE, 128)
-        )
-    """)
-
-    # Insert vectors
-    embedding = [0.1] * 128  # 128-dimensional vector
-    cur.execute(
-        'INSERT INTO embeddings VALUES (%s, %s)',
-        (1, embedding)
-    )
-
-    # Similarity search using pgvector <=> operator
-    query_vec = [0.2] * 128
-    cur.execute("""
-        SELECT id, embedding <=> %s AS distance
-        FROM embeddings
-        ORDER BY distance
-        LIMIT 5
-    """, (query_vec,))
-
-    # Behind the scenes: <=> is rewritten to VECTOR_COSINE()
-    # Actual query: VECTOR_COSINE(embedding, TO_VECTOR(%s, DOUBLE))
-```
-
-**Supported pgvector Operators**:
-- `<=>` - Cosine distance → `VECTOR_COSINE()`
-- `<->` - L2 distance → `VECTOR_L2()`
-- `<#>` - Inner product → `VECTOR_DOT_PRODUCT()`
 
 ---
 
-## 🔐 Authentication Methods
+## 🔐 Authentication
 
-**Feature**: Enterprise authentication bridging (Feature 024)
-**Status**: ✅ Implementation complete (Phases 3.1-3.5, 2025-11-15)
+PGWire bridges PostgreSQL authentication to IRIS's enterprise authentication infrastructure:
 
-PGWire transparently bridges PostgreSQL authentication to IRIS's native enterprise authentication infrastructure, enabling OAuth 2.0, Kerberos SSO, and encrypted credential storage.
-
-### Supported Authentication Methods
-
-| Method | Status | Use Case | Setup |
-|--------|--------|----------|-------|
-| **OAuth 2.0** | ✅ Complete | BI tools, API integrations, token-based auth | Configure IRIS OAuth server |
-| **Kerberos (GSSAPI)** | 🚧 Core ready | Enterprise SSO, Active Directory, Zero Trust | Requires Phase 3.6 protocol wiring |
-| **IRIS Wallet** | ✅ Complete | Encrypted credential storage, audit trail | Store credentials in IRIS Wallet |
-| **Password (fallback)** | ✅ Complete | Legacy clients, backward compatibility | Always enabled (default) |
-
-**Key Features**:
-- ✅ **100% Backward Compatible** - Password authentication always works as fallback
-- ✅ **Zero Client Changes** - PostgreSQL clients (psql, psycopg) work transparently
-- ✅ **Dual-Mode Routing** - OAuth for BI tools, Kerberos for enterprise SSO
-- ✅ **Audit Trail** - All authentication attempts logged with structured logging
-
-### Quick Setup
-
-#### OAuth 2.0 Authentication
+### OAuth 2.0 Token Authentication
 
 **Use Case**: BI tools, data science notebooks, API integrations
 
-**Configuration**:
 ```bash
-# Environment variables (or IRIS Wallet)
+# Environment configuration
 export OAUTH_CLIENT_ID=pgwire-server
-export OAUTH_CLIENT_SECRET=your-secret-here  # Or store in IRIS Wallet
+export OAUTH_CLIENT_SECRET=your-secret-here
 
-# IRIS OAuth server configuration (one-time setup)
-# 1. Enable OAuth 2.0 in IRIS Management Portal
-# 2. Create OAuth client: pgwire-server
-# 3. Store client secret in Wallet (recommended):
-#    Do ##class(%IRIS.Wallet).SetSecret("pgwire-oauth-client", "secret")
-```
-
-**Client Usage** (transparent to user):
-```bash
-# psql client - no changes needed
+# Clients connect normally - OAuth happens transparently
 psql -h localhost -p 5432 -U john.doe -d USER
-# Password: [user enters password]
-# → PGWire exchanges password for OAuth token via IRIS OAuth server
-# → Subsequent queries use cached OAuth token (no re-authentication)
+# Password is exchanged for OAuth token automatically
+# Token cached in session (5-minute TTL) - no re-authentication
 ```
 
-**Python Example**:
-```python
-import psycopg
-
-# Standard PostgreSQL connection - OAuth happens transparently
-conn = psycopg.connect(
-    "host=localhost port=5432 user=john.doe password=user_password dbname=USER"
-)
-# → Behind the scenes:
-#   1. PGWire receives SCRAM-SHA-256 auth request
-#   2. Selects OAuth as authentication method
-#   3. Exchanges password for IRIS OAuth token
-#   4. Caches token in session (5-minute TTL)
-#   5. Returns success to client
-```
-
-#### IRIS Wallet Integration
+### IRIS Wallet Integration
 
 **Use Case**: Zero plain-text passwords, encrypted credential storage, audit compliance
 
-**Setup**:
 ```python
 # Store user passwords in IRIS Wallet (admin operation)
 import iris
-
 wallet = iris.cls('%IRIS.Wallet')
 wallet.SetSecret('pgwire-user-john.doe', 'secure_password_123')
-```
 
-**Client Usage** (password retrieved automatically):
-```python
-import psycopg
-
-# Connect without password in code
+# Client connects without password in code
 conn = psycopg.connect("host=localhost port=5432 user=john.doe dbname=USER")
-# → PGWire retrieves password from Wallet automatically
-# → Audit log: "Password retrieved from Wallet, username=john.doe, accessed_at=2025-11-15T10:30:00Z"
+# Password retrieved from Wallet automatically
+# Audit log: credential access recorded
 ```
 
 **Benefits**:
-- ✅ Zero plain-text passwords in code or configuration files
+- ✅ Zero plain-text passwords in code or configuration
 - ✅ Automatic password rotation via Wallet API
-- ✅ Audit trail of all credential access (compliance)
+- ✅ Audit trail of all credential access
 - ✅ Encrypted storage in IRISSECURITY database
 
-#### Kerberos GSSAPI (Coming Soon)
+### Password Authentication (Default)
 
-**Use Case**: Enterprise SSO, Active Directory, zero credential management
+Standard PostgreSQL password authentication - 100% backward compatible:
 
-**Status**: Core implementation complete, protocol integration pending (Phase 3.6)
-
-**Future Usage**:
-```bash
-# ETL pod with service principal (no password needed)
-psql -h iris-pgwire -p 5432 -U etl-service
-# → GSSAPI authentication via Kerberos ticket
-# → Principal mapped: etl-service@EXAMPLE.COM → ETL_SERVICE
-# → Zero credential storage overhead
-```
-
-### Authentication Flow Architecture
-
-```
-PostgreSQL Client (psql, psycopg, JDBC)
-    ↓
-    SCRAM-SHA-256 authentication request
-    ↓
-AuthenticationSelector (protocol.py:931-1040)
-    ↓
-    ├─→ [OAuth Selected]
-    │   ↓
-    │   1. Check IRIS Wallet for password (preferred)
-    │   2. Fallback to SCRAM client-final password
-    │   3. Exchange password for OAuth token
-    │      iris.cls('OAuth2.Client').RequestToken()
-    │   4. Cache token in session (no re-auth)
-    │
-    ├─→ [Kerberos Selected] (Phase 3.6)
-    │   ↓
-    │   1. GSSAPI handshake (multi-step)
-    │   2. Validate ticket via IRIS
-    │      iris.cls('%Service_Bindings').ValidateGSSAPIToken()
-    │   3. Map principal → IRIS user
-    │      alice@EXAMPLE.COM → ALICE
-    │
-    └─→ [Password Fallback] (always available)
-        ↓
-        Direct password authentication via IRIS
-        iris.cls('%Service_Login').ValidateUser()
-```
-
-### Configuration Reference
-
-**Environment Variables**:
-```bash
-# OAuth Configuration
-OAUTH_CLIENT_ID=pgwire-server          # OAuth client identifier
-OAUTH_CLIENT_SECRET=your-secret        # Client secret (or use Wallet)
-OAUTH_TOKEN_ENDPOINT=http://iris:52773/oauth2/token
-
-# IRIS Wallet (recommended for production)
-# Store credentials via IRIS ObjectScript:
-# Do ##class(%IRIS.Wallet).SetSecret("pgwire-user-username", "password")
-# Do ##class(%IRIS.Wallet).SetSecret("pgwire-oauth-client", "secret")
-
-# Kerberos (Phase 3.6)
-KRB5_SERVICE_PRINCIPAL=postgres@hostname
-KRB5_KEYTAB=/path/to/keytab
-```
-
-**Feature Flags** (protocol.py:187-238):
 ```python
-# Authentication bridge initialization
-auth_selector = AuthenticationSelector(
-    oauth_enabled=True,      # Enable OAuth 2.0 token exchange
-    kerberos_enabled=False,  # Kerberos GSSAPI (Phase 3.6)
-    wallet_enabled=True      # IRIS Wallet credential retrieval
-)
+conn = psycopg.connect("host=localhost port=5432 user=_SYSTEM password=SYS dbname=USER")
 ```
-
-### Real-World Use Cases
-
-**1. BI Tools with OAuth**:
-```bash
-# Apache Superset, Metabase, Grafana
-# Connection string: host=localhost port=5432 user=analyst dbname=USER
-# → User enters password once
-# → PGWire exchanges for OAuth token (5-minute cache)
-# → BI tool makes 100 queries → only 1 OAuth token exchange
-```
-
-**2. Data Science with Wallet**:
-```python
-# Jupyter notebook (no password in code)
-import psycopg
-conn = psycopg.connect("host=localhost port=5432 user=datascientist dbname=USER")
-# → Password retrieved from IRIS Wallet
-# → Audit log: credential access recorded
-# → Zero plain-text passwords in notebook files
-```
-
-**3. ETL Pipelines with Kerberos** (Phase 3.6):
-```bash
-# Kubernetes pod with service principal
-# No password storage, no secret management
-# Uses Kerberos ticket from Active Directory
-```
-
-### Performance & Security
-
-**Performance**:
-- OAuth token exchange: <5 seconds (constitutional requirement)
-- Token caching: 5-minute TTL (configurable)
-- Wallet retrieval: <1 second
-- Zero overhead after authentication (token cached in session)
-
-**Security**:
-- ✅ All IRIS calls non-blocking (asyncio.to_thread)
-- ✅ Client secrets from IRIS Wallet (encrypted at rest)
-- ✅ Structured logging (no secrets in logs)
-- ✅ Automatic fallback chains: OAuth → Password, Kerberos → Password
-- ✅ 100% backward compatible (password always works)
-
-### Documentation
-
-**Complete Guides**:
-- **Implementation**: See CLAUDE.md section "Enterprise Authentication Bridge - IMPLEMENTATION COMPLETE"
-- **Specifications**: `specs/024-research-and-implement/spec.md`
-- **Completion Reports**: `PHASE_3_4_COMPLETION.md`, `PHASE_3_5_COMPLETION.md`
-- **Quickstart**: `specs/024-research-and-implement/quickstart.md`
-
-**Test Coverage**: 102 tests (56 contract + 34 integration + 12 protocol)
-
-**Implementation Status**:
-- ✅ Phase 3.1-3.3: Contract and integration tests (90 tests)
-- ✅ Phase 3.4: Core implementations (OAuthBridge, GSSAPIAuthenticator, WalletCredentials, AuthenticationSelector)
-- ✅ Phase 3.5: Protocol integration (authentication bridge wired into PGWire protocol)
-- 🚧 Phase 3.6: Complete SCRAM password extraction + direct password auth (2 TODOs)
-- 📋 Phase 4: Wire Kerberos GSSAPI into protocol handler
 
 ---
 
 ## 📊 BI & Analytics Integration
 
-**The Ecosystem Advantage**: Connect enterprise BI and analytics tools to IRIS using standard PostgreSQL drivers.
+### Zero-Configuration Setup
 
-### Supported BI Tools (Zero Configuration)
+All BI tools connect using standard PostgreSQL drivers - no IRIS-specific plugins required:
 
-All tools connect via standard PostgreSQL drivers - no IRIS-specific plugins required:
-
+**Connection Configuration**:
 ```yaml
-# Connection configuration (same for all tools)
 Host:     localhost
 Port:     5432
 Database: USER
@@ -628,44 +260,38 @@ Password: SYS
 Driver:   PostgreSQL (standard)
 ```
 
-#### Apache Superset (Port 8088)
+### Supported BI Tools
+
+#### Apache Superset
 Modern data exploration and visualization platform.
 
 ```bash
 docker-compose --profile bi-tools up superset
-# Access: http://localhost:8088
-# Login: admin / admin
+# Access: http://localhost:8088 (admin / admin)
 ```
 
-**Features**: SQL Lab, rich visualizations, dashboards, role-based access
+**Try the Healthcare Demo**: Complete working example with 250 patient records and 400 lab results - see [Superset Healthcare Example](examples/superset-iris-healthcare/README.md) for <10 minute setup.
 
-#### Metabase (Port 3001)
-User-friendly business intelligence tool.
+#### Metabase
+User-friendly business intelligence tool with visual query builder.
 
 ```bash
 docker-compose --profile bi-tools up metabase
 # Access: http://localhost:3001
-# First launch: Complete setup wizard
 ```
 
-**Features**: Visual query builder (no SQL required), automated insights, X-ray analysis
-
-#### Grafana (Port 3000)
+#### Grafana
 Real-time monitoring and time-series visualization.
 
 ```bash
 docker-compose up grafana
-# Access: http://localhost:3000
-# Login: admin / admin
+# Access: http://localhost:3000 (admin / admin)
 ```
 
-**Features**: Real-time dashboards, alerting, time-series analytics
+### IRIS Vector Analytics in BI Tools
 
-### IRIS-Specific BI Capabilities
-
-**Vector Analytics in BI Tools**:
 ```sql
--- Semantic search in Superset/Metabase
+-- Semantic search directly in Superset/Metabase
 SELECT id, title,
        VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2,...]', DOUBLE)) AS similarity
 FROM documents
@@ -673,13 +299,11 @@ ORDER BY similarity DESC
 LIMIT 10
 ```
 
-**Complete BI Setup Guide**: See [examples/BI_TOOLS_SETUP.md](examples/BI_TOOLS_SETUP.md) for detailed instructions, sample queries, and troubleshooting.
-
 ---
 
 ## 📊 Performance
 
-### Benchmarked Performance (2025-10-05)
+### Benchmarked Results
 
 **Protocol Translation Overhead**: ~4ms (preserves IRIS native performance)
 
@@ -700,111 +324,141 @@ LIMIT 10
 
 ---
 
+## 🏗️ Architecture
+
+### High-Level Flow
+
+```
+PostgreSQL Client → PGWire Server (Port 5432) → IRIS Database
+```
+
+### Dual Backend Execution Paths
+
+| Feature | DBAPI Backend | Embedded Python Backend |
+|---------|---------------|-------------------------|
+| **Deployment** | External Python process | Inside IRIS via `irispython` |
+| **Connection** | TCP to IRIS:1972 | Direct in-process calls |
+| **Latency** | +1-3ms network overhead | Near-zero overhead |
+| **Best For** | Development, multi-IRIS | Production, max performance |
+
+### Key Components
+
+- **Protocol Layer**: PostgreSQL wire protocol v3 (message parsing, encoding)
+- **Query Translation**: SQL rewriting, pgvector → IRIS vector functions
+- **Connection Pooling**: Async pool with configurable limits (DBAPI backend)
+
+**Detailed Architecture**: See [Dual-Path Architecture](docs/DUAL_PATH_ARCHITECTURE.md)
+
+---
+
+## 🔧 Installation
+
+### Prerequisites
+
+- **IRIS Database**: InterSystems IRIS 2024.1+ with vector support
+- **Python**: 3.11+ (for development) or IRIS embedded Python
+- **Docker** (optional): For containerized deployment
+
+### Docker Deployment
+
+```bash
+# Clone repository
+git clone https://github.com/isc-tdyar/iris-pgwire.git
+cd iris-pgwire
+
+# Start services
+docker-compose up -d
+
+# Verify services
+docker-compose ps
+```
+
+**Ports**:
+- `5432` - PGWire server (PostgreSQL protocol)
+- `1972` - IRIS SuperServer
+- `52773` - IRIS Management Portal
+
+### Manual Installation
+
+```bash
+# Install dependencies
+pip install iris-pgwire intersystems-irispython psycopg[binary]
+
+# Or with uv (recommended)
+uv pip install iris-pgwire intersystems-irispython psycopg[binary]
+
+# Configure IRIS connection
+export IRIS_HOST=localhost
+export IRIS_PORT=1972
+export IRIS_USERNAME=_SYSTEM
+export IRIS_PASSWORD=SYS
+export IRIS_NAMESPACE=USER
+
+# Start server
+python -m iris_pgwire.server
+```
+
+### Embedded Python Deployment (Production)
+
+```bash
+# From IRIS container/instance
+export IRISUSERNAME=_SYSTEM
+export IRISPASSWORD=SYS
+export IRISNAMESPACE=USER
+export BACKEND_TYPE=embedded
+
+# Start embedded server
+irispython -m iris_pgwire.server
+```
+
+**Benefits**: Zero network overhead, true VECTOR types, maximum performance
+
+---
+
 ## 📚 Documentation
 
 ### Getting Started
-- **[Quick Start Guide](benchmarks/README_4WAY.md)** - Multi-path benchmark setup and usage
 - **[Installation Guide](docs/DEPLOYMENT.md)** - Detailed deployment instructions
-- **[BI Tools Setup](examples/BI_TOOLS_SETUP.md)** - Apache Superset, Metabase, Grafana integration
-- **[Translation API](docs/TRANSLATION_API.md)** - REST API for SQL translation microservice
-- **[Developer Guide](docs/developer_guide.md)** - Development setup and contribution guidelines
+- **[BI Tools Setup](examples/BI_TOOLS_SETUP.md)** - Superset, Metabase, Grafana integration
+- **[Developer Guide](docs/developer_guide.md)** - Development setup and contribution
 
 ### Core Features
-- **[Vector Parameter Binding](docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vector support (up to 188,962D)
-- **[DBAPI Backend Guide](docs/DBAPI_BACKEND.md)** - External connection pooling and configuration
-- **[Testing Guide](docs/testing.md)** - Test framework and validation procedures
-- **[Test Suite README](tests/README.md)** - Test categories and execution
+- **[Vector Parameter Binding](docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vector support
+- **[DBAPI Backend Guide](docs/DBAPI_BACKEND.md)** - Connection pooling configuration
+- **[Testing Guide](docs/testing.md)** - Test framework and validation
 
-### Async SQLAlchemy
-- **[Quick Reference](specs/019-async-sqlalchemy-based/QUICK_REFERENCE.md)** - One-page developer guide
-- **[Final Summary](specs/019-async-sqlalchemy-based/FINAL_SUMMARY.md)** - Executive summary and deployment checklist
-- **[Known Limitations](specs/019-async-sqlalchemy-based/KNOWN_LIMITATIONS.md)** - Limitations with simple workarounds
-- **[INFORMATION_SCHEMA Workarounds](specs/019-async-sqlalchemy-based/INFORMATION_SCHEMA_WORKAROUNDS.md)** - Detailed table creation workarounds
-- **[Impact Matrix](specs/019-async-sqlalchemy-based/IMPACT_MATRIX.md)** - What works (99%) vs. what breaks (1%)
-- **[Implementation Status](specs/019-async-sqlalchemy-based/IMPLEMENTATION_STATUS.md)** - Complete technical timeline
-
-### Vector Operations
-- **[HNSW Investigation](docs/HNSW_FINDINGS_2025_10_02.md)** - Comprehensive vector index performance analysis
-- **[Vector Optimizer](docs/DUAL_PATH_ARCHITECTURE.md)** - pgvector → IRIS query translation
-- **[Client Compatibility](docs/CLIENT_RECOMMENDATIONS.md)** - PostgreSQL client compatibility matrix
-
-### Architecture & Deployment
-- **[Dual-Path Architecture](docs/DUAL_PATH_ARCHITECTURE.md)** - DBAPI vs Embedded execution paths
-- **[Embedded Python Servers](docs/EMBEDDED_PYTHON_SERVERS_HOWTO.md)** - Running inside IRIS with `irispython`
-- **[IRIS Enterprise Setup](docs/IRIS_ENTERPRISE_SETUP_GUIDE.md)** - Production IRIS configuration
-
-### Feature Specifications
-- **[Feature 013: Vector Query Optimizer](specs/013-vector-query-optimizer/)** - pgvector compatibility layer
-- **[Feature 018: DBAPI Backend](specs/018-add-dbapi-option/)** - Connection pooling implementation
-- **[Feature 019: Async SQLAlchemy](specs/019-async-sqlalchemy-based/)** - Complete async/await support
+### Architecture
+- **[Dual-Path Architecture](docs/DUAL_PATH_ARCHITECTURE.md)** - DBAPI vs Embedded execution
+- **[Embedded Python Servers](docs/EMBEDDED_PYTHON_SERVERS_HOWTO.md)** - Running inside IRIS
+- **[Client Compatibility](docs/CLIENT_RECOMMENDATIONS.md)** - PostgreSQL client matrix
 
 ---
 
 ## ⚠️ Known Limitations
 
-### 🎉 Recently Fixed
-
-**v0.2.0 (2025-11-06)**: DDL Semicolon Parsing Bug
-- **Issue**: CREATE/DROP/ALTER TABLE failed with `"Input (;) encountered after end of query"` error
-- **Status**: ✅ **FIXED** - All DDL operations now work with standard PostgreSQL semicolon syntax
-- **Test Coverage**: 15 comprehensive E2E tests added
-- **Details**: See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md#-critical-ddl-semicolon-parsing-fixed-in-v020)
-
 ### Protocol Features
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Simple Queries | ✅ Complete | SELECT, INSERT, UPDATE, DELETE working |
-| DDL Statements | ✅ Complete | CREATE/DROP/ALTER TABLE with semicolons (fixed v0.2.0) |
-| Extended Protocol | 🚧 Partial | Prepared statements work, some advanced features missing |
-| Authentication | ✅ Complete | OAuth 2.0, IRIS Wallet, password fallback (Feature 024) |
-| SSL/TLS | ❌ Not implemented | Plain text connections only |
-| COPY Protocol | 🚧 Partial | Single-row inserts work, bulk operations limited |
+| Simple Queries | ✅ Complete | SELECT, INSERT, UPDATE, DELETE |
+| DDL Statements | ✅ Complete | CREATE/DROP/ALTER TABLE |
+| Extended Protocol | ✅ Working | Prepared statements, parameter binding |
+| Authentication | ✅ Complete | OAuth 2.0, IRIS Wallet, password |
 | Transactions | ✅ Working | COMMIT/ROLLBACK supported |
+| COPY Protocol | 🚧 Partial | Single-row inserts work, bulk operations limited |
+| SSL/TLS Encryption | 🚧 In Development | OAuth/Wallet provide authentication security |
 
-### IRIS-Specific Behaviors
+### IRIS-Specific Notes
 
-1. **INFORMATION_SCHEMA Compatibility** (async SQLAlchemy)
-   - **Issue**: IRIS returns errors for non-existent table queries instead of empty result sets
-   - **Impact**: Affects `metadata.create_all(checkfirst=True)`
-   - **Workaround**: Use `checkfirst=False` (one-word change)
-   - **Severity**: LOW - affects only 1% of use cases
-   - **See**: [INFORMATION_SCHEMA Workarounds](specs/019-async-sqlalchemy-based/INFORMATION_SCHEMA_WORKAROUNDS.md)
+1. **HNSW Index Performance**: Requires 100,000+ vectors for meaningful speedup (5× at scale). Below 10K vectors, sequential scan may be faster. See [HNSW Investigation](docs/HNSW_FINDINGS_2025_10_02.md).
 
-2. **VECTOR Type Display (DBAPI Backend)**
-   - **Issue**: VECTOR columns show as VARCHAR in INFORMATION_SCHEMA
-   - **Impact**: Type introspection shows incorrect type
-   - **Workaround**: Use embedded backend for true VECTOR types
-   - **Functionality**: Vector operations work correctly despite VARCHAR display
+2. **VECTOR Type Display (DBAPI Backend)**: VECTOR columns show as VARCHAR in INFORMATION_SCHEMA, but vector operations work correctly. Use embedded backend for accurate type introspection.
 
-3. **HNSW Index Performance**
-   - **Requirement**: 100,000+ vectors for meaningful performance gains
-   - **Performance**: 5.14× speedup at 100K scale, minimal benefit below 10K
-   - **See**: [HNSW Investigation](docs/HNSW_FINDINGS_2025_10_02.md)
-
-### Async SQLAlchemy Workarounds
-
-**Status**: 12/14 requirements complete (86%) - Production ready
-
-**Working** (99% of use cases):
-- ✅ All CRUD operations
-- ✅ Transactions (COMMIT/ROLLBACK)
-- ✅ Connection pooling
-- ✅ FastAPI integration
-- ✅ IRIS VECTOR operations
-- ✅ ORM operations
-
-**Require Workarounds** (1% of use cases):
-- ⚠️ Table creation: Use `checkfirst=False` instead of `checkfirst=True`
-- ⚠️ Bulk inserts: Use batch operations instead of executemany()
-
-**Impact**: ZERO for production - workarounds are simple and often better practice
+**Complete Details**: See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)
 
 ---
 
 ## 🧪 Testing
-
-### Run Tests
 
 ```bash
 # All tests (contract + integration)
@@ -819,20 +473,10 @@ python3 tests/test_all_vector_sizes.py      # 128D-1024D validation
 python3 tests/test_vector_limits.py         # Maximum dimension tests
 ```
 
-### Test Framework Features
-
-- ✅ 30-second timeout detection with diagnostics
-- ✅ Sequential execution for IRIS stability
-- ✅ Coverage tracking (informational only)
-- ✅ Flaky test detection and retry
-- ✅ Contract-based validation
-
-**Test Pass Rate**: 19/21 (90%) - See [Testing Guide](docs/testing.md)
-
 ### Performance Benchmarks
 
 ```bash
-# 4-way architecture comparison (recommended)
+# 4-way architecture comparison
 ./benchmarks/run_4way_benchmark.sh
 
 # Custom parameters
@@ -845,8 +489,6 @@ python3 benchmarks/4way_comparison.py \
 ---
 
 ## 🤝 Contributing
-
-### Development Setup
 
 ```bash
 # Clone repository
@@ -863,31 +505,7 @@ docker-compose up -d
 pytest -v
 ```
 
-### Code Quality Standards
-
-- **Formatter**: black
-- **Linter**: ruff
-- **Type Checking**: mypy (future)
-- **Testing**: pytest with contract-based validation
-- **Documentation**: Markdown with examples
-
-### Project Structure
-
-```
-iris-pgwire/
-├── src/iris_pgwire/          # Main source code
-│   ├── server.py             # PGWire server entry point
-│   ├── protocol.py           # PostgreSQL wire protocol
-│   ├── vector_optimizer.py   # pgvector → IRIS translation
-│   ├── dbapi_executor.py     # DBAPI backend
-│   └── iris_executor.py      # Embedded backend
-├── tests/                    # Test suite
-│   ├── contract/             # Framework validation
-│   └── integration/          # E2E tests
-├── benchmarks/               # Performance benchmarks
-├── docs/                     # Documentation
-└── specs/                    # Feature specifications
-```
+**Code Quality**: black (formatter), ruff (linter), pytest (testing)
 
 ---
 
@@ -906,31 +524,26 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ---
 
-## 🎯 Project Roadmap
+## 🎯 Roadmap
 
-### Completed Features
-- ✅ P0: Handshake & SSL negotiation (100%)
-- ✅ P1: Simple query protocol (100%)
-- ✅ P2: Extended protocol (prepared statements) (100%)
-- ✅ P3: Authentication (SCRAM-SHA-256 protocol) (100%)
-- ✅ P4: Query cancellation (100%)
-- ✅ P5: Vector support (pgvector compatibility) (100%)
-- ✅ Feature 013: Vector query optimizer (100%)
-- ✅ Feature 018: DBAPI backend (96% - 27/28 tasks)
-- ✅ Feature 019: Async SQLAlchemy (86% - 12/14 requirements)
-- ✅ Feature 024: Authentication bridge (93% - OAuth, Wallet, Kerberos core)
+### Implemented
+- ✅ PostgreSQL wire protocol v3 (handshake, simple & extended query protocols)
+- ✅ Authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet)
+- ✅ Vector operations (pgvector syntax, HNSW indexes, 188K dimensions)
+- ✅ Async SQLAlchemy support (FastAPI integration, connection pooling)
+- ✅ Dual backend architecture (DBAPI + Embedded Python)
+- ✅ Multi-language client compatibility (Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
 
-### In Progress
-- 🚧 P6: COPY protocol & bulk operations (deferred - single-row inserts work)
-- 🚧 Feature 024 Phase 3.6: Complete SCRAM password extraction + Kerberos GSSAPI wiring
-- 🚧 SSL/TLS support
+### In Development
+- 🚧 SSL/TLS encryption (OAuth/Wallet provide authentication security)
+- 🚧 Kerberos/GSSAPI protocol integration (core implementation complete)
+- 🚧 Enhanced COPY protocol (bulk operations)
 
 ### Future Enhancements
 - 📋 Connection limits & rate limiting
-- 📋 Comprehensive client compatibility testing
-- 📋 Performance optimization (reduce 4ms PGWire overhead)
+- 📋 Performance optimization (reduce 4ms protocol overhead)
 - 📋 Advanced PostgreSQL features (CTEs, window functions)
 
 ---
 
-**Questions?** See documentation links above or file an issue on GitLab.
+**Questions?** File an issue on [GitHub](https://github.com/isc-tdyar/iris-pgwire/issues)
