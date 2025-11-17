@@ -13,6 +13,7 @@ from enum import Enum
 
 class QueryCategory(Enum):
     """Query complexity categories per FR-002"""
+
     SIMPLE = "simple"
     VECTOR_SIMILARITY = "vector_similarity"
     COMPLEX_JOIN = "complex_join"
@@ -20,6 +21,7 @@ class QueryCategory(Enum):
 
 class BenchmarkState(Enum):
     """Benchmark execution states"""
+
     INITIALIZING = "initializing"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -30,6 +32,7 @@ class BenchmarkState(Enum):
 @dataclass
 class ConnectionConfig:
     """Connection parameters for a database access method"""
+
     method_name: str
     host: str
     port: int
@@ -63,11 +66,12 @@ class ConnectionConfig:
 @dataclass
 class BenchmarkConfiguration:
     """Configuration for a benchmark run (FR-005)"""
+
     vector_dimensions: int = 1024  # FR-003: configurable with 1024 default
-    dataset_size: int = 100000     # Clarification: 100K-1M for production scale
+    dataset_size: int = 100000  # Clarification: 100K-1M for production scale
     iterations: int = 1000
     concurrent_connections: int = 1
-    warmup_queries: int = 100       # FR-009: avoid cold-start bias
+    warmup_queries: int = 100  # FR-009: avoid cold-start bias
     random_seed: int = 42
     connection_configs: Dict[str, ConnectionConfig] = None
 
@@ -101,7 +105,9 @@ class BenchmarkConfiguration:
             required_methods = {"iris_pgwire", "postgresql_psycopg3", "iris_dbapi"}
             actual_methods = set(self.connection_configs.keys())
             if actual_methods != required_methods:
-                errors.append(f"Must configure all three methods: {required_methods}, got {actual_methods}")
+                errors.append(
+                    f"Must configure all three methods: {required_methods}, got {actual_methods}"
+                )
 
             # Validate each connection config
             for method, config in self.connection_configs.items():
@@ -114,6 +120,7 @@ class BenchmarkConfiguration:
 @dataclass
 class PerformanceResult:
     """Single query execution result (FR-004)"""
+
     result_id: str
     method_name: str
     query_id: str
@@ -143,6 +150,7 @@ class PerformanceResult:
 @dataclass
 class CategoryMetrics:
     """Performance metrics for a query category"""
+
     count: int
     qps: float
     p50_ms: float
@@ -153,13 +161,14 @@ class CategoryMetrics:
 @dataclass
 class MethodResults:
     """Aggregated results for one database method (FR-004)"""
+
     method_name: str
     queries_executed: int
     queries_failed: int
-    qps: float                  # Queries per second
-    latency_p50_ms: float       # Median latency
-    latency_p95_ms: float       # 95th percentile latency
-    latency_p99_ms: float       # 99th percentile latency
+    qps: float  # Queries per second
+    latency_p50_ms: float  # Median latency
+    latency_p95_ms: float  # 95th percentile latency
+    latency_p99_ms: float  # 99th percentile latency
     by_category: Dict[str, CategoryMetrics]
 
     def validate(self) -> List[str]:
@@ -169,16 +178,20 @@ class MethodResults:
         if self.qps < 0:
             errors.append(f"qps cannot be negative, got {self.qps}")
 
-        for name, value in [("p50", self.latency_p50_ms),
-                           ("p95", self.latency_p95_ms),
-                           ("p99", self.latency_p99_ms)]:
+        for name, value in [
+            ("p50", self.latency_p50_ms),
+            ("p95", self.latency_p95_ms),
+            ("p99", self.latency_p99_ms),
+        ]:
             if value < 0:
                 errors.append(f"{name} cannot be negative, got {value}")
 
         # FR-002: Must have results for all query categories
-        required_categories = {QueryCategory.SIMPLE.value,
-                              QueryCategory.VECTOR_SIMILARITY.value,
-                              QueryCategory.COMPLEX_JOIN.value}
+        required_categories = {
+            QueryCategory.SIMPLE.value,
+            QueryCategory.VECTOR_SIMILARITY.value,
+            QueryCategory.COMPLEX_JOIN.value,
+        }
         actual_categories = set(self.by_category.keys())
         if actual_categories != required_categories:
             errors.append(f"Missing category results: {required_categories - actual_categories}")
@@ -189,6 +202,7 @@ class MethodResults:
 @dataclass
 class BenchmarkReport:
     """Complete benchmark results (FR-007, FR-010)"""
+
     report_id: str
     config: BenchmarkConfiguration
     start_time: datetime
@@ -225,7 +239,7 @@ class BenchmarkReport:
                     "queries_failed": results.queries_failed,
                 }
                 for method, results in self.method_results.items()
-            }
+            },
         }
 
     def to_table_rows(self) -> List[List]:

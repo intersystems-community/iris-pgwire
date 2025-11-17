@@ -16,12 +16,13 @@ psycopg2 uses Extended Protocol automatically for parameterized queries.
 
 import asyncio
 import logging
-import time
 import subprocess
+
 from iris_pgwire.server import PGWireServer
 
 # Enable debug logging
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(message)s')
+logging.basicConfig(level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s")
+
 
 async def test_p2_extended_protocol():
     """Test P2 Extended Protocol with psycopg2"""
@@ -30,13 +31,13 @@ async def test_p2_extended_protocol():
 
     # Start server
     server = PGWireServer(
-        host='localhost',
+        host="localhost",
         port=15433,
-        iris_host='localhost',
+        iris_host="localhost",
         iris_port=1972,
-        iris_username='_SYSTEM',
-        iris_password='SYS',
-        iris_namespace='USER'
+        iris_username="_SYSTEM",
+        iris_password="SYS",
+        iris_namespace="USER",
     )
 
     print("🚀 Starting PGWire server on port 15433...")
@@ -49,7 +50,7 @@ async def test_p2_extended_protocol():
         # Test with psycopg2 using Python subprocess
         print("📱 Testing psycopg2 Extended Protocol...")
 
-        psycopg2_test = '''
+        psycopg2_test = """
 import psycopg2
 import sys
 
@@ -115,12 +116,12 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     sys.exit(1)
-'''
+"""
 
         # Run psycopg2 test as subprocess
-        result = subprocess.run([
-            'uv', 'run', 'python', '-c', psycopg2_test
-        ], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            ["uv", "run", "python", "-c", psycopg2_test], capture_output=True, text=True, timeout=30
+        )
 
         print("📋 psycopg2 test output:")
         print(result.stdout)
@@ -139,6 +140,7 @@ except Exception as e:
     except Exception as e:
         print(f"❌ Test execution error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         # Stop server
@@ -148,6 +150,7 @@ except Exception as e:
         except asyncio.CancelledError:
             pass
         print("📡 Server stopped")
+
 
 if __name__ == "__main__":
     asyncio.run(test_p2_extended_protocol())

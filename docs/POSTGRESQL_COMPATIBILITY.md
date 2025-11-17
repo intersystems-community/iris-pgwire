@@ -1,7 +1,7 @@
 # PostgreSQL Compatibility Guide for IRIS PGWire
 
-**Version**: 1.0.0
-**Date**: 2025-11-10
+**Version**: 1.1.0
+**Date**: 2025-11-11
 **Status**: Production-Ready with Known Limitations
 
 ---
@@ -169,13 +169,59 @@ SELECT CAST('42' AS INTEGER), CAST(? AS VARCHAR)
 
 ---
 
-### 4. Missing PostgreSQL Functions
+### 4. SHOW Commands (AUTOMATIC COMPATIBILITY SHIM) ✅ NEW
+
+**PostgreSQL Syntax**: Uses `SHOW` for runtime parameter queries
+
+**IRIS SQL Syntax**: Does not support `SHOW` commands
+
+**PGWire Translation**: ✅ **Automatic** - SHOW commands intercepted and handled transparently
+
+**How It Works**:
+```sql
+-- PostgreSQL client sends:
+SHOW TRANSACTION ISOLATION LEVEL;
+
+-- PGWire intercepts and returns fake/default value:
+-- Result: 'read committed'
+
+-- IRIS execution bypassed - no error thrown
+```
+
+**Supported SHOW Commands**:
+| SHOW Command | Default Value Returned |
+|--------------|------------------------|
+| `SHOW TRANSACTION ISOLATION LEVEL` | `'read committed'` |
+| `SHOW SERVER_VERSION` | `'16.0 (InterSystems IRIS)'` |
+| `SHOW SERVER_ENCODING` | `'UTF8'` |
+| `SHOW CLIENT_ENCODING` | `'UTF8'` |
+| `SHOW DATESTYLE` | `'ISO, MDY'` |
+| `SHOW TIMEZONE` | `'UTC'` |
+| `SHOW STANDARD_CONFORMING_STRINGS` | `'on'` |
+| `SHOW INTEGER_DATETIMES` | `'on'` |
+| `SHOW INTERVALSTYLE` | `'postgres'` |
+| `SHOW IS_SUPERUSER` | `'off'` |
+| `SHOW APPLICATION_NAME` | `''` (empty string) |
+
+**JDBC Integration**:
+```java
+// ✅ WORKS: JDBC calls getTransactionIsolation() which internally sends SHOW
+Connection conn = DriverManager.getConnection(url, props);
+int level = conn.getTransactionIsolation();  // Works transparently
+// Returns: Connection.TRANSACTION_READ_COMMITTED (2)
+```
+
+**Result**: Standard JDBC transaction isolation level queries work seamlessly - no client code changes needed.
+
+---
+
+### 5. Missing PostgreSQL Functions
 
 **Issue**: IRIS does not implement all PostgreSQL system functions
 
 **Common Missing Functions**:
-- `version()` - Returns PostgreSQL version string
-- `current_setting()` - Get runtime parameters
+- `version()` - Returns PostgreSQL version string (use `SHOW SERVER_VERSION` instead ✅)
+- `current_setting()` - Get runtime parameters (use `SHOW` commands instead ✅)
 - `pg_backend_pid()` - Get backend process ID
 - `pg_postmaster_start_time()` - Get server start time
 
@@ -187,7 +233,17 @@ SELECT version();
 
 **Workaround Options**:
 
-1. **Use IRIS equivalents** (when available):
+1. **Use SHOW commands** (recommended - fully supported):
+```sql
+-- ✅ WORKS: Use SHOW instead of function calls
+SHOW SERVER_VERSION;
+-- Returns: '16.0 (InterSystems IRIS)'
+
+SHOW TRANSACTION ISOLATION LEVEL;
+-- Returns: 'read committed'
+```
+
+2. **Use IRIS equivalents** (when available):
 ```sql
 -- PostgreSQL: SELECT version();
 -- IRIS: SELECT $ZVERSION  -- Via ObjectScript
@@ -196,7 +252,7 @@ SELECT version();
 -- IRIS: SELECT CURRENT_SCHEMA()
 ```
 
-2. **Client-side fallback**:
+3. **Client-side fallback**:
 ```javascript
 try {
     const result = await client.query('SELECT version()');
@@ -206,16 +262,9 @@ try {
 }
 ```
 
-3. **Wait for function shims** (planned implementation):
-```sql
--- Coming soon: PGWire function shims
-SELECT version();
--- Will return: "InterSystems IRIS (pgwire-compatible) based on PostgreSQL 16"
-```
-
 ---
 
-### 5. Table Operations and Edge Cases
+### 6. Table Operations and Edge Cases
 
 #### DELETE Requires Existing Table
 **IRIS Behavior**: `DELETE FROM non_existent_table` fails with "Table not found"
@@ -244,7 +293,7 @@ INSERT INTO test (id, name) VALUES (1, 'John');
 
 ---
 
-### 6. Mixed Case Column Names
+### 7. Mixed Case Column Names
 
 **IRIS Behavior**: Preserves original case for column names (e.g., `PatientID`, `LastName`)
 
@@ -274,7 +323,7 @@ ORDER BY ordinal_position;
 
 ---
 
-### 7. Metadata Schema Differences
+### 8. Metadata Schema Differences
 
 **IRIS Uses**: `INFORMATION_SCHEMA` (SQL standard)
 
@@ -322,17 +371,63 @@ WHERE table_name = 'MyTable';
 
 ---
 
-### JDBC (PostgreSQL JDBC 42.7.1) - FRAMEWORK READY
+### JDBC (PostgreSQL JDBC 42.7.1) - TESTED ✅
 
-**Status**: 🔄 **Testing Pending**
+**Status**: ✅ **COMPATIBLE** (with known IRIS limitations)
 
-**Test Framework**: 15+ tests across 4 test files
-- `BasicConnectionTest.java` - Connection establishment, metadata, pooling
-- `SimpleQueryTest.java` - Query execution, result sets
-- `PreparedStatementTest.java` - Parameter binding, batching
-- `TransactionTest.java` - Transaction management, isolation levels
+**Test Results** (27 total tests):
+- ✅ Connection tests (6/6): 100% PASSING ✅
+- ⚠️ Simple query tests (3/7): 43% PASSING
+- ⚠️ Prepared statement tests (1/7): 14% PASSING
+- ✅ Transaction tests (6/7): 86% PASSING ✅ **MAJOR IMPROVEMENT**
 
-**Expected Compatibility**: High (same parameter translation as node-postgres)
+**Total**: **17/27 tests passing (63%)** ⬆️ **+113% improvement from initial 30%**
+
+**Recent Fixes** (2025-11-11):
+1. ✅ **SQLCODE 100 Handling** - Fixed 7 tests by treating IRIS SQLCODE 100 as success with 0 rows
+2. ✅ **Empty Result Set** - Fixed 1 test by properly handling SELECT from empty table
+3. ✅ **SHOW Commands** - Fixed 1 test by implementing SHOW TRANSACTION ISOLATION LEVEL shim
+
+**Progress Timeline**:
+- Initial: 8/27 tests (30%)
+- After SQLCODE 100 fix: 15/27 tests (56%)
+- After empty result fix: 16/27 tests (59%)
+- After SHOW shim: **17/27 tests (63%)** ✅
+
+**Known IRIS Limitations** (10 failures):
+
+1. **Column Aliases NOT Preserved** (7 failures) - **IRIS SQL LIMITATION**
+   ```java
+   // ❌ FAILS: IRIS returns "column1" not "num"
+   ResultSet rs = stmt.executeQuery("SELECT 1 AS num, 'hello' AS text");
+   int value = rs.getInt("num");  // Column name not found!
+
+   // ✅ WORKS: Use positional access
+   int value = rs.getInt(1);  // Works perfectly
+   ```
+
+2. **String Literals Uppercased** (1 failure) - **IRIS SQL BEHAVIOR**
+   ```java
+   // ❌ FAILS: IRIS returns "HELLO" not "hello"
+   ResultSet rs = stmt.executeQuery("SELECT 'hello'");
+   assertEquals("hello", rs.getString(1));  // Expected: hello, Actual: HELLO
+
+   // ✅ WORKS: Case-insensitive comparison
+   assertEquals("hello", rs.getString(1).toLowerCase());
+   ```
+
+3. **Remaining Failures** (2 tests) - **NEEDS INVESTIGATION**
+   - CREATE TABLE syntax issue (1 test)
+   - Batch operations (1 test)
+
+**Production Readiness**:
+- ✅ **READY**: Connections, connection pooling, transactions, read-write queries
+- ✅ **READY**: Transaction isolation level queries (via SHOW shim)
+- ⚠️ **LIMITED**: Named column access (use positional instead)
+- ⚠️ **LIMITED**: String comparisons (case-insensitive only)
+- ❌ **NOT READY**: Batch operations, some DDL operations
+
+**Full Analysis**: `tests/client_compatibility/jdbc/JDBC_TEST_RESULTS.md`
 
 **To Execute**:
 ```bash
@@ -439,12 +534,13 @@ WHERE LOWER(table_name) = LOWER('MyTable');
 - ✅ Transaction management (BEGIN/COMMIT/ROLLBACK)
 - ✅ COPY protocol for bulk operations
 - ✅ INFORMATION_SCHEMA metadata queries
+- ✅ SHOW command shims (11 commands including TRANSACTION ISOLATION LEVEL)
 
 ### Planned 🔄
-- 🔄 PostgreSQL function shims (`version()`, `current_setting()`)
-- 🔄 Additional client driver testing (JDBC, Npgsql, pgx)
+- 🔄 Additional client driver testing (Npgsql, pgx)
 - 🔄 `?column?` naming compatibility mode (optional)
 - 🔄 Enhanced error messages with PostgreSQL context
+- 🔄 Additional function shims (`version()`, `current_setting()`)
 
 ### Not Supported ❌
 - ❌ `pg_catalog` schema (use INFORMATION_SCHEMA instead)

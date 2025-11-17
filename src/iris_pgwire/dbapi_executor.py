@@ -16,7 +16,7 @@ Contract: contracts/dbapi-executor-contract.md
 import asyncio
 import logging
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.models.backend_config import BackendConfig
@@ -67,9 +67,7 @@ class DBAPIExecutor:
             },
         )
 
-    async def execute_query(
-        self, sql: str, params: Optional[Tuple] = None
-    ) -> List[Tuple[Any, ...]]:
+    async def execute_query(self, sql: str, params: tuple | None = None) -> list[tuple[Any, ...]]:
         """
         Execute SQL query via DBAPI connection pool.
 
@@ -117,12 +115,10 @@ class DBAPIExecutor:
             self._total_queries += 1
             self._total_query_time_ms += elapsed_ms
 
-            conn_wrapper.record_query_execution(
-                acquisition_time_ms=elapsed_ms, success=True
-            )
+            conn_wrapper.record_query_execution(acquisition_time_ms=elapsed_ms, success=True)
 
             logger.debug(
-                f"Query executed",
+                "Query executed",
                 extra={
                     "sql": sql[:100],
                     "rows_returned": len(results),
@@ -137,9 +133,7 @@ class DBAPIExecutor:
             self._total_errors += 1
 
             if conn_wrapper:
-                conn_wrapper.record_query_execution(
-                    acquisition_time_ms=0, success=False
-                )
+                conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
 
             raise
 
@@ -148,9 +142,7 @@ class DBAPIExecutor:
             if conn_wrapper:
                 await self.pool.release(conn_wrapper)
 
-    async def execute_vector_query(
-        self, request: VectorQueryRequest
-    ) -> List[Tuple[Any, ...]]:
+    async def execute_vector_query(self, request: VectorQueryRequest) -> list[tuple[Any, ...]]:
         """
         Execute vector similarity query using translated SQL.
 
@@ -167,7 +159,7 @@ class DBAPIExecutor:
         # Validate translation SLA
         if request.exceeds_sla():
             logger.warning(
-                f"Vector translation exceeded 5ms SLA",
+                "Vector translation exceeded 5ms SLA",
                 extra={
                     "request_id": request.request_id,
                     "translation_ms": request.translation_time_ms,
@@ -178,7 +170,7 @@ class DBAPIExecutor:
 
         # Execute translated SQL
         logger.info(
-            f"Executing vector query",
+            "Executing vector query",
             extra={
                 "request_id": request.request_id,
                 "operator": request.vector_operator,
@@ -190,7 +182,7 @@ class DBAPIExecutor:
         results = await self.execute_query(request.translated_sql)
 
         logger.debug(
-            f"Vector query completed",
+            "Vector query completed",
             extra={
                 "request_id": request.request_id,
                 "rows_returned": len(results),
@@ -215,9 +207,7 @@ class DBAPIExecutor:
 
             # Calculate average query time
             avg_query_ms = (
-                self._total_query_time_ms / self._total_queries
-                if self._total_queries > 0
-                else None
+                self._total_query_time_ms / self._total_queries if self._total_queries > 0 else None
             )
 
             return {
@@ -273,7 +263,7 @@ class DBAPIExecutor:
 
         logger.info("DBAPI executor closed")
 
-    def avg_query_time_ms(self) -> Optional[float]:
+    def avg_query_time_ms(self) -> float | None:
         """
         Calculate average query execution time.
 

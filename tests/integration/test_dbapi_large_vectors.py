@@ -14,8 +14,6 @@ Test Scenarios: Based on quickstart.md Step 5 (Execute Vector Similarity Query)
 
 import pytest
 
-from iris_pgwire.config_schema import BackendConfig, BackendType
-
 # Will fail until implemented (TDD)
 try:
     from iris_pgwire.dbapi_executor import DBAPIExecutor

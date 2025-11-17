@@ -11,11 +11,11 @@ Constitutional Requirements:
 import csv
 import io
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from .sql_translator.copy_parser import CSVOptions
 from .column_validator import ColumnNameValidator
+from .sql_translator.copy_parser import CSVOptions
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class CSVParsingError(Exception):
 @dataclass
 class CSVBatch:
     """Batch of CSV rows for memory-efficient processing."""
+
     rows: list[dict]
     batch_number: int
     total_bytes: int
@@ -51,9 +52,7 @@ class CSVProcessor:
     BATCH_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
     async def parse_csv_rows(
-        self,
-        csv_stream: AsyncIterator[bytes],
-        options: CSVOptions
+        self, csv_stream: AsyncIterator[bytes], options: CSVOptions
     ) -> AsyncIterator[dict]:
         """
         Parse CSV bytes stream to row dicts with batching.
@@ -71,7 +70,7 @@ class CSVProcessor:
         logger.debug(f"Parsing CSV: header={options.header}, delimiter='{options.delimiter}'")
 
         # Accumulate bytes into buffer
-        buffer = b''
+        buffer = b""
         column_names = None
         line_number = 0
         rows_yielded = 0
@@ -80,12 +79,14 @@ class CSVProcessor:
         async for chunk in csv_stream:
             chunks_received += 1
             buffer += chunk
-            logger.debug(f"CSV chunk #{chunks_received}: {len(chunk)} bytes, buffer now {len(buffer)} bytes")
+            logger.debug(
+                f"CSV chunk #{chunks_received}: {len(chunk)} bytes, buffer now {len(buffer)} bytes"
+            )
 
             # Process complete lines from buffer
-            while b'\n' in buffer:
+            while b"\n" in buffer:
                 # Extract one line
-                line_end = buffer.index(b'\n') + 1
+                line_end = buffer.index(b"\n") + 1
                 line_bytes = buffer[:line_end]
                 buffer = buffer[line_end:]
 
@@ -93,7 +94,7 @@ class CSVProcessor:
 
                 try:
                     # Decode line
-                    line_text = line_bytes.decode('utf-8').rstrip('\r\n')
+                    line_text = line_bytes.decode("utf-8").rstrip("\r\n")
 
                     if not line_text.strip():
                         continue  # Skip empty lines
@@ -103,7 +104,7 @@ class CSVProcessor:
                         [line_text],
                         delimiter=options.delimiter,
                         quotechar=options.quote,
-                        escapechar=options.escape if options.escape != '\\' else None
+                        escapechar=options.escape if options.escape != "\\" else None,
                     )
                     row_values = next(csv_reader)
 
@@ -123,12 +124,12 @@ class CSVProcessor:
                     if len(row_values) != len(column_names):
                         raise CSVParsingError(
                             f"Expected {len(column_names)} columns, got {len(row_values)}",
-                            line_number
+                            line_number,
                         )
 
                     # Build row dict
                     row_dict = {}
-                    for col_name, col_value in zip(column_names, row_values):
+                    for col_name, col_value in zip(column_names, row_values, strict=False):
                         # Handle NULL values
                         if col_value == options.null_string:
                             row_dict[col_name] = None
@@ -147,26 +148,24 @@ class CSVProcessor:
         if buffer:
             line_number += 1
             try:
-                line_text = buffer.decode('utf-8').rstrip('\r\n')
+                line_text = buffer.decode("utf-8").rstrip("\r\n")
                 if line_text.strip():
                     csv_reader = csv.reader(
-                        [line_text],
-                        delimiter=options.delimiter,
-                        quotechar=options.quote
+                        [line_text], delimiter=options.delimiter, quotechar=options.quote
                     )
                     row_values = next(csv_reader)
 
                     if column_names and len(row_values) != len(column_names):
                         raise CSVParsingError(
                             f"Expected {len(column_names)} columns, got {len(row_values)}",
-                            line_number
+                            line_number,
                         )
 
                     if column_names is None:
                         column_names = [f"column_{i}" for i in range(len(row_values))]
 
                     row_dict = {}
-                    for col_name, col_value in zip(column_names, row_values):
+                    for col_name, col_value in zip(column_names, row_values, strict=False):
                         row_dict[col_name] = None if col_value == options.null_string else col_value
 
                     yield row_dict
@@ -175,13 +174,12 @@ class CSVProcessor:
             except Exception as e:
                 raise CSVParsingError(str(e), line_number)
 
-        logger.info(f"CSV parsing complete: {chunks_received} chunks received, {rows_yielded} rows yielded")
+        logger.info(
+            f"CSV parsing complete: {chunks_received} chunks received, {rows_yielded} rows yielded"
+        )
 
     async def generate_csv_rows(
-        self,
-        result_rows: AsyncIterator[tuple],
-        column_names: list[str],
-        options: CSVOptions
+        self, result_rows: AsyncIterator[tuple], column_names: list[str], options: CSVOptions
     ) -> AsyncIterator[bytes]:
         """
         Generate CSV bytes from result row tuples.
@@ -201,8 +199,8 @@ class CSVProcessor:
             buffer,
             delimiter=options.delimiter,
             quotechar=options.quote,
-            escapechar=options.escape if options.escape != '\\' else None,
-            quoting=csv.QUOTE_MINIMAL
+            escapechar=options.escape if options.escape != "\\" else None,
+            quoting=csv.QUOTE_MINIMAL,
         )
 
         rows_generated = 0
@@ -229,7 +227,7 @@ class CSVProcessor:
 
             # Yield batch when buffer reaches 8KB (or every 100 rows)
             if buffer.tell() >= 8192 or batch_rows >= 100:
-                csv_bytes = buffer.getvalue().encode('utf-8')
+                csv_bytes = buffer.getvalue().encode("utf-8")
                 yield csv_bytes
 
                 # Reset buffer
@@ -238,13 +236,13 @@ class CSVProcessor:
                     buffer,
                     delimiter=options.delimiter,
                     quotechar=options.quote,
-                    quoting=csv.QUOTE_MINIMAL
+                    quoting=csv.QUOTE_MINIMAL,
                 )
                 batch_rows = 0
 
         # Yield remaining data
         if buffer.tell() > 0:
-            csv_bytes = buffer.getvalue().encode('utf-8')
+            csv_bytes = buffer.getvalue().encode("utf-8")
             yield csv_bytes
 
         logger.info(f"CSV generation complete: {rows_generated} rows generated")

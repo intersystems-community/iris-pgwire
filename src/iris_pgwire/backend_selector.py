@@ -13,7 +13,7 @@ Contract: contracts/backend-selector-contract.md
 """
 
 import logging
-from typing import Protocol, Union
+from typing import Protocol
 
 from iris_pgwire.models.backend_config import BackendConfig, BackendType
 
@@ -75,7 +75,7 @@ class BackendSelector:
         backend_type = config.backend_type
 
         logger.info(
-            f"Selecting backend executor",
+            "Selecting backend executor",
             extra={
                 "backend_type": backend_type.value,
                 "requires_pool": config.requires_pool(),
@@ -138,7 +138,7 @@ class BackendSelector:
                 )
 
             logger.info(
-                f"DBAPI configuration validated",
+                "DBAPI configuration validated",
                 extra={
                     "hostname": config.iris_hostname,
                     "port": config.iris_port,

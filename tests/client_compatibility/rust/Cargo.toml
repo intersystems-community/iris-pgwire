@@ -1,0 +1,24 @@
+[package]
+name = "pgwire-rust-compatibility"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[[test]]
+name = "connection_tests"
+path = "tests/connection_tests.rs"
+
+[[test]]
+name = "query_tests"
+path = "tests/query_tests.rs"
+
+[[test]]
+name = "transaction_tests"
+path = "tests/transaction_tests.rs"

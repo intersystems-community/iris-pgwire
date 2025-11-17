@@ -24,15 +24,15 @@ async def test_bulk_insert_contract():
     executor = BulkExecutor()
 
     async def rows():
-        yield {'PatientID': 1, 'FirstName': 'John', 'LastName': 'Smith'}
-        yield {'PatientID': 2, 'FirstName': 'Jane', 'LastName': 'Doe'}
+        yield {"PatientID": 1, "FirstName": "John", "LastName": "Smith"}
+        yield {"PatientID": 2, "FirstName": "Jane", "LastName": "Doe"}
 
     # Execute
     row_count = await executor.bulk_insert(
-        table_name='Patients',
-        column_names=['PatientID', 'FirstName', 'LastName'],
+        table_name="Patients",
+        column_names=["PatientID", "FirstName", "LastName"],
         rows=rows(),
-        batch_size=1000
+        batch_size=1000,
     )
 
     # Contract: Returns row count (int)
@@ -54,14 +54,14 @@ async def test_bulk_insert_batching_contract():
 
     async def large_dataset():
         for i in range(2500):  # 2.5 batches
-            yield {'PatientID': i, 'FirstName': f'Patient{i}'}
+            yield {"PatientID": i, "FirstName": f"Patient{i}"}
 
     # Execute with small batch size
     row_count = await executor.bulk_insert(
-        table_name='Patients',
-        column_names=['PatientID', 'FirstName'],
+        table_name="Patients",
+        column_names=["PatientID", "FirstName"],
         rows=large_dataset(),
-        batch_size=1000
+        batch_size=1000,
     )
 
     # Contract: Processes all rows

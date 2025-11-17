@@ -14,10 +14,9 @@ Feature: 018-add-dbapi-option
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BackendType(str, Enum):
@@ -52,12 +51,10 @@ class BackendConfig(BaseModel):
     iris_hostname: str = Field(
         default="localhost", description="IRIS instance hostname or IP address"
     )
-    iris_port: int = Field(
-        default=1972, ge=1, le=65535, description="IRIS SuperServer port"
-    )
+    iris_port: int = Field(default=1972, ge=1, le=65535, description="IRIS SuperServer port")
     iris_namespace: str = Field(default="USER", description="Target IRIS namespace")
     iris_username: str = Field(default="_SYSTEM", description="IRIS authentication username")
-    iris_password: Optional[str] = Field(
+    iris_password: str | None = Field(
         default=None, description="IRIS authentication password (required for DBAPI)"
     )
 
@@ -83,9 +80,7 @@ class BackendConfig(BaseModel):
 
     # Observability Configuration
     enable_otel: bool = Field(default=True, description="Enable OpenTelemetry instrumentation")
-    otel_endpoint: str = Field(
-        default="http://localhost:4318", description="OTLP endpoint URL"
-    )
+    otel_endpoint: str = Field(default="http://localhost:4318", description="OTLP endpoint URL")
 
     @field_validator("otel_endpoint")
     @classmethod
@@ -136,7 +131,7 @@ class BackendConfig(BaseModel):
         if not config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             config_data = yaml.safe_load(f)
 
         # Flatten nested YAML structure (backend.type → backend_type)

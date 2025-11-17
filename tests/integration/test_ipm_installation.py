@@ -15,12 +15,9 @@ Feature: 018-add-dbapi-option
 Test Scenarios: Based on quickstart.md Step 1 (Install via IPM)
 """
 
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_iris]
 
@@ -200,6 +197,4 @@ def test_tdd_placeholder_ipm_installation_tests():
     missing_files = [f for f in expected_files if not f.exists()]
 
     if missing_files:
-        pytest.skip(
-            f"IPM files not yet created (TDD): {', '.join(str(f) for f in missing_files)}"
-        )
+        pytest.skip(f"IPM files not yet created (TDD): {', '.join(str(f) for f in missing_files)}")

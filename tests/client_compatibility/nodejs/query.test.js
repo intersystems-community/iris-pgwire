@@ -130,6 +130,9 @@ describe('Simple Query Tests', () => {
       SELECT 3, 'third'
     `);
 
+    console.log('UNION result columns:', result.fields.map(f => f.name));
+    console.log('UNION result row:', JSON.stringify(result.rows[0], null, 2));
+
     // THEN: Should return all rows
     expect(result.rows).toHaveLength(3);
     expect(result.rows[0].id).toBe(1);

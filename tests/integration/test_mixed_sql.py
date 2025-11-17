@@ -7,28 +7,30 @@ with standard PostgreSQL SQL. These tests MUST FAIL until implementation is comp
 Constitutional Requirement: Test-First Development ensuring seamless SQL integration
 """
 
-import pytest
-import time
 import json
-from datetime import datetime, date
-from typing import Any, Dict, List, Optional
+import time
+
+import pytest
 
 # These imports will fail until implementation exists - expected in TDD
 try:
     from iris_pgwire.server import PGWireServer
     from iris_pgwire.sql_translator import SQLTranslator
     from iris_pgwire.sql_translator.hybrid_processor import HybridSQLProcessor
+
     SERVER_AVAILABLE = True
 except ImportError:
     SERVER_AVAILABLE = False
 
 try:
     import psycopg
+
     PSYCOPG_AVAILABLE = True
 except ImportError:
     PSYCOPG_AVAILABLE = False
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_iris, pytest.mark.mixed_sql]
+
 
 @pytest.fixture(scope="session")
 def pgwire_server():
@@ -41,7 +43,7 @@ def pgwire_server():
         port=5436,  # Different port for mixed SQL testing
         enable_translation=True,
         enable_hybrid_mode=True,  # Key feature for mixed SQL
-        fallback_strategy="PRESERVE_STANDARD"
+        fallback_strategy="PRESERVE_STANDARD",
     )
     server.start()
 
@@ -51,6 +53,7 @@ def pgwire_server():
 
     server.stop()
 
+
 @pytest.fixture
 def connection_params():
     """Connection parameters for mixed SQL testing"""
@@ -59,8 +62,9 @@ def connection_params():
         "port": 5436,
         "user": "postgres",
         "password": "iris",
-        "dbname": "iris"
+        "dbname": "iris",
     }
+
 
 class TestMixedIRISStandardSQL:
     """Test queries that mix IRIS constructs with standard PostgreSQL SQL"""
@@ -73,7 +77,8 @@ class TestMixedIRISStandardSQL:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Standard SQL structure with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         id,
                         name,
@@ -85,7 +90,8 @@ class TestMixedIRISStandardSQL:
                     WHERE id > 10
                     ORDER BY created_at DESC
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "LIMIT should be respected"
@@ -105,7 +111,8 @@ class TestMixedIRISStandardSQL:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Standard JOIN with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         u.id,
                         %SQLUPPER(u.name) AS user_name,
@@ -117,7 +124,8 @@ class TestMixedIRISStandardSQL:
                     WHERE %SQLUPPER(p.status) = 'PUBLISHED'
                     ORDER BY p.created_at DESC
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 10, "LIMIT should be respected"
@@ -126,7 +134,7 @@ class TestMixedIRISStandardSQL:
                     # Verify JSON construction worked
                     json_col = results[0][4]
                     parsed = json.loads(json_col)
-                    assert 'user' in parsed and 'post' in parsed
+                    assert "user" in parsed and "post" in parsed
 
     def test_standard_aggregation_with_iris_functions(self, pgwire_server, connection_params):
         """Test standard aggregation queries with IRIS functions"""
@@ -136,7 +144,8 @@ class TestMixedIRISStandardSQL:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Standard GROUP BY with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         %SQLUPPER(status) AS status_upper,
                         COUNT(*) AS user_count,
@@ -148,7 +157,8 @@ class TestMixedIRISStandardSQL:
                     GROUP BY status, %SQLUPPER(status)
                     HAVING COUNT(*) > 5
                     ORDER BY COUNT(*) DESC
-                """)
+                """
+                )
 
                 results = cur.fetchall()
 
@@ -159,7 +169,7 @@ class TestMixedIRISStandardSQL:
 
                     # Verify JSON aggregation
                     json_summary = json.loads(row[4])
-                    assert json_summary['count'] == row[1], "JSON count should match actual count"
+                    assert json_summary["count"] == row[1], "JSON count should match actual count"
 
     def test_standard_window_functions_with_iris_constructs(self, pgwire_server, connection_params):
         """Test PostgreSQL window functions with IRIS constructs"""
@@ -169,7 +179,8 @@ class TestMixedIRISStandardSQL:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Window functions with IRIS constructs
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         id,
                         name,
@@ -180,7 +191,8 @@ class TestMixedIRISStandardSQL:
                     FROM users
                     ORDER BY id
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 10, "LIMIT should be respected"
@@ -192,7 +204,10 @@ class TestMixedIRISStandardSQL:
 
                     assert first_row[3] == 1, "First row should have ROW_NUMBER = 1"
                     assert first_row[5] is None, "First row LAG should be NULL"
-                    assert second_row[5] == first_row[2], "Second row LAG should equal first row name_upper"
+                    assert (
+                        second_row[5] == first_row[2]
+                    ), "Second row LAG should equal first row name_upper"
+
 
 class TestMixedSQLWithCTE:
     """Test Common Table Expressions (CTEs) with IRIS constructs"""
@@ -205,7 +220,8 @@ class TestMixedSQLWithCTE:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # CTE with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     WITH user_summary AS (
                         SELECT
                             id,
@@ -225,7 +241,8 @@ class TestMixedSQLWithCTE:
                     WHERE name_upper LIKE 'A%'
                     ORDER BY name_upper
                     LIMIT 5
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "LIMIT should be respected"
@@ -233,12 +250,12 @@ class TestMixedSQLWithCTE:
                 if results:
                     # Verify CTE processing worked
                     row = results[0]
-                    assert row[0].startswith('A'), "Name should start with 'A'"
+                    assert row[0].startswith("A"), "Name should start with 'A'"
                     assert row[2] is not None, "IRIS version should be populated"
 
                     # Verify JSON from CTE
                     user_json = json.loads(row[3])
-                    assert 'id' in user_json and 'name' in user_json
+                    assert "id" in user_json and "name" in user_json
 
     def test_recursive_cte_with_iris_constructs(self, pgwire_server, connection_params):
         """Test recursive CTE with IRIS function calls"""
@@ -248,7 +265,8 @@ class TestMixedSQLWithCTE:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Recursive CTE with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     WITH RECURSIVE category_hierarchy AS (
                         SELECT
                             id,
@@ -279,7 +297,8 @@ class TestMixedSQLWithCTE:
                     FROM category_hierarchy
                     ORDER BY level, name_upper
                     LIMIT 20
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 20, "LIMIT should be respected"
@@ -291,7 +310,8 @@ class TestMixedSQLWithCTE:
 
                     # Verify JSON construction in recursive context
                     category_json = json.loads(results[0][3])
-                    assert 'level' in category_json
+                    assert "level" in category_json
+
 
 class TestMixedSQLWithSubqueries:
     """Test subqueries mixing IRIS constructs with standard SQL"""
@@ -304,7 +324,8 @@ class TestMixedSQLWithSubqueries:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Correlated subquery with IRIS functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         u.id,
                         %SQLUPPER(u.name) AS name_upper,
@@ -329,7 +350,8 @@ class TestMixedSQLWithSubqueries:
                     )
                     ORDER BY published_count DESC
                     LIMIT 10
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 10, "LIMIT should be respected"
@@ -342,7 +364,7 @@ class TestMixedSQLWithSubqueries:
                     # Verify JSON from subquery
                     if row[3]:
                         latest_info = json.loads(row[3])
-                        assert 'latest_post' in latest_info
+                        assert "latest_post" in latest_info
 
     def test_scalar_subquery_with_iris_system_functions(self, pgwire_server, connection_params):
         """Test scalar subqueries with IRIS system functions"""
@@ -352,7 +374,8 @@ class TestMixedSQLWithSubqueries:
         with psycopg.connect(**connection_params) as conn:
             with conn.cursor() as cur:
                 # Scalar subquery with IRIS system functions
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         id,
                         name,
@@ -369,7 +392,8 @@ class TestMixedSQLWithSubqueries:
                     FROM users
                     WHERE id <= 5
                     ORDER BY id
-                """)
+                """
+                )
 
                 results = cur.fetchall()
                 assert len(results) <= 5, "Should have max 5 users"
@@ -382,7 +406,8 @@ class TestMixedSQLWithSubqueries:
 
                     # Verify complex JSON from subquery
                     system_info = json.loads(row[4])
-                    assert 'version' in system_info and 'user_count' in system_info
+                    assert "version" in system_info and "user_count" in system_info
+
 
 class TestMixedSQLTransactionHandling:
     """Test transaction handling with mixed IRIS/standard SQL"""
@@ -407,21 +432,23 @@ class TestMixedSQLTransactionHandling:
                 assert version is not None
 
                 # Mixed SQL statement
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT
                         COUNT(*) AS total_users,
                         %SYSTEM.Version.GetNumber() AS current_version,
                         JSON_OBJECT('count', COUNT(*), 'version', %SYSTEM.Version.GetNumber()) AS summary
                     FROM users
                     WHERE %SQLUPPER(status) = 'ACTIVE'
-                """)
+                """
+                )
                 result = cur.fetchone()
                 assert result[0] >= 0, "Count should be non-negative"
                 assert result[1] == version, "Version should be consistent"
 
                 # Verify JSON construction
                 summary = json.loads(result[2])
-                assert summary['version'] == version
+                assert summary["version"] == version
 
                 cur.execute("COMMIT")
 
@@ -449,12 +476,14 @@ class TestMixedSQLTransactionHandling:
                 cur.execute("SAVEPOINT sp2")
 
                 # Execute mixed SQL
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT JSON_OBJECT('version', %SYSTEM.Version.GetNumber()) AS version_json
-                """)
+                """
+                )
                 result2 = cur.fetchone()[0]
                 version_info = json.loads(result2)
-                assert 'version' in version_info
+                assert "version" in version_info
 
                 # Rollback to savepoint
                 cur.execute("ROLLBACK TO sp1")
@@ -465,6 +494,7 @@ class TestMixedSQLTransactionHandling:
                 assert result3 == "rollback_test"
 
                 cur.execute("COMMIT")
+
 
 class TestMixedSQLPerformance:
     """Test performance characteristics of mixed IRIS/standard SQL"""
@@ -516,19 +546,24 @@ class TestMixedSQLPerformance:
                 assert len(results) <= 50, "LIMIT should be respected"
 
                 # Constitutional requirement: complex mixed queries should be reasonably fast
-                assert execution_time_ms < 2000.0, \
-                    f"Complex mixed query took {execution_time_ms}ms, should be < 2000ms"
+                assert (
+                    execution_time_ms < 2000.0
+                ), f"Complex mixed query took {execution_time_ms}ms, should be < 2000ms"
 
                 if results:
                     # Verify all elements processed correctly
                     row = results[0]
                     assert row[0] is not None, "Name upper should be processed"
                     assert row[3] is not None, "IRIS version should be returned"
-                    assert row[4] in ['PROLIFIC', 'ACTIVE', 'CASUAL'], "User type should be uppercased"
+                    assert row[4] in [
+                        "PROLIFIC",
+                        "ACTIVE",
+                        "CASUAL",
+                    ], "User type should be uppercased"
 
                     # Verify JSON structure
                     user_json = json.loads(row[2])
-                    assert 'user_id' in user_json and 'name' in user_json
+                    assert "user_id" in user_json and "name" in user_json
 
     def test_batch_mixed_sql_performance(self, pgwire_server, connection_params):
         """Test performance of batch execution with mixed SQL"""
@@ -543,7 +578,7 @@ class TestMixedSQLPerformance:
                     "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE",
                     "SELECT %SYSTEM.Version.GetNumber() AS version",
                     "SELECT JSON_OBJECT('timestamp', CURRENT_TIMESTAMP) AS time_json",
-                    "SELECT %SQLLOWER('BATCH') AS lower_test"
+                    "SELECT %SQLLOWER('BATCH') AS lower_test",
                 ]
 
                 start_time = time.perf_counter()
@@ -556,8 +591,10 @@ class TestMixedSQLPerformance:
                 execution_time_ms = (time.perf_counter() - start_time) * 1000
 
                 # Batch execution should be efficient
-                assert execution_time_ms < 1000.0, \
-                    f"Batch mixed queries took {execution_time_ms}ms, should be < 1000ms"
+                assert (
+                    execution_time_ms < 1000.0
+                ), f"Batch mixed queries took {execution_time_ms}ms, should be < 1000ms"
+
 
 class TestMixedSQLErrorHandling:
     """Test error handling in mixed IRIS/standard SQL scenarios"""
@@ -571,7 +608,8 @@ class TestMixedSQLErrorHandling:
             with conn.cursor() as cur:
                 # Query with potential IRIS function failure
                 try:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             id,
                             name,
@@ -579,7 +617,8 @@ class TestMixedSQLErrorHandling:
                             created_at
                         FROM users
                         LIMIT 1
-                    """)
+                    """
+                    )
                     result = cur.fetchone()
                     # If no error, verify graceful handling
                     assert result is not None or cur.rowcount >= 0
@@ -596,19 +635,22 @@ class TestMixedSQLErrorHandling:
             with conn.cursor() as cur:
                 # Syntax error in mixed query
                 with pytest.raises(psycopg.Error):
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             %SQLUPPER(name) AS name_upper,
                             INVALID SYNTAX HERE,
                             COUNT(*) AS count
                         FROM users
                         GROUP BY name
-                    """)
+                    """
+                    )
 
                 # Connection should recover
                 cur.execute("SELECT %SYSTEM.Version.GetNumber() AS version")
                 result = cur.fetchone()
                 assert result is not None, "Connection should recover after syntax error"
+
 
 # TDD Validation: These tests should fail until implementation exists
 def test_mixed_sql_tdd_validation():

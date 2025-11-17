@@ -14,7 +14,6 @@ Data Model: Entity #5 - IPMModuleMetadata
 
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -63,20 +62,16 @@ class IPMModuleMetadata(BaseModel):
     )
 
     # Python Dependencies
-    python_requirements: List[str] = Field(
+    python_requirements: list[str] = Field(
         default_factory=list, description="List of Python package requirements"
     )
-    requirements_file: Optional[Path] = Field(
+    requirements_file: Path | None = Field(
         default=None, description="Path to requirements.txt file"
     )
 
     # ObjectScript Classes
-    installer_class: str = Field(
-        default="IrisPGWire.Installer", description="Installer class name"
-    )
-    service_class: str = Field(
-        default="IrisPGWire.Service", description="Service class name"
-    )
+    installer_class: str = Field(default="IrisPGWire.Installer", description="Installer class name")
+    service_class: str = Field(default="IrisPGWire.Service", description="Service class name")
 
     # Lifecycle Hooks
     setup_method: str = Field(
@@ -92,7 +87,7 @@ class IPMModuleMetadata(BaseModel):
 
     # Package Metadata
     author: str = Field(default="InterSystems Community", description="Package author")
-    keywords: List[str] = Field(
+    keywords: list[str] = Field(
         default_factory=lambda: ["postgresql", "pgwire", "vector", "iris"],
         description="Package keywords",
     )
@@ -110,15 +105,13 @@ class IPMModuleMetadata(BaseModel):
 
         for part in parts:
             if not part.isdigit():
-                raise ValueError(
-                    f"Version components must be numeric (e.g., 1.0.0), got: {v}"
-                )
+                raise ValueError(f"Version components must be numeric (e.g., 1.0.0), got: {v}")
 
         return v
 
     @field_validator("python_requirements")
     @classmethod
-    def validate_requirements_format(cls, v: List[str]) -> List[str]:
+    def validate_requirements_format(cls, v: list[str]) -> list[str]:
         """Validate Python requirements use package>=version format."""
         for req in v:
             if ">" not in req and "=" not in req and "<" not in req:

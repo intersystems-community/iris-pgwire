@@ -13,7 +13,6 @@ Data Model: Entity #3 - VectorQueryRequest
 """
 
 from datetime import datetime
-from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,30 +41,26 @@ class VectorQueryRequest(BaseModel):
         description="pgvector operator used: '<->' (L2), '<=>' (cosine), '<#>' (inner product)"
     )
     vector_column: str = Field(description="Column name containing vector data")
-    query_vector: List[float] = Field(description="Query vector values")
+    query_vector: list[float] = Field(description="Query vector values")
     vector_dimensions: int = Field(ge=1, le=2048, description="Vector dimensionality")
 
     # Query Constraints
-    limit_clause: Optional[int] = Field(
+    limit_clause: int | None = Field(
         default=None, ge=1, description="LIMIT value if present in query"
     )
-    filter_conditions: Optional[str] = Field(
+    filter_conditions: str | None = Field(
         default=None, description="WHERE clause conditions if present"
     )
 
     # Performance Telemetry
-    translation_time_ms: float = Field(
-        ge=0, description="Query translation time in milliseconds"
-    )
+    translation_time_ms: float = Field(ge=0, description="Query translation time in milliseconds")
     backend_type: str = Field(description="Backend that will execute: 'dbapi' or 'embedded'")
 
     # Timestamps
     received_at: datetime = Field(
         default_factory=datetime.utcnow, description="When request was received"
     )
-    translated_at: Optional[datetime] = Field(
-        default=None, description="When translation completed"
-    )
+    translated_at: datetime | None = Field(default=None, description="When translation completed")
 
     @field_validator("vector_operator")
     @classmethod
@@ -80,7 +75,7 @@ class VectorQueryRequest(BaseModel):
 
     @field_validator("query_vector")
     @classmethod
-    def validate_vector_dimensions(cls, v: List[float], info) -> List[float]:
+    def validate_vector_dimensions(cls, v: list[float], info) -> list[float]:
         """Validate query vector matches declared dimensions."""
         vector_dims = info.data.get("vector_dimensions")
         if vector_dims and len(v) != vector_dims:

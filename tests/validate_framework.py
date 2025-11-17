@@ -14,18 +14,16 @@ Exit codes:
     1: One or more validations failed
 """
 
-import sys
 import os
-import subprocess
+import sys
 from pathlib import Path
-from typing import List, Tuple
 
 # ANSI color codes for output
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-RESET = '\033[0m'
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
 
 class ValidationResult:
@@ -36,7 +34,7 @@ class ValidationResult:
         self.passed = 0
         self.failed = 0
         self.skipped = 0
-        self.failures: List[Tuple[str, str]] = []
+        self.failures: list[tuple[str, str]] = []
 
     def add_pass(self, criterion: str):
         """Record a passing criterion."""
@@ -107,33 +105,35 @@ def check_pytest_config(result: ValidationResult):
             return
 
     try:
-        with open('pyproject.toml', 'rb') as f:
+        with open("pyproject.toml", "rb") as f:
             config = tomli.load(f)
 
-        pytest_config = config.get('tool', {}).get('pytest', {}).get('ini_options', {})
+        pytest_config = config.get("tool", {}).get("pytest", {}).get("ini_options", {})
 
         # Check timeout
-        if pytest_config.get('timeout') == 30:
+        if pytest_config.get("timeout") == 30:
             result.add_pass("Timeout configured to 30 seconds")
         else:
-            result.add_fail("Timeout configuration", f"Expected 30, got {pytest_config.get('timeout')}")
+            result.add_fail(
+                "Timeout configuration", f"Expected 30, got {pytest_config.get('timeout')}"
+            )
 
         # Check coverage
-        addopts = pytest_config.get('addopts', [])
-        if '--cov=iris_pgwire' in addopts:
+        addopts = pytest_config.get("addopts", [])
+        if "--cov=iris_pgwire" in addopts:
             result.add_pass("Coverage configured for iris_pgwire")
         else:
             result.add_fail("Coverage configuration", "--cov=iris_pgwire not in addopts")
 
         # Check sequential execution
-        if '--dist=no' in addopts:
+        if "--dist=no" in addopts:
             result.add_pass("Sequential execution enforced (--dist=no)")
         else:
             result.add_fail("Sequential execution", "--dist=no not in addopts")
 
         # Check markers
-        markers = pytest_config.get('markers', [])
-        required_markers = ['timeout', 'flaky', 'slow']
+        markers = pytest_config.get("markers", [])
+        required_markers = ["timeout", "flaky", "slow"]
         for marker in required_markers:
             if any(marker in m for m in markers):
                 result.add_pass(f"Marker '{marker}' configured")
@@ -149,15 +149,15 @@ def check_fixtures(result: ValidationResult):
     criterion = "Required fixtures implemented in tests/conftest.py"
 
     try:
-        with open('tests/conftest.py', 'r') as f:
+        with open("tests/conftest.py") as f:
             content = f.read()
 
         # Check for required fixtures
         required_fixtures = [
-            ('iris_config', '@pytest.fixture', 'def iris_config'),
-            ('embedded_iris', '@pytest.fixture', 'def embedded_iris'),
-            ('iris_clean_namespace', '@pytest.fixture', 'def iris_clean_namespace'),
-            ('pgwire_client', '@pytest.fixture', 'def pgwire_client'),
+            ("iris_config", "@pytest.fixture", "def iris_config"),
+            ("embedded_iris", "@pytest.fixture", "def embedded_iris"),
+            ("iris_clean_namespace", "@pytest.fixture", "def iris_clean_namespace"),
+            ("pgwire_client", "@pytest.fixture", "def pgwire_client"),
         ]
 
         for fixture_name, decorator, definition in required_fixtures:
@@ -177,24 +177,24 @@ def check_timeout_handler(result: ValidationResult):
     criterion = "TimeoutHandler implemented in tests/timeout_handler.py"
 
     try:
-        with open('tests/timeout_handler.py', 'r') as f:
+        with open("tests/timeout_handler.py") as f:
             content = f.read()
 
         # Check for required components
-        if 'class TimeoutHandler' in content:
+        if "class TimeoutHandler" in content:
             result.add_pass("TimeoutHandler class defined")
         else:
             result.add_fail("TimeoutHandler class", "Not found in timeout_handler.py")
 
-        if 'class DiagnosticContext' in content or '@dataclass' in content:
+        if "class DiagnosticContext" in content or "@dataclass" in content:
             result.add_pass("DiagnosticContext defined")
         else:
             result.add_fail("DiagnosticContext", "Not found in timeout_handler.py")
 
         # Check for required methods
-        required_methods = ['monitor_test', 'capture_diagnostics', 'terminate_process']
+        required_methods = ["monitor_test", "capture_diagnostics", "terminate_process"]
         for method in required_methods:
-            if f'def {method}' in content:
+            if f"def {method}" in content:
                 result.add_pass(f"Method '{method}' implemented")
             else:
                 result.add_fail(f"Method '{method}'", "Not found in TimeoutHandler")
@@ -210,16 +210,16 @@ def check_diagnostic_capture(result: ValidationResult):
     criterion = "Diagnostic capture hooks implemented"
 
     try:
-        with open('tests/conftest.py', 'r') as f:
+        with open("tests/conftest.py") as f:
             content = f.read()
 
         # Check for pytest hooks
-        if 'pytest_runtest_makereport' in content:
+        if "pytest_runtest_makereport" in content:
             result.add_pass("pytest_runtest_makereport hook implemented")
         else:
             result.add_fail("pytest_runtest_makereport hook", "Not found in conftest.py")
 
-        if 'capture_iris_state' in content:
+        if "capture_iris_state" in content:
             result.add_pass("capture_iris_state function implemented")
         else:
             result.add_fail("capture_iris_state function", "Not found in conftest.py")
@@ -231,8 +231,8 @@ def check_diagnostic_capture(result: ValidationResult):
 def check_contract_tests(result: ValidationResult):
     """Check that contract tests exist."""
     contract_tests = [
-        ('tests/contract/test_fixture_contract.py', "Fixture contract tests"),
-        ('tests/contract/test_timeout_handler.py', "Timeout handler contract tests"),
+        ("tests/contract/test_fixture_contract.py", "Fixture contract tests"),
+        ("tests/contract/test_timeout_handler.py", "Timeout handler contract tests"),
     ]
 
     for test_file, description in contract_tests:
@@ -242,8 +242,8 @@ def check_contract_tests(result: ValidationResult):
 def check_integration_tests(result: ValidationResult):
     """Check that integration tests exist."""
     integration_tests = [
-        ('tests/integration/test_developer_workflow.py', "Developer workflow tests"),
-        ('tests/integration/test_ci_cd_workflow.py', "CI/CD workflow tests"),
+        ("tests/integration/test_developer_workflow.py", "Developer workflow tests"),
+        ("tests/integration/test_ci_cd_workflow.py", "CI/CD workflow tests"),
     ]
 
     for test_file, description in integration_tests:
@@ -253,8 +253,8 @@ def check_integration_tests(result: ValidationResult):
 def check_documentation(result: ValidationResult):
     """Check that documentation files exist."""
     docs = [
-        ('tests/flaky_tests.md', "Flaky test tracking documentation"),
-        ('.gitlab-ci.yml', "GitLab CI/CD configuration"),
+        ("tests/flaky_tests.md", "Flaky test tracking documentation"),
+        (".gitlab-ci.yml", "GitLab CI/CD configuration"),
     ]
 
     for doc_file, description in docs:
@@ -298,5 +298,5 @@ def main():
     return result.summary()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

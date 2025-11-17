@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.0/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         verbose="true">
+    <testsuites>
+        <testsuite name="Connection Tests">
+            <file>tests/ConnectionTest.php</file>
+        </testsuite>
+        <testsuite name="Query Tests">
+            <file>tests/QueryTest.php</file>
+        </testsuite>
+        <testsuite name="Transaction Tests">
+            <file>tests/TransactionTest.php</file>
+        </testsuite>
+    </testsuites>
+    <php>
+        <env name="PGWIRE_HOST" value="localhost"/>
+        <env name="PGWIRE_PORT" value="5432"/>
+        <env name="PGWIRE_DATABASE" value="USER"/>
+        <env name="PGWIRE_USERNAME" value="test_user"/>
+        <env name="PGWIRE_PASSWORD" value="test"/>
+    </php>
+</phpunit>

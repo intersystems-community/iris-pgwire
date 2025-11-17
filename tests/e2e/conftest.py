@@ -10,10 +10,10 @@ Constitutional Requirements:
 """
 
 import subprocess
-import pytest
 import time
-import os
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture(scope="session")
@@ -26,11 +26,11 @@ def iris_container():
     """
     # IRIS connection parameters from kg-ticket-resolver setup
     params = {
-        'host': 'localhost',
-        'port': 1975,
-        'namespace': 'USER',
-        'username': '_SYSTEM',
-        'password': 'SYS'
+        "host": "localhost",
+        "port": 1975,
+        "namespace": "USER",
+        "username": "_SYSTEM",
+        "password": "SYS",
     }
 
     # TODO: Add health check for IRIS container
@@ -50,24 +50,20 @@ def pgwire_server(iris_container):
     Returns:
         dict: PGWire server connection parameters
     """
-    params = {
-        'host': 'localhost',
-        'port': 5432,
-        'user': 'test_user',
-        'dbname': 'USER'
-    }
+    params = {"host": "localhost", "port": 5432, "user": "test_user", "dbname": "USER"}
 
     # TODO: Add PGWire server startup and health check
     # For now, assume PGWire is running (manual prerequisite)
 
     # Wait for port to be ready (simple check)
     import socket
+
     max_retries = 10
     for i in range(max_retries):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
-            result = sock.connect_ex((params['host'], params['port']))
+            result = sock.connect_ex((params["host"], params["port"]))
             sock.close()
             if result == 0:
                 break
@@ -101,6 +97,7 @@ def psql_command(pgwire_server):
             assert result.returncode == 0
             assert "COPY 250" in result.stdout
     """
+
     def _execute_psql(sql, stdin_file=None, stdout_file=None, expect_success=True):
         """
         Execute a psql command with optional stdin/stdout redirection.
@@ -116,18 +113,23 @@ def psql_command(pgwire_server):
         """
         # Build psql command
         cmd = [
-            'psql',
-            '-h', pgwire_server['host'],
-            '-p', str(pgwire_server['port']),
-            '-U', pgwire_server['user'],
-            '-d', pgwire_server['dbname'],
-            '-c', sql
+            "psql",
+            "-h",
+            pgwire_server["host"],
+            "-p",
+            str(pgwire_server["port"]),
+            "-U",
+            pgwire_server["user"],
+            "-d",
+            pgwire_server["dbname"],
+            "-c",
+            sql,
         ]
 
         # Handle stdin redirection
         stdin_data = None
         if stdin_file:
-            with open(stdin_file, 'rb') as f:
+            with open(stdin_file, "rb") as f:
                 stdin_data = f.read()
 
         # Execute command
@@ -137,23 +139,23 @@ def psql_command(pgwire_server):
                 input=stdin_data,
                 capture_output=True,
                 text=False if stdin_file else True,
-                timeout=30
+                timeout=30,
             )
 
             # Handle stdout redirection
             if stdout_file and result.returncode == 0:
-                with open(stdout_file, 'wb' if isinstance(result.stdout, bytes) else 'w') as f:
+                with open(stdout_file, "wb" if isinstance(result.stdout, bytes) else "w") as f:
                     f.write(result.stdout)
 
             # Convert bytes to string for easier testing
             if isinstance(result.stdout, bytes):
-                result.stdout = result.stdout.decode('utf-8', errors='replace')
+                result.stdout = result.stdout.decode("utf-8", errors="replace")
             if isinstance(result.stderr, bytes):
-                result.stderr = result.stderr.decode('utf-8', errors='replace')
+                result.stderr = result.stderr.decode("utf-8", errors="replace")
 
             return result
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             pytest.fail(f"psql command timed out after 30 seconds: {sql[:100]}")
         except FileNotFoundError:
             pytest.skip("psql command not found - ensure PostgreSQL client is installed")
@@ -172,7 +174,7 @@ def test_data_dir():
         Path: Path to examples/superset-iris-healthcare/data/
     """
     repo_root = Path(__file__).parent.parent.parent
-    return repo_root / 'examples' / 'superset-iris-healthcare' / 'data'
+    return repo_root / "examples" / "superset-iris-healthcare" / "data"
 
 
 @pytest.fixture
@@ -183,7 +185,7 @@ def patients_csv_file(test_data_dir):
     Returns:
         Path: Path to patients-data.csv file
     """
-    csv_file = test_data_dir / 'patients-data.csv'
+    csv_file = test_data_dir / "patients-data.csv"
     if not csv_file.exists():
         pytest.skip(f"Test data file not found: {csv_file}")
     return csv_file

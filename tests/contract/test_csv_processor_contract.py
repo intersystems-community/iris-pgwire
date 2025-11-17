@@ -19,10 +19,10 @@ async def test_parse_csv_rows_contract():
 
     Expected: FAIL - CSVProcessor class doesn't exist yet
     """
-    from iris_pgwire.csv_processor import CSVProcessor, CSVOptions
+    from iris_pgwire.csv_processor import CSVOptions, CSVProcessor
 
     processor = CSVProcessor()
-    options = CSVOptions(format='CSV', header=True, delimiter=',')
+    options = CSVOptions(format="CSV", header=True, delimiter=",")
 
     async def csv_stream():
         yield b"PatientID,FirstName,LastName\n"
@@ -35,8 +35,8 @@ async def test_parse_csv_rows_contract():
     # Contract: Yields dicts with column names as keys
     assert len(rows) == 2, "Expected 2 data rows (header skipped)"
     assert isinstance(rows[0], dict)
-    assert rows[0]['PatientID'] == '1'
-    assert rows[0]['FirstName'] == 'John'
+    assert rows[0]["PatientID"] == "1"
+    assert rows[0]["FirstName"] == "John"
 
 
 @pytest.mark.contract
@@ -47,22 +47,24 @@ async def test_generate_csv_rows_contract():
 
     Expected: FAIL - CSVProcessor class doesn't exist yet
     """
-    from iris_pgwire.csv_processor import CSVProcessor, CSVOptions
+    from iris_pgwire.csv_processor import CSVOptions, CSVProcessor
 
     processor = CSVProcessor()
-    options = CSVOptions(format='CSV', header=True, delimiter=',')
-    column_names = ['PatientID', 'FirstName', 'LastName']
+    options = CSVOptions(format="CSV", header=True, delimiter=",")
+    column_names = ["PatientID", "FirstName", "LastName"]
 
     async def result_rows():
-        yield ('1', 'John', 'Smith')
-        yield ('2', 'Jane', 'Doe')
+        yield ("1", "John", "Smith")
+        yield ("2", "Jane", "Doe")
 
     # Execute
-    csv_chunks = [chunk async for chunk in processor.generate_csv_rows(result_rows(), column_names, options)]
+    csv_chunks = [
+        chunk async for chunk in processor.generate_csv_rows(result_rows(), column_names, options)
+    ]
 
     # Contract: Yields bytes
     assert len(csv_chunks) > 0
     assert isinstance(csv_chunks[0], bytes)
-    csv_text = b''.join(csv_chunks).decode('utf-8')
-    assert 'PatientID,FirstName,LastName' in csv_text, "Header expected"
-    assert '1,John,Smith' in csv_text, "First row expected"
+    csv_text = b"".join(csv_chunks).decode("utf-8")
+    assert "PatientID,FirstName,LastName" in csv_text, "Header expected"
+    assert "1,John,Smith" in csv_text, "First row expected"
