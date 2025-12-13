@@ -97,22 +97,38 @@ psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 
 ### Built with Structured AI Collaboration
 
-What makes this project interesting isn't just the code - it's how it was built. The `specs/` directory contains the full specification history:
+What makes this project interesting isn't just the code - it's how it was built. The `specs/` directory contains **27 feature specifications** documenting the entire development journey:
 
 ```
 specs/
-├── 026-doc-review/          # Documentation quality review
-│   ├── spec.md              # User stories for clarity, tone, accuracy
-│   ├── plan.md              # Review strategy
-│   └── tasks.md             # Actionable checklist
-└── 027-open-exchange/       # Open Exchange publication
-    ├── spec.md              # Package requirements
-    ├── research.md          # Market research
-    ├── plan.md              # Publication strategy
-    └── tasks.md             # Implementation steps
+├── 001-postgresql-wire-protocol/    # Where it all began
+├── 002-sql-query-processing/        # Query translation layer
+├── 003-iris-integration-layer/      # IRIS backend connection
+├── 006-vector-operations-pgvector/  # AI/ML vector support
+├── 008-copy-protocol-bulk-operations/
+├── 010-security-production-readiness/
+├── 012-client-compatibility-testing/ # 8-language test matrix
+├── 019-async-sqlalchemy-based/      # FastAPI integration
+├── 025-comprehensive-code-and/      # Quality validation
+├── 026-doc-review/                  # Documentation audit
+└── 027-open-exchange/               # This publication!
+    ├── spec.md                      # Package requirements
+    ├── research.md                  # Market analysis
+    ├── plan.md                      # Publication strategy
+    └── tasks.md                     # Implementation steps
 ```
 
-Each feature started as a natural language description and became a structured specification. When the bot implemented the code, it had clear requirements to follow. When I reviewed the output, I had acceptance criteria to verify against.
+Each feature started as a natural language description like:
+
+> *"PostgreSQL Wire Protocol Foundation - SSL/TLS handshake, authentication, session management, and basic protocol compliance"*
+
+And became a structured specification with user stories, acceptance criteria, and `[NEEDS CLARIFICATION]` markers for decisions that required human judgment.
+
+**The Evolution:**
+- **Spec 001**: "Can we make PostgreSQL clients talk to IRIS?"
+- **Spec 006**: "What about vector search and AI workloads?"
+- **Spec 019**: "FastAPI developers need async support"
+- **Spec 027**: "Let's share this with the world"
 
 **The result:** 171 tests passing across 8 programming languages. Production-ready.
 
