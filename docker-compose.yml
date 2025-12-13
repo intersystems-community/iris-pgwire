@@ -29,7 +29,7 @@ services:
       # Mount startup script for embedded PGWire server
       - ./scripts/start-pgwire-embedded.sh:/app/start-pgwire.sh
       # Mount merge.cpf for CallIn service (CRITICAL for embedded Python)
-      - ./merge.cpf:/app/merge.cpf
+      - ./docker/merge.cpf:/app/merge.cpf
       # Mount vector licensing key (required for VECTOR operations)
       - ./iris.key:/usr/irissys/mgr/iris.key
     healthcheck:
