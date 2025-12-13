@@ -97,7 +97,13 @@ This document tracks issues found during the documentation review process.
 ### Not Implemented
 - **L2 distance** (`<->`): Not available in IRIS PGWire
 - **Inner product** (`<#>`): Not available in IRIS PGWire
-- **LangChain PGVector class**: Requires CREATE EXTENSION compatibility (pgvector-specific)
+
+### LangChain PGVector Class Issue
+The LangChain `PGVector` class fails because SQLAlchemy's psycopg2 dialect queries PostgreSQL system catalogs (`pg_type`) to get HSTORE OIDs during connection setup. IRIS doesn't have these PostgreSQL-specific system tables.
+
+**Error**: `IndexError: tuple index out of range` in `psycopg2/extras.py` HstoreAdapter.get_oids()
+
+**Workaround**: Use raw psycopg/psycopg3 with the `<=>` operator (tested and working)
 
 ### README Example Verdict
 The README example showing LangChain PGVector is **aspirational** - the concept works for basic similarity search using `<=>`, but full drop-in PGVector class support requires additional compatibility work.
