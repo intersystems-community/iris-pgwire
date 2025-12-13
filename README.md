@@ -420,7 +420,7 @@ irispython -m iris_pgwire.server
 
 ✅ **Core Protocol**: Simple queries, prepared statements, transactions, bulk operations (COPY)
 ✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
-✅ **Vectors**: pgvector cosine distance (`<=>`), HNSW indexes
+✅ **Vectors**: pgvector operators (`<=>` cosine, `<#>` dot product), HNSW indexes
 ✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
 
 ### Architecture Decisions
@@ -519,19 +519,29 @@ MIT License - See [LICENSE](LICENSE) for details
 - **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet instead
 
 #### Vector Operations
-- **L2 distance** (`<->`): Not implemented - use cosine distance (`<=>`)
-- **Inner product** (`<#>`): Not implemented - use cosine distance (`<=>`)
+- **Cosine distance** (`<=>`): ✅ Supported → `VECTOR_COSINE()`
+- **Dot product** (`<#>`): ✅ Supported → `VECTOR_DOT_PRODUCT()`
+- **L2/Euclidean** (`<->`): ❌ Not implemented
 
 #### PostgreSQL Compatibility
-- **System catalogs**: `pg_type`, `pg_catalog`, etc. not available (IRIS uses different metadata)
-- **SQLAlchemy + psycopg2**: Fails on connection (queries missing system catalogs for HSTORE OIDs)
-- **LangChain PGVector class**: Does not work directly (depends on SQLAlchemy psycopg2 dialect)
-- **CREATE EXTENSION**: Not supported (IRIS has native vector support, no extension needed)
+- **System catalogs**: `pg_type`, `pg_catalog` not available (IRIS uses INFORMATION_SCHEMA)
+- **CREATE EXTENSION**: Not supported (IRIS has native vector support)
+
+#### Tools That Won't Work Out of the Box
+
+| Category | Won't Work | Use Instead |
+|----------|------------|-------------|
+| **ORM/Database** | SQLAlchemy + psycopg2, Django ORM (psycopg2) | psycopg3 directly |
+| **Vector Search** | LangChain PGVector, LlamaIndex PGVector | psycopg3 + `<=>` operator |
+| **Admin Tools** | pgAdmin (full features), some DBeaver features | IRIS Management Portal |
+| **ML Workflows** | L2/Euclidean distance (`<->`) | Cosine (`<=>`) or dot product (`<#>`) |
 
 #### Recommended Approach
 For vector similarity search, use **psycopg3 directly** with the `<=>` operator:
 ```python
-cur.execute("SELECT * FROM docs ORDER BY embedding <=> %s LIMIT 5", (query_vec,))
+import psycopg
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    cur.execute("SELECT * FROM docs ORDER BY embedding <=> %s LIMIT 5", (query_vec,))
 ```
 
 ### 📋 Future Enhancements
