@@ -512,11 +512,27 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ### 🚧 Known Limitations
 
-**Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer (the most widely deployed connection pooler) also omits GSSAPI support, and QuestDB explicitly does not support SSL/TLS.
+**Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer also omits GSSAPI support, and QuestDB does not support SSL/TLS.
 
-- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption (industry-standard approach)
-- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet authentication instead (matches PgBouncer, YugabyteDB, PGAdapter)
-- **L2 distance operator** (`<->`): Not supported by IRIS - use cosine (`<=>`) or dot product (`<#>`) instead
+#### Protocol & Authentication
+- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption
+- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet instead
+
+#### Vector Operations
+- **L2 distance** (`<->`): Not implemented - use cosine distance (`<=>`)
+- **Inner product** (`<#>`): Not implemented - use cosine distance (`<=>`)
+
+#### PostgreSQL Compatibility
+- **System catalogs**: `pg_type`, `pg_catalog`, etc. not available (IRIS uses different metadata)
+- **SQLAlchemy + psycopg2**: Fails on connection (queries missing system catalogs for HSTORE OIDs)
+- **LangChain PGVector class**: Does not work directly (depends on SQLAlchemy psycopg2 dialect)
+- **CREATE EXTENSION**: Not supported (IRIS has native vector support, no extension needed)
+
+#### Recommended Approach
+For vector similarity search, use **psycopg3 directly** with the `<=>` operator:
+```python
+cur.execute("SELECT * FROM docs ORDER BY embedding <=> %s LIMIT 5", (query_vec,))
+```
 
 ### 📋 Future Enhancements
 - SSL/TLS wire protocol encryption
