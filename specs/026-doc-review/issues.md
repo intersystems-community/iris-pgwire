@@ -79,7 +79,30 @@ This document tracks issues found during the documentation review process.
 | I002 | Broken Link | README.md | InterSystems docs link returns 404 | Update to valid docs URL | Open |
 | I003 | Clarity | README.md | Value proposition excellent - no changes needed | N/A | Closed |
 | I004 | Tone | README.md | Professional tone, no defensive language found | N/A | Closed |
-| I005 | Untested | README.md | LangChain PGVector integration example not validated | Test with actual LangChain + IRIS PGWire | Open |
+| I005 | Tested | README.md | LangChain PGVector integration partially validated | See test results below | Closed |
+
+---
+
+## I005 Test Results: LangChain PGVector Compatibility
+
+**Test Date**: 2024-12-13
+**Environment**: IRIS Community Edition (embedded PGWire)
+
+### What Works
+- **Table creation**: `CREATE TABLE ... VECTOR(DOUBLE, 384)` ✅
+- **Vector inserts**: `TO_VECTOR('[...]')` ✅
+- **Cosine distance** (`<=>`): Fully working with parameter binding ✅
+- **psycopg3**: Full compatibility for vector queries ✅
+
+### What Needs Work
+- **L2 distance** (`<->`): Translation issue in ORDER BY
+- **Inner product** (`<#>`): Translation issue in ORDER BY
+- **LangChain PGVector class**: Requires CREATE EXTENSION compatibility
+
+### README Example Verdict
+The README example showing LangChain PGVector is **aspirational** - the concept works for basic similarity search using `<=>`, but full drop-in PGVector class support requires additional compatibility work.
+
+**Recommendation**: Update README to note that pgvector operators work, but full LangChain PGVector class integration may require manual table setup.
 
 ---
 

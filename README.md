@@ -87,22 +87,24 @@ Tested and verified with popular PostgreSQL clients:
 
 ### pgvector-Compatible Vector Operations
 
-**Use Case**: You have a LangChain RAG application using PostgreSQL + pgvector. Now you want IRIS capabilities (healthcare FHIR, analytics, ObjectScript). Just change the connection string - your pgvector code works unchanged.
+**Use Case**: Your existing pgvector similarity search code works with IRIS - just change the connection string.
 
-- **Drop-in Syntax**: Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS
+- **Drop-in Syntax**: Use familiar `<=>` operator - auto-translated to IRIS VECTOR_COSINE
 - **HNSW Indexes**: 5× speedup on 100K+ vector datasets
-- **RAG-Ready**: Works with LangChain, LlamaIndex, and embedding models (1024D-4096D)
+- **RAG-Ready**: Compatible with LangChain, LlamaIndex embedding pipelines (1024D-4096D)
 
 ```python
-# LangChain pgvector code - works with IRIS PGWire unchanged
-from langchain_community.vectorstores import PGVector
+# pgvector syntax works unchanged with IRIS PGWire
+import psycopg
 
-vectorstore = PGVector(
-    connection_string="postgresql://localhost:5432/USER",  # IRIS PGWire
-    embedding_function=embeddings,
-    collection_name="documents"
-)
-retriever = vectorstore.as_retriever()  # Semantic search over IRIS data
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    with conn.cursor() as cur:
+        # Similarity search with pgvector <=> operator
+        cur.execute(
+            "SELECT id, content FROM documents ORDER BY embedding <=> %s LIMIT 5",
+            (query_embedding,)  # Python list - auto-converted
+        )
+        results = cur.fetchall()
 ```
 
 ### Enterprise Authentication
