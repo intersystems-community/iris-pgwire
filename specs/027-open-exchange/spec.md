@@ -9,6 +9,12 @@
 
 Package IRIS PGWire for publication on InterSystems Open Exchange, enabling developers worldwide to discover, download, and deploy the PostgreSQL wire protocol server for IRIS databases. This involves creating the required metadata, documentation, and deployment artifacts that meet Open Exchange publication standards.
 
+## Clarifications
+
+### Session 2024-12-13
+
+- Q: Should PGWire server auto-start after ZPM installation? → A: Manual start - user runs startup command after install
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Developer Discovers and Evaluates Package (Priority: P1)
@@ -38,8 +44,9 @@ A developer installs the iris-pgwire package using ZPM (IRIS package manager) wi
 **Acceptance Scenarios**:
 
 1. **Given** a developer has IRIS with ZPM installed, **When** they run `zpm "install iris-pgwire"`, **Then** the package downloads and installs without errors
-2. **Given** the package is installed, **When** the developer follows the quick start guide, **Then** they can connect using `psql` within 5 minutes
-3. **Given** a fresh IRIS 2024.1+ instance, **When** installing via ZPM, **Then** all dependencies are automatically resolved
+2. **Given** the package is installed, **When** the developer runs the documented startup command, **Then** the PGWire server starts and listens on the configured port
+3. **Given** the server is running, **When** the developer follows the quick start guide, **Then** they can connect using `psql` within 5 minutes
+4. **Given** a fresh IRIS 2024.1+ instance, **When** installing via ZPM, **Then** all dependencies are automatically resolved
 
 ---
 
@@ -95,6 +102,7 @@ A developer can access complete documentation for configuration options, authent
 - **FR-008**: Package MUST include at least one screenshot or visual demonstrating functionality
 - **FR-009**: Package MUST link to or include KNOWN_LIMITATIONS.md for transparency
 - **FR-010**: Package MUST include example code demonstrating basic usage (Python, psql)
+- **FR-016**: Package MUST require manual server startup after installation (no auto-start) with clear startup instructions in documentation
 
 ### Open Exchange Metadata Requirements
 
