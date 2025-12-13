@@ -94,10 +94,10 @@ This document tracks issues found during the documentation review process.
 - **Cosine distance** (`<=>`): Fully working with parameter binding ✅
 - **psycopg3**: Full compatibility for vector queries ✅
 
-### What Needs Work
-- **L2 distance** (`<->`): Translation issue in ORDER BY
-- **Inner product** (`<#>`): Translation issue in ORDER BY
-- **LangChain PGVector class**: Requires CREATE EXTENSION compatibility
+### Not Implemented
+- **L2 distance** (`<->`): Not available in IRIS PGWire
+- **Inner product** (`<#>`): Not available in IRIS PGWire
+- **LangChain PGVector class**: Requires CREATE EXTENSION compatibility (pgvector-specific)
 
 ### README Example Verdict
 The README example showing LangChain PGVector is **aspirational** - the concept works for basic similarity search using `<=>`, but full drop-in PGVector class support requires additional compatibility work.
