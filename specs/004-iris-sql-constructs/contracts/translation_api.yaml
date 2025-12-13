@@ -1,0 +1,327 @@
+openapi: 3.0.3
+info:
+  title: IRIS SQL Translation API
+  description: Internal API for translating IRIS SQL constructs to PostgreSQL equivalents
+  version: 1.0.0
+
+paths:
+  /translate:
+    post:
+      summary: Translate IRIS SQL to PostgreSQL
+      description: |
+        Translates IRIS-specific SQL constructs to PostgreSQL-compatible syntax.
+        Used internally by PostgreSQL wire protocol handler.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TranslationRequest'
+            examples:
+              simple_function:
+                summary: IRIS system function translation
+                value:
+                  original_sql: "SELECT %SYSTEM.Version.GetNumber()"
+                  debug_mode: false
+              complex_query:
+                summary: Multiple IRIS constructs
+                value:
+                  original_sql: "SELECT TOP 10 %SQLUPPER(name) FROM users WHERE id = ?"
+                  parameters: {"1": 123}
+                  debug_mode: true
+      responses:
+        '200':
+          description: Translation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationResult'
+              examples:
+                success:
+                  summary: Successful translation
+                  value:
+                    translated_sql: "SELECT version()"
+                    construct_mappings:
+                      - construct_type: "FUNCTION"
+                        original_syntax: "%SYSTEM.Version.GetNumber()"
+                        translated_syntax: "version()"
+                        confidence: 1.0
+                        source_location: {"line": 1, "column": 8, "length": 26}
+                    performance_stats:
+                      translation_time_ms: 12.5
+                      parsing_time_ms: 3.2
+                      mapping_time_ms: 7.1
+                      validation_time_ms: 2.2
+                      cache_hit: false
+                      constructs_detected: 1
+                      constructs_translated: 1
+                    warnings: []
+        '400':
+          description: Invalid SQL or translation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationError'
+              examples:
+                parse_error:
+                  summary: SQL parsing failed
+                  value:
+                    error_code: "PARSE_ERROR"
+                    message: "Invalid SQL syntax at line 1, column 15"
+                    original_sql: "SELECT INVALID_SYNTAX"
+                unsupported_construct:
+                  summary: Unsupported IRIS construct
+                  value:
+                    error_code: "UNSUPPORTED_CONSTRUCT"
+                    message: "IRIS construct '%ADMIN.VACUUM' not supported"
+                    construct_type: "ADMINISTRATIVE"
+                    fallback_strategy: "ERROR"
+        '500':
+          description: Internal translation engine error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranslationError'
+
+  /cache/stats:
+    get:
+      summary: Get translation cache statistics
+      description: Returns cache performance metrics for monitoring
+      responses:
+        '200':
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStats'
+
+  /cache/invalidate:
+    post:
+      summary: Invalidate translation cache
+      description: Clears cached translations (for schema changes)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pattern:
+                  type: string
+                  description: Optional pattern to match cache keys
+              example:
+                pattern: "SELECT%"
+      responses:
+        '200':
+          description: Cache invalidated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invalidated_count:
+                    type: integer
+                    description: Number of cache entries removed
+
+components:
+  schemas:
+    TranslationRequest:
+      type: object
+      required:
+        - original_sql
+      properties:
+        original_sql:
+          type: string
+          description: SQL with IRIS-specific constructs
+          example: "SELECT %SYSTEM.Version.GetNumber()"
+        parameters:
+          type: object
+          description: Parameter bindings for prepared statements
+          additionalProperties: true
+        session_context:
+          type: object
+          description: Connection-specific settings
+          additionalProperties:
+            type: string
+          example:
+            timezone: "UTC"
+            client_encoding: "UTF8"
+        debug_mode:
+          type: boolean
+          description: Enable detailed trace logging
+          default: false
+
+    TranslationResult:
+      type: object
+      required:
+        - translated_sql
+        - construct_mappings
+        - performance_stats
+      properties:
+        translated_sql:
+          type: string
+          description: PostgreSQL-compatible SQL
+          example: "SELECT version()"
+        construct_mappings:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConstructMapping'
+        performance_stats:
+          $ref: '#/components/schemas/PerformanceStats'
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Non-fatal translation issues
+        debug_trace:
+          $ref: '#/components/schemas/DebugTrace'
+
+    ConstructMapping:
+      type: object
+      required:
+        - construct_type
+        - original_syntax
+        - translated_syntax
+        - confidence
+        - source_location
+      properties:
+        construct_type:
+          type: string
+          enum: [FUNCTION, SYNTAX, DATATYPE, HINT]
+          description: Category of IRIS construct
+        original_syntax:
+          type: string
+          description: IRIS-specific SQL fragment
+        translated_syntax:
+          type: string
+          description: PostgreSQL equivalent
+        confidence:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Translation accuracy score
+        source_location:
+          $ref: '#/components/schemas/TextLocation'
+
+    TextLocation:
+      type: object
+      required:
+        - line
+        - column
+        - length
+      properties:
+        line:
+          type: integer
+          minimum: 1
+        column:
+          type: integer
+          minimum: 1
+        length:
+          type: integer
+          minimum: 1
+
+    PerformanceStats:
+      type: object
+      required:
+        - translation_time_ms
+        - cache_hit
+        - constructs_detected
+        - constructs_translated
+      properties:
+        translation_time_ms:
+          type: number
+          description: Total translation time
+          maximum: 50.0
+        parsing_time_ms:
+          type: number
+          description: SQL parsing time
+        mapping_time_ms:
+          type: number
+          description: Construct mapping time
+        validation_time_ms:
+          type: number
+          description: Result validation time
+        cache_hit:
+          type: boolean
+          description: Whether result was cached
+        constructs_detected:
+          type: integer
+          description: Number of IRIS constructs found
+        constructs_translated:
+          type: integer
+          description: Number successfully translated
+
+    DebugTrace:
+      type: object
+      properties:
+        parsing_steps:
+          type: array
+          items:
+            type: object
+            properties:
+              step:
+                type: string
+              duration_ms:
+                type: number
+              tokens_parsed:
+                type: integer
+        mapping_decisions:
+          type: array
+          items:
+            type: object
+            properties:
+              construct:
+                type: string
+              decision:
+                type: string
+              rationale:
+                type: string
+        validation_results:
+          type: array
+          items:
+            type: object
+            properties:
+              check:
+                type: string
+              passed:
+                type: boolean
+              message:
+                type: string
+
+    TranslationError:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: string
+          enum: [PARSE_ERROR, UNSUPPORTED_CONSTRUCT, VALIDATION_ERROR, TIMEOUT_ERROR]
+        message:
+          type: string
+          description: Human-readable error description
+        original_sql:
+          type: string
+          description: SQL that caused the error
+        construct_type:
+          type: string
+          description: Type of unsupported construct
+        fallback_strategy:
+          type: string
+          enum: [ERROR, WARNING, BEST_EFFORT]
+          description: How the error should be handled
+
+    CacheStats:
+      type: object
+      properties:
+        total_entries:
+          type: integer
+        hit_rate:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        average_lookup_ms:
+          type: number
+        memory_usage_mb:
+          type: number
+        oldest_entry_age_minutes:
+          type: integer
