@@ -50,6 +50,30 @@ export IRIS_HOST=localhost IRIS_PORT=1972 IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SY
 python -m iris_pgwire.server
 ```
 
+### ZPM Installation (Existing IRIS)
+
+For InterSystems IRIS 2024.1+ with ZPM package manager:
+
+```objectscript
+// Install the package
+zpm "install iris-pgwire"
+
+// Start the server manually
+do ##class(IrisPGWire.Service).Start()
+
+// Check server status
+do ##class(IrisPGWire.Service).ShowStatus()
+```
+
+**From terminal**:
+```bash
+# Install
+iris session IRIS -U USER 'zpm "install iris-pgwire"'
+
+# Start server
+iris session IRIS -U USER 'do ##class(IrisPGWire.Service).Start()'
+```
+
 ### First Query
 
 ```python
@@ -306,7 +330,26 @@ LIMIT 10
 ### High-Level Flow
 
 ```
-PostgreSQL Client → PGWire Server (Port 5432) → IRIS Database
+┌─────────────────────────────────────────────────────────────────┐
+│                     PostgreSQL Clients                          │
+│  (psql, DBeaver, Superset, psycopg3, JDBC, node-postgres, ...)  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ Port 5432 (PostgreSQL Protocol)
+┌─────────────────────────────────────────────────────────────────┐
+│                      IRIS PGWire Server                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
+│  │ Wire Proto   │  │   Query      │  │   Vector Translation   │ │
+│  │ Handler      │──│   Parser     │──│ <=> → VECTOR_COSINE    │ │
+│  └──────────────┘  └──────────────┘  │ <#> → VECTOR_DOT_PROD  │ │
+│                                      └────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ IRIS DBAPI / Embedded Python
+┌─────────────────────────────────────────────────────────────────┐
+│                    InterSystems IRIS                            │
+│                   (SQL Engine, Vector Support)                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Dual Backend Execution Paths
