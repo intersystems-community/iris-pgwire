@@ -120,8 +120,8 @@ CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='DotProduct');
 | pgvector Operator | IRIS Translation | Status |
 |-------------------|------------------|--------|
 | `<=>` (cosine distance) | `VECTOR_COSINE()` | ✅ **Supported** |
+| `<#>` (inner/dot product) | `VECTOR_DOT_PRODUCT()` | ✅ **Supported** |
 | `<->` (L2/Euclidean distance) | — | ❌ Not implemented |
-| `<#>` (inner/dot product) | — | ❌ Not implemented |
 
 ### Example
 
@@ -129,16 +129,16 @@ CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='DotProduct');
 -- ✅ Works: Cosine distance
 SELECT * FROM vectors ORDER BY embedding <=> %s LIMIT 5;
 
--- ❌ Fails: L2 distance
-SELECT * FROM vectors ORDER BY embedding <-> %s LIMIT 5;
-
--- ❌ Fails: Inner product
+-- ✅ Works: Dot product (for MIPS - Maximum Inner Product Search)
 SELECT * FROM vectors ORDER BY embedding <#> %s LIMIT 5;
+
+-- ❌ Fails: L2 distance (not available in IRIS)
+SELECT * FROM vectors ORDER BY embedding <-> %s LIMIT 5;
 ```
 
 ### Workaround
 
-Use cosine distance (`<=>`) for all similarity searches. For most embedding models (OpenAI, Cohere, sentence-transformers), cosine similarity is the recommended metric.
+Use cosine distance (`<=>`) or dot product (`<#>`) instead of L2 distance. For normalized embeddings (OpenAI, Cohere, sentence-transformers), cosine similarity is recommended.
 
 ---
 
@@ -158,11 +158,19 @@ IndexError: tuple index out of range
   in psycopg2/extras.py HstoreAdapter.get_oids()
 ```
 
-### Affected Libraries
+### Affected Libraries and Tools
 
-- ❌ **SQLAlchemy + psycopg2**: Fails on connection
-- ❌ **LangChain PGVector class**: Depends on SQLAlchemy psycopg2
-- ✅ **psycopg3 (psycopg)**: Works directly without SQLAlchemy
+| Tool/Library | Status | Issue |
+|--------------|--------|-------|
+| **SQLAlchemy + psycopg2** | ❌ Fails | HSTORE OID lookup in pg_type |
+| **Django ORM (psycopg2 backend)** | ❌ Fails | Same as SQLAlchemy |
+| **LangChain PGVector** | ❌ Fails | Depends on SQLAlchemy psycopg2 |
+| **LlamaIndex PGVectorStore** | ❌ Fails | Depends on SQLAlchemy psycopg2 |
+| **Haystack PGVector** | ❌ Fails | Depends on SQLAlchemy |
+| **psycopg3 (psycopg)** | ✅ Works | No system catalog queries |
+| **asyncpg** | ✅ Works | Direct protocol, no ORM overhead |
+| **node-postgres (pg)** | ✅ Works | Simple driver |
+| **JDBC PostgreSQL** | ✅ Works | Simple driver |
 
 ### Workaround
 

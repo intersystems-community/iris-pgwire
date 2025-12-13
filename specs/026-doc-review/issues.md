@@ -94,9 +94,10 @@ This document tracks issues found during the documentation review process.
 - **Cosine distance** (`<=>`): Fully working with parameter binding ✅
 - **psycopg3**: Full compatibility for vector queries ✅
 
-### Not Implemented
-- **L2 distance** (`<->`): Not available in IRIS PGWire
-- **Inner product** (`<#>`): Not available in IRIS PGWire
+### Operator Support (Verified)
+- **Cosine distance** (`<=>`): ✅ Works → `VECTOR_COSINE()`
+- **Dot product** (`<#>`): ✅ Works → `VECTOR_DOT_PRODUCT()`
+- **L2 distance** (`<->`): ❌ Not implemented in IRIS
 
 ### LangChain PGVector Class Issue
 The LangChain `PGVector` class fails because SQLAlchemy's psycopg2 dialect queries PostgreSQL system catalogs (`pg_type`) to get HSTORE OIDs during connection setup. IRIS doesn't have these PostgreSQL-specific system tables.
