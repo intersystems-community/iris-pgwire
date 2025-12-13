@@ -160,21 +160,53 @@ IndexError: tuple index out of range
 
 ### Affected Libraries and Tools
 
-| Tool/Library | Status | Issue |
-|--------------|--------|-------|
-| **SQLAlchemy + psycopg2** | ❌ Fails | HSTORE OID lookup in pg_type |
-| **Django ORM (psycopg2 backend)** | ❌ Fails | Same as SQLAlchemy |
-| **LangChain PGVector** | ❌ Fails | Depends on SQLAlchemy psycopg2 |
-| **LlamaIndex PGVectorStore** | ❌ Fails | Depends on SQLAlchemy psycopg2 |
-| **Haystack PGVector** | ❌ Fails | Depends on SQLAlchemy |
-| **psycopg3 (psycopg)** | ✅ Works | No system catalog queries |
-| **asyncpg** | ✅ Works | Direct protocol, no ORM overhead |
-| **node-postgres (pg)** | ✅ Works | Simple driver |
-| **JDBC PostgreSQL** | ✅ Works | Simple driver |
+| Tool/Library | PGWire Status | IRIS-Native Alternative |
+|--------------|---------------|------------------------|
+| **LangChain PGVector** | ❌ Fails | [`langchain-iris`](https://github.com/caretdev/langchain-iris) ✅ |
+| **LlamaIndex PGVectorStore** | ❌ Fails | [`llama-iris`](https://github.com/caretdev/llama-iris) ✅ |
+| **Haystack PGVector** | ❌ Fails | Custom retriever with psycopg3 |
+| **SQLAlchemy + psycopg2** | ❌ Fails | psycopg3 directly |
+| **Django ORM (psycopg2)** | ❌ Fails | psycopg3 directly |
+| **psycopg3 (psycopg)** | ✅ Works | — |
+| **asyncpg** | ✅ Works | — |
+| **node-postgres (pg)** | ✅ Works | — |
+| **JDBC PostgreSQL** | ✅ Works | — |
 
-### Workaround
+### Recommended: IRIS-Native Packages
 
-Use psycopg3 directly instead of SQLAlchemy:
+For LangChain and LlamaIndex applications, use the IRIS-native packages which connect directly to IRIS (not via PGWire):
+
+```bash
+pip install langchain-iris llama-iris
+```
+
+**LangChain with IRIS:**
+```python
+from langchain_iris import IRISVector
+
+db = IRISVector(
+    embedding_function=embeddings,
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    collection_name="my_docs"
+)
+db.add_texts(["Document 1", "Document 2"])
+results = db.similarity_search("query", k=5)
+```
+
+**LlamaIndex with IRIS:**
+```python
+from llama_iris import IRISVectorStore
+
+vector_store = IRISVectorStore.from_params(
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    table_name="my_vectors",
+    embed_dim=384
+)
+```
+
+### Alternative: psycopg3 via PGWire
+
+For direct PGWire access without ORM:
 
 ```python
 import psycopg

@@ -527,17 +527,38 @@ MIT License - See [LICENSE](LICENSE) for details
 - **System catalogs**: `pg_type`, `pg_catalog` not available (IRIS uses INFORMATION_SCHEMA)
 - **CREATE EXTENSION**: Not supported (IRIS has native vector support)
 
-#### Tools That Won't Work Out of the Box
+#### Tools That Won't Work via PGWire
 
-| Category | Won't Work | Use Instead |
-|----------|------------|-------------|
-| **ORM/Database** | SQLAlchemy + psycopg2, Django ORM (psycopg2) | psycopg3 directly |
-| **Vector Search** | LangChain PGVector, LlamaIndex PGVector | psycopg3 + `<=>` operator |
-| **Admin Tools** | pgAdmin (full features), some DBeaver features | IRIS Management Portal |
-| **ML Workflows** | L2/Euclidean distance (`<->`) | Cosine (`<=>`) or dot product (`<#>`) |
+| Category | Won't Work (via PGWire) | IRIS-Native Alternative |
+|----------|-------------------------|------------------------|
+| **LangChain** | `langchain_community.PGVector` | [`langchain-iris`](https://github.com/caretdev/langchain-iris) (PyPI) |
+| **LlamaIndex** | `llama_index.PGVectorStore` | [`llama-iris`](https://github.com/caretdev/llama-iris) (PyPI) |
+| **Haystack** | `haystack.PGVector` | psycopg3 with custom retriever |
+| **ORM/Database** | SQLAlchemy + psycopg2 | psycopg3 directly |
+| **Admin Tools** | pgAdmin (full features) | IRIS Management Portal |
 
-#### Recommended Approach
-For vector similarity search, use **psycopg3 directly** with the `<=>` operator:
+#### IRIS-Native Packages (Recommended for RAG)
+
+```bash
+# Install IRIS-native LangChain/LlamaIndex integrations
+pip install langchain-iris llama-iris
+```
+
+```python
+# LangChain with native IRIS connection
+from langchain_iris import IRISVector
+
+db = IRISVector(
+    embedding_function=embeddings,
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    collection_name="my_docs"
+)
+db.add_texts(["Document 1", "Document 2"])
+results = db.similarity_search("query", k=5)
+```
+
+#### PGWire Approach (psycopg3 directly)
+For direct PostgreSQL wire protocol access:
 ```python
 import psycopg
 with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
