@@ -85,21 +85,24 @@ Tested and verified with popular PostgreSQL clients:
 
 ## 🎯 Key Features
 
-### Vector Operations (Up to 188K Dimensions!)
+### pgvector-Compatible Vector Operations
 
-- **Massive Scale**: Support for vectors up to **188,962 dimensions** (1.44 MB)
-- **pgvector Syntax**: Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS functions
+**Use Case**: You have a LangChain RAG application using PostgreSQL + pgvector. Now you want IRIS capabilities (healthcare FHIR, analytics, ObjectScript). Just change the connection string - your pgvector code works unchanged.
+
+- **Drop-in Syntax**: Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS
 - **HNSW Indexes**: 5× speedup on 100K+ vector datasets
-- **RAG Integration**: Works with LangChain, LlamaIndex, and other pgvector-based tools
+- **RAG-Ready**: Works with LangChain, LlamaIndex, and embedding models (1024D-4096D)
 
 ```python
-# pgvector syntax - works transparently
-cur.execute("""
-    SELECT id, embedding <=> %s AS distance
-    FROM vectors
-    ORDER BY distance
-    LIMIT 5
-""", (query_vector,))
+# LangChain pgvector code - works with IRIS PGWire unchanged
+from langchain_community.vectorstores import PGVector
+
+vectorstore = PGVector(
+    connection_string="postgresql://localhost:5432/USER",  # IRIS PGWire
+    embedding_function=embeddings,
+    collection_name="documents"
+)
+retriever = vectorstore.as_retriever()  # Semantic search over IRIS data
 ```
 
 ### Enterprise Authentication
@@ -155,7 +158,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER user=_SYSTEM password
         row = cur.fetchone()
 
     # Vector search with parameter binding
-    query_vector = [0.1, 0.2, 0.3]  # Up to 188,962D supported
+    query_vector = [0.1, 0.2, 0.3]  # Works with any embedding model
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(%s, DOUBLE)) AS score
@@ -283,7 +286,7 @@ LIMIT 10
 |--------|--------|-------|
 | Simple Query Latency | 3.99ms avg, 4.29ms P95 | IRIS DBAPI baseline: 0.20ms |
 | Vector Similarity (1024D) | 6.94ms avg, 8.05ms P95 | Binary parameter encoding |
-| **Max Vector Dimensions** | **188,962D (1.44 MB)** | **1,465× more than text literals** |
+| Binary Vector Encoding | 40% more compact | Efficient for high-dimensional embeddings |
 | Connection Pool | 50+20 async connections | <1ms acquisition time |
 | HNSW Index Speedup | 5.14× at 100K+ vectors | Requires ≥100K dataset |
 
@@ -415,7 +418,7 @@ irispython -m iris_pgwire.server
 
 ✅ **Core Protocol**: Simple queries, prepared statements, transactions, bulk operations (COPY)
 ✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
-✅ **Vectors**: pgvector syntax, HNSW indexes, up to 188K dimensions
+✅ **Vectors**: pgvector syntax (`<=>`, `<->`, `<#>`), HNSW indexes
 ✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
 
 ### Architecture Decisions
@@ -498,7 +501,7 @@ MIT License - See [LICENSE](LICENSE) for details
 ### ✅ Implemented (Production-Ready)
 - PostgreSQL wire protocol v3 (handshake, simple & extended query protocols)
 - Authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet)
-- Vector operations (pgvector syntax, HNSW indexes, up to 188K dimensions)
+- Vector operations (pgvector syntax, HNSW indexes)
 - COPY protocol (bulk import/export with CSV format, 600+ rows/sec)
 - Transactions (BEGIN/COMMIT/ROLLBACK with savepoints)
 - Async SQLAlchemy support (FastAPI integration, connection pooling)

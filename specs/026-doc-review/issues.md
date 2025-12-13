@@ -79,6 +79,7 @@ This document tracks issues found during the documentation review process.
 | I002 | Broken Link | README.md | InterSystems docs link returns 404 | Update to valid docs URL | Open |
 | I003 | Clarity | README.md | Value proposition excellent - no changes needed | N/A | Closed |
 | I004 | Tone | README.md | Professional tone, no defensive language found | N/A | Closed |
+| I005 | Untested | README.md | LangChain PGVector integration example not validated | Test with actual LangChain + IRIS PGWire | Open |
 
 ---
 
