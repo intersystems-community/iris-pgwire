@@ -38,10 +38,8 @@
         <Description>Install Python dependencies from requirements.txt</Description>
       </Invoke>
 
-      <!-- Activate Phase: Start PGWire TCP server -->
-      <Invoke Phase="Activate" Class="IrisPGWire.Service" Method="Start" CheckStatus="true">
-        <Description>Start iris-pgwire TCP server on port 5432</Description>
-      </Invoke>
+      <!-- NOTE: Server does NOT auto-start after installation -->
+      <!-- User must manually start: do ##class(IrisPGWire.Service).Start() -->
 
       <!-- Deactivate Phase: Stop PGWire TCP server -->
       <Invoke Phase="Deactivate" Class="IrisPGWire.Service" Method="Stop" CheckStatus="true">
