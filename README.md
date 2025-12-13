@@ -420,7 +420,7 @@ irispython -m iris_pgwire.server
 
 ✅ **Core Protocol**: Simple queries, prepared statements, transactions, bulk operations (COPY)
 ✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
-✅ **Vectors**: pgvector syntax (`<=>`, `<->`, `<#>`), HNSW indexes
+✅ **Vectors**: pgvector cosine distance (`<=>`), HNSW indexes
 ✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
 
 ### Architecture Decisions
