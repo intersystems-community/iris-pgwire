@@ -18,28 +18,35 @@ Then AI coding assistants arrived. And I became a "Yes Man" for bots.
 
 ## Act I: Exuberance ("Yes to Everything!")
 
-When I first started using Claude Code, it felt like magic. Natural language → working code. I said "yes" to every suggestion, every refactor, every wild idea.
+When I first started using AI coding assistants, it felt like magic. Natural language → working code. I said "yes" to every suggestion, every refactor, every wild idea.
 
-*"Write me a PostgreSQL wire protocol server!"* Yes!
-*"Add OAuth 2.0 authentication!"* Yes!
-*"Support pgvector operators!"* Yes!
+My first major AI-assisted project was [iris-vector-rag](https://github.com/isc-tdyar/iris-vector-rag) - a vector search and RAG implementation for IRIS. I was so excited I let the bot run wild:
 
-The results were impressive. In days, I had a working prototype that let any PostgreSQL client connect to InterSystems IRIS. The creative energy was back.
+*"Add embeddings support!"* Yes!
+*"Implement semantic search!"* Yes!
+*"Build a full RAG pipeline!"* Yes!
 
-But there was a problem.
+The creative energy was back. Code was flowing. I felt productive again.
+
+Then my intern - a software engineering major - looked over the codebase.
+
+He was **horribly confused**.
+
+What I thought was "fast iteration" was actually "AI slop" - inconsistent patterns, duplicated logic, architectural decisions that contradicted each other. The bot had said "yes" to everything I asked, but nobody was saying "no" to bad ideas or "wait, let's think about this first."
 
 ---
 
 ## Act II: The Trough of Reality
 
-Like Jim Carrey learning that saying "yes" to everything creates chaos, I discovered the downsides:
+That intern review was my wake-up call. Like Jim Carrey learning that saying "yes" to everything creates chaos, I had to face the downsides:
 
 - **Hallucinations**: The bot confidently generated code for APIs that didn't exist
 - **Context drift**: Long sessions lost track of architectural decisions
 - **Quality variance**: Some outputs were brilliant; others needed complete rewrites
-- **The "Yes, and don't..." dance**: Every prompt became "Yes, add this feature... and don't break authentication... and don't forget the tests... and don't change the public API..."
+- **No specs folder**: iris-vector-rag has no `specs/` directory - because there were no specs. Just vibes.
+- **The "Yes, and don't..." dance**: Every prompt became "Yes, add this feature... and don't break what we did yesterday... and don't forget that thing I mentioned three hours ago..."
 
-I was spending more time managing the bot than coding. The exuberance phase had ended.
+I was spending more time managing the bot than coding. The exuberance phase had ended. I needed a different approach.
 
 ---
 
@@ -186,7 +193,8 @@ Happy Holidays from InterSystems DevRel. May your prompts be clear and your test
 
 ## Resources
 
-- [IRIS PGWire GitHub Repository](https://github.com/isc-tdyar/iris-pgwire)
+- [IRIS PGWire GitHub Repository](https://github.com/isc-tdyar/iris-pgwire) - The "after" (27 specs, 171 tests)
+- [iris-vector-rag GitHub Repository](https://github.com/isc-tdyar/iris-vector-rag) - The "before" (no specs, AI slop)
 - [specify-kit Claude Code Workflow](https://github.com/ProfSynapse/specify-kit)
 - [Kiro - AWS Spec-Driven Development](https://kiro.dev)
 - [Claude Code Documentation](https://docs.anthropic.com/claude-code)
