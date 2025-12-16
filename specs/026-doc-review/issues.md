@@ -79,6 +79,37 @@ This document tracks issues found during the documentation review process.
 | I002 | Broken Link | README.md | InterSystems docs link returns 404 | Update to valid docs URL | Open |
 | I003 | Clarity | README.md | Value proposition excellent - no changes needed | N/A | Closed |
 | I004 | Tone | README.md | Professional tone, no defensive language found | N/A | Closed |
+| I005 | Tested | README.md | LangChain PGVector integration partially validated | See test results below | Closed |
+
+---
+
+## I005 Test Results: LangChain PGVector Compatibility
+
+**Test Date**: 2024-12-13
+**Environment**: IRIS Community Edition (embedded PGWire)
+
+### What Works
+- **Table creation**: `CREATE TABLE ... VECTOR(DOUBLE, 384)` ✅
+- **Vector inserts**: `TO_VECTOR('[...]')` ✅
+- **Cosine distance** (`<=>`): Fully working with parameter binding ✅
+- **psycopg3**: Full compatibility for vector queries ✅
+
+### Operator Support (Verified)
+- **Cosine distance** (`<=>`): ✅ Works → `VECTOR_COSINE()`
+- **Dot product** (`<#>`): ✅ Works → `VECTOR_DOT_PRODUCT()`
+- **L2 distance** (`<->`): ❌ Not implemented in IRIS
+
+### LangChain PGVector Class Issue
+The LangChain `PGVector` class fails because SQLAlchemy's psycopg2 dialect queries PostgreSQL system catalogs (`pg_type`) to get HSTORE OIDs during connection setup. IRIS doesn't have these PostgreSQL-specific system tables.
+
+**Error**: `IndexError: tuple index out of range` in `psycopg2/extras.py` HstoreAdapter.get_oids()
+
+**Workaround**: Use raw psycopg/psycopg3 with the `<=>` operator (tested and working)
+
+### README Example Verdict
+The README example showing LangChain PGVector is **aspirational** - the concept works for basic similarity search using `<=>`, but full drop-in PGVector class support requires additional compatibility work.
+
+**Recommendation**: Update README to note that pgvector operators work, but full LangChain PGVector class integration may require manual table setup.
 
 ---
 

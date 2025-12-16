@@ -110,40 +110,112 @@ CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='DotProduct');
 
 ---
 
-## 🟡 L2 Distance Not Supported
+## 🟡 pgvector Operator Support
 
 **Severity**: Medium
 **Affects**: pgvector compatibility
 
-### Issue Description
+### Supported Operators
 
-The L2 distance operator `<->` from pgvector is not supported. IRIS VECTOR functions provide:
-- ✅ **Cosine distance**: `<=>` → `VECTOR_COSINE()`
-- ✅ **Dot product**: `<#>` → `VECTOR_DOT_PRODUCT()`
-- ❌ **L2 distance**: `<->` → NOT SUPPORTED
+| pgvector Operator | IRIS Translation | Status |
+|-------------------|------------------|--------|
+| `<=>` (cosine distance) | `VECTOR_COSINE()` | ✅ **Supported** |
+| `<#>` (inner/dot product) | `VECTOR_DOT_PRODUCT()` | ✅ **Supported** |
+| `<->` (L2/Euclidean distance) | — | ❌ Not implemented |
 
-### Error
+### Example
 
 ```sql
-SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]';
--- Raises: NotImplementedError: L2 distance operator (<->) is not supported by IRIS
+-- ✅ Works: Cosine distance
+SELECT * FROM vectors ORDER BY embedding <=> %s LIMIT 5;
+
+-- ✅ Works: Dot product (for MIPS - Maximum Inner Product Search)
+SELECT * FROM vectors ORDER BY embedding <#> %s LIMIT 5;
+
+-- ❌ Fails: L2 distance (not available in IRIS)
+SELECT * FROM vectors ORDER BY embedding <-> %s LIMIT 5;
 ```
 
 ### Workaround
 
-Use cosine distance instead:
+Use cosine distance (`<=>`) or dot product (`<#>`) instead of L2 distance. For normalized embeddings (OpenAI, Cohere, sentence-transformers), cosine similarity is recommended.
 
-```sql
--- Replace:
-SELECT * FROM vectors ORDER BY embedding <-> '[0.1,0.2]' LIMIT 5;
+---
 
--- With:
-SELECT * FROM vectors ORDER BY embedding <=> '[0.1,0.2]' LIMIT 5;
+## 🟡 SQLAlchemy psycopg2 Dialect Compatibility
+
+**Severity**: Medium
+**Affects**: SQLAlchemy applications using psycopg2
+
+### Issue Description
+
+SQLAlchemy's psycopg2 dialect queries PostgreSQL system catalogs (`pg_type`) during connection setup to get HSTORE type OIDs. IRIS doesn't have these PostgreSQL-specific system tables.
+
+### Error
+
+```
+IndexError: tuple index out of range
+  in psycopg2/extras.py HstoreAdapter.get_oids()
 ```
 
-### Technical Reason
+### Affected Libraries and Tools
 
-IRIS does not provide a native L2 distance function. Implementing it would require element-wise operations that would violate the <5ms translation performance requirement.
+| Tool/Library | PGWire Status | IRIS-Native Alternative |
+|--------------|---------------|------------------------|
+| **LangChain PGVector** | ❌ Fails | [`langchain-iris`](https://github.com/caretdev/langchain-iris) ✅ |
+| **LlamaIndex PGVectorStore** | ❌ Fails | [`llama-iris`](https://github.com/caretdev/llama-iris) ✅ |
+| **Haystack PGVector** | ❌ Fails | Custom retriever with psycopg3 |
+| **SQLAlchemy + psycopg2** | ❌ Fails | psycopg3 directly |
+| **Django ORM (psycopg2)** | ❌ Fails | psycopg3 directly |
+| **psycopg3 (psycopg)** | ✅ Works | — |
+| **asyncpg** | ✅ Works | — |
+| **node-postgres (pg)** | ✅ Works | — |
+| **JDBC PostgreSQL** | ✅ Works | — |
+
+### Recommended: IRIS-Native Packages
+
+For LangChain and LlamaIndex applications, use the IRIS-native packages which connect directly to IRIS (not via PGWire):
+
+```bash
+pip install langchain-iris llama-iris
+```
+
+**LangChain with IRIS:**
+```python
+from langchain_iris import IRISVector
+
+db = IRISVector(
+    embedding_function=embeddings,
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    collection_name="my_docs"
+)
+db.add_texts(["Document 1", "Document 2"])
+results = db.similarity_search("query", k=5)
+```
+
+**LlamaIndex with IRIS:**
+```python
+from llama_iris import IRISVectorStore
+
+vector_store = IRISVectorStore.from_params(
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    table_name="my_vectors",
+    embed_dim=384
+)
+```
+
+### Alternative: psycopg3 via PGWire
+
+For direct PGWire access without ORM:
+
+```python
+import psycopg
+
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM docs ORDER BY embedding <=> %s LIMIT 5", (query_vec,))
+        results = cur.fetchall()
+```
 
 ---
 
