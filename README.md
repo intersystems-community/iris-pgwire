@@ -50,6 +50,30 @@ export IRIS_HOST=localhost IRIS_PORT=1972 IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SY
 python -m iris_pgwire.server
 ```
 
+### ZPM Installation (Existing IRIS)
+
+For InterSystems IRIS 2024.1+ with ZPM package manager:
+
+```objectscript
+// Install the package
+zpm "install iris-pgwire"
+
+// Start the server manually
+do ##class(IrisPGWire.Service).Start()
+
+// Check server status
+do ##class(IrisPGWire.Service).ShowStatus()
+```
+
+**From terminal**:
+```bash
+# Install
+iris session IRIS -U USER 'zpm "install iris-pgwire"'
+
+# Start server
+iris session IRIS -U USER 'do ##class(IrisPGWire.Service).Start()'
+```
+
 ### First Query
 
 ```python
@@ -85,21 +109,26 @@ Tested and verified with popular PostgreSQL clients:
 
 ## 🎯 Key Features
 
-### Vector Operations (Up to 188K Dimensions!)
+### pgvector-Compatible Vector Operations
 
-- **Massive Scale**: Support for vectors up to **188,962 dimensions** (1.44 MB)
-- **pgvector Syntax**: Use familiar `<=>`, `<->`, `<#>` operators - auto-translated to IRIS functions
+**Use Case**: Your existing pgvector similarity search code works with IRIS - just change the connection string.
+
+- **Drop-in Syntax**: Use familiar `<=>` operator - auto-translated to IRIS VECTOR_COSINE
 - **HNSW Indexes**: 5× speedup on 100K+ vector datasets
-- **RAG Integration**: Works with LangChain, LlamaIndex, and other pgvector-based tools
+- **RAG-Ready**: Compatible with LangChain, LlamaIndex embedding pipelines (1024D-4096D)
 
 ```python
-# pgvector syntax - works transparently
-cur.execute("""
-    SELECT id, embedding <=> %s AS distance
-    FROM vectors
-    ORDER BY distance
-    LIMIT 5
-""", (query_vector,))
+# pgvector syntax works unchanged with IRIS PGWire
+import psycopg
+
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    with conn.cursor() as cur:
+        # Similarity search with pgvector <=> operator
+        cur.execute(
+            "SELECT id, content FROM documents ORDER BY embedding <=> %s LIMIT 5",
+            (query_embedding,)  # Python list - auto-converted
+        )
+        results = cur.fetchall()
 ```
 
 ### Enterprise Authentication
@@ -155,7 +184,7 @@ with psycopg.connect('host=localhost port=5432 dbname=USER user=_SYSTEM password
         row = cur.fetchone()
 
     # Vector search with parameter binding
-    query_vector = [0.1, 0.2, 0.3]  # Up to 188,962D supported
+    query_vector = [0.1, 0.2, 0.3]  # Works with any embedding model
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(%s, DOUBLE)) AS score
@@ -283,7 +312,7 @@ LIMIT 10
 |--------|--------|-------|
 | Simple Query Latency | 3.99ms avg, 4.29ms P95 | IRIS DBAPI baseline: 0.20ms |
 | Vector Similarity (1024D) | 6.94ms avg, 8.05ms P95 | Binary parameter encoding |
-| **Max Vector Dimensions** | **188,962D (1.44 MB)** | **1,465× more than text literals** |
+| Binary Vector Encoding | 40% more compact | Efficient for high-dimensional embeddings |
 | Connection Pool | 50+20 async connections | <1ms acquisition time |
 | HNSW Index Speedup | 5.14× at 100K+ vectors | Requires ≥100K dataset |
 
@@ -301,7 +330,26 @@ LIMIT 10
 ### High-Level Flow
 
 ```
-PostgreSQL Client → PGWire Server (Port 5432) → IRIS Database
+┌─────────────────────────────────────────────────────────────────┐
+│                     PostgreSQL Clients                          │
+│  (psql, DBeaver, Superset, psycopg3, JDBC, node-postgres, ...)  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ Port 5432 (PostgreSQL Protocol)
+┌─────────────────────────────────────────────────────────────────┐
+│                      IRIS PGWire Server                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
+│  │ Wire Proto   │  │   Query      │  │   Vector Translation   │ │
+│  │ Handler      │──│   Parser     │──│ <=> → VECTOR_COSINE    │ │
+│  └──────────────┘  └──────────────┘  │ <#> → VECTOR_DOT_PROD  │ │
+│                                      └────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ IRIS DBAPI / Embedded Python
+┌─────────────────────────────────────────────────────────────────┐
+│                    InterSystems IRIS                            │
+│                   (SQL Engine, Vector Support)                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Dual Backend Execution Paths
@@ -415,7 +463,7 @@ irispython -m iris_pgwire.server
 
 ✅ **Core Protocol**: Simple queries, prepared statements, transactions, bulk operations (COPY)
 ✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
-✅ **Vectors**: pgvector syntax, HNSW indexes, up to 188K dimensions
+✅ **Vectors**: pgvector operators (`<=>` cosine, `<#>` dot product), HNSW indexes
 ✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
 
 ### Architecture Decisions
@@ -498,7 +546,7 @@ MIT License - See [LICENSE](LICENSE) for details
 ### ✅ Implemented (Production-Ready)
 - PostgreSQL wire protocol v3 (handshake, simple & extended query protocols)
 - Authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet)
-- Vector operations (pgvector syntax, HNSW indexes, up to 188K dimensions)
+- Vector operations (pgvector syntax, HNSW indexes)
 - COPY protocol (bulk import/export with CSV format, 600+ rows/sec)
 - Transactions (BEGIN/COMMIT/ROLLBACK with savepoints)
 - Async SQLAlchemy support (FastAPI integration, connection pooling)
@@ -507,11 +555,58 @@ MIT License - See [LICENSE](LICENSE) for details
 
 ### 🚧 Known Limitations
 
-**Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer (the most widely deployed connection pooler) also omits GSSAPI support, and QuestDB explicitly does not support SSL/TLS.
+**Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer also omits GSSAPI support, and QuestDB does not support SSL/TLS.
 
-- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption (industry-standard approach)
-- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet authentication instead (matches PgBouncer, YugabyteDB, PGAdapter)
-- **L2 distance operator** (`<->`): Not supported by IRIS - use cosine (`<=>`) or dot product (`<#>`) instead
+#### Protocol & Authentication
+- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption
+- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet instead
+
+#### Vector Operations
+- **Cosine distance** (`<=>`): ✅ Supported → `VECTOR_COSINE()`
+- **Dot product** (`<#>`): ✅ Supported → `VECTOR_DOT_PRODUCT()`
+- **L2/Euclidean** (`<->`): ❌ Not implemented
+
+#### PostgreSQL Compatibility
+- **System catalogs**: `pg_type`, `pg_catalog` not available (IRIS uses INFORMATION_SCHEMA)
+- **CREATE EXTENSION**: Not supported (IRIS has native vector support)
+
+#### Tools That Won't Work via PGWire
+
+| Category | Won't Work (via PGWire) | IRIS-Native Alternative |
+|----------|-------------------------|------------------------|
+| **LangChain** | `langchain_community.PGVector` | [`langchain-iris`](https://github.com/caretdev/langchain-iris) (PyPI) |
+| **LlamaIndex** | `llama_index.PGVectorStore` | [`llama-iris`](https://github.com/caretdev/llama-iris) (PyPI) |
+| **Haystack** | `haystack.PGVector` | psycopg3 with custom retriever |
+| **ORM/Database** | SQLAlchemy + psycopg2 | psycopg3 directly |
+| **Admin Tools** | pgAdmin (full features) | IRIS Management Portal |
+
+#### IRIS-Native Packages (Recommended for RAG)
+
+```bash
+# Install IRIS-native LangChain/LlamaIndex integrations
+pip install langchain-iris llama-iris
+```
+
+```python
+# LangChain with native IRIS connection
+from langchain_iris import IRISVector
+
+db = IRISVector(
+    embedding_function=embeddings,
+    connection_string="iris://_SYSTEM:SYS@localhost:1972/USER",
+    collection_name="my_docs"
+)
+db.add_texts(["Document 1", "Document 2"])
+results = db.similarity_search("query", k=5)
+```
+
+#### PGWire Approach (psycopg3 directly)
+For direct PostgreSQL wire protocol access:
+```python
+import psycopg
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    cur.execute("SELECT * FROM docs ORDER BY embedding <=> %s LIMIT 5", (query_vec,))
+```
 
 ### 📋 Future Enhancements
 - SSL/TLS wire protocol encryption
