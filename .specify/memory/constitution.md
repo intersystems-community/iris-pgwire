@@ -280,4 +280,10 @@ Constitution violations may be permitted only when:
 3. Production security requirements override development convenience
 4. Performance requirements documented with benchmarks justify the complexity
 
-**Version**: 1.3.0 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-11-08
+## Authorship and Attribution
+
+**Owner and Author**: Thomas Dyar <thomas.dyar@intersystems.com>
+
+All code, documentation, specifications, and artifacts in this repository are authored by Thomas Dyar. NEVER attribute work to Claude Code, AI assistants, or any automated tools. All commit messages, pull requests, documentation, and public communications MUST credit Thomas Dyar as the sole author and owner.
+
+**Version**: 1.3.1 | **Ratified**: 2025-01-19 | **Last Amended**: 2025-12-16
