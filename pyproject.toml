@@ -9,10 +9,10 @@ description = "PostgreSQL Wire Protocol Server for InterSystems IRIS - Connect B
 readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
 authors = [
-    {name = "IRIS PGWire Contributors", email = "iris-pgwire@intersystems.com"},
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"},
 ]
 maintainers = [
-    {name = "IRIS PGWire Team"},
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"},
 ]
 keywords = [
     "intersystems",
