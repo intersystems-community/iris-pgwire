@@ -74,3 +74,4 @@ dmypy.json
 # IRIS license keys (sensitive)
 iris.key
 *.key
+docs/articles/developer-community-article.md
