@@ -139,7 +139,7 @@ class TestWalletPasswordRetrieval:
             mock_iris_cls.return_value = mock_wallet
 
             # WHEN: Retrieving password
-            password = await mock_wallet_credentials.get_password_from_wallet(username)
+            await mock_wallet_credentials.get_password_from_wallet(username)
 
             # THEN: Should have used correct key format
             mock_wallet.GetSecret.assert_called()
@@ -161,7 +161,7 @@ class TestWalletPasswordRetrieval:
             mock_iris_cls.return_value = mock_wallet
 
             # WHEN: Retrieving password
-            password = await mock_wallet_credentials.get_password_from_wallet(username)
+            await mock_wallet_credentials.get_password_from_wallet(username)
 
             # THEN: Should update audit trail (accessed_at timestamp)
             # Note: This may be tracked internally or via separate API call
@@ -313,7 +313,7 @@ class TestWalletOAuthClientSecret:
             mock_iris_cls.return_value = mock_wallet
 
             # WHEN: Retrieving OAuth client secret
-            client_secret = await mock_wallet_credentials.get_oauth_client_secret()
+            await mock_wallet_credentials.get_oauth_client_secret()
 
             # THEN: Should use correct key format
             mock_wallet.GetSecret.assert_called()
@@ -335,10 +335,10 @@ class TestWalletOAuthClientSecret:
             mock_iris_cls.return_value = mock_wallet
 
             # Retrieve user password
-            user_password = await mock_wallet_credentials.get_password_from_wallet("alice")
+            await mock_wallet_credentials.get_password_from_wallet("alice")
 
             # Retrieve OAuth client secret
-            client_secret = await mock_wallet_credentials.get_oauth_client_secret()
+            await mock_wallet_credentials.get_oauth_client_secret()
 
             # THEN: Both should use same Wallet API (iris.cls('%IRIS.Wallet'))
             assert mock_wallet.GetSecret.call_count == 2

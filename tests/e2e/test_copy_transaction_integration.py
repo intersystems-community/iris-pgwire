@@ -163,7 +163,7 @@ def test_copy_error_triggers_rollback(psql_command):
 
         # Transaction should be in error state or rolled back
         # Try to query - should fail or return 0 rows
-        count_result = psql_command("SELECT COUNT(*) FROM Patients")
+        psql_command("SELECT COUNT(*) FROM Patients")
         # Either transaction is aborted (error) or table is empty (rollback succeeded)
         # Both are acceptable outcomes
 

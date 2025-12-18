@@ -43,7 +43,7 @@ def test_copy_250_patients_to_stdout(psql_command, patients_csv_file):
     assert setup_result.returncode == 0
 
     # Load data via COPY FROM STDIN first (prerequisite)
-    load_result = psql_command(
+    psql_command(
         "COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)", stdin_file=str(patients_csv_file)
     )
     # Note: This will also fail if T004 implementation isn't done
@@ -94,7 +94,7 @@ def test_copy_to_stdout_with_query(psql_command, patients_csv_file):
     assert setup_result.returncode == 0
 
     # Load data
-    load_result = psql_command(
+    psql_command(
         "COPY Patients FROM STDIN WITH (FORMAT CSV, HEADER)", stdin_file=str(patients_csv_file)
     )
 

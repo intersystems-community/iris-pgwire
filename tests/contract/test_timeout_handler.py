@@ -67,7 +67,7 @@ def test_timeout_handler_captures_iris_query_history():
     """
     from tests.timeout_handler import DiagnosticContext, TimeoutHandler
 
-    handler = TimeoutHandler(timeout_seconds=30)
+    TimeoutHandler(timeout_seconds=30)
 
     # Simulate scenario where queries were executed before timeout
     # In real scenario, this would be captured from actual IRIS connection
@@ -160,7 +160,7 @@ def test_timeout_handler_no_timeout_for_fast_tests():
     """
     from tests.timeout_handler import TimeoutHandler
 
-    handler = TimeoutHandler(timeout_seconds=30)
+    TimeoutHandler(timeout_seconds=30)
 
     # Simulate fast test
     def fast_test():

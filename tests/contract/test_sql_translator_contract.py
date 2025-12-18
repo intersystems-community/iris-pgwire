@@ -98,7 +98,7 @@ class TestSQLTranslatorContract:
         sql = f"SELECT {columns} FROM test_table LIMIT 1"
 
         start_time = time.perf_counter()
-        normalized = translator.normalize_sql(sql, execution_path="direct")
+        translator.normalize_sql(sql, execution_path="direct")
         end_time = time.perf_counter()
 
         normalization_time_ms = (end_time - start_time) * 1000

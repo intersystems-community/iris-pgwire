@@ -63,7 +63,7 @@ try:
 
     # Warmup
     print("   Warmup: 5 queries...")
-    for i in range(5):
+    for _i in range(5):
         vec = gen_vec(1024)
         vec_str = "[" + ",".join(str(v) for v in vec) + "]"
         cur.execute(
@@ -74,7 +74,7 @@ try:
     # Benchmark
     print("   Benchmark: 30 queries...")
     times = []
-    for i in range(30):
+    for _i in range(30):
         vec = gen_vec(1024)
         vec_str = "[" + ",".join(str(v) for v in vec) + "]"
 
@@ -159,7 +159,7 @@ try:
 
     # Warmup
     print("   Warmup: 5 queries...")
-    for i in range(5):
+    for _i in range(5):
         vec = gen_vec(1024)
         cur.execute("SELECT id FROM test_vectors_1024 ORDER BY vec <=> %s LIMIT 5", (vec,))
         cur.fetchall()
@@ -167,7 +167,7 @@ try:
     # Benchmark
     print("   Benchmark: 30 queries...")
     times = []
-    for i in range(30):
+    for _i in range(30):
         vec = gen_vec(1024)
 
         start = time.perf_counter()

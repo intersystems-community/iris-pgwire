@@ -26,6 +26,7 @@ import pytest
 # Try to import iris-devtester (skip tests if not available)
 try:
     from iris_devtester import IRISContainer
+
     IRIS_DEVTESTER_AVAILABLE = True
 except ImportError:
     IRIS_DEVTESTER_AVAILABLE = False
@@ -41,7 +42,7 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 
 requires_iris_devtester = pytest.mark.skipif(
     not IRIS_DEVTESTER_AVAILABLE,
-    reason="iris-devtester not installed. Install with: pip install iris-devtester"
+    reason="iris-devtester not installed. Install with: pip install iris-devtester",
 )
 
 
@@ -155,26 +156,37 @@ class TestDockerQuickStartE2E:
         with conn.cursor() as cur:
             # Setup
             cur.execute(f"DROP TABLE IF EXISTS {test_table}")
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 CREATE TABLE {test_table} (
                     id INT PRIMARY KEY,
                     content VARCHAR(255),
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             # IRIS doesn't support multi-row VALUES - use separate inserts
-            cur.execute(f"INSERT INTO {test_table} VALUES (1, 'Document about Python', TO_VECTOR('[0.1, 0.2, 0.3]'))")
-            cur.execute(f"INSERT INTO {test_table} VALUES (2, 'Document about IRIS', TO_VECTOR('[0.9, 0.8, 0.7]'))")
-            cur.execute(f"INSERT INTO {test_table} VALUES (3, 'Document about vectors', TO_VECTOR('[0.5, 0.5, 0.5]'))")
+            cur.execute(
+                f"INSERT INTO {test_table} VALUES (1, 'Document about Python', TO_VECTOR('[0.1, 0.2, 0.3]'))"
+            )
+            cur.execute(
+                f"INSERT INTO {test_table} VALUES (2, 'Document about IRIS', TO_VECTOR('[0.9, 0.8, 0.7]'))"
+            )
+            cur.execute(
+                f"INSERT INTO {test_table} VALUES (3, 'Document about vectors', TO_VECTOR('[0.5, 0.5, 0.5]'))"
+            )
             conn.commit()
 
             # Test README pattern: pgvector <=> operator with parameter binding
             query_embedding = [0.1, 0.2, 0.3]
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT id, content FROM {test_table}
                 ORDER BY embedding <=> %s
                 LIMIT 5
-            """, (query_embedding,))
+            """,
+                (query_embedding,),
+            )
 
             results = cur.fetchall()
             assert len(results) == 3
@@ -193,12 +205,14 @@ class TestDockerQuickStartE2E:
 
         with conn.cursor() as cur:
             cur.execute(f"DROP TABLE IF EXISTS {test_table}")
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 CREATE TABLE {test_table} (
                     id INT PRIMARY KEY,
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             # IRIS doesn't support multi-row VALUES
             cur.execute(f"INSERT INTO {test_table} VALUES (1, TO_VECTOR('[1.0, 0.0, 0.0]'))")
             cur.execute(f"INSERT INTO {test_table} VALUES (2, TO_VECTOR('[0.5, 0.5, 0.0]'))")
@@ -206,11 +220,14 @@ class TestDockerQuickStartE2E:
 
             # Test <#> operator (dot product)
             query_vec = [1.0, 0.0, 0.0]
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT id FROM {test_table}
                 ORDER BY embedding <#> %s
                 LIMIT 1
-            """, (query_vec,))
+            """,
+                (query_vec,),
+            )
 
             result = cur.fetchone()
             assert result is not None
@@ -283,12 +300,26 @@ class TestIsolatedDBAPIBackend:
 
             # Install Python dependencies
             print("📦 Installing dependencies...")
-            deps = ["structlog", "cryptography", "sqlparse", "psycopg[binary]", "pydantic", "pyyaml"]
+            deps = [
+                "structlog",
+                "cryptography",
+                "sqlparse",
+                "psycopg[binary]",
+                "pydantic",
+                "pyyaml",
+            ]
             for dep in deps:
-                container.exec_run([
-                    "/usr/irissys/bin/irispython", "-m", "pip", "install",
-                    "--quiet", "--break-system-packages", dep
-                ])
+                container.exec_run(
+                    [
+                        "/usr/irissys/bin/irispython",
+                        "-m",
+                        "pip",
+                        "install",
+                        "--quiet",
+                        "--break-system-packages",
+                        dep,
+                    ]
+                )
 
             # Start PGWire server
             print("🚀 Starting PGWire server...")
@@ -346,9 +377,9 @@ conn.close()
         tar_stream.seek(0)
         params["container"].put_archive("/tmp/", tar_stream.getvalue())
 
-        exit_code, output = params["container"].exec_run([
-            "/usr/irissys/bin/irispython", "/tmp/test_basic.py"
-        ])
+        exit_code, output = params["container"].exec_run(
+            ["/usr/irissys/bin/irispython", "/tmp/test_basic.py"]
+        )
 
         assert exit_code == 0, f"Test failed: {output.decode()}"
         assert "Isolated test passed!" in output.decode()
@@ -413,9 +444,9 @@ print("ALL_VECTOR_TESTS_PASS")
         tar_stream.seek(0)
         params["container"].put_archive("/tmp/", tar_stream.getvalue())
 
-        exit_code, output = params["container"].exec_run([
-            "/usr/irissys/bin/irispython", "/tmp/test_vectors.py"
-        ])
+        exit_code, output = params["container"].exec_run(
+            ["/usr/irissys/bin/irispython", "/tmp/test_vectors.py"]
+        )
 
         output_str = output.decode()
         print(output_str)
@@ -470,9 +501,9 @@ print("ALL_TXN_TESTS_PASS")
         tar_stream.seek(0)
         params["container"].put_archive("/tmp/", tar_stream.getvalue())
 
-        exit_code, output = params["container"].exec_run([
-            "/usr/irissys/bin/irispython", "/tmp/test_txn.py"
-        ])
+        exit_code, output = params["container"].exec_run(
+            ["/usr/irissys/bin/irispython", "/tmp/test_txn.py"]
+        )
 
         output_str = output.decode()
         print(output_str)
@@ -481,7 +512,6 @@ print("ALL_TXN_TESTS_PASS")
         assert "COMMIT_PASS" in output_str
         assert "ROLLBACK_PASS" in output_str
         assert "ALL_TXN_TESTS_PASS" in output_str
-
 
     def test_isolated_authentication(self, isolated_iris):
         """Test authentication in isolated environment with valid credentials."""
@@ -526,9 +556,9 @@ print("ALL_AUTH_TESTS_PASS")
         tar_stream.seek(0)
         params["container"].put_archive("/tmp/", tar_stream.getvalue())
 
-        exit_code, output = params["container"].exec_run([
-            "/usr/irissys/bin/irispython", "/tmp/test_auth.py"
-        ])
+        exit_code, output = params["container"].exec_run(
+            ["/usr/irissys/bin/irispython", "/tmp/test_auth.py"]
+        )
 
         output_str = output.decode()
         print(output_str)
@@ -562,12 +592,14 @@ class TestPerformanceSanity:
 
         with conn.cursor() as cur:
             cur.execute(f"DROP TABLE IF EXISTS {test_table}")
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 CREATE TABLE {test_table} (
                     id INT PRIMARY KEY,
                     vec VECTOR(DOUBLE, 128)
                 )
-            """)
+            """
+            )
             # Insert a few rows
             for i in range(10):
                 vec = [float(j + i) / 128 for j in range(128)]
@@ -577,11 +609,14 @@ class TestPerformanceSanity:
             # Time vector query
             query_vec = [float(j) / 128 for j in range(128)]
             start = time.time()
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT id FROM {test_table}
                 ORDER BY vec <=> %s
                 LIMIT 5
-            """, (query_vec,))
+            """,
+                (query_vec,),
+            )
             cur.fetchall()
             elapsed = time.time() - start
 

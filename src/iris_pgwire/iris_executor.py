@@ -955,7 +955,7 @@ class IRISExecutor:
                             # Convert value to SQL literal
                             if param_value is None:
                                 sql_literal = "NULL"
-                            elif isinstance(param_value, (int, float)):
+                            elif isinstance(param_value, int | float):
                                 # Numbers can be used directly
                                 sql_literal = str(param_value)
                             else:
@@ -1423,7 +1423,7 @@ class IRISExecutor:
                 t_start_total = time.perf_counter()
 
                 # Get or create connection
-                connection = self._get_iris_connection()
+                self._get_iris_connection()
 
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
@@ -1694,7 +1694,7 @@ class IRISExecutor:
                 # Fetch rows
                 try:
                     for row in result:
-                        if isinstance(row, (list, tuple)):
+                        if isinstance(row, list | tuple):
                             # Normalize IRIS NULL representations to Python None
                             normalized_row = [self._normalize_iris_null(value) for value in row]
                             rows.append(normalized_row)
@@ -2388,7 +2388,7 @@ class IRISExecutor:
                         )
 
                         for row in results:
-                            if isinstance(row, (list, tuple)):
+                            if isinstance(row, list | tuple):
                                 rows.append(list(row))
                             else:
                                 # Single value result
@@ -2742,7 +2742,7 @@ class IRISExecutor:
             # Some database APIs expose column info through iteration interface
             try:
                 # Attempt to get first row (should be empty)
-                for row in result:
+                for _row in result:
                     # We shouldn't reach here with LIMIT 0, but if we do,
                     # we can infer column count from row length
                     break
@@ -2753,7 +2753,7 @@ class IRISExecutor:
             if hasattr(result, "description") and result.description:
                 for col_desc in result.description:
                     # DB-API 2.0: description is list of 7-tuples (name, type, ...)
-                    if isinstance(col_desc, (list, tuple)) and len(col_desc) > 0:
+                    if isinstance(col_desc, list | tuple) and len(col_desc) > 0:
                         column_names.append(str(col_desc[0]))
                     elif hasattr(col_desc, "name"):
                         column_names.append(col_desc.name)

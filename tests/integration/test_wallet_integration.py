@@ -152,14 +152,14 @@ class TestWalletPasswordRetrievalIntegration:
         """T021.4: Wallet key format should be 'pgwire-user-{username}'"""
         # GIVEN: Username for Wallet lookup
         username = "alice"
-        expected_key = test_wallet_secrets["alice"]["key"]
+        test_wallet_secrets["alice"]["key"]
         expected_password = test_wallet_secrets["alice"]["password"]
 
         # Mock IRIS Wallet
         iris_wallet_mock.GetSecret.return_value = expected_password
 
         # WHEN: Retrieving password
-        password = await wallet_credentials.get_password_from_wallet(username)
+        await wallet_credentials.get_password_from_wallet(username)
 
         # THEN: Should have used correct key format
         iris_wallet_mock.GetSecret.assert_called()

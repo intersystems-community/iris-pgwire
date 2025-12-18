@@ -54,7 +54,9 @@ class TestFullValidationWorkflow:
         # Overall readiness determination (metadata + docs are critical)
         # Security and code quality warnings are informational
         print("\n📊 Validation Results:")
-        print(f"  Package Metadata: {'✅ PASS' if result['metadata_validation']['is_valid'] else '❌ FAIL'}")
+        print(
+            f"  Package Metadata: {'✅ PASS' if result['metadata_validation']['is_valid'] else '❌ FAIL'}"
+        )
         print(f"  Docstring Coverage: {doc_result['coverage_percentage']:.1f}%")
         print(f"  Overall Ready: {result['is_pypi_ready']}")
 
@@ -67,7 +69,8 @@ class TestFullValidationWorkflow:
             pkg_dir = Path(tmpdir)
 
             # Create pyproject.toml
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "test-package"
 version = "0.1.0"
@@ -81,10 +84,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = ["requests>=2.0.0"]
-""")
+"""
+            )
 
             # Create README.md
-            (pkg_dir / "README.md").write_text("""# Test Package
+            (pkg_dir / "README.md").write_text(
+                """# Test Package
 
 A test package for validation.
 
@@ -109,10 +114,12 @@ See docs at example.com
 ## License
 
 MIT License
-""")
+"""
+            )
 
             # Create CHANGELOG.md
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
@@ -120,18 +127,21 @@ MIT License
 
 ### Added
 - Initial release
-""")
+"""
+            )
 
             # Create source directory with documented code
             src_dir = pkg_dir / "src" / "test_package"
             src_dir.mkdir(parents=True)
-            (src_dir / "__init__.py").write_text('''"""Test package module."""
+            (src_dir / "__init__.py").write_text(
+                '''"""Test package module."""
 __version__ = "0.1.0"
 
 def hello():
     """Say hello."""
     return "Hello, World!"
-''')
+'''
+            )
 
             # Create LICENSE file
             (pkg_dir / "LICENSE").write_text("MIT License\n\nCopyright 2025")
@@ -207,7 +217,7 @@ def hello():
         package_root = Path(__file__).parent.parent.parent
 
         start_time = time.time()
-        result = self.validator.validate_all(str(package_root))
+        self.validator.validate_all(str(package_root))
         duration = time.time() - start_time
 
         # Should complete in < 2 minutes (CI environments may be slower)
@@ -302,9 +312,14 @@ def hello():
         result2 = self.validator.validate_all(str(package_root))
 
         # Core metrics should be identical
-        assert result1["metadata_validation"]["pyroma_score"] == result2["metadata_validation"]["pyroma_score"]
-        assert result1["documentation_validation"]["docstring_coverage"]["coverage_percentage"] == \
-               result2["documentation_validation"]["docstring_coverage"]["coverage_percentage"]
+        assert (
+            result1["metadata_validation"]["pyroma_score"]
+            == result2["metadata_validation"]["pyroma_score"]
+        )
+        assert (
+            result1["documentation_validation"]["docstring_coverage"]["coverage_percentage"]
+            == result2["documentation_validation"]["docstring_coverage"]["coverage_percentage"]
+        )
 
         # is_pypi_ready determination should be consistent
         assert result1["is_pypi_ready"] == result2["is_pypi_ready"]

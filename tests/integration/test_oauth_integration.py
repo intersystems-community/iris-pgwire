@@ -156,7 +156,7 @@ class TestOAuthPasswordGrantIntegration:
 
         # WHEN: Measuring token exchange latency
         start_time = time.time()
-        token = await asyncio.wait_for(
+        await asyncio.wait_for(
             oauth_bridge.exchange_password_for_token(username, password), timeout=5.0
         )
         elapsed = time.time() - start_time

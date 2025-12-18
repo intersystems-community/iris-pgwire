@@ -30,23 +30,27 @@ class TestValidationFailureScenarios:
             pkg_dir = Path(tmpdir)
 
             # Create incomplete pyproject.toml (missing license, authors)
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "incomplete-package"
 version = "0.1.0"
 description = "Missing required fields"
-""")
+"""
+            )
 
             # Create minimal README
             (pkg_dir / "README.md").write_text("# Incomplete Package\n")
 
             # Create minimal CHANGELOG
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             # Create minimal source
             src_dir = pkg_dir / "src" / "incomplete"
@@ -59,9 +63,11 @@ description = "Missing required fields"
             # Should fail metadata validation
             assert result["metadata_validation"]["is_valid"] is False
             assert len(result["metadata_validation"]["missing_fields"]) > 0
-            assert "readme" in result["metadata_validation"]["missing_fields"] or \
-                   "license" in result["metadata_validation"]["missing_fields"] or \
-                   "authors" in result["metadata_validation"]["missing_fields"]
+            assert (
+                "readme" in result["metadata_validation"]["missing_fields"]
+                or "license" in result["metadata_validation"]["missing_fields"]
+                or "authors" in result["metadata_validation"]["missing_fields"]
+            )
 
     # T028.2: Poor pyroma score
     @pytest.mark.integration
@@ -71,7 +77,8 @@ description = "Missing required fields"
             pkg_dir = Path(tmpdir)
 
             # Create minimal pyproject.toml (will get low pyroma score)
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "poor-quality"
 version = "0.1.0"
@@ -79,7 +86,8 @@ description = "Q"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "T", email = "t@e.com"}]
-""")
+"""
+            )
 
             # Create minimal README
             (pkg_dir / "README.md").write_text("# Poor Quality\n\nShort.\n")
@@ -98,7 +106,8 @@ authors = [{name = "T", email = "t@e.com"}]
             pkg_dir = Path(tmpdir)
 
             # Create valid pyproject.toml
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "undocumented"
 version = "0.1.0"
@@ -106,9 +115,11 @@ description = "Undocumented package"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
-            (pkg_dir / "README.md").write_text("""# Undocumented Package
+            (pkg_dir / "README.md").write_text(
+                """# Undocumented Package
 
 ## Installation
 
@@ -129,19 +140,23 @@ Docs available.
 ## License
 
 MIT
-""")
+"""
+            )
 
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             # Create source with many undocumented functions
             src_dir = pkg_dir / "src" / "undocumented"
             src_dir.mkdir(parents=True)
-            (src_dir / "__init__.py").write_text('''"""Package with poor docstring coverage."""
+            (src_dir / "__init__.py").write_text(
+                '''"""Package with poor docstring coverage."""
 __version__ = "0.1.0"
 
 def function_one():
@@ -159,7 +174,8 @@ class UndocumentedClass:
 
     def method_two(self):
         return 2
-''')
+'''
+            )
 
             # Run validation
             result = self.validator.validate_all(str(pkg_dir))
@@ -178,7 +194,8 @@ class UndocumentedClass:
             pkg_dir = Path(tmpdir)
 
             # Create pyproject.toml with invalid classifiers
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "invalid-classifiers"
 version = "0.1.0"
@@ -191,7 +208,8 @@ classifiers = [
     "Invalid :: Classifier :: That :: Does :: Not :: Exist",
     "Another :: Fake :: Classifier",
 ]
-""")
+"""
+            )
 
             (pkg_dir / "README.md").write_text("# Package\n")
 
@@ -201,7 +219,9 @@ classifiers = [
             # Should detect invalid classifiers
             if len(result["metadata_validation"]["invalid_classifiers"]) > 0:
                 assert result["metadata_validation"]["is_valid"] is False
-                assert "Invalid :: Classifier" in str(result["metadata_validation"]["invalid_classifiers"])
+                assert "Invalid :: Classifier" in str(
+                    result["metadata_validation"]["invalid_classifiers"]
+                )
 
     # T028.5: Missing CHANGELOG sections
     @pytest.mark.integration
@@ -210,7 +230,8 @@ classifiers = [
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir)
 
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "incomplete-changelog"
 version = "0.1.0"
@@ -218,9 +239,11 @@ description = "Package with incomplete changelog"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
-            (pkg_dir / "README.md").write_text("""# Package
+            (pkg_dir / "README.md").write_text(
+                """# Package
 
 ## Installation
 pip install pkg
@@ -236,13 +259,16 @@ Docs
 
 ## License
 MIT
-""")
+"""
+            )
 
             # Create CHANGELOG without required sections
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 Some changes happened.
-""")
+"""
+            )
 
             src_dir = pkg_dir / "src" / "pkg"
             src_dir.mkdir(parents=True)
@@ -263,7 +289,8 @@ Some changes happened.
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir)
 
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "incomplete-readme"
 version = "0.1.0"
@@ -271,20 +298,25 @@ description = "Package with incomplete README"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
             # Create minimal README (missing key sections)
-            (pkg_dir / "README.md").write_text("""# Incomplete README
+            (pkg_dir / "README.md").write_text(
+                """# Incomplete README
 
 This package exists.
-""")
+"""
+            )
 
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             src_dir = pkg_dir / "src" / "pkg"
             src_dir.mkdir(parents=True)
@@ -306,7 +338,8 @@ This package exists.
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir)
 
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "insecure-code"
 version = "0.1.0"
@@ -314,9 +347,11 @@ description = "Package with security issues"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
-            (pkg_dir / "README.md").write_text("""# Insecure Code
+            (pkg_dir / "README.md").write_text(
+                """# Insecure Code
 
 ## Installation
 pip install pkg
@@ -332,19 +367,23 @@ Docs
 
 ## License
 MIT
-""")
+"""
+            )
 
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             # Create source with potential security issues
             src_dir = pkg_dir / "src" / "insecure"
             src_dir.mkdir(parents=True)
-            (src_dir / "__init__.py").write_text('''"""Insecure module."""
+            (src_dir / "__init__.py").write_text(
+                '''"""Insecure module."""
 
 import pickle  # B403: pickle usage detected
 import subprocess
@@ -356,7 +395,8 @@ def execute_command(user_input):
 def deserialize_data(data):
     """Deserialize pickle data (B301)."""
     return pickle.loads(data)  # NOQA
-''')
+'''
+            )
 
             # Run validation
             result = self.validator.validate_all(str(pkg_dir))
@@ -366,7 +406,9 @@ def deserialize_data(data):
             print(f"Security issues found: {len(security_result['code_issues'])}")
             if len(security_result["code_issues"]) > 0:
                 # Bandit should flag the pickle and subprocess usage
-                assert security_result["is_secure"] is False or len(security_result["code_issues"]) > 0
+                assert (
+                    security_result["is_secure"] is False or len(security_result["code_issues"]) > 0
+                )
 
     # T028.8: Code formatting violations
     @pytest.mark.integration
@@ -375,7 +417,8 @@ def deserialize_data(data):
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir)
 
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "unformatted-code"
 version = "0.1.0"
@@ -383,9 +426,11 @@ description = "Package with formatting issues"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
-            (pkg_dir / "README.md").write_text("""# Unformatted Code
+            (pkg_dir / "README.md").write_text(
+                """# Unformatted Code
 
 ## Installation
 pip install pkg
@@ -401,19 +446,23 @@ Docs
 
 ## License
 MIT
-""")
+"""
+            )
 
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             # Create source with terrible formatting
             src_dir = pkg_dir / "src" / "unformatted"
             src_dir.mkdir(parents=True)
-            (src_dir / "__init__.py").write_text('''"""Unformatted module."""
+            (src_dir / "__init__.py").write_text(
+                '''"""Unformatted module."""
 
 def badly_formatted_function(  x,y,    z  ):
     """Function with bad formatting."""
@@ -424,7 +473,8 @@ def badly_formatted_function(  x,y,    z  ):
 class  BadlyFormattedClass:
     """Class with bad formatting."""
     def   method(self,a,b,c):return a+b+c
-''')
+'''
+            )
 
             # Run validation
             result = self.validator.validate_all(str(pkg_dir))
@@ -442,11 +492,13 @@ class  BadlyFormattedClass:
             pkg_dir = Path(tmpdir)
 
             # Create invalid TOML
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project
 name = incomplete-package
 This is not valid TOML
-""")
+"""
+            )
 
             # Run validation - validate_all catches exceptions and returns error results
             result = self.validator.validate_all(str(pkg_dir))
@@ -462,7 +514,8 @@ This is not valid TOML
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir)
 
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "no-readme"
 version = "0.1.0"
@@ -470,15 +523,18 @@ description = "Package without README"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Test", email = "test@example.com"}]
-""")
+"""
+            )
 
             # Don't create README.md
-            (pkg_dir / "CHANGELOG.md").write_text("""# Changelog
+            (pkg_dir / "CHANGELOG.md").write_text(
+                """# Changelog
 
 ## [Unreleased]
 
 ## [0.1.0] - 2025-01-15
-""")
+"""
+            )
 
             src_dir = pkg_dir / "src" / "pkg"
             src_dir.mkdir(parents=True)
@@ -499,7 +555,8 @@ authors = [{name = "Test", email = "test@example.com"}]
             pkg_dir = Path(tmpdir)
 
             # Create package with multiple issues
-            (pkg_dir / "pyproject.toml").write_text("""
+            (pkg_dir / "pyproject.toml").write_text(
+                """
 [project]
 name = "multi-fail"
 version = "0.1.0"
@@ -508,7 +565,8 @@ readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "T", email = "t@e.com"}]
 classifiers = ["Invalid :: Classifier"]
-""")
+"""
+            )
 
             # Incomplete README
             (pkg_dir / "README.md").write_text("# Multi Fail\n")
@@ -519,10 +577,12 @@ classifiers = ["Invalid :: Classifier"]
             # Undocumented code
             src_dir = pkg_dir / "src" / "multi_fail"
             src_dir.mkdir(parents=True)
-            (src_dir / "__init__.py").write_text('''
+            (src_dir / "__init__.py").write_text(
+                """
 def func(): return 1
 def func2(): return 2
-''')
+"""
+            )
 
             # Run validation
             result = self.validator.validate_all(str(pkg_dir))

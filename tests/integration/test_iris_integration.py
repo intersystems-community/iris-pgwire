@@ -529,7 +529,7 @@ class TestIRISParameterPerformance:
                 # Create query with many parameters
                 param_count = 20
                 params = [f"param_{i}" for i in range(param_count)]
-                placeholders = ", ".join(["%s"] * param_count)
+                ", ".join(["%s"] * param_count)
 
                 query = f"""
                     SELECT JSON_OBJECT({', '.join([f"'key_{i}', %s" for i in range(param_count)])}) AS large_json

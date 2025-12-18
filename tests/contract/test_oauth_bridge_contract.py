@@ -130,7 +130,7 @@ class TestOAuthTokenExchange:
         # WHEN: Measuring token exchange latency
         start_time = time.time()
         try:
-            token = await asyncio.wait_for(
+            await asyncio.wait_for(
                 mock_oauth_bridge.exchange_password_for_token(username, password), timeout=5.0
             )
             elapsed = time.time() - start_time
@@ -219,9 +219,7 @@ class TestOAuthTokenValidation:
         # WHEN: Measuring validation latency
         start_time = time.time()
         try:
-            is_valid = await asyncio.wait_for(
-                mock_oauth_bridge.validate_token(access_token), timeout=1.0
-            )
+            await asyncio.wait_for(mock_oauth_bridge.validate_token(access_token), timeout=1.0)
             elapsed = time.time() - start_time
 
             # THEN: Should complete within 1 second
@@ -285,9 +283,7 @@ class TestOAuthTokenRefresh:
         # WHEN: Measuring refresh latency
         start_time = time.time()
         try:
-            new_token = await asyncio.wait_for(
-                mock_oauth_bridge.refresh_token(refresh_token), timeout=5.0
-            )
+            await asyncio.wait_for(mock_oauth_bridge.refresh_token(refresh_token), timeout=5.0)
             elapsed = time.time() - start_time
 
             # THEN: Should complete within 5 seconds (FR-028)
@@ -387,9 +383,7 @@ class TestOAuthIRISIntegration:
             mock_iris_cls.return_value = mock_client
 
             # WHEN: Exchanging credentials for token
-            token = await mock_oauth_bridge.exchange_password_for_token(
-                "test_user", "test_password"
-            )
+            await mock_oauth_bridge.exchange_password_for_token("test_user", "test_password")
 
             # THEN: Should have called iris.cls('OAuth2.Client')
             mock_iris_cls.assert_called()
@@ -411,9 +405,7 @@ class TestOAuthIRISIntegration:
             )
 
             # WHEN: Exchanging credentials for token
-            token = await mock_oauth_bridge.exchange_password_for_token(
-                "test_user", "test_password"
-            )
+            await mock_oauth_bridge.exchange_password_for_token("test_user", "test_password")
 
             # THEN: Should have used asyncio.to_thread() for IRIS call
             mock_to_thread.assert_called()
@@ -429,9 +421,7 @@ class TestOAuthIRISIntegration:
 
             # WHEN: Exchanging credentials for token
             try:
-                token = await mock_oauth_bridge.exchange_password_for_token(
-                    "test_user", "test_password"
-                )
+                await mock_oauth_bridge.exchange_password_for_token("test_user", "test_password")
             except Exception:
                 pass  # Expected to fail until implementation exists
 
@@ -473,7 +463,7 @@ class TestOAuthErrorHandling:
             ("test_user", "", "empty password"),
         ]
 
-        for username, password, expected_hint in test_cases:
+        for username, password, _expected_hint in test_cases:
             # WHEN: Authentication fails
             try:
                 await mock_oauth_bridge.exchange_password_for_token(username, password)

@@ -379,7 +379,7 @@ def configure_server_integration():
         logger = logging.getLogger(logger_name)
         # Ensure consistent formatting
         for handler in logger.handlers:
-            if not isinstance(handler.formatter, (JSONFormatter, ConsoleFormatter)):
+            if not isinstance(handler.formatter, JSONFormatter | ConsoleFormatter):
                 handler.setFormatter(JSONFormatter())
 
     # Log configuration completion

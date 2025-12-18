@@ -480,7 +480,7 @@ class PGWireUserSynchronizer:
         """Get users from PGWire credential cache"""
         users = []
         if hasattr(self.auth_provider, "_credential_cache"):
-            for username, credentials in self.auth_provider._credential_cache.items():
+            for username, _credentials in self.auth_provider._credential_cache.items():
                 user_info = PGWireUserInfo(
                     username=username,
                     has_scram_credentials=True,

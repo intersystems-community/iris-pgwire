@@ -46,7 +46,7 @@ class TestCopyNetworkErrors:
 
             # Simulate network disconnect after processing some rows
             count = 0
-            async for row in rows:
+            async for _row in rows:
                 count += 1
                 if count == 50:
                     # Simulate connection lost
@@ -85,7 +85,7 @@ class TestCopyNetworkErrors:
         # Mock bulk_insert to consume all rows
         async def mock_bulk_insert(table_name, column_names, rows, batch_size=1000):
             count = 0
-            async for row in rows:
+            async for _row in rows:
                 count += 1
             return count
 
@@ -220,7 +220,7 @@ class TestCopyTransactionIntegration:
         # Mock bulk_insert to simulate partial success then failure
         async def mock_bulk_insert(table_name, column_names, rows, batch_size=1000):
             count = 0
-            async for row in rows:
+            async for _row in rows:
                 count += 1
                 if count == 50:
                     # Simulate database constraint violation
@@ -461,7 +461,7 @@ class TestCopyEdgeCases:
 
         async def mock_bulk_insert(table_name, column_names, rows, batch_size=1000):
             count = 0
-            async for row in rows:
+            async for _row in rows:
                 count += 1
             return count
 

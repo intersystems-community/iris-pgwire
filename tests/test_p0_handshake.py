@@ -139,7 +139,7 @@ class TestP0Handshake:
         connections = []
         try:
             # Create multiple concurrent connections
-            for i in range(3):
+            for _i in range(3):
                 conn = await psycopg.AsyncConnection.connect(**pgwire_connection_params)
                 connections.append(conn)
 
