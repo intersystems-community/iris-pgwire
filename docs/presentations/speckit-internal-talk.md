@@ -1,4 +1,4 @@
-# SpecKit: Spec-Driven Development with Claude Code
+# SpecKit: Spec-Driven Development with AI Coding Assistants
 
 **15-Minute Internal Talk**
 **Presenter**: Thomas Dyar
@@ -11,7 +11,19 @@
 - **GitHub Spec Kit Repo**: [github.com/github/spec-kit](https://github.com/github/spec-kit)
 - **GitHub Blog Post**: [Spec-driven development with AI](https://github.blog/ai-and-ml/generative-ai/spec-driven-development-with-ai-get-started-with-a-new-open-source-toolkit/)
 - **Official Docs**: [github.github.io/spec-kit](https://github.github.io/spec-kit/)
-- **Video Tutorial (12 min)**: [GitHub Spec Kit Tutorial with Claude Code](https://www.youtube.com/watch?v=-9obEHJkQc8)
+- **Video Tutorial (12 min)**: [GitHub Spec Kit Tutorial](https://www.youtube.com/watch?v=-9obEHJkQc8)
+
+### Supported AI Assistants
+
+SpecKit works with **multiple AI coding assistants**, not just Claude Code:
+
+- Claude Code
+- GitHub Copilot
+- Cursor
+- Gemini CLI
+- Qwen
+- Codex
+- And others (see official docs for full list)
 
 ---
 
@@ -19,7 +31,7 @@
 
 1. **What is SpecKit?** (2 min)
 2. **What Makes It Special?** (2 min)
-3. **The Workflow: 5 Commands** (4 min)
+3. **The Workflow: 6 Commands** (4 min)
 4. **Live Walkthrough: A Real Spec** (5 min)
 5. **Key Principles & Lessons** (2 min)
 
@@ -27,25 +39,41 @@
 
 ## 1. What is SpecKit?
 
-SpecKit is a **spec-driven development framework** for Claude Code that enforces a structured workflow:
+SpecKit is a **spec-driven development framework** for AI coding assistants that enforces a structured workflow:
 
 ```
 User Idea → Specification → Plan → Tasks → Implementation
 ```
 
-**The Core Insight**: Don't let Claude start coding until you've agreed on WHAT to build.
+**The Core Philosophy**: "Specifications become executable, directly generating working implementations."
+
+**The Core Insight**: Don't let your AI assistant start coding until you've agreed on WHAT to build.
 
 ### Installation
 
-SpecKit lives in your repo as slash commands:
+Install using `uv` (Python package manager):
+
+```bash
+# Persistent installation
+uv tool install specify-cli
+
+# Initialize a new project
+specify init <project-name>
+
+# Or one-time usage
+uvx --from git+https://github.com/github/spec-kit.git specify init <PROJECT_NAME>
+```
+
+This creates slash commands and templates in your repo:
 
 ```
-.claude/commands/
+.claude/commands/           # (or equivalent for other assistants)
 ├── speckit.specify.md      # Create feature specs
 ├── speckit.clarify.md      # Resolve ambiguities
 ├── speckit.plan.md         # Generate technical plan
 ├── speckit.tasks.md        # Break plan into tasks
-└── speckit.implement.md    # Execute tasks
+├── speckit.implement.md    # Execute tasks
+└── speckit.analyze.md      # Cross-artifact validation (optional)
 ```
 
 Plus templates and scripts:
@@ -61,9 +89,9 @@ Plus templates and scripts:
 
 ## 2. What Makes SpecKit Special?
 
-### Problem: Claude is Too Eager to Code
+### Problem: AI Assistants Are Too Eager to Code
 
-Without structure, Claude will:
+Without structure, AI coding assistants will:
 - Start implementing before understanding requirements
 - Make assumptions that don't match your intent
 - Build the wrong thing, then need to redo
@@ -74,15 +102,17 @@ SpecKit enforces:
 
 | Stage | What Happens | Can't Skip |
 |-------|--------------|------------|
-| `/specify` | User describes feature → Claude writes spec | Must have spec before plan |
-| `/clarify` | Claude asks targeted questions (max 5) | Ambiguities resolved before coding |
+| `/constitution` | Establish project principles & guardrails | Optional but recommended first |
+| `/specify` | User describes feature → AI writes spec | Must have spec before plan |
+| `/clarify` | AI asks targeted questions (max 5) | Ambiguities resolved before coding |
 | `/plan` | Technical design, data model, contracts | Must have plan before tasks |
 | `/tasks` | Ordered task list with dependencies | Must have tasks before implementing |
 | `/implement` | Execute tasks one by one | Tasks executed in order |
+| `/analyze` | Cross-artifact consistency check | Optional validation step |
 
 ### The Magic: Clarification Questions
 
-Instead of guessing, Claude **asks** about critical decisions:
+Instead of guessing, the AI **asks** about critical decisions:
 
 ```markdown
 ## Question 1: Scope
@@ -102,7 +132,27 @@ Instead of guessing, Claude **asks** about critical decisions:
 
 ---
 
-## 3. The Workflow: 5 Commands
+## 3. The Workflow: 6 Commands
+
+### Command 0 (Optional): `/constitution`
+
+Establishes project principles and guardrails before any feature work.
+
+```bash
+/constitution
+```
+
+**What it produces**: `.specify/memory/constitution.md`
+
+**Key sections**:
+- Core principles (e.g., "PostgreSQL compatibility is paramount")
+- Quality standards
+- Architectural constraints
+- What the AI should NOT do
+
+This is checked during every `/plan` to prevent drift from project values.
+
+---
 
 ### Command 1: `/specify <description>`
 
@@ -214,7 +264,7 @@ Executes tasks from `tasks.md`, updating checkboxes as work completes.
 /implement
 ```
 
-Claude:
+The AI assistant:
 1. Reads tasks.md
 2. Finds next uncompleted task
 3. Executes it
@@ -223,6 +273,24 @@ Claude:
 6. Moves to next task
 
 **Key Behavior**: Respects parallel markers - can spawn multiple agents for `[P]` tasks.
+
+---
+
+### Command 6 (Optional): `/analyze`
+
+Cross-artifact consistency check after task generation.
+
+```bash
+/analyze
+```
+
+**What it does**:
+- Validates spec.md, plan.md, and tasks.md are consistent
+- Checks all requirements have corresponding tasks
+- Identifies gaps or contradictions
+- Reports quality issues
+
+Use this before starting `/implement` to catch issues early.
 
 ---
 
@@ -236,7 +304,7 @@ Let's look at a real spec that needed clarifications.
 /specify README and doc review for clarity, tone and accuracy
 ```
 
-### What Claude Generated
+### What the AI Generated
 
 **User Stories** (3 priority levels):
 
@@ -309,7 +377,7 @@ Every question asked becomes a **decision record**:
 - Q: Data retention? → A: 90 days, then archive
 ```
 
-Future developers (or Claude) can see WHY decisions were made.
+Future developers (or the AI) can see WHY decisions were made.
 
 ### Principle 3: Parallel Tasks = Speed
 
@@ -321,7 +389,7 @@ Mark independent tasks with `[P]`:
 - [ ] T008 [P] Test psql examples
 ```
 
-Claude can spawn agents to run these simultaneously.
+The AI can spawn agents to run these simultaneously.
 
 ### Principle 4: Constitution Prevents Drift
 
@@ -343,6 +411,7 @@ Every `/plan` checks against constitution. Violations flagged.
 
 | Command | Purpose | Output |
 |---------|---------|--------|
+| `/constitution` | Establish project principles | `.specify/memory/constitution.md` |
 | `/specify <desc>` | Create spec from description | `spec.md` |
 | `/clarify` | Ask clarification questions | Updates `spec.md` |
 | `/plan` | Generate technical design | `plan.md`, `research.md`, `contracts/` |
@@ -376,7 +445,11 @@ Every `/plan` checks against constitution. Violations flagged.
    - Update spec.md → re-run `/plan` → `/tasks` regenerates.
 
 4. **Does this work with other AI tools?**
-   - Commands are Claude Code specific, but the principles apply anywhere.
+   - Yes! SpecKit supports Claude Code, GitHub Copilot, Cursor, Gemini, Qwen, Codex, and others.
+   - See [official docs](https://github.github.io/spec-kit/) for the full list of supported assistants.
+
+5. **Do I need to use /constitution?**
+   - It's optional but recommended for team projects to establish shared principles.
 
 ---
 
