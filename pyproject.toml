@@ -65,9 +65,6 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
-    # Authentication bridge (feature 024-research-and-implement)
-    # Kerberos GSSAPI authentication for enterprise SSO
-    "python-gssapi>=1.8.0",
 ]
 
 [project.optional-dependencies]
@@ -97,6 +94,11 @@ dev = [
 iris = [
     # IRIS embedded Python (when available)
     # "intersystems-iris>=3.6.0",
+]
+kerberos = [
+    # Kerberos GSSAPI authentication (optional - not implemented in wire protocol yet)
+    # Install with: pip install iris-pgwire[kerberos]
+    "gssapi>=1.8.0",
 ]
 
 [project.scripts]
