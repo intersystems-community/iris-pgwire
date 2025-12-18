@@ -170,7 +170,7 @@ Creates a feature branch and spec from natural language.
 - Success Criteria (measurable outcomes)
 - Key Entities
 
-[View Example: specs/028-readme-performance/spec.md](../../specs/028-readme-performance/spec.md)
+[View Example: specs/028-readme-performance/spec.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/specs/028-readme-performance/spec.md)
 
 ---
 
@@ -198,7 +198,7 @@ Scans spec for ambiguities and asks targeted questions (max 5).
   → A: Smoke test - Copy-paste and run each example manually
 ```
 
-[View Example: specs/026-doc-review/spec.md#clarifications](../../specs/026-doc-review/spec.md)
+[View Example: specs/026-doc-review/spec.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/specs/026-doc-review/spec.md)
 
 ---
 
@@ -220,7 +220,7 @@ specs/026-doc-review/
 - Constitution check (principles verification)
 - Phase-by-phase implementation approach
 
-[View Example: specs/026-doc-review/plan.md](../../specs/026-doc-review/plan.md)
+[View Example: specs/026-doc-review/plan.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/specs/026-doc-review/plan.md)
 
 ---
 
@@ -252,7 +252,7 @@ Breaks plan into ordered, executable tasks:
 - Phase 3 (Accuracy): Can run parallel with Phase 2
 ```
 
-[View Example: specs/026-doc-review/tasks.md](../../specs/026-doc-review/tasks.md)
+[View Example: specs/026-doc-review/tasks.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/specs/026-doc-review/tasks.md)
 
 ---
 
@@ -424,10 +424,10 @@ Every `/plan` checks against constitution. Violations flagged.
 ## Resources
 
 - **This Project**: [github.com/isc-tdyar/iris-pgwire](https://github.com/isc-tdyar/iris-pgwire)
-- **Example Spec (026)**: [specs/026-doc-review/](../../specs/026-doc-review/)
-- **Example Spec (028)**: [specs/028-readme-performance/](../../specs/028-readme-performance/)
-- **SpecKit Commands**: [.claude/commands/](../../.claude/commands/)
-- **Templates**: [.specify/templates/](../../.specify/templates/)
+- **Example Spec (026)**: [specs/026-doc-review/](https://github.com/isc-tdyar/iris-pgwire/tree/main/specs/026-doc-review)
+- **Example Spec (028)**: [specs/028-readme-performance/](https://github.com/isc-tdyar/iris-pgwire/tree/main/specs/028-readme-performance)
+- **SpecKit Commands**: [.claude/commands/](https://github.com/isc-tdyar/iris-pgwire/tree/main/.claude/commands)
+- **Templates**: [.specify/templates/](https://github.com/isc-tdyar/iris-pgwire/tree/main/.specify/templates)
 
 ---
 
