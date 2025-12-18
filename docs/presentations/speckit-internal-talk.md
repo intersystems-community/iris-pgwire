@@ -108,7 +108,7 @@ SpecKit enforces:
 | `/plan` | Technical design, data model, contracts | Must have plan before tasks |
 | `/tasks` | Ordered task list with dependencies | Must have tasks before implementing |
 | `/implement` | Execute tasks one by one | Tasks executed in order |
-| `/analyze` | Cross-artifact consistency check | Optional validation step |
+| `/analyze` | Cross-artifact consistency check | Run after /tasks, before /implement |
 
 ### The Magic: Clarification Questions
 
@@ -276,21 +276,27 @@ The AI assistant:
 
 ---
 
-### Command 6 (Optional): `/analyze`
+### Command 6: `/analyze` (Before Implementation)
 
-Cross-artifact consistency check after task generation.
+Cross-artifact consistency and quality analysis. Run **after** `/tasks`, **before** `/implement`.
 
 ```bash
 /analyze
 ```
 
-**What it does**:
+**What it does** (read-only, no file changes):
 - Validates spec.md, plan.md, and tasks.md are consistent
-- Checks all requirements have corresponding tasks
-- Identifies gaps or contradictions
-- Reports quality issues
+- Checks all requirements have corresponding tasks (coverage gaps)
+- Detects ambiguities, duplications, terminology drift
+- Verifies constitution alignment (CRITICAL if violated)
+- Reports severity: CRITICAL → HIGH → MEDIUM → LOW
 
-Use this before starting `/implement` to catch issues early.
+**Output**: Analysis report with:
+- Findings table (category, severity, location, recommendation)
+- Coverage summary (requirements → tasks mapping)
+- Metrics (coverage %, ambiguity count, critical issues)
+
+**When to use**: Always recommended before `/implement` - catches issues early!
 
 ---
 
@@ -416,8 +422,8 @@ Every `/plan` checks against constitution. Violations flagged.
 | `/clarify` | Ask clarification questions | Updates `spec.md` |
 | `/plan` | Generate technical design | `plan.md`, `research.md`, `contracts/` |
 | `/tasks` | Break into executable tasks | `tasks.md` |
+| `/analyze` | Cross-artifact consistency check | Analysis report (run before implement) |
 | `/implement` | Execute tasks | Code + commits |
-| `/analyze` | Cross-artifact consistency check | Validation report |
 
 ---
 
