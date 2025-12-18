@@ -170,7 +170,7 @@ Creates a feature branch and spec from natural language.
 - Success Criteria (measurable outcomes)
 - Key Entities
 
-[View Example: specs/028-readme-performance/spec.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/specs/028-readme-performance/spec.md)
+[View Example: specs/028-readme-performance/spec.md](https://github.com/isc-tdyar/iris-pgwire/blob/028-readme-performance/specs/028-readme-performance/spec.md)
 
 ---
 
@@ -425,7 +425,7 @@ Every `/plan` checks against constitution. Violations flagged.
 
 - **This Project**: [github.com/isc-tdyar/iris-pgwire](https://github.com/isc-tdyar/iris-pgwire)
 - **Example Spec (026)**: [specs/026-doc-review/](https://github.com/isc-tdyar/iris-pgwire/tree/main/specs/026-doc-review)
-- **Example Spec (028)**: [specs/028-readme-performance/](https://github.com/isc-tdyar/iris-pgwire/tree/main/specs/028-readme-performance)
+- **Example Spec (028)**: [specs/028-readme-performance/](https://github.com/isc-tdyar/iris-pgwire/tree/028-readme-performance/specs/028-readme-performance)
 - **SpecKit Commands**: [.claude/commands/](https://github.com/isc-tdyar/iris-pgwire/tree/main/.claude/commands)
 - **Templates**: [.specify/templates/](https://github.com/isc-tdyar/iris-pgwire/tree/main/.specify/templates)
 
