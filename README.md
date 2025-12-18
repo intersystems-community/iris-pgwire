@@ -492,6 +492,23 @@ python3 tests/test_vector_limits.py         # Maximum dimension tests
 
 ### Performance Benchmarks
 
+Connection path latency comparison (50 iterations, 128-dimensional vectors):
+
+| Connection Path | Simple SELECT | Vector Similarity | Best For |
+|-----------------|---------------|-------------------|----------|
+| **IRIS DBAPI Direct** | **0.21ms** | 2.35ms | Maximum performance |
+| PGWire + DBAPI | 3.82ms | 6.76ms | PostgreSQL compatibility |
+| PGWire + Embedded | 4.75ms | N/A | Single-container deployment |
+| PostgreSQL (baseline) | 0.32ms | 0.59ms | Reference comparison |
+
+**Key Takeaways**:
+- **IRIS DBAPI direct is ~18× faster** than PGWire for simple queries
+- PGWire adds ~4ms protocol translation overhead for PostgreSQL client compatibility
+- For maximum performance, use IRIS DBAPI driver directly when PostgreSQL compatibility isn't required
+
+*Benchmarks from 2025-10-05. See [benchmarks/README_4WAY.md](benchmarks/README_4WAY.md) for methodology.*
+
+**Run Your Own Benchmarks**:
 ```bash
 # 4-way architecture comparison
 ./benchmarks/run_4way_benchmark.sh
