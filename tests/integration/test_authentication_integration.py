@@ -43,7 +43,6 @@ class TestAuthenticationIntegration:
         try:
             import iris
 
-            iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
@@ -68,7 +67,6 @@ class TestAuthenticationIntegration:
         try:
             import iris
 
-            iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
@@ -310,7 +308,6 @@ class TestIRISProviderIntegration:
         try:
             import iris
 
-            iris_available = True
         except ImportError:
             pytest.skip("IRIS Python module not available")
 
@@ -418,7 +415,6 @@ class TestAuthenticationMetrics:
     async def test_sla_violation_detection(self):
         """Test SLA violation detection and reporting"""
         # Simulate slow authentication by adding delay
-        original_validate = self.authenticator.iris_provider.validate_iris_user_exists
 
         async def slow_validate(username):
             await asyncio.sleep(0.006)  # 6ms delay (exceeds 5ms SLA)

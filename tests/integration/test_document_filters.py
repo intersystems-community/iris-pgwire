@@ -185,7 +185,7 @@ class TestIRISDocumentFilterBasics:
 
                 results = cur.fetchall()
                 # Should return documents that have 'active' field
-                for doc_id, document in results:
+                for _doc_id, document in results:
                     doc_obj = json.loads(document) if isinstance(document, str) else document
                     assert "active" in doc_obj, "Document should have 'active' field"
 
@@ -251,7 +251,7 @@ class TestIRISDocumentQueryOperations:
 
                 results = cur.fetchall()
 
-                for order_id, total, item_count, first_item in results:
+                for _order_id, total, item_count, first_item in results:
                     assert item_count > 1, "Should have more than 1 item"
                     assert float(total) > 100.0, "Total should be > 100"
                     assert first_item is not None, "Should have first item"
@@ -282,7 +282,7 @@ class TestIRISDocumentQueryOperations:
 
                 results = cur.fetchall()
 
-                for user_id, name, title, city, country in results:
+                for _user_id, name, _title, _city, country in results:
                     assert country == "USA", "Should filter by country"
                     assert name is not None, "Profile name should exist"
 
@@ -316,7 +316,7 @@ class TestIRISDocumentAggregations:
 
                 results = cur.fetchall()
 
-                for dept, count, avg_sal, earliest, latest in results:
+                for _dept, count, avg_sal, earliest, latest in results:
                     assert count >= 5, "Should have at least 5 employees per HAVING clause"
                     assert avg_sal > 0, "Average salary should be positive"
                     assert earliest <= latest, "Earliest hire should be <= latest hire"
@@ -346,7 +346,7 @@ class TestIRISDocumentAggregations:
 
                 results = cur.fetchall()
 
-                for category, count, avg_tags, total_val in results:
+                for _category, count, avg_tags, total_val in results:
                     assert count > 0, "Should have products in category"
                     assert avg_tags > 0, "Should have tags (filtered by WHERE)"
                     assert total_val > 0, "Total value should be positive"
@@ -385,7 +385,7 @@ class TestIRISDocumentComplexQueries:
 
                 results = cur.fetchall()
 
-                for user_id, username, full_name, email, theme, post_count in results:
+                for user_id, _username, full_name, _email, _theme, post_count in results:
                     assert user_id is not None, "User ID should exist"
                     assert full_name is not None, "Full name should be in document"
                     assert post_count >= 0, "Post count should be non-negative"
@@ -442,7 +442,7 @@ class TestIRISDocumentComplexQueries:
 
                 results = cur.fetchall()
 
-                for city, user_count, avg_age, avg_int, summary in results:
+                for city, user_count, avg_age, _avg_int, summary in results:
                     assert user_count >= 10, "Should meet HAVING criteria"
                     assert avg_age > 0, "Average age should be positive"
 
@@ -487,7 +487,7 @@ class TestIRISDocumentComplexQueries:
 
                 if len(results) >= 2:
                     # Verify window function behavior
-                    for emp_id, name, dept, salary, rank, avg_sal, prev_emp in results:
+                    for _emp_id, _name, _dept, _salary, rank, avg_sal, _prev_emp in results:
                         assert rank >= 1, "Rank should start from 1"
                         assert avg_sal > 0, "Department average should be positive"
 
@@ -570,7 +570,7 @@ class TestIRISDocumentPerformance:
 
                 if results:
                     # Verify aggregation results
-                    for category, count, avg_price, features, first, last in results:
+                    for _category, count, avg_price, _features, _first, _last in results:
                         assert count >= 5, "Should meet HAVING criteria"
                         assert avg_price > 0, "Average price should be positive"
 
@@ -600,7 +600,7 @@ class TestIRISDocumentErrorHandling:
 
                 results = cur.fetchall()
 
-                for doc_id, name, missing in results:
+                for _doc_id, name, missing in results:
                     assert name is not None, "Name should exist"
                     assert missing is None, "Missing field should be NULL"
 
@@ -626,7 +626,7 @@ class TestIRISDocumentErrorHandling:
                     )
                     results = cur.fetchall()
                     # If successful, verify data integrity
-                    for doc_id, age, bad_date in results:
+                    for _doc_id, age, _bad_date in results:
                         if age is not None:
                             assert isinstance(age, int), "Age should be integer or NULL"
                 except psycopg.Error as e:
@@ -653,7 +653,7 @@ class TestIRISDocumentErrorHandling:
                     )
                     results = cur.fetchall()
 
-                    for doc_id, document in results:
+                    for _doc_id, document in results:
                         # Verify JSON is valid object type
                         if isinstance(document, str):
                             json.loads(document)  # Should not raise exception

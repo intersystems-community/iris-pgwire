@@ -542,7 +542,7 @@ class TestConfidenceAnalyzerIntegration:
         assert "reliable" in report.summary.lower() or "high" in report.summary.lower()
 
         # Test trend analysis after multiple translations
-        for i in range(5):
+        for _i in range(5):
             analyzer.analyze_translation_confidence(result)
 
         trend = analyzer.analyze_confidence_trends("1h")

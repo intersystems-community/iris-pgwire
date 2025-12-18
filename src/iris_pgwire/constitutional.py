@@ -472,7 +472,7 @@ class ConstitutionalGovernor:
         compliance_results = self.check_compliance(include_optional=True)
 
         # Calculate overall compliance
-        mandatory_requirements = [r for r in self.requirements.values() if r.mandatory]
+        [r for r in self.requirements.values() if r.mandatory]
         mandatory_results = {
             k: v for k, v in compliance_results.items() if self.requirements[k].mandatory
         }

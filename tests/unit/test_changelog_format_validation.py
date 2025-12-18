@@ -496,19 +496,20 @@ MIT License
 """
 
         with patch("pathlib.Path.exists", return_value=True):
-            with patch("builtins.open", side_effect=[
-                mock_open(read_data=readme_content)(),
-                mock_open(read_data=changelog_content)(),
-            ]):
+            with patch(
+                "builtins.open",
+                side_effect=[
+                    mock_open(read_data=readme_content)(),
+                    mock_open(read_data=changelog_content)(),
+                ],
+            ):
                 with patch("subprocess.run") as mock_run:
                     # Mock interrogate output
                     mock_run.return_value.stdout = "actual: 95.4%\nTotal: 100\nMiss: 5"
                     mock_run.return_value.stderr = ""
 
                     is_complete, results = self.validator.validate_documentation(
-                        "/fake/src",
-                        "README.md",
-                        "CHANGELOG.md"
+                        "/fake/src", "README.md", "CHANGELOG.md"
                     )
 
         changelog_result = results["changelog_validation"]

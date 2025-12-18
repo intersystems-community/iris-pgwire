@@ -163,7 +163,6 @@ class TestCacheInvalidateEndpoint:
             pytest.skip("Implementation not available yet")
 
         # Simulate endpoint request without pattern
-        request_body = {}  # Empty request body
 
         result = populated_cache.invalidate()  # No pattern = invalidate all
 

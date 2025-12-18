@@ -98,14 +98,14 @@ class IRISSQLExtensionTranslator:
 
         # Handle TOP n PERCENT
         def replace_top_percent(match):
-            percent = int(match.group(1))
+            int(match.group(1))
             # For PERCENT, we need to calculate based on total rows
             # This is complex, so we'll use a subquery approach
             return "SELECT * FROM (SELECT "
 
         # Handle regular TOP n
         def replace_top(match):
-            limit = match.group(1)
+            match.group(1)
             return "SELECT "
 
         # First handle PERCENT case
@@ -325,7 +325,7 @@ class IRISJSONFunctionTranslator:
                     col_type = parts[1]
                     path_idx = parts.index("PATH") + 1
                     if path_idx < len(parts):
-                        col_path = parts[path_idx].strip("'\"")
+                        parts[path_idx].strip("'\"")
                         column_entries.append(f"{col_name} {col_type}")
 
             # Convert to PostgreSQL syntax using jsonb_to_recordset
@@ -343,7 +343,7 @@ class IRISJSONFunctionTranslator:
         def replace_collection_table(match):
             collection_name = match.group(1).strip()
             json_path = match.group(2).strip().strip("'\"")
-            columns_def = match.group(3).strip()
+            match.group(3).strip()
 
             # For collections, we'd need to query a collection table
             # This is a placeholder - would need actual collection infrastructure

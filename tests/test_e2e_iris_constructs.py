@@ -97,7 +97,7 @@ class TestIRISSQLExtensions:
 
         assert result["success"], f"TOP clause failed in psql: {result['stderr']}"
         # Count actual data rows (excluding headers/footers)
-        data_lines = [
+        [
             line
             for line in result["stdout"].split("\n")
             if line.strip() and not line.startswith("-") and "test_value" not in line

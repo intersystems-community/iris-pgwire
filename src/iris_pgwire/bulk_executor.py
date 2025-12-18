@@ -253,7 +253,7 @@ class BulkExecutor:
         """
         # Query INFORMATION_SCHEMA for column types
         # IRIS stores column names in mixed case, so we need to match case-insensitively
-        placeholders = ", ".join(["?" for _ in column_names])
+        ", ".join(["?" for _ in column_names])
         query = f"""
             SELECT COLUMN_NAME, DATA_TYPE
             FROM INFORMATION_SCHEMA.COLUMNS

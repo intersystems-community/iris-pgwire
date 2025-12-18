@@ -122,8 +122,8 @@ class TestProtocolAuthenticationIntegration:
 
         with patch.object(
             protocol.oauth_bridge, "exchange_password_for_token", return_value=mock_token
-        ) as mock_exchange:
-            with patch.object(protocol, "send_scram_final_success") as mock_success:
+        ):
+            with patch.object(protocol, "send_scram_final_success"):
                 # Execute authentication completion
                 import time
 
@@ -158,8 +158,8 @@ class TestProtocolAuthenticationIntegration:
         # Mock wallet credentials to return password
         with patch.object(
             protocol.wallet_credentials, "get_password_from_wallet", return_value="wallet_password"
-        ) as mock_wallet:
-            with patch.object(protocol.oauth_bridge, "exchange_password_for_token") as mock_oauth:
+        ):
+            with patch.object(protocol.oauth_bridge, "exchange_password_for_token"):
                 with patch.object(protocol, "send_scram_final_success"):
                     try:
                         await protocol.complete_scram_authentication()
@@ -187,7 +187,7 @@ class TestProtocolAuthenticationIntegration:
         # Mock authentication selector
         with patch.object(
             protocol.auth_selector, "select_authentication_method", return_value="oauth"
-        ) as mock_select:
+        ):
             with patch.object(protocol.oauth_bridge, "exchange_password_for_token"):
                 with patch.object(protocol, "send_scram_final_success"):
                     try:
@@ -257,7 +257,7 @@ class TestProtocolAuthenticationIntegration:
             side_effect=ImportError("Authentication bridge not available"),
         ):
             # Create protocol handler (should fallback to trust mode)
-            protocol = PGWireProtocol(
+            PGWireProtocol(
                 reader=reader,
                 writer=writer,
                 iris_executor=iris_executor,

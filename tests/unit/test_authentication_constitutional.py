@@ -65,7 +65,7 @@ class TestAuthenticationConstitutionalCompliance:
     async def test_authentication_constitutional_monitoring(self, trust_authenticator):
         """Test constitutional monitoring integration"""
         monitor = get_monitor()
-        governor = get_governor()
+        get_governor()
 
         # Clear any existing stats
         monitor.reset_stats()

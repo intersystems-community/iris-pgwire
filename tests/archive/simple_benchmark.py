@@ -14,13 +14,13 @@ def time_query(name, connect_func, query, iterations=5):
     """Time a query with simple averaging."""
     times = []
 
-    for i in range(iterations):
+    for _i in range(iterations):
         conn = connect_func()
         cursor = conn.cursor()
 
         start = time.perf_counter()
         cursor.execute(query)
-        result = cursor.fetchall()
+        cursor.fetchall()
         elapsed = (time.perf_counter() - start) * 1000  # ms
 
         times.append(elapsed)

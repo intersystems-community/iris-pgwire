@@ -320,7 +320,7 @@ def test_ddl_translation_performance(pgwire_connection, cleanup_test_tables):
     iterations = 10
     total_time = 0
 
-    for i in range(iterations):
+    for _i in range(iterations):
         # Drop table if exists
         try:
             cur.execute("DROP TABLE test_simple_table")

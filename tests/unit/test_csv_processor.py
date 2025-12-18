@@ -121,7 +121,7 @@ class TestCSVProcessorEdgeCases:
 
         # Expect CSVParsingError due to column count mismatch
         with pytest.raises(CSVParsingError) as exc_info:
-            rows = [row async for row in processor.parse_csv_rows(csv_stream(), options)]
+            [row async for row in processor.parse_csv_rows(csv_stream(), options)]
 
         assert exc_info.value.line_number > 0
         assert "Expected 2 columns" in str(exc_info.value)
@@ -269,7 +269,7 @@ class TestCSVProcessorEdgeCases:
             yield b"2,Mary\n"  # Missing Age column
 
         with pytest.raises(CSVParsingError) as exc_info:
-            rows = [row async for row in processor.parse_csv_rows(csv_stream(), options)]
+            [row async for row in processor.parse_csv_rows(csv_stream(), options)]
 
         assert exc_info.value.line_number == 3
         assert "Expected 3 columns" in str(exc_info.value)
@@ -284,7 +284,7 @@ class TestCSVProcessorEdgeCases:
             yield b'"John Smith,New York\n'  # Missing closing quote
 
         with pytest.raises(CSVParsingError) as exc_info:
-            rows = [row async for row in processor.parse_csv_rows(csv_stream(), options)]
+            [row async for row in processor.parse_csv_rows(csv_stream(), options)]
 
         # Python csv module will detect this as an error
         assert exc_info.value.line_number > 0
@@ -299,7 +299,7 @@ class TestCSVProcessorEdgeCases:
             yield b"John,\xff\xfe\n"  # Invalid UTF-8 bytes
 
         with pytest.raises(CSVParsingError) as exc_info:
-            rows = [row async for row in processor.parse_csv_rows(csv_stream(), options)]
+            [row async for row in processor.parse_csv_rows(csv_stream(), options)]
 
         assert "UTF-8" in str(exc_info.value) or "decode" in str(exc_info.value).lower()
 

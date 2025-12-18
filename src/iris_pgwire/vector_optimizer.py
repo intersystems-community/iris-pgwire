@@ -193,8 +193,8 @@ class VectorQueryOptimizer:
         for match in reversed(matches):
             vector_func = match.group(1)  # VECTOR_COSINE, etc
             column_name = match.group(2)  # column name
-            to_vector_call = match.group(3)  # Full TO_VECTOR(...) call
-            param_placeholder = match.group(4)  # ? or %s
+            match.group(3)  # Full TO_VECTOR(...) call
+            match.group(4)  # ? or %s
             data_type = match.group(5) or "FLOAT"  # FLOAT, INT, etc
 
             # Find which parameter this corresponds to
@@ -417,7 +417,6 @@ class VectorQueryOptimizer:
         """Helper to rewrite operators in a given text"""
         print("\n⚙️  _REWRITE_OPERATORS_IN_TEXT CALLED", flush=True)
         print(f"  Input: {sql[:200]}...", flush=True)
-        original_sql = sql
         operators_found = []
 
         # <=> operator (cosine distance) -> VECTOR_COSINE

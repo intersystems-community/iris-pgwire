@@ -94,7 +94,7 @@ def start_pgwire_in_container(container, iris_port: int):
     # Map port 5432 from container to host
     # Get the mapped port from container's port bindings
     container.reload()  # Refresh container state
-    port_bindings = container.attrs["NetworkSettings"]["Ports"]
+    container.attrs["NetworkSettings"]["Ports"]
 
     # For iris-devtester containers, we need to expose 5432
     # Since the container is already running, we'll connect to the container IP directly
@@ -370,7 +370,6 @@ def test_copy_to_stdout_250_patients(isolated_iris_with_pgwire):
     - Isolated test environment (Principle II)
     - Real PostgreSQL client (psycopg)
     """
-    params = isolated_iris_with_pgwire
     pytest.skip("PGWire server startup in isolated container not yet implemented")
 
 
@@ -387,7 +386,6 @@ def test_copy_transaction_rollback(isolated_iris_with_pgwire):
     - Isolated test environment (Principle II)
     - Feature 022 transaction integration
     """
-    params = isolated_iris_with_pgwire
     pytest.skip("PGWire server startup in isolated container not yet implemented")
 
 
@@ -405,7 +403,6 @@ def test_copy_memory_efficiency_1m_rows(isolated_iris_with_pgwire):
     - Isolated test environment (Principle II)
     - Performance requirement validation (FR-006)
     """
-    params = isolated_iris_with_pgwire
     pytest.skip("PGWire server startup in isolated container not yet implemented")
 
 
