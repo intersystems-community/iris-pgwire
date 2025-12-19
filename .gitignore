@@ -75,3 +75,5 @@ dmypy.json
 iris.key
 *.key
 docs/articles/developer-community-article.md
+# Internal presentations
+docs/presentations/
