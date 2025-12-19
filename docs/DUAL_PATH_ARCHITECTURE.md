@@ -320,9 +320,9 @@ class TestDualPathComparison:
 
 ## References
 
-- HNSW Investigation: [docs/HNSW_INVESTIGATION.md](./HNSW_INVESTIGATION.md)
-- Constitutional Governance: [src/iris_pgwire/constitutional.py](../src/iris_pgwire/constitutional.py)
-- CLAUDE.md: [CLAUDE.md](../CLAUDE.md) (needs update with correct API)
+- HNSW Investigation: [docs/HNSW_INVESTIGATION.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/HNSW_INVESTIGATION.md)
+- Constitutional Governance: [src/iris_pgwire/constitutional.py](https://github.com/isc-tdyar/iris-pgwire/blob/main/src/iris_pgwire/constitutional.py)
+- CLAUDE.md: [CLAUDE.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/CLAUDE.md)
 - User Requirement: "we need to put this in the specs and constitution!!!!!!!"
 
 ## Constitutional Status
