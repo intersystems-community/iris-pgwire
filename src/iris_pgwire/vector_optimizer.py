@@ -133,10 +133,12 @@ class VectorQueryOptimizer:
         print(f"✅ RETURNED FROM _rewrite_pgvector_operators: {sql[:150]}...", flush=True)
         logger.info("✅ Returned from _rewrite_pgvector_operators", sql_preview=sql[:150])
 
-        # Handle INSERT/UPDATE statements with TO_VECTOR (different from ORDER BY optimization)
+        # Handle INSERT/UPDATE statements with vectors (TO_VECTOR or raw '[...]' literals)
         sql_upper = sql.upper()
-        if ("INSERT" in sql_upper or "UPDATE" in sql_upper) and "TO_VECTOR" in sql_upper:
-            # For INSERT/UPDATE, strip TO_VECTOR wrapper to avoid object reference bug
+        # Check for vector patterns: explicit TO_VECTOR() OR raw pgvector-style '[0.1,0.2,...]'
+        has_vector_pattern = "TO_VECTOR" in sql_upper or re.search(r"'\[[\d.,\s\-eE]+\]'", sql)
+        if ("INSERT" in sql_upper or "UPDATE" in sql_upper) and has_vector_pattern:
+            # For INSERT/UPDATE, ensure raw vector literals are wrapped with TO_VECTOR()
             optimized_sql = self._optimize_insert_vectors(sql, start_time)
 
             # Fix ORDER BY aliases if present
@@ -356,41 +358,14 @@ class VectorQueryOptimizer:
             logger.info("✅ DDL detected, skipping vector operator rewriting")
             return sql
 
-        # Split SQL into SELECT and ORDER BY parts to avoid duplication
-        # Handle both "SELECT ... FROM ..." and "SELECT ..." (no FROM)
-        select_match = re.search(
-            r"(SELECT\s+.+?)(?:\s+ORDER\s+BY\s+.+)?$", sql, re.IGNORECASE | re.DOTALL
-        )
+        if not sql:
+            logger.info("⚠️ Empty SQL received, returning as-is")
+            return sql
 
-        if not select_match:
-            print("⚠️ Could not parse SELECT, rewriting entire SQL", flush=True)
-            logger.warning("⚠️ Could not parse SELECT clause, rewriting entire SQL")
-            return self._rewrite_operators_in_text(sql)
-
-        select_part = select_match.group(1)
-        order_by_part = sql[len(select_part) :]
-        print(
-            f"  ✅ Split: SELECT={len(select_part)}chars, ORDER BY={len(order_by_part)}chars",
-            flush=True,
-        )
-
-        logger.info(
-            f"  Split SQL: SELECT part {len(select_part)} chars, ORDER BY part {len(order_by_part)} chars"
-        )
-
-        # Rewrite operators in BOTH SELECT and ORDER BY parts
-        # BUG FIX: Original code only rewrote SELECT, assuming ORDER BY would use aliases
-        # But _fix_order_by_aliases() is disabled, so we need to rewrite ORDER BY too
-        rewritten_select = self._rewrite_operators_in_text(select_part)
-        rewritten_order_by = self._rewrite_operators_in_text(order_by_part)
-
-        # Combine rewritten parts
-        result = rewritten_select + rewritten_order_by
-        logger.info("✅ Operator rewriting complete (SELECT + ORDER BY)")
-        logger.info(
-            f"   FULL RESULT SQL (len={len(result)}): {result[:500]}...{result[-200:] if len(result) > 700 else ''}"
-        )
-
+        # Rewrite operators in the entire SQL statement
+        # This handles SELECT, ORDER BY, and INSERT/UPDATE clauses consistently
+        result = self._rewrite_operators_in_text(sql)
+        logger.info("✅ Operator rewriting complete")
         return result
 
     def _optimize_vector_literal(self, literal: str) -> str:
@@ -860,71 +835,46 @@ class VectorQueryOptimizer:
 
     def _optimize_insert_vectors(self, sql: str, start_time: float) -> str:
         """
-        Optimize INSERT/UPDATE statements with TO_VECTOR() calls.
+        Optimize INSERT/UPDATE statements for IRIS vector compatibility.
 
-        IRIS Bug: When TO_VECTOR() is used in INSERT statements via external connections,
-        IRIS returns an object reference (e.g., '44C4A7AEED68909052D5E9390805E211@$vector')
-        instead of evaluating the vector. This causes validation errors.
-
-        Workaround: Strip the TO_VECTOR wrapper and insert the vector literal directly.
-        IRIS accepts both formats:
-        - TO_VECTOR('[0.1,0.2,0.3]', FLOAT) → works in direct DBAPI
-        - '[0.1,0.2,0.3]' → works everywhere
+        Supports pgvector-style inserts by ensuring bracketed strings are wrapped in TO_VECTOR().
+        IRIS requires TO_VECTOR() for string-to-vector conversion during INSERT.
 
         Transform:
-            INSERT INTO table VALUES (id, TO_VECTOR('[0.1,0.2,0.3]', FLOAT))
-        To:
             INSERT INTO table VALUES (id, '[0.1,0.2,0.3]')
+        To:
+            INSERT INTO table VALUES (id, TO_VECTOR('[0.1,0.2,0.3]', DOUBLE))
 
-        Args:
-            sql: INSERT or UPDATE SQL with TO_VECTOR() calls
-            start_time: Performance tracking start time
-
-        Returns:
-            Optimized SQL with TO_VECTOR wrappers removed
+        Note: If TO_VECTOR is already present, it is preserved/normalized.
         """
-        # Pattern: TO_VECTOR('...', FLOAT) or TO_VECTOR('[...]', FLOAT)
-        # We want to extract just the vector literal
-        insert_pattern = re.compile(r"TO_VECTOR\s*\(\s*'([^']+)'\s*,\s*\w+\s*\)", re.IGNORECASE)
-
-        matches = list(insert_pattern.finditer(sql))
-
-        if not matches:
-            logger.debug("No TO_VECTOR calls found in INSERT/UPDATE statement")
-            return sql
-
-        logger.info(f"Optimizing {len(matches)} TO_VECTOR calls in INSERT/UPDATE statement")
-
         optimized_sql = sql
         transformations = 0
 
-        # Process in reverse to maintain string positions
-        for match in reversed(matches):
-            vector_literal = match.group(1)  # The vector string between quotes
-
-            # Replace entire TO_VECTOR(...) with just the quoted vector literal
-            replacement = f"'{vector_literal}'"
-            optimized_sql = (
-                optimized_sql[: match.start()] + replacement + optimized_sql[match.end() :]
-            )
-            transformations += 1
-
-            logger.debug(
-                f"Stripped TO_VECTOR wrapper: {match.group(0)[:50]}... → '{vector_literal[:30]}...'"
-            )
+        # Pattern 1: Find raw bracketed strings that look like vectors but aren't wrapped
+        # Matches: '[0.1, 0.2, ...]'
+        # We use a non-greedy match for the content and check if it's already inside TO_VECTOR
+        # Note: Python re lookbehind must be fixed width, so we use a simpler pattern
+        literal_pattern = re.compile(r"'(?<!TO_VECTOR\()(\[[^']+\])'", re.IGNORECASE)
+        
+        # Actually, lookbehind with (?<!TO_VECTOR\() is still variable if it were longer, 
+        # but here it's also not quite right because of whitespace.
+        # Let's use a capture group approach instead to be robust.
+        sql_with_v = re.sub(
+            r"(TO_VECTOR\s*\(\s*)?'(\[[^']+\])'",
+            lambda m: m.group(0) if m.group(1) else f"TO_VECTOR('{m.group(2)}', DOUBLE)",
+            optimized_sql,
+            flags=re.IGNORECASE
+        )
+        
+        if sql_with_v != optimized_sql:
+            transformations = 1 # Simplified count for logging
+            optimized_sql = sql_with_v
+            logger.info("Wrapped raw vector literal in TO_VECTOR")
 
         # Record metrics
         transformation_time_ms = (time.perf_counter() - start_time) * 1000
-        sla_compliant = transformation_time_ms <= self.CONSTITUTIONAL_SLA_MS
-
-        if not sla_compliant:
-            logger.warning(
-                f"INSERT optimization SLA violation: {transformation_time_ms:.2f}ms > {self.CONSTITUTIONAL_SLA_MS}ms"
-            )
-
         logger.info(
-            f"INSERT/UPDATE optimization complete: {transformations} TO_VECTOR calls stripped, "
-            f"time={transformation_time_ms:.2f}ms"
+            f"INSERT/UPDATE optimization complete: time={transformation_time_ms:.2f}ms"
         )
 
         return optimized_sql

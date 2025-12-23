@@ -307,5 +307,73 @@ class TestConvertVectorToLiteralContract:
         assert result is None, "Unknown format should return None (graceful degradation)"
 
 
+class TestInsertVectorOptimization:
+    """Contract tests for INSERT statement vector optimization"""
+
+    def test_raw_pgvector_insert_auto_wraps(self):
+        """
+        GIVEN INSERT with raw pgvector syntax '[0.1,0.2,0.3]'
+        WHEN optimized
+        THEN raw literal is wrapped with TO_VECTOR()
+
+        Bug fix: Previously raw pgvector literals in INSERT were not detected
+        because the optimizer only triggered when TO_VECTOR was already present.
+        """
+        sql = "INSERT INTO vectors (id, content, embedding) VALUES (1, 'test', '[0.1,0.2,0.3]')"
+
+        optimized_sql, params = optimize_vector_query(sql, None)
+
+        # Raw literal MUST be wrapped with TO_VECTOR()
+        assert "TO_VECTOR('[0.1,0.2,0.3]'" in optimized_sql, (
+            f"Raw pgvector literal should be wrapped with TO_VECTOR. Got: {optimized_sql}"
+        )
+        # DOUBLE is the default type for pgvector-style literals
+        assert "DOUBLE)" in optimized_sql, (
+            f"TO_VECTOR should use DOUBLE type. Got: {optimized_sql}"
+        )
+
+    def test_explicit_to_vector_insert_preserved(self):
+        """
+        GIVEN INSERT with explicit TO_VECTOR() syntax
+        WHEN optimized
+        THEN TO_VECTOR is preserved (not double-wrapped)
+        """
+        sql = "INSERT INTO vectors (id, embedding) VALUES (1, TO_VECTOR('[0.1,0.2,0.3]', DOUBLE))"
+
+        optimized_sql, params = optimize_vector_query(sql, None)
+
+        # Should NOT double-wrap TO_VECTOR
+        assert optimized_sql.count("TO_VECTOR") == 1, (
+            f"TO_VECTOR should not be double-wrapped. Got: {optimized_sql}"
+        )
+        assert "TO_VECTOR('[0.1,0.2,0.3]', DOUBLE)" in optimized_sql
+
+    def test_insert_without_vector_unchanged(self):
+        """
+        GIVEN INSERT without vector data
+        WHEN optimized
+        THEN SQL is unchanged
+        """
+        sql = "INSERT INTO users (id, name) VALUES (1, 'Alice')"
+
+        optimized_sql, params = optimize_vector_query(sql, None)
+
+        assert optimized_sql == sql, "Non-vector INSERT should be unchanged"
+
+    def test_update_raw_pgvector_auto_wraps(self):
+        """
+        GIVEN UPDATE with raw pgvector syntax
+        WHEN optimized
+        THEN raw literal is wrapped with TO_VECTOR()
+        """
+        sql = "UPDATE vectors SET embedding = '[0.4,0.5,0.6]' WHERE id = 1"
+
+        optimized_sql, params = optimize_vector_query(sql, None)
+
+        assert "TO_VECTOR('[0.4,0.5,0.6]'" in optimized_sql, (
+            f"Raw pgvector literal in UPDATE should be wrapped. Got: {optimized_sql}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
