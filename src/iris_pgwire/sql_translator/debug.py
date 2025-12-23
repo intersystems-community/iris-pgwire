@@ -533,7 +533,7 @@ class DebugTracer:
                 },
                 "events_by_component": {
                     component: len([e for e in self._events if e.component == component])
-                    for component in set(e.component for e in self._events)
+                    for component in {e.component for e in self._events}
                 },
                 "constitutional_compliance": {
                     "sla_violations": len(

@@ -317,7 +317,7 @@ class IRISDocumentFilterRegistry:
     def _convert_json_table(self, match, full_sql: str) -> str:
         """Convert JSON_TABLE to PostgreSQL equivalent"""
         json_data = match.group(1).strip()
-        path = match.group(2).strip().strip("'\"")
+        match.group(2).strip().strip("'\"")
         columns_spec = match.group(3).strip()
 
         # Parse columns specification
@@ -388,8 +388,8 @@ class IRISDocumentFilterRegistry:
 
     def _convert_json_exists_returning(self, match, full_sql: str) -> str:
         """Convert JSON_EXISTS with RETURNING clause"""
-        json_data = match.group(1).strip()
-        path = match.group(2).strip()
+        match.group(1).strip()
+        match.group(2).strip()
         return_type = match.group(3).strip().upper()
 
         base_check = self._convert_json_exists(match, full_sql)

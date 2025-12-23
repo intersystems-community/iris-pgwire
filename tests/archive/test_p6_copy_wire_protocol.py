@@ -297,7 +297,7 @@ async def test_copy_performance_metrics():
         print("📱 Testing COPY performance monitoring...")
 
         # Create performance monitor
-        monitor = PerformanceMonitor()
+        PerformanceMonitor()
 
         # Simulate COPY performance metrics
         print("   Testing COPY operation metrics...")

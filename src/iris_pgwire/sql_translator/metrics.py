@@ -14,6 +14,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 # Optional OpenTelemetry imports
 try:
     from opentelemetry import metrics as otel_metrics
@@ -31,7 +35,7 @@ except ImportError:
 
 # Optional Prometheus imports
 try:
-    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Summary
+    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
     PROMETHEUS_AVAILABLE = True
 except ImportError:

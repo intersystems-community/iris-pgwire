@@ -32,7 +32,7 @@ async def test_handle_copy_from_stdin_contract():
     async def mock_bulk_insert(table_name, column_names, rows, batch_size=1000):
         # Consume async iterator and count rows
         count = 0
-        async for row in rows:
+        async for _row in rows:
             count += 1
         return count
 

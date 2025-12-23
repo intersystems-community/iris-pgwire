@@ -10,8 +10,6 @@ These tests verify that the iris-pgwire ZPM package:
 Feature: 027-open-exchange
 """
 
-import os
-import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -53,7 +51,9 @@ class TestZPMPackageManifest:
         # Required elements
         name = module.find("Name")
         assert name is not None, "Name element required"
-        assert name.text == "iris-pgwire", f"Package name should be 'iris-pgwire', got '{name.text}'"
+        assert (
+            name.text == "iris-pgwire"
+        ), f"Package name should be 'iris-pgwire', got '{name.text}'"
 
         version = module.find("Version")
         assert version is not None, "Version element required"
@@ -67,8 +67,9 @@ class TestZPMPackageManifest:
         root = module_tree.getroot()
         sys_req = root.find(".//SystemRequirements/Version")
         assert sys_req is not None, "SystemRequirements/Version should exist"
-        assert "2024.1" in sys_req.text or "IRIS>=2024" in sys_req.text, \
-            f"Should require IRIS 2024.1+, got '{sys_req.text}'"
+        assert (
+            "2024.1" in sys_req.text or "IRIS>=2024" in sys_req.text
+        ), f"Should require IRIS 2024.1+, got '{sys_req.text}'"
 
     def test_no_activate_phase_auto_start(self, module_tree):
         """Verify server does NOT auto-start (no Activate phase with Start)."""
@@ -101,8 +102,9 @@ class TestZPMPackageManifest:
                 has_deactivate_stop = True
                 break
 
-        assert has_deactivate_stop, \
-            "module.xml should have Deactivate phase with Stop method for cleanup"
+        assert (
+            has_deactivate_stop
+        ), "module.xml should have Deactivate phase with Stop method for cleanup"
 
     def test_has_setup_phase_install_deps(self, module_tree):
         """Verify Setup phase installs Python dependencies."""
@@ -117,8 +119,9 @@ class TestZPMPackageManifest:
                 has_setup_install = True
                 break
 
-        assert has_setup_install, \
-            "module.xml should have Setup phase to install Python dependencies"
+        assert (
+            has_setup_install
+        ), "module.xml should have Setup phase to install Python dependencies"
 
 
 class TestZPMPackageFiles:
@@ -182,30 +185,33 @@ class TestReadmeDocumentation:
 
     def test_readme_has_zpm_section(self, readme_content):
         """Verify README has ZPM installation section."""
-        assert "ZPM Installation" in readme_content, \
-            "README should have 'ZPM Installation' section"
+        assert "ZPM Installation" in readme_content, "README should have 'ZPM Installation' section"
 
     def test_readme_has_zpm_install_command(self, readme_content):
         """Verify README shows ZPM install command."""
-        assert 'zpm "install iris-pgwire"' in readme_content, \
-            "README should show ZPM install command"
+        assert (
+            'zpm "install iris-pgwire"' in readme_content
+        ), "README should show ZPM install command"
 
     def test_readme_has_manual_start_command(self, readme_content):
         """Verify README shows manual start command."""
-        assert "IrisPGWire.Service" in readme_content, \
-            "README should reference IrisPGWire.Service for manual start"
-        assert "Start()" in readme_content, \
-            "README should show Start() command"
+        assert (
+            "IrisPGWire.Service" in readme_content
+        ), "README should reference IrisPGWire.Service for manual start"
+        assert "Start()" in readme_content, "README should show Start() command"
 
     def test_readme_has_architecture_diagram(self, readme_content):
         """Verify README has architecture diagram."""
         # Check for ASCII art diagram markers
-        assert "PostgreSQL Clients" in readme_content, \
-            "README should have architecture diagram with PostgreSQL Clients"
-        assert "IRIS PGWire Server" in readme_content, \
-            "README should have architecture diagram with IRIS PGWire Server"
-        assert "Wire Proto" in readme_content or "Protocol" in readme_content, \
-            "README should show wire protocol in architecture"
+        assert (
+            "PostgreSQL Clients" in readme_content
+        ), "README should have architecture diagram with PostgreSQL Clients"
+        assert (
+            "IRIS PGWire Server" in readme_content
+        ), "README should have architecture diagram with IRIS PGWire Server"
+        assert (
+            "Wire Proto" in readme_content or "Protocol" in readme_content
+        ), "README should show wire protocol in architecture"
 
 
 class TestDockerQuickStart:
@@ -225,6 +231,7 @@ class TestDockerQuickStart:
         """Verify docker-compose.yml is valid YAML."""
         try:
             import yaml
+
             with open(docker_compose_path) as f:
                 yaml.safe_load(f)
         except ImportError:

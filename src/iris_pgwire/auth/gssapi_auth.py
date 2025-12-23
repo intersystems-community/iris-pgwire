@@ -170,7 +170,7 @@ class GSSAPIAuthenticator:
             )
             raise KerberosTimeoutError(
                 f"GSSAPI handshake exceeded {self.config.handshake_timeout} second timeout"
-            )
+            ) from None
         except KerberosAuthenticationError:
             raise
         except Exception as e:
@@ -179,7 +179,7 @@ class GSSAPIAuthenticator:
                 connection_id=connection_id,
                 error=str(e),
             )
-            raise KerberosAuthenticationError(f"GSSAPI handshake failed: {e}")
+            raise KerberosAuthenticationError(f"GSSAPI handshake failed: {e}") from e
 
     async def _perform_gssapi_handshake(self, connection_id: str) -> KerberosPrincipal:
         """
@@ -208,7 +208,9 @@ class GSSAPIAuthenticator:
                 server_name = Name(service_principal, name_type=gssapi.NameType.hostbased_service)
 
                 # Get server credentials from keytab
-                server_creds = Credentials(
+                # Note: _server_creds is created for future use when real GSSAPI
+                # token exchange is implemented. Prefixed with _ to silence linter.
+                _server_creds = Credentials(
                     name=server_name, usage="accept"  # Server-side credential
                 )
 
@@ -234,7 +236,7 @@ class GSSAPIAuthenticator:
                     "gssapi_handshake_failed",
                     error=str(e),
                 )
-                raise KerberosAuthenticationError(f"GSSAPI handshake failed: {e}")
+                raise KerberosAuthenticationError(f"GSSAPI handshake failed: {e}") from e
 
         # Execute in thread pool
         authenticated_principal = await asyncio.to_thread(_gssapi_handshake)
@@ -305,7 +307,7 @@ class GSSAPIAuthenticator:
                         "iris_ticket_validation_failed",
                         error=str(e),
                     )
-                    raise KerberosAuthenticationError(f"IRIS ticket validation failed: {e}")
+                    raise KerberosAuthenticationError(f"IRIS ticket validation failed: {e}") from e
 
             # Execute in thread pool
             is_valid = await asyncio.to_thread(_iris_ticket_validation)
@@ -324,7 +326,9 @@ class GSSAPIAuthenticator:
                 "kerberos_ticket_validation_error",
                 error=str(e),
             )
-            raise KerberosAuthenticationError(f"Unexpected error during ticket validation: {e}")
+            raise KerberosAuthenticationError(
+                f"Unexpected error during ticket validation: {e}"
+            ) from e
 
     async def extract_principal(self, security_context) -> str:
         """

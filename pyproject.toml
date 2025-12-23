@@ -9,10 +9,10 @@ description = "PostgreSQL Wire Protocol Server for InterSystems IRIS - Connect B
 readme = {file = "README.md", content-type = "text/markdown"}
 license = {file = "LICENSE"}
 authors = [
-    {name = "IRIS PGWire Contributors", email = "iris-pgwire@intersystems.com"},
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"},
 ]
 maintainers = [
-    {name = "IRIS PGWire Team"},
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"},
 ]
 keywords = [
     "intersystems",
@@ -65,9 +65,6 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
-    # Authentication bridge (feature 024-research-and-implement)
-    # Kerberos GSSAPI authentication for enterprise SSO
-    "python-gssapi>=1.8.0",
 ]
 
 [project.optional-dependencies]
@@ -97,6 +94,11 @@ dev = [
 iris = [
     # IRIS embedded Python (when available)
     # "intersystems-iris>=3.6.0",
+]
+kerberos = [
+    # Kerberos GSSAPI authentication (optional - not implemented in wire protocol yet)
+    # Install with: pip install iris-pgwire[kerberos]
+    "gssapi>=1.8.0",
 ]
 
 [project.scripts]
@@ -192,6 +194,9 @@ ignore = [
     "E501",  # line too long, handled by black
     "B008",  # do not perform function calls in argument defaults
     "C901",  # too complex
+    "B904",  # exception chaining - good practice but not critical for existing code
+    "E722",  # bare except - sometimes intentional for cleanup handlers
+    "B023",  # function definition does not bind loop variable - common in regex replacement functions
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -201,9 +206,18 @@ ignore = [
     "E712",  # Comparison to True/False (explicit in tests)
     "UP038", # Use X | Y in isinstance (less critical in tests)
     "B904",  # Exception chaining (less critical in tests)
+    "B007",  # Loop control variable not used (common in benchmarks)
+    "F401",  # Unused imports (used for availability checking in tests)
+    "F821",  # Undefined name (conditional variables in cleanup handlers)
 ]
 "src/iris_pgwire/auth/gssapi_auth.py" = [
     "F401",  # Unused imports (conditional availability checks)
+]
+"src/iris_pgwire/server.py" = [
+    "E402",  # Module level import not at top (intentional - logging setup first)
+]
+"src/iris_pgwire/sql_translator/config.py" = [
+    "E721",  # Type comparison - existing code pattern
 ]
 
 [tool.mypy]

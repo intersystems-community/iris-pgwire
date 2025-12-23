@@ -22,7 +22,7 @@ def test_vector_quick(dimensions: int, port: int):
                 # Use embedding_1024 column and hope dimension mismatch fails fast
                 sql = "SELECT id FROM benchmark_vectors ORDER BY embedding_1024 <=> %s LIMIT 1"
                 cur.execute(sql, (query_vector,))
-                result = cur.fetchone()
+                cur.fetchone()
                 return True
     except Exception:
         # Any error means this dimension doesn't work

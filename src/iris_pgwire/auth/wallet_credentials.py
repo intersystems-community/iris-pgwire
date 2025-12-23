@@ -372,7 +372,7 @@ class WalletCredentials:
                     import iris
 
                     # Get IRIS Wallet instance
-                    wallet = iris.cls("%IRIS.Wallet")
+                    iris.cls("%IRIS.Wallet")
 
                     # Update accessed timestamp (if API supports it)
                     # Note: Actual IRIS Wallet API may differ - adjust based on documentation

@@ -303,7 +303,7 @@ class SCRAMAuthenticator:
 
         except Exception as e:
             logger.error(f"Failed to parse client-first-message: {e}")
-            raise ValueError(f"Invalid client-first-message: {e}")
+            raise ValueError(f"Invalid client-first-message: {e}") from e
 
     def create_server_first_message(self, client_nonce: str, username: str) -> tuple[str, str]:
         """
@@ -711,7 +711,7 @@ class PostgreSQLAuthenticator:
     def register_user_credentials(self, username: str, password: str) -> bool:
         """Register user credentials for SCRAM authentication"""
         try:
-            credentials = self.iris_provider.store_credentials(username, password)
+            self.iris_provider.store_credentials(username, password)
             logger.info(f"Stored SCRAM credentials for user {username}")
             return True
         except Exception as e:
