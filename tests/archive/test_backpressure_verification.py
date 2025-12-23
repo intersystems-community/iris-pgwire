@@ -173,7 +173,7 @@ def test_copy_backpressure():
             for i in range(100):  # Simulate 100 rows
                 bulk_data.append(f"{i}\t[{i}.0,{i+1}.0,{i+2}.0]")
 
-            bulk_data_str = "\n".join(bulk_data)
+            "\n".join(bulk_data)
 
             # This should trigger COPY FROM STDIN protocol with back-pressure
             # The server should handle buffer management properly

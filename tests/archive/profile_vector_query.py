@@ -36,7 +36,7 @@ def profile_pgwire(iterations=10):
         "fetch": [],
     }
 
-    for i in range(iterations):
+    for _i in range(iterations):
         # Connection time
         t_start = time.perf_counter()
         conn = psycopg.connect(host="localhost", port=5434, dbname="USER")
@@ -50,7 +50,7 @@ def profile_pgwire(iterations=10):
 
         # Fetch time (result serialization + network)
         t_start = time.perf_counter()
-        result = cur.fetchall()
+        cur.fetchall()
         t_fetch = (time.perf_counter() - t_start) * 1000
 
         cur.close()
@@ -92,7 +92,7 @@ def profile_dbapi(iterations=10):
         "fetch": [],
     }
 
-    for i in range(iterations):
+    for _i in range(iterations):
         # Connection time
         t_start = time.perf_counter()
         conn = iris.connect(
@@ -108,7 +108,7 @@ def profile_dbapi(iterations=10):
 
         # Fetch time
         t_start = time.perf_counter()
-        result = cur.fetchall()
+        cur.fetchall()
         t_fetch = (time.perf_counter() - t_start) * 1000
 
         cur.close()

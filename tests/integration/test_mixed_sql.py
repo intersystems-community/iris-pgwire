@@ -424,7 +424,7 @@ class TestMixedSQLTransactionHandling:
 
                 # Standard SQL statement
                 cur.execute("SELECT COUNT(*) FROM users")
-                initial_count = cur.fetchone()[0]
+                cur.fetchone()[0]
 
                 # IRIS function call
                 cur.execute("SELECT %SYSTEM.Version.GetNumber() AS version")

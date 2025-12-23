@@ -151,15 +151,14 @@ async def test_connection_recycling_after_lifecycle_expiration(pool_config):
     executor = DBAPIExecutor(recycle_config)
 
     # Execute query to create initial connection
-    result1 = await executor.execute_query("SELECT 1")
-    initial_pool_state = await executor.get_pool_state()
-    initial_connection_count = initial_pool_state.total_connections
+    await executor.execute_query("SELECT 1")
+    await executor.get_pool_state()
 
     # Wait for recycle timeout
     await asyncio.sleep(3)
 
     # Execute another query - should trigger recycling
-    result2 = await executor.execute_query("SELECT 2")
+    await executor.execute_query("SELECT 2")
     post_recycle_state = await executor.get_pool_state()
 
     # Verify connection was recycled (total connections refreshed)

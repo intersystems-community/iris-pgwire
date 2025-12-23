@@ -350,7 +350,7 @@ class TestIRISUserManager:
             mock_create_conn.return_value = mock_conn
 
             start_time = time.perf_counter()
-            users = await self.user_manager.get_iris_users()
+            await self.user_manager.get_iris_users()
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
             # Should complete under constitutional 5ms SLA

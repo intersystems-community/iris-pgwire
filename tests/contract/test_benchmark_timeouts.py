@@ -109,11 +109,11 @@ class TestBenchmarkTimeouts:
 
         start_short = time.time()
         result_short = executor_short.execute_with_timeout(sql)
-        elapsed_short = (time.time() - start_short) * 1000
+        (time.time() - start_short) * 1000
 
         start_long = time.time()
         result_long = executor_long.execute_with_timeout(sql)
-        elapsed_long = (time.time() - start_long) * 1000
+        (time.time() - start_long) * 1000
 
         # Both should complete quickly for SELECT 1
         assert result_short.status == "SUCCESS"

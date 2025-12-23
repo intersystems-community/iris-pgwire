@@ -179,9 +179,9 @@ class TranslationCache:
         Returns:
             Result indicating number of entries invalidated
         """
-        with PerformanceTimer() as timer:
+        with PerformanceTimer():
             with self._lock:
-                initial_count = len(self._cache)
+                len(self._cache)
 
                 if pattern is None:
                     # Invalidate all entries

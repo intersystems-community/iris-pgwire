@@ -101,7 +101,6 @@ class SemanticValidator:
         """
         with PerformanceTimer() as timer:
             issues: list[ValidationIssue] = []
-            warnings: list[str] = []
             recommendations: list[str] = []
 
             try:

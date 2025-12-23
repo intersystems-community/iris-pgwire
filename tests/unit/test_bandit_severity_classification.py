@@ -443,8 +443,22 @@ class TestBanditSeverityClassification:
         """Should pass security validation with only MEDIUM/LOW issues"""
         bandit_output = {
             "results": [
-                {"issue_severity": "MEDIUM", "issue_confidence": "HIGH", "test_id": "B201", "filename": "test.py", "line_number": 1, "issue_text": "Medium"},
-                {"issue_severity": "LOW", "issue_confidence": "LOW", "test_id": "B301", "filename": "test.py", "line_number": 2, "issue_text": "Low"},
+                {
+                    "issue_severity": "MEDIUM",
+                    "issue_confidence": "HIGH",
+                    "test_id": "B201",
+                    "filename": "test.py",
+                    "line_number": 1,
+                    "issue_text": "Medium",
+                },
+                {
+                    "issue_severity": "LOW",
+                    "issue_confidence": "LOW",
+                    "test_id": "B301",
+                    "filename": "test.py",
+                    "line_number": 2,
+                    "issue_text": "Low",
+                },
             ]
         }
 
@@ -465,8 +479,22 @@ class TestBanditSeverityClassification:
         """Should fail security validation with any HIGH issue"""
         bandit_output = {
             "results": [
-                {"issue_severity": "LOW", "issue_confidence": "LOW", "test_id": "B301", "filename": "test.py", "line_number": 1, "issue_text": "Low"},
-                {"issue_severity": "HIGH", "issue_confidence": "HIGH", "test_id": "B101", "filename": "test.py", "line_number": 2, "issue_text": "High"},
+                {
+                    "issue_severity": "LOW",
+                    "issue_confidence": "LOW",
+                    "test_id": "B301",
+                    "filename": "test.py",
+                    "line_number": 1,
+                    "issue_text": "Low",
+                },
+                {
+                    "issue_severity": "HIGH",
+                    "issue_confidence": "HIGH",
+                    "test_id": "B101",
+                    "filename": "test.py",
+                    "line_number": 2,
+                    "issue_text": "High",
+                },
             ]
         }
 

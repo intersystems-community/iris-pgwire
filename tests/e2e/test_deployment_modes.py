@@ -17,11 +17,9 @@ import os
 import socket
 import subprocess
 import time
-from pathlib import Path
 
 import psycopg
 import pytest
-
 
 # =============================================================================
 # Fixtures
@@ -155,10 +153,7 @@ class TestPsqlCommandLine:
         """Check if psql is available."""
         try:
             result = subprocess.run(
-                ["psql", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["psql", "--version"], capture_output=True, text=True, timeout=5
             )
             if result.returncode != 0:
                 pytest.skip("psql not available")
@@ -170,11 +165,16 @@ class TestPsqlCommandLine:
         """Test psql with simple query (README example)."""
         cmd = [
             "psql",
-            "-h", pgwire_connection_params["host"],
-            "-p", str(pgwire_connection_params["port"]),
-            "-U", pgwire_connection_params["user"],
-            "-d", pgwire_connection_params["dbname"],
-            "-c", "SELECT 'psql test passed!' AS result"
+            "-h",
+            pgwire_connection_params["host"],
+            "-p",
+            str(pgwire_connection_params["port"]),
+            "-U",
+            pgwire_connection_params["user"],
+            "-d",
+            pgwire_connection_params["dbname"],
+            "-c",
+            "SELECT 'psql test passed!' AS result",
         ]
 
         env = os.environ.copy()
@@ -190,15 +190,20 @@ class TestPsqlCommandLine:
         # Create table with vector column
         setup_cmd = [
             "psql",
-            "-h", pgwire_connection_params["host"],
-            "-p", str(pgwire_connection_params["port"]),
-            "-U", pgwire_connection_params["user"],
-            "-d", pgwire_connection_params["dbname"],
-            "-c", """
+            "-h",
+            pgwire_connection_params["host"],
+            "-p",
+            str(pgwire_connection_params["port"]),
+            "-U",
+            pgwire_connection_params["user"],
+            "-d",
+            pgwire_connection_params["dbname"],
+            "-c",
+            """
                 DROP TABLE IF EXISTS psql_vector_test;
                 CREATE TABLE psql_vector_test (id INT, vec VECTOR(DOUBLE, 3));
                 INSERT INTO psql_vector_test VALUES (1, TO_VECTOR('[0.1, 0.2, 0.3]'));
-            """
+            """,
         ]
 
         env = os.environ.copy()
@@ -210,11 +215,16 @@ class TestPsqlCommandLine:
         # Query with VECTOR_COSINE
         query_cmd = [
             "psql",
-            "-h", pgwire_connection_params["host"],
-            "-p", str(pgwire_connection_params["port"]),
-            "-U", pgwire_connection_params["user"],
-            "-d", pgwire_connection_params["dbname"],
-            "-c", "SELECT id, VECTOR_COSINE(vec, TO_VECTOR('[0.1, 0.2, 0.3]', DOUBLE)) AS score FROM psql_vector_test"
+            "-h",
+            pgwire_connection_params["host"],
+            "-p",
+            str(pgwire_connection_params["port"]),
+            "-U",
+            pgwire_connection_params["user"],
+            "-d",
+            pgwire_connection_params["dbname"],
+            "-c",
+            "SELECT id, VECTOR_COSINE(vec, TO_VECTOR('[0.1, 0.2, 0.3]', DOUBLE)) AS score FROM psql_vector_test",
         ]
 
         result = subprocess.run(query_cmd, capture_output=True, text=True, env=env, timeout=30)
@@ -224,11 +234,16 @@ class TestPsqlCommandLine:
         # Cleanup
         cleanup_cmd = [
             "psql",
-            "-h", pgwire_connection_params["host"],
-            "-p", str(pgwire_connection_params["port"]),
-            "-U", pgwire_connection_params["user"],
-            "-d", pgwire_connection_params["dbname"],
-            "-c", "DROP TABLE IF EXISTS psql_vector_test"
+            "-h",
+            pgwire_connection_params["host"],
+            "-p",
+            str(pgwire_connection_params["port"]),
+            "-U",
+            pgwire_connection_params["user"],
+            "-d",
+            pgwire_connection_params["dbname"],
+            "-c",
+            "DROP TABLE IF EXISTS psql_vector_test",
         ]
         subprocess.run(cleanup_cmd, capture_output=True, env=env, timeout=30)
 
@@ -308,31 +323,37 @@ class TestVectorOperations:
     def test_vector_table_creation(self, conn, clean_test_table):
         """Test creating table with VECTOR column."""
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE e2e_test_vectors (
                     id INT PRIMARY KEY,
                     content VARCHAR(255),
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             conn.commit()
 
             # Verify table exists
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
                 WHERE TABLE_NAME = 'e2e_test_vectors'
-            """)
+            """
+            )
             assert cur.fetchone()[0] == 1
 
     def test_vector_insert_with_to_vector(self, conn, clean_test_table):
         """Test inserting vectors with TO_VECTOR function."""
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE e2e_test_vectors (
                     id INT PRIMARY KEY,
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
 
             # Insert using TO_VECTOR (separate statements - IRIS doesn't support multi-row VALUES)
             cur.execute("INSERT INTO e2e_test_vectors VALUES (1, TO_VECTOR('[0.1, 0.2, 0.3]'))")
@@ -346,12 +367,14 @@ class TestVectorOperations:
     def test_vector_parameter_binding(self, conn, clean_test_table):
         """Test vector parameter binding (README pattern)."""
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE e2e_test_vectors (
                     id INT PRIMARY KEY,
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             # IRIS doesn't support multi-row VALUES
             cur.execute("INSERT INTO e2e_test_vectors VALUES (1, TO_VECTOR('[0.1, 0.2, 0.3]'))")
             cur.execute("INSERT INTO e2e_test_vectors VALUES (2, TO_VECTOR('[0.9, 0.8, 0.7]'))")
@@ -360,11 +383,14 @@ class TestVectorOperations:
             # Parameter binding with Python list (README pattern)
             # Use pgvector <=> operator which gets translated to VECTOR_COSINE
             query_vector = [0.1, 0.2, 0.3]
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM e2e_test_vectors
                 ORDER BY embedding <=> %s
                 LIMIT 5
-            """, (query_vector,))
+            """,
+                (query_vector,),
+            )
 
             results = cur.fetchall()
             assert len(results) == 2, "Should return 2 results"
@@ -375,12 +401,14 @@ class TestVectorOperations:
     def test_cosine_operator_translation(self, conn, clean_test_table):
         """Test <=> operator translates to VECTOR_COSINE."""
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE e2e_test_vectors (
                     id INT PRIMARY KEY,
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             # IRIS doesn't support multi-row VALUES
             cur.execute("INSERT INTO e2e_test_vectors VALUES (1, TO_VECTOR('[1.0, 0.0, 0.0]'))")
             cur.execute("INSERT INTO e2e_test_vectors VALUES (2, TO_VECTOR('[0.0, 1.0, 0.0]'))")
@@ -388,11 +416,14 @@ class TestVectorOperations:
 
             # Use pgvector <=> operator
             query_vec = [1.0, 0.0, 0.0]
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM e2e_test_vectors
                 ORDER BY embedding <=> %s
                 LIMIT 1
-            """, (query_vec,))
+            """,
+                (query_vec,),
+            )
 
             result = cur.fetchone()
             assert result is not None
@@ -402,12 +433,14 @@ class TestVectorOperations:
     def test_dot_product_operator_translation(self, conn, clean_test_table):
         """Test <#> operator translates to VECTOR_DOT_PRODUCT."""
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 CREATE TABLE e2e_test_vectors (
                     id INT PRIMARY KEY,
                     embedding VECTOR(DOUBLE, 3)
                 )
-            """)
+            """
+            )
             # IRIS doesn't support multi-row VALUES
             cur.execute("INSERT INTO e2e_test_vectors VALUES (1, TO_VECTOR('[1.0, 0.0, 0.0]'))")
             cur.execute("INSERT INTO e2e_test_vectors VALUES (2, TO_VECTOR('[0.5, 0.5, 0.0]'))")
@@ -415,11 +448,14 @@ class TestVectorOperations:
 
             # Use pgvector <#> operator (dot product)
             query_vec = [1.0, 0.0, 0.0]
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM e2e_test_vectors
                 ORDER BY embedding <#> %s
                 LIMIT 1
-            """, (query_vec,))
+            """,
+                (query_vec,),
+            )
 
             result = cur.fetchone()
             assert result is not None
@@ -534,7 +570,6 @@ class TestPerformanceSanity:
 
     def test_query_latency_reasonable(self, conn):
         """Test simple query completes in reasonable time (<100ms)."""
-        import time
 
         start = time.time()
         with conn.cursor() as cur:

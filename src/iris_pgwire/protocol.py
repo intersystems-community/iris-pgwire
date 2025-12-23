@@ -3138,9 +3138,9 @@ class PGWireProtocol:
 
             # Parse max rows (for now, ignore and fetch all)
             if len(body) >= name_end + 5:
-                max_rows = struct.unpack("!I", body[name_end + 1 : name_end + 5])[0]
+                struct.unpack("!I", body[name_end + 1 : name_end + 5])[0]
             else:
-                max_rows = 0
+                pass
 
             # Check if portal exists
             if portal_name not in self.portals:
@@ -3547,7 +3547,7 @@ class PGWireProtocol:
             pos = 0
             ndim = struct.unpack("!I", data[pos : pos + 4])[0]
             pos += 4
-            has_null = struct.unpack("!I", data[pos : pos + 4])[0]
+            struct.unpack("!I", data[pos : pos + 4])[0]
             pos += 4
             element_oid = struct.unpack("!I", data[pos : pos + 4])[0]
             pos += 4
@@ -3563,7 +3563,7 @@ class PGWireProtocol:
                     raise ValueError(f"Truncated dimension info for parameter {param_index}")
                 dim_size = struct.unpack("!I", data[pos : pos + 4])[0]
                 pos += 4
-                lower_bound = struct.unpack("!I", data[pos : pos + 4])[0]
+                struct.unpack("!I", data[pos : pos + 4])[0]
                 pos += 4
                 dimensions.append(dim_size)
 

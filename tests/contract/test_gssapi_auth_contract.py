@@ -139,7 +139,7 @@ class TestKerberosGSSAPIHandshake:
         # WHEN: Handshake exceeds 5 seconds
         start_time = time.time()
         try:
-            principal = await asyncio.wait_for(
+            await asyncio.wait_for(
                 mock_gssapi_authenticator.handle_gssapi_handshake(connection_id), timeout=5.0
             )
             elapsed = time.time() - start_time
@@ -180,7 +180,7 @@ class TestKerberosGSSAPIHandshake:
 
             # WHEN: Performing GSSAPI handshake
             try:
-                principal = await mock_gssapi_authenticator.handle_gssapi_handshake(connection_id)
+                await mock_gssapi_authenticator.handle_gssapi_handshake(connection_id)
 
                 # THEN: Should handle multiple token exchanges
                 assert mock_instance.step.call_count >= 2  # Multi-step exchange
@@ -403,7 +403,7 @@ class TestKerberosTicketValidation:
             mock_iris_cls.return_value = mock_service_bindings
 
             # WHEN: Validating token
-            is_valid = await mock_gssapi_authenticator.validate_kerberos_ticket(gssapi_token)
+            await mock_gssapi_authenticator.validate_kerberos_ticket(gssapi_token)
 
             # THEN: Should have called IRIS %Service_Bindings
             mock_iris_cls.assert_called()
@@ -422,7 +422,7 @@ class TestKerberosTicketValidation:
             mock_to_thread.return_value = True
 
             # WHEN: Validating token
-            is_valid = await mock_gssapi_authenticator.validate_kerberos_ticket(gssapi_token)
+            await mock_gssapi_authenticator.validate_kerberos_ticket(gssapi_token)
 
             # THEN: Should have used asyncio.to_thread() for blocking IRIS call
             mock_to_thread.assert_called()
