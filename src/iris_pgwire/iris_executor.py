@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 
+from .schema_mapper import translate_output_schema  # Feature 030: PostgreSQL schema mapping
 from .sql_translator import (
     SQLTranslator,  # Feature 021: PostgreSQL→IRIS normalization
     TransactionTranslator,
@@ -2078,6 +2079,12 @@ class IRISExecutor:
                     session_id=session_id,
                 )
 
+                # Feature 030: Schema output translation (SQLUser → public)
+                # Only apply to information_schema queries that return schema columns
+                if rows and columns:
+                    column_names = [col.get("name", "") for col in columns]
+                    rows = translate_output_schema(rows, column_names)
+
                 return {
                     "success": True,
                     "rows": rows,
@@ -2482,6 +2489,12 @@ class IRISExecutor:
                     overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
                     session_id=session_id,
                 )
+
+                # Feature 030: Schema output translation (SQLUser → public)
+                # Only apply to information_schema queries that return schema columns
+                if rows and columns:
+                    column_names = [col.get("name", "") for col in columns]
+                    rows = translate_output_schema(rows, column_names)
 
                 return {
                     "success": True,
