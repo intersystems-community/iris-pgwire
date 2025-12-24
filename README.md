@@ -94,7 +94,7 @@ Tested and verified with popular PostgreSQL clients:
 | Language | Clients | Features |
 |----------|---------|----------|
 | **Python** | psycopg3, asyncpg, SQLAlchemy (sync + async), pandas | Full CRUD, transactions, async/await, vector ops |
-| **Node.js** | pg (node-postgres), Prisma, Sequelize | Prepared statements, connection pooling, ORM support |
+| **Node.js** | pg (node-postgres), Prisma, Sequelize | Prepared statements, connection pooling, **ORM introspection** |
 | **Java** | PostgreSQL JDBC, Spring Data JPA, Hibernate | Enterprise ORM, connection pooling, batch operations |
 | **.NET** | Npgsql, Entity Framework Core, Dapper | Async operations, LINQ queries, ORM support |
 | **Go** | pgx, lib/pq, GORM | High performance, connection pooling, migrations |
@@ -129,6 +129,39 @@ with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
             (query_embedding,)  # Python list - auto-converted
         )
         results = cur.fetchall()
+```
+
+### ORM & Schema Compatibility
+
+**Use Case**: Run Prisma, SQLAlchemy, and other ORMs against IRIS without configuration.
+
+PostgreSQL ORMs expect tables in the `public` schema, but IRIS uses `SQLUser`. PGWire automatically maps between them:
+
+```python
+# Prisma/SQLAlchemy queries work unchanged
+# "SELECT * FROM public.users" → executes against SQLUser.users
+# Results show table_schema='public' for ORM compatibility
+
+import psycopg
+with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
+    # This query returns IRIS SQLUser tables as 'public' schema
+    cur = conn.execute("""
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+    """)
+    tables = cur.fetchall()  # Your IRIS tables!
+```
+
+**Configuration** (optional - defaults to `SQLUser`):
+```bash
+# For non-standard IRIS schema names
+export PGWIRE_IRIS_SCHEMA=MyAppSchema
+```
+
+```python
+# Or configure programmatically
+from iris_pgwire.schema_mapper import configure_schema
+configure_schema(iris_schema="MyAppSchema")
 ```
 
 ### Enterprise Authentication
@@ -415,6 +448,9 @@ export IRIS_USERNAME=_SYSTEM
 export IRIS_PASSWORD=SYS
 export IRIS_NAMESPACE=USER
 
+# Optional: Configure schema mapping (default: SQLUser)
+# export PGWIRE_IRIS_SCHEMA=MyAppSchema
+
 # Start server
 python -m iris_pgwire.server
 ```
@@ -465,6 +501,7 @@ irispython -m iris_pgwire.server
 ✅ **Authentication**: OAuth 2.0, IRIS Wallet, SCRAM-SHA-256 (no plain-text passwords)
 ✅ **Vectors**: pgvector operators (`<=>` cosine, `<#>` dot product), HNSW indexes
 ✅ **Clients**: Full compatibility with PostgreSQL drivers and ORMs
+✅ **ORM Support**: Schema mapping for Prisma, SQLAlchemy, and other ORM introspection tools
 
 ### Architecture Decisions
 
@@ -569,6 +606,7 @@ MIT License - See [LICENSE](https://github.com/isc-tdyar/iris-pgwire/blob/main/L
 - Async SQLAlchemy support (FastAPI integration, connection pooling)
 - Dual backend architecture (DBAPI + Embedded Python)
 - Multi-language client compatibility (8 drivers at 100%: Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP)
+- **ORM schema mapping** (`public` ↔ configurable IRIS schema for Prisma, SQLAlchemy introspection)
 
 ### 🚧 Known Limitations
 
