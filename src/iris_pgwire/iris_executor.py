@@ -1154,6 +1154,59 @@ class IRISExecutor:
             # Solution: Return FAKE pg_type data with standard PostgreSQL type OIDs
             sql_upper = sql.upper()
 
+            # pg_namespace - Return that 'public' schema exists (for Prisma introspection)
+            # Prisma sends: SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = ?)
+            # We need to return TRUE for 'public' schema
+            if "PG_NAMESPACE" in sql_upper:
+                logger.info(
+                    "Intercepting pg_namespace query (Prisma introspection)",
+                    sql_preview=sql[:150],
+                    session_id=session_id,
+                )
+                # Return that the namespace exists (nspname='public')
+                columns = [
+                    {
+                        "name": "nspname",
+                        "type_oid": 19,  # name type
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    {
+                        "name": "oid",
+                        "type_oid": 26,  # oid type
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                ]
+                # Return 'public' namespace
+                return {
+                    "success": True,
+                    "rows": [["public", 2200]],  # 2200 is standard public schema OID
+                    "columns": columns,
+                    "row_count": 1,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 1",
+                }
+
+            # CREATE SCHEMA "public" - Return success (schema already exists in IRIS)
+            # Prisma tries to create the schema if it doesn't exist
+            if sql_upper.strip().startswith("CREATE SCHEMA"):
+                logger.info(
+                    "Intercepting CREATE SCHEMA (returning success - schema exists)",
+                    sql_preview=sql[:100],
+                    session_id=session_id,
+                )
+                return {
+                    "success": True,
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command": "CREATE",
+                    "command_tag": "CREATE SCHEMA",
+                }
+
             # pg_enum - Return empty with column metadata (no enums defined)
             # CRITICAL: PostgreSQL protocol requires RowDescription even for 0-row results
             if "PG_ENUM" in sql_upper:
