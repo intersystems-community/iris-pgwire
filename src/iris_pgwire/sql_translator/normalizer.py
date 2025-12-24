@@ -7,10 +7,14 @@ This is the SQLTranslator class that implements the contract interface.
 Constitutional Requirements:
 - < 5ms normalization overhead for 50 identifier references
 - < 10% total execution time increase vs baseline
+
+Feature 030 Extension:
+- PostgreSQL schema mapping (public → SQLUser)
 """
 
 import time
 
+from ..schema_mapper import translate_input_schema
 from .date_translator import DATETranslator
 from .identifier_normalizer import IdentifierNormalizer
 
@@ -70,8 +74,11 @@ class SQLTranslator:
             }
             return sql
 
+        # Step 0: Schema mapping (public → SQLUser) - Feature 030
+        normalized_sql = translate_input_schema(sql)
+
         # Step 1: Normalize identifiers (unquoted → UPPERCASE)
-        normalized_sql, identifier_count = self.identifier_normalizer.normalize(sql)
+        normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
 
         # Step 2: Translate DATE literals ('YYYY-MM-DD' → TO_DATE(...))
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
