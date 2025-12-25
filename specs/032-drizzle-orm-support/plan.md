@@ -152,7 +152,7 @@ tests/
 - [x] Phase 0: Research complete (research.md generated)
 - [x] Phase 1: Design complete (data-model.md, contracts/, quickstart.md)
 - [x] Phase 2: Task planning complete (approach documented)
-- [ ] Phase 3: Tasks generated (/tasks command)
+- [x] Phase 3: Tasks generated (52 tasks in tasks.md)
 - [ ] Phase 4: Implementation complete
 - [ ] Phase 5: Validation passed
 
