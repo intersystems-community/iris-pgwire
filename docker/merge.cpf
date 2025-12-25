@@ -2,9 +2,8 @@
 ; Enable CallIn service for embedded Python (required for iris-pgwire)
 ModifyService:Name=%Service_CallIn,Enabled=1,AutheEnabled=48
 
-[Namespaces]
-; Ensure USER namespace exists
-Namespace=USER
+; NOTE: USER namespace is created by default - don't declare it here
+; The [Namespaces] section was causing "Namespace already exists" errors
 
 [Startup]
 ; Auto-install iris-pgwire via IPM on first boot

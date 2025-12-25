@@ -197,12 +197,22 @@ class AliasExtractor:
         without_strings = self._string_literal_pattern.sub("", column_expr)
 
         # Extract rightmost identifier
-        # Pattern: word at end of expression (not inside parentheses)
-        implicit_alias_pattern = re.compile(r"(\w+)\s*$")
+        # CRITICAL FIX: Handle quoted identifiers from Prisma
+        # Prisma sends columns like: "public"."test_users"."id"
+        # We need to extract "id" not "public"
+        # Pattern matches: optional quote, word chars, optional quote, end
+        implicit_alias_pattern = re.compile(r'"?(\w+)"?\s*$')
         implicit_match = implicit_alias_pattern.search(without_strings)
 
         if implicit_match:
             return implicit_match.group(1)
+
+        # Fallback: Try to find last quoted identifier in dot-separated path
+        # For "schema"."table"."column", extract "column"
+        quoted_identifier_pattern = re.compile(r'"(\w+)"')
+        quoted_matches = quoted_identifier_pattern.findall(without_strings)
+        if quoted_matches:
+            return quoted_matches[-1]  # Return last quoted identifier
 
         # Fallback: return first identifier found
         identifier_pattern = re.compile(r"(\w+)")
