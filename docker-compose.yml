@@ -5,7 +5,7 @@ services:
   # IRIS Database with Embedded PGWire Server
   # Server runs via irispython command inside IRIS process (spec 014-irispython-deployment)
   iris:
-    image: containers.intersystems.com/intersystems/iris-community:latest
+    image: intersystemsdc/iris-community:latest
     container_name: iris-pgwire-db
     environment:
       # IRIS configuration
@@ -20,8 +20,8 @@ services:
       - PGWIRE_SSL_ENABLED=false
       - PGWIRE_DEBUG=false
     ports:
-      - "1972:1972"   # IRIS SQL port
-      - "52773:52773" # Management Portal
+      - "2972:1972"   # IRIS SQL port (mapped to 2972 to avoid conflicts)
+      - "52776:52773" # Management Portal (mapped to avoid conflicts)
       - "5432:5432"   # PostgreSQL wire protocol (served from INSIDE IRIS)
     volumes:
       # Mount source code for irispython execution
@@ -39,9 +39,10 @@ services:
       retries: 5
       start_period: 60s
     # Start IRIS, apply merge.cpf (enables CallIn for embedded Python), then launch PGWire
+    # Note: Use ; instead of && so PGWire starts even if merge fails (e.g., "Namespace already exists")
     command: >
       --check-caps false
-      -a "iris merge IRIS /app/merge.cpf && nohup /bin/bash /app/start-pgwire.sh > /tmp/pgwire.log 2>&1 &"
+      -a "iris merge IRIS /app/merge.cpf ; nohup /bin/bash /app/start-pgwire.sh > /tmp/pgwire.log 2>&1 &"
     restart: unless-stopped
 
   # Additional IRIS container for HNSW testing (latest preview build)
@@ -54,8 +55,8 @@ services:
       - IRISUSERNAME=_SYSTEM
       - IRISPASSWORD=SYS
     ports:
-      - "1973:1972"   # IRIS SQL port (different from main)
-      - "52774:52773" # Management Portal (different from main)
+      - "2973:1972"   # IRIS SQL port (different from main, avoid conflicts)
+      - "52777:52773" # Management Portal (different from main, avoid conflicts)
     volumes:
       - iris_latest_data:/usr/irissys/mgr
       - ./iris.key:/usr/irissys/mgr/iris.key
