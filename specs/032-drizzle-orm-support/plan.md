@@ -135,7 +135,7 @@ tests/
 3. Testing: Execute CRUD operations
 4. Documentation: Update README with Drizzle instructions
 
-**Estimated Output**: 10-15 tasks (mostly verification, minimal implementation)
+**Estimated Output**: 54 tasks (verification-focused, organized by 7 user stories)
 
 ## Complexity Tracking
 *No constitution violations - this is a verification feature building on existing work*
@@ -152,7 +152,7 @@ tests/
 - [x] Phase 0: Research complete (research.md generated)
 - [x] Phase 1: Design complete (data-model.md, contracts/, quickstart.md)
 - [x] Phase 2: Task planning complete (approach documented)
-- [x] Phase 3: Tasks generated (52 tasks in tasks.md)
+- [x] Phase 3: Tasks generated (54 tasks in tasks.md)
 - [ ] Phase 4: Implementation complete
 - [ ] Phase 5: Validation passed
 

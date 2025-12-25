@@ -8,6 +8,8 @@
 
 This is a **verification feature** - validating that existing IRIS PGWire capabilities (from Feature 031) work with Drizzle ORM. Tasks focus on creating a demo project, running verification tests, and documenting results.
 
+**Total Tasks**: 54 (T001-T054)
+
 **User Stories** (from spec.md acceptance scenarios):
 - **US1**: Introspection - drizzle-kit introspect generates accurate schema.ts
 - **US2**: INSERT with .returning() returns inserted row with ID
@@ -134,18 +136,20 @@ This is a **verification feature** - validating that existing IRIS PGWire capabi
 - [ ] T043 [US7] Test VARCHAR roundtrip with special characters
 - [ ] T044 [US7] Test TIMESTAMP roundtrip with timezone handling
 - [ ] T045 [US7] Test BOOLEAN/BIT roundtrip
-- [ ] T046 [US7] Document type mapping results in examples/drizzle-iris-demo/RESULTS.md
+- [ ] T046 [US7] Test BIGINT roundtrip (verify no precision loss for values > 2^53) [FR-015]
+- [ ] T047 [US7] Test DECIMAL/NUMERIC roundtrip (verify precision preservation) [FR-017]
+- [ ] T048 [US7] Document type mapping results in examples/drizzle-iris-demo/RESULTS.md
 
 ---
 
 ## Phase 10: Integration & Polish
 
-- [ ] T047 Create unified test runner at examples/drizzle-iris-demo/src/test-crud.ts (combines all tests)
-- [ ] T048 [P] Create Python integration test at tests/integration/test_drizzle_compatibility.py
-- [ ] T049 [P] Update README.md with Drizzle ORM instructions
-- [ ] T050 Consolidate RESULTS.md with pass/fail summary
-- [ ] T051 Update checklists/requirements.md with verification status
-- [ ] T052 Clean up test data from IRIS database
+- [ ] T049 Create unified test runner at examples/drizzle-iris-demo/src/test-crud.ts (combines all tests)
+- [ ] T050 [P] Create Python integration test at tests/integration/test_drizzle_compatibility.py
+- [ ] T051 [P] Update README.md with Drizzle ORM instructions
+- [ ] T052 Consolidate RESULTS.md with pass/fail summary
+- [ ] T053 Update checklists/requirements.md with verification status
+- [ ] T054 Clean up test data from IRIS database
 
 ---
 
@@ -224,7 +228,9 @@ If any user story fails, document the specific failure:
 - [x] Tasks specify exact file paths
 - [x] Parallel tasks truly independent ([P] markers)
 - [x] Documentation tasks included
-- [x] Cleanup task included (T052)
+- [x] Cleanup task included (T054)
+- [x] Type mapping tests cover FR-015 (BIGINT) and FR-017 (DECIMAL)
+- [x] Edge cases documented with deferral rationale
 
 ---
 
@@ -235,3 +241,15 @@ If any user story fails, document the specific failure:
 - All tests use the demo project at `examples/drizzle-iris-demo/`
 - Results documented in `RESULTS.md` for each phase
 - Commit after each phase completion
+
+## Edge Cases (Out of Scope)
+
+The following edge cases from spec.md are **deferred** to future features if issues arise:
+
+| Edge Case | Status | Rationale |
+|-----------|--------|-----------|
+| Empty database introspection | Deferred | Tested implicitly - if no tables exist, introspection returns empty schema |
+| VECTOR column type mapping | Deferred | VECTOR is IRIS-specific; Drizzle has no native VECTOR type - requires custom extension |
+| Connection pooling behavior | Deferred | postgres.js handles pooling; no PGWire-specific changes expected |
+
+**Policy**: If any edge case causes a real failure during verification, create a follow-up feature task.
