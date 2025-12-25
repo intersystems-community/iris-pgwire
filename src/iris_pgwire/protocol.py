@@ -120,6 +120,7 @@ def _fix_order_by_aliases(sql: str) -> str:
 
 # PostgreSQL protocol constants
 SSL_REQUEST_CODE = 80877103
+GSSENC_REQUEST_CODE = 80877104  # GSSAPI encryption request (0x04d21630)
 CANCEL_REQUEST_CODE = 80877102
 PROTOCOL_VERSION = 0x00030000  # PostgreSQL protocol version 3.0
 
@@ -482,6 +483,53 @@ class PGWireProtocol:
         Returns:
             List of PostgreSQL type OIDs for each parameter
         """
+        sql_upper = translated_sql.upper()
+
+        # PRISMA/ORM CATALOG QUERY FIX (Feature 031):
+        # Prisma introspection sends queries with multiple ANY($n) patterns but expects
+        # fewer parameters than the query suggests. Our catalog interceptions handle
+        # these queries without needing actual parameters, so we return the expected
+        # parameter count that ORMs actually send.
+        #
+        # Pattern: Prisma column info query - has 2 ANY patterns but sends only 1 param
+        # Query: SELECT ... FROM information_schema.columns ... WHERE namespace = ANY($1) AND table_name = ANY($2)
+        # Prisma sends: 1 param (namespace array)
+        if ("INFO.TABLE_NAME" in sql_upper or "INFORMATION_SCHEMA" in sql_upper) and \
+           ("INFO.COLUMN_NAME" in sql_upper or "COLUMN_NAME" in sql_upper) and \
+           "FORMAT_TYPE" in sql_upper:
+            logger.info(
+                "Prisma column info query detected - returning 1 param (namespace only)",
+                connection_id=self.connection_id,
+                detected_placeholders=param_count,
+                sql_preview=translated_sql[:150],
+            )
+            return [1009]  # Single text[] for namespace filter
+
+        # Pattern: Prisma pg_class query - table introspection with namespace filter
+        # Query: SELECT ... FROM pg_class ... WHERE namespace.nspname = ANY($1)
+        if "PG_CLASS" in sql_upper and "PG_NAMESPACE" in sql_upper:
+            any_count = sql_upper.count("ANY(?)")
+            if any_count >= 1:
+                logger.info(
+                    "Prisma pg_class query detected - returning 1 param (namespace only)",
+                    connection_id=self.connection_id,
+                    any_patterns_found=any_count,
+                    sql_preview=translated_sql[:150],
+                )
+                return [1009]  # Single text[] for namespace filter
+
+        # Pattern: Prisma pg_namespace query - simple namespace lookup
+        if "PG_NAMESPACE" in sql_upper and "NSPNAME" in sql_upper:
+            any_count = sql_upper.count("ANY(?)")
+            if any_count >= 1:
+                logger.info(
+                    "Prisma pg_namespace query detected - returning 1 param",
+                    connection_id=self.connection_id,
+                    any_patterns_found=any_count,
+                    sql_preview=translated_sql[:150],
+                )
+                return [1009]  # Single text[] for namespace filter
+
         # Map IRIS types to PostgreSQL OIDs
         iris_to_pg_oid = {
             "INTEGER": 23,  # int4
@@ -509,91 +557,124 @@ class PGWireProtocol:
             pg_oid = iris_to_pg_oid.get(iris_type, 705)  # Default to UNKNOWN if type not recognized
             param_oids.append(pg_oid)
 
-        # If we found fewer CAST expressions than parameters, fill remaining with OID 705 (UNKNOWN)
+        # PRISMA FIX: Detect ANY(?) pattern for array parameters
+        # Prisma sends queries like "WHERE nspname = ANY($1)" expecting text[] (OID 1009)
+        # If we have remaining parameters and query contains ANY(?), use text[] OID
+        any_pattern = r"=\s*ANY\s*\(\s*\?\s*\)"
+        any_matches = list(re.finditer(any_pattern, translated_sql, re.IGNORECASE))
+
+        # If we found fewer CAST expressions than parameters, check for ANY() patterns
+        any_index = 0
         while len(param_oids) < param_count:
-            param_oids.append(705)
+            # If this parameter position has an ANY() pattern, use text[] (1009)
+            if any_index < len(any_matches):
+                param_oids.append(1009)  # text[] for array parameters
+                any_index += 1
+            else:
+                param_oids.append(705)  # Default to UNKNOWN
 
         return param_oids[:param_count]  # Ensure we don't return more OIDs than parameters
 
     async def handle_ssl_probe(self, ssl_context: ssl.SSLContext | None):
         """
-        P0: Handle SSL probe (first 8 bytes of connection)
+        P0: Handle SSL/GSSAPI probe (first 8 bytes of connection)
 
-        PostgreSQL clients first send an 8-byte SSL request to check if TLS is supported.
-        We respond with 'S' (SSL supported) or 'N' (no SSL).
+        PostgreSQL clients may send multiple probe requests before the actual StartupMessage:
+        1. GSSENCRequest (80877104) - GSSAPI encryption negotiation
+        2. SSLRequest (80877103) - SSL/TLS negotiation
+        3. CancelRequest (80877102) - Query cancellation
+
+        We loop until we get a non-probe request (the actual StartupMessage).
         """
         try:
-            # Read first 8 bytes - handle connection close gracefully
-            data = await self.reader.readexactly(8)
-            if len(data) != 8:
-                raise ValueError("Invalid SSL probe length")
+            while True:
+                # Read first 8 bytes - handle connection close gracefully
+                data = await self.reader.readexactly(8)
+                if len(data) != 8:
+                    raise ValueError("Invalid probe length")
 
-            # Parse SSL request
-            length, code = struct.unpack("!II", data)
+                # Parse request
+                length, code = struct.unpack("!II", data)
 
-            if length == 16 and code == CANCEL_REQUEST_CODE:
-                # P4: Handle cancel request - read additional 8 bytes for PID and secret
-                logger.debug("Cancel request received", connection_id=self.connection_id)
-                await self.handle_cancel_request()
-                return  # Cancel requests don't continue to normal protocol
-            elif length == 8 and code == SSL_REQUEST_CODE:
-                logger.debug("SSL request received", connection_id=self.connection_id)
+                if length == 16 and code == CANCEL_REQUEST_CODE:
+                    # P4: Handle cancel request - read additional 8 bytes for PID and secret
+                    logger.debug("Cancel request received", connection_id=self.connection_id)
+                    await self.handle_cancel_request()
+                    return  # Cancel requests don't continue to normal protocol
 
-                if ssl_context:
-                    # Respond with 'S' (SSL supported) and upgrade connection
-                    self.writer.write(b"S")
-                    await self.writer.drain()
-
-                    # Upgrade to TLS
-                    transport = self.writer.transport
-                    protocol = transport.get_protocol()
-                    await asyncio.sleep(0.1)  # Allow response to be sent
-
-                    # Create SSL transport
-                    ssl_transport = await asyncio.get_event_loop().start_tls(
-                        transport, protocol, ssl_context, server_side=True
-                    )
-
-                    # Update reader/writer for SSL
-                    self.writer = asyncio.StreamWriter(
-                        ssl_transport, protocol, self.reader, asyncio.get_event_loop()
-                    )
-                    self.ssl_enabled = True
-
-                    logger.info("SSL connection established", connection_id=self.connection_id)
-                else:
-                    # Respond with 'N' (no SSL)
-                    self.writer.write(b"N")
-                    await self.writer.drain()
+                elif length == 8 and code == GSSENC_REQUEST_CODE:
+                    # GSSAPI encryption request (code 80877104 = 0x04d21630)
+                    # Respond with 'N' to indicate GSSAPI encryption is not supported
+                    # Client will then send another probe or StartupMessage
                     logger.debug(
-                        "SSL not supported, continuing with plain connection",
+                        "GSSENCRequest received, responding with 'N' (not supported)",
                         connection_id=self.connection_id,
                     )
-            else:
-                # Not an SSL request, rewind and continue
-                # This is a bit tricky in asyncio - we'll handle this in startup
-                logger.debug(
-                    "Not an SSL request, treating as startup message",
-                    connection_id=self.connection_id,
-                    length=length,
-                    code=code,
-                )
+                    self.writer.write(b"N")
+                    await self.writer.drain()
+                    continue  # Loop to read next message
 
-                # Store the data for startup message parsing
-                self._buffered_data = data
+                elif length == 8 and code == SSL_REQUEST_CODE:
+                    logger.debug("SSL request received", connection_id=self.connection_id)
+
+                    if ssl_context:
+                        # Respond with 'S' (SSL supported) and upgrade connection
+                        self.writer.write(b"S")
+                        await self.writer.drain()
+
+                        # Upgrade to TLS
+                        transport = self.writer.transport
+                        protocol = transport.get_protocol()
+                        await asyncio.sleep(0.1)  # Allow response to be sent
+
+                        # Create SSL transport
+                        ssl_transport = await asyncio.get_event_loop().start_tls(
+                            transport, protocol, ssl_context, server_side=True
+                        )
+
+                        # Update reader/writer for SSL
+                        self.writer = asyncio.StreamWriter(
+                            ssl_transport, protocol, self.reader, asyncio.get_event_loop()
+                        )
+                        self.ssl_enabled = True
+
+                        logger.info("SSL connection established", connection_id=self.connection_id)
+                        break  # SSL upgraded, exit loop - client will send StartupMessage
+                    else:
+                        # Respond with 'N' (no SSL)
+                        self.writer.write(b"N")
+                        await self.writer.drain()
+                        logger.debug(
+                            "SSL not supported, continuing with plain connection",
+                            connection_id=self.connection_id,
+                        )
+                        continue  # Loop to read next message
+
+                else:
+                    # Not a probe request - this is the StartupMessage
+                    logger.debug(
+                        "Not a probe request, treating as startup message",
+                        connection_id=self.connection_id,
+                        length=length,
+                        code=code,
+                    )
+
+                    # Store the data for startup message parsing
+                    self._buffered_data = data
+                    break  # Exit loop - startup message will be parsed next
 
         except asyncio.IncompleteReadError as e:
-            # Connection closed before SSL probe completed
+            # Connection closed before probe completed
             logger.debug(
-                "Connection closed during SSL probe",
+                "Connection closed during probe",
                 connection_id=self.connection_id,
                 bytes_read=len(e.partial),
                 expected=8,
             )
-            raise ConnectionAbortedError("Connection closed during SSL probe")
+            raise ConnectionAbortedError("Connection closed during probe")
         except Exception as e:
             logger.error(
-                "SSL probe handling failed", connection_id=self.connection_id, error=str(e)
+                "Probe handling failed", connection_id=self.connection_id, error=str(e)
             )
             raise
 
@@ -1548,7 +1629,8 @@ class PGWireProtocol:
                 await self.send_ready_for_query()
 
     async def send_query_result(
-        self, result: dict[str, Any], send_ready: bool = True, send_row_description: bool = True
+        self, result: dict[str, Any], send_ready: bool = True, send_row_description: bool = True,
+        result_formats: list[int] = None
     ):
         """
         Send query results from IRIS execution.
@@ -1559,6 +1641,8 @@ class PGWireProtocol:
                        If False, omit ReadyForQuery (Extended Protocol - Sync will send it)
             send_row_description: If True, send RowDescription before DataRows.
                                  If False, skip RowDescription (already sent in Describe for Extended Protocol)
+            result_formats: Format codes from Bind message (0=text, 1=binary).
+                           Passed to send_row_description to ensure format_code matches DataRow encoding.
         """
         try:
             rows = result.get("rows", [])
@@ -1589,8 +1673,9 @@ class PGWireProtocol:
                     connection_id=self.connection_id,
                     column_count=len(columns),
                     row_count=len(rows),
+                    result_formats=result_formats,
                 )
-                await self.send_row_description(columns)
+                await self.send_row_description(columns, result_formats=result_formats)
                 logger.info("🔵 STEP 2: RowDescription sent", connection_id=self.connection_id)
             elif columns and not send_row_description:
                 logger.info(
@@ -1868,6 +1953,10 @@ class PGWireProtocol:
                             binary_data = struct.pack("!f", float(value))
                         elif type_oid == 701:  # FLOAT8 (double)
                             binary_data = struct.pack("!d", float(value))
+                        elif type_oid == 26:  # OID (4-byte unsigned int)
+                            binary_data = struct.pack("!I", int(value))
+                        elif type_oid == 19:  # NAME (63-byte string, encode as text)
+                            binary_data = str(value).encode("utf-8")
                         elif type_oid == 16:  # BOOL
                             binary_data = struct.pack("!?", bool(value))
                         elif type_oid == 1082:  # DATE
@@ -2675,9 +2764,16 @@ class PGWireProtocol:
                 query, session_id=f"conn_{self.connection_id}_stmt_{statement_name}"
             )
 
-            # CRITICAL FIX: If client sends 0 parameter types (asyncpg behavior),
-            # infer parameter count and types from query placeholders and CAST() expressions
-            if num_params == 0 and "?" in translation_result["translated_sql"]:
+            # CRITICAL FIX (Feature 031 - Prisma Support):
+            # Infer parameter types when:
+            # 1. Client sends 0 parameter types (asyncpg behavior), OR
+            # 2. Client sends parameters with OID 0 (unspecified) - Prisma's Rust driver does this
+            # Without proper OIDs, Prisma fails with "Couldn't serialize value into `unknown`"
+            needs_inference = (
+                "?" in translation_result["translated_sql"] and
+                (num_params == 0 or all(pt == 0 for pt in param_types))
+            )
+            if needs_inference:
                 inferred_param_count = translation_result["translated_sql"].count("?")
                 logger.info(
                     "Inferring parameter count from query placeholders",
@@ -2967,10 +3063,91 @@ class PGWireProtocol:
                     is_show=query_upper.startswith("SHOW"),
                 )
 
-                if query_upper.startswith("SELECT") or query_upper.startswith("SHOW"):
+                # Check if query has RETURNING clause (INSERT/UPDATE/DELETE with RETURNING)
+                has_returning = "RETURNING" in query_upper
+
+                if query_upper.startswith("SELECT") or query_upper.startswith("SHOW") or has_returning:
                     # Execute metadata discovery to get column information
                     # Use LIMIT 0 pattern to avoid fetching actual data
+                    # For RETURNING queries, we'll send synthetic column metadata based on RETURNING columns
                     try:
+                        # Special handling for RETURNING queries - extract columns from RETURNING clause
+                        if has_returning and not query_upper.startswith("SELECT"):
+                            import re
+                            # Extract RETURNING columns from query
+                            # Format: RETURNING "schema"."table"."col1", "schema"."table"."col2", ...
+                            returning_match = re.search(
+                                r'\bRETURNING\s+(.+)$',
+                                query,
+                                re.IGNORECASE | re.DOTALL
+                            )
+                            if returning_match:
+                                returning_clause = returning_match.group(1).strip().rstrip(';')  # Remove trailing semicolon
+                                logger.info(
+                                    "🔍 DEBUG: RETURNING clause parsed",
+                                    connection_id=self.connection_id,
+                                    returning_clause=returning_clause[:200],
+                                    returning_clause_len=len(returning_clause),
+                                )
+                                raw_cols = [c.strip() for c in returning_clause.split(',')]
+                                logger.info(
+                                    "🔍 DEBUG: Raw columns from split",
+                                    connection_id=self.connection_id,
+                                    raw_cols_count=len(raw_cols),
+                                    raw_cols=[c[:50] for c in raw_cols],
+                                )
+                                returning_columns = []
+                                for col in raw_cols:
+                                    # Extract column name (last part after dots)
+                                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+                                    if col_match:
+                                        col_name = col_match.group(1)
+                                        # Determine type OID based on column name
+                                        # Note: Default to text (25) for unknown columns
+                                        # Use int4 for id columns, bigint for timestamp-like columns
+                                        # (Prisma often stores timestamps as BigInt)
+                                        if col_name.lower() == 'id':
+                                            type_oid = 23  # int4
+                                        elif col_name.lower() in ('created_at', 'updated_at', 'deleted_at'):
+                                            type_oid = 20  # bigint - JS/Prisma often stores timestamps as bigint
+                                        else:
+                                            type_oid = 25  # text
+                                        returning_columns.append({
+                                            "name": col_name,
+                                            "type_oid": type_oid,
+                                            "type_size": -1,
+                                            "type_modifier": -1,
+                                            "format_code": 0,
+                                        })
+
+                                logger.info(
+                                    "🔍 Describe: Sending synthetic RowDescription for RETURNING",
+                                    connection_id=self.connection_id,
+                                    columns=[c["name"] for c in returning_columns],
+                                )
+                                await self.send_row_description(returning_columns)
+                                logger.info(
+                                    "Described object",
+                                    connection_id=self.connection_id,
+                                    name=name,
+                                    type="S",
+                                )
+                                return
+                            else:
+                                logger.warning(
+                                    "Could not parse RETURNING clause, falling back to NoData",
+                                    connection_id=self.connection_id,
+                                    query_preview=query[:100],
+                                )
+                                await self.send_no_data()
+                                logger.info(
+                                    "Described object",
+                                    connection_id=self.connection_id,
+                                    name=name,
+                                    type="S",
+                                )
+                                return
+
                         logger.info(
                             "🔍 Describe Statement: Executing metadata discovery",
                             connection_id=self.connection_id,
@@ -2999,6 +3176,9 @@ class PGWireProtocol:
 
                         if result.get("success") and result.get("columns"):
                             await self.send_row_description(result["columns"])
+                            # CRITICAL: Mark that RowDescription was sent in Describe phase (text format)
+                            # Execute phase must use text format in DataRow to match RowDescription
+                            stmt["row_description_sent_in_describe"] = True
                             logger.info(
                                 "✅ Sent RowDescription for statement Describe",
                                 connection_id=self.connection_id,
@@ -3151,8 +3331,13 @@ class PGWireProtocol:
             params = portal["params"]
             result_formats = portal.get("result_formats", [])  # Get result format codes from Bind
 
-            # Store result formats for send_data_row to use during Execute
-            # This enables binary format support for asyncpg and other drivers
+            if statement_name not in self.prepared_statements:
+                raise ValueError(f"Statement '{statement_name}' no longer exists")
+
+            stmt = self.prepared_statements[statement_name]
+
+            # Use result formats from Bind - this is what the client requested
+            # Binary encoding is supported for common types (INT4, INT8, TEXT, etc.)
             self._current_result_formats = result_formats
             logger.info(
                 "Execute: Using result formats from portal",
@@ -3161,10 +3346,6 @@ class PGWireProtocol:
                 result_formats=result_formats,
             )
 
-            if statement_name not in self.prepared_statements:
-                raise ValueError(f"Statement '{statement_name}' no longer exists")
-
-            stmt = self.prepared_statements[statement_name]
             # Use translated query for execution
             query = stmt.get("translated_query", stmt.get("query", stmt.get("original_query", "")))
 
@@ -3304,10 +3485,11 @@ class PGWireProtocol:
         Sync message has no body.
         """
         try:
+            logger.info("🔄 Sync received, sending ReadyForQuery", connection_id=self.connection_id)
             # Send ReadyForQuery to indicate we're ready for the next command
             await self.send_ready_for_query()
 
-            logger.debug("Sync message processed", connection_id=self.connection_id)
+            logger.info("✅ Sync processed, ReadyForQuery sent", connection_id=self.connection_id)
 
         except Exception as e:
             logger.error(
@@ -3522,6 +3704,23 @@ class PGWireProtocol:
                     PG_EPOCH = datetime.date(2000, 1, 1)
                     date_obj = PG_EPOCH + datetime.timedelta(days=pg_days)
                     return date_obj.strftime("%Y-%m-%d")  # Convert to ISO string for IRIS
+                elif param_type_oid == 1114 and len(data) == 8:  # TIMESTAMP (without timezone)
+                    # PostgreSQL TIMESTAMP binary format: 8-byte signed integer (microseconds since 2000-01-01)
+                    # IRIS expects timestamps as ISO 8601 strings (YYYY-MM-DD HH:MM:SS.ffffff)
+                    import datetime
+
+                    pg_microseconds = struct.unpack("!q", data)[0]
+                    PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
+                    timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
+                    return timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")  # Convert to ISO string for IRIS
+                elif param_type_oid == 1184 and len(data) == 8:  # TIMESTAMPTZ (with timezone)
+                    # Same as TIMESTAMP but with timezone - PostgreSQL stores as UTC microseconds
+                    import datetime
+
+                    pg_microseconds = struct.unpack("!q", data)[0]
+                    PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
+                    timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
+                    return timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")  # Convert to ISO string for IRIS
                 # Fallback: Infer type from data length when OID not specified
                 elif len(data) == 1:
                     # Could be boolean - treat as boolean

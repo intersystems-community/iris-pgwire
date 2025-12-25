@@ -20,6 +20,8 @@ from .sql_translator import (
 )  # Feature 022: PostgreSQL transaction verb translation
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
+from .type_mapping import get_type_mapping, load_type_mappings_from_file  # Configurable type mapping
+from .catalog.oid_generator import OIDGenerator  # OID generation for catalog emulation
 
 logger = structlog.get_logger()
 
@@ -55,6 +57,11 @@ class IRISExecutor:
         self._connection_lock = threading.RLock()
         self._connection_pool = []
         self._max_connections = 10
+
+        # Load custom type mappings from configuration file (if exists)
+        # This allows users to customize IRIS→PostgreSQL type mappings
+        # for ORM compatibility (Prisma, SQLAlchemy, etc.)
+        load_type_mappings_from_file()
 
         # Attempt to detect IRIS environment
         self._detect_iris_environment()
@@ -269,12 +276,22 @@ class IRISExecutor:
         # Import Decimal for type checking
         from decimal import Decimal
 
+        # INT4 range limits
+        INT4_MIN = -2147483648  # -2^31
+        INT4_MAX = 2147483647   # 2^31 - 1
+
         if value is None:
             return 25  # VARCHAR (most flexible for NULL)
         elif isinstance(value, bool):
             return 16  # BOOL
         elif isinstance(value, int):
-            return 23  # INTEGER (INT4)
+            # CRITICAL FIX: Check if integer exceeds INT4 range
+            # IRIS returns timestamps as large integers that can exceed INT4 max
+            # These need to be sent as INT8 (BIGINT) to avoid binary encoding errors
+            if INT4_MIN <= value <= INT4_MAX:
+                return 23  # INTEGER (INT4)
+            else:
+                return 20  # BIGINT (INT8) for large integers
         elif isinstance(value, float):
             return 701  # FLOAT8/DOUBLE
         elif isinstance(value, Decimal):
@@ -568,6 +585,70 @@ class IRISExecutor:
                             "type_modifier": -1,
                             "format_code": 0,
                         }
+                    ],
+                    "row_count": 1,
+                }
+
+            # Handle Prisma schema existence check query:
+            # SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = ?), version(), current_setting('server_version_num')::integer
+            # Prisma sends this to check if the target schema exists before introspection
+            # CRITICAL: Must be checked BEFORE generic CURRENT_SETTING handler
+            # CRITICAL: The ::integer cast means current_setting must return INTEGER type_oid (23), not TEXT (25)
+            if "EXISTS" in sql_upper and "PG_NAMESPACE" in sql_upper and "VERSION" in sql_upper:
+                logger.info(
+                    "Intercepting Prisma schema existence check query",
+                    sql=sql[:150],
+                    session_id=session_id,
+                )
+                # Determine which schema Prisma is checking
+                # params[0] should be the schema name (e.g., 'public')
+                # CRITICAL FIX: During Describe phase, params may be None or contain dummy values
+                # Default to True for 'public' schema which Prisma always expects to exist
+                schema_exists = True  # Default: 'public' exists
+                schema_name = 'public'  # Default schema
+
+                if params and len(params) > 0 and params[0] is not None:
+                    # Actual parameter provided - validate it
+                    schema_name = params[0] if isinstance(params[0], str) else str(params[0])
+                    # Handle 'None' string that might come from str(None)
+                    if schema_name.lower() != 'none':
+                        schema_exists = schema_name.lower() in ['public', 'sqluser', 'pg_catalog', 'information_schema']
+                    else:
+                        # 'None' string means no param provided - default to public exists
+                        schema_name = 'public'
+                        schema_exists = True
+
+                logger.info(f"Prisma checking schema '{schema_name}', exists={schema_exists}")
+
+                return {
+                    "success": True,
+                    "rows": [[
+                        schema_exists,  # EXISTS result (boolean)
+                        "PostgreSQL 16.0 (InterSystems IRIS)",  # version()
+                        160000  # current_setting('server_version_num')::integer - MUST be int, not string!
+                    ]],
+                    "columns": [
+                        {
+                            "name": "exists",
+                            "type_oid": 16,  # bool
+                            "type_size": 1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        },
+                        {
+                            "name": "version",
+                            "type_oid": 25,  # text
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        },
+                        {
+                            "name": "numeric_version",  # Match Prisma's expected column name
+                            "type_oid": 23,  # int4 - CRITICAL: Prisma casts to ::integer
+                            "type_size": 4,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        },
                     ],
                     "row_count": 1,
                 }
@@ -1162,23 +1243,42 @@ class IRISExecutor:
                     sql_preview=sql[:100],
                     session_id=session_id,
                 )
-                # Define expected columns for enum query (oid, enumlabel)
-                columns = [
-                    {
-                        "name": "oid",
-                        "type_oid": 26,
-                        "type_size": 4,
-                        "type_modifier": -1,
-                        "format_code": 0,
-                    },
-                    {
-                        "name": "enumlabel",
-                        "type_oid": 19,
-                        "type_size": 64,
-                        "type_modifier": -1,
-                        "format_code": 0,
-                    },
-                ]
+                # Parse SELECT clause using regex to extract all "... AS alias" patterns
+                # This handles function calls with commas like obj_description(t.oid, 'pg_type') AS description
+                import re
+
+                columns = []
+                # Match patterns like: expression AS alias
+                # expression can be: column, table.column, function(args)
+                as_pattern = re.compile(
+                    r'(?:[\w\.]+(?:\([^)]*\))?)\s+AS\s+(\w+)',
+                    re.IGNORECASE
+                )
+                aliases = as_pattern.findall(sql)
+
+                # DEBUG: Log what the regex found
+                logger.warning(
+                    f"🔍 pg_enum regex debug: sql_len={len(sql)}, aliases_found={aliases}, sql_first_200={sql[:200]!r}"
+                )
+
+                if aliases:
+                    # We found AS aliases - use those as column names
+                    for alias in aliases:
+                        columns.append({
+                            "name": alias,
+                            "type_oid": 25,  # text type
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        })
+
+                if not columns:
+                    # Fallback to default columns
+                    columns = [
+                        {"name": "oid", "type_oid": 26, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                        {"name": "enumlabel", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    ]
+
                 return {
                     "success": True,
                     "rows": [],
@@ -1187,6 +1287,692 @@ class IRISExecutor:
                     "command": "SELECT",
                     "command_tag": "SELECT 0",
                 }
+
+            # pg_namespace - Return standard PostgreSQL namespaces for Prisma/ORM introspection
+            # Prisma queries: SELECT namespace.nspname ... FROM pg_namespace WHERE nspname = ANY($1)
+            # CRITICAL: Prisma needs 'public' schema to discover tables
+            # CRITICAL: Only intercept SIMPLE pg_namespace queries, not complex JOINs
+            # Complex queries like "SELECT ... FROM pg_namespace JOIN pg_class" should go to CatalogRouter
+            import re
+            is_simple_pg_namespace = (
+                "PG_NAMESPACE" in sql_upper and
+                # Must have FROM pg_namespace (direct table access)
+                re.search(r"\bFROM\s+PG_NAMESPACE\b", sql_upper) and
+                # Must NOT have JOIN (which indicates complex query)
+                "JOIN" not in sql_upper and
+                # Must NOT have multiple FROM clauses (subqueries are OK)
+                len(re.findall(r"\bFROM\b", sql_upper)) <= 2  # Allow 1 main + 1 subquery
+            )
+
+            if is_simple_pg_namespace:
+                logger.info(
+                    "Intercepting SIMPLE pg_namespace query (returning standard namespaces)",
+                    sql_preview=sql[:150],
+                    session_id=session_id,
+                )
+
+                # Define namespace columns
+                columns = [
+                    {
+                        "name": "nspname",
+                        "type_oid": 19,  # name type
+                        "type_size": 64,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                    {
+                        "name": "oid",
+                        "type_oid": 26,  # oid type
+                        "type_size": 4,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    },
+                ]
+
+                # Standard PostgreSQL namespaces
+                # OIDs match PostgreSQL's well-known values
+                all_namespaces = [
+                    ("public", 2200),
+                    ("pg_catalog", 11),
+                    ("information_schema", 11323),
+                    ("sqluser", 16384),  # IRIS default schema mapped to custom OID
+                ]
+
+                # Check if query filters by specific namespaces (ANY clause)
+                # Prisma sends: WHERE nspname = ANY($1) with params=['public']
+                filtered_namespaces = all_namespaces
+                if params and len(params) > 0 and params[0] is not None:
+                    # params[0] could be:
+                    # - A list: ['public', 'pg_catalog']
+                    # - A string representing a list: "['public']" or "{public}"
+                    # - A single string: 'public'
+                    filter_names = []
+                    param0 = params[0]
+
+                    if isinstance(param0, list):
+                        filter_names = param0
+                    elif isinstance(param0, str):
+                        # Try to parse string-encoded lists
+                        import json
+                        try:
+                            # Handle JSON array format: ["public", "pg_catalog"]
+                            parsed = json.loads(param0)
+                            if isinstance(parsed, list):
+                                filter_names = parsed
+                            else:
+                                filter_names = [str(parsed)]
+                        except json.JSONDecodeError:
+                            # Handle PostgreSQL array format: {public,pg_catalog}
+                            if param0.startswith('{') and param0.endswith('}'):
+                                inner = param0[1:-1]
+                                if inner:
+                                    filter_names = [s.strip().strip('"') for s in inner.split(',')]
+                            # Handle Python-like array format: [public] or ['public']
+                            elif param0.startswith('[') and param0.endswith(']'):
+                                inner = param0[1:-1].strip()
+                                if inner:
+                                    # Remove any quotes around values
+                                    filter_names = [s.strip().strip('"').strip("'") for s in inner.split(',')]
+                            elif param0 == '[]' or param0 == '{}':
+                                # Empty array - return all namespaces
+                                filter_names = []
+                            else:
+                                # Single value
+                                filter_names = [param0]
+                    else:
+                        filter_names = [str(param0)]
+
+                    # Only filter if we have actual names
+                    if filter_names:
+                        filter_names_lower = [n.lower() for n in filter_names if n]
+                        filtered_namespaces = [
+                            (name, oid) for name, oid in all_namespaces
+                            if name.lower() in filter_names_lower
+                        ]
+                        logger.info(
+                            f"pg_namespace: filtering by {filter_names}, found {len(filtered_namespaces)} matches"
+                        )
+                    else:
+                        logger.info("pg_namespace: empty filter, returning all namespaces")
+
+                # Check if query requests only nspname (single column) or both columns
+                # Prisma query: SELECT namespace.nspname as namespace_name FROM pg_namespace
+                import re
+                select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql, re.IGNORECASE | re.DOTALL)
+                if select_match:
+                    select_clause = select_match.group(1).lower()
+                    # Check what columns are requested
+                    has_nspname = "nspname" in select_clause or "namespace_name" in select_clause
+                    has_oid = "oid" in select_clause and "nspname" not in select_clause.split("oid")[0][-5:]
+
+                    if has_nspname and not has_oid:
+                        # Only nspname requested (Prisma pattern)
+                        columns = [columns[0]]  # Just nspname
+                        # Check for alias
+                        if "namespace_name" in select_clause:
+                            columns[0] = columns[0].copy()
+                            columns[0]["name"] = "namespace_name"
+                        rows = [(name,) for name, _ in filtered_namespaces]
+                    else:
+                        # Both columns
+                        rows = [tuple(ns) for ns in filtered_namespaces]
+                else:
+                    # Default: return both columns
+                    rows = [tuple(ns) for ns in filtered_namespaces]
+
+                return {
+                    "success": True,
+                    "rows": rows,
+                    "columns": columns,
+                    "row_count": len(rows),
+                    "command": "SELECT",
+                    "command_tag": f"SELECT {len(rows)}",
+                }
+
+            # pg_constraint - Return constraint information from IRIS INFORMATION_SCHEMA
+            # Prisma sends MULTIPLE types of pg_constraint queries:
+            # 1. Primary/Unique/Foreign key query - needs constraint_definition, column_names
+            # 2. Check/exclusion constraint query - needs is_deferrable, is_deferred
+            # 3. Index query (WITH rawindex) - needs index info, NOT check constraints
+            # 4. Foreign key relationships query - needs parent/child column info
+            # CRITICAL: Must check BEFORE pg_class since constraint queries also reference pg_class
+            if "PG_CONSTRAINT" in sql_upper or "CONSTR.CONNAME" in sql_upper:
+                logger.info(
+                    "Intercepting pg_constraint query (returning from INFORMATION_SCHEMA)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                # Check if this is a check/exclusion constraint query
+                # SPECIFIC pattern: contype NOT IN ('p', 'u', 'f') - filters for check/exclusion only
+                # MUST NOT match WITH rawindex queries which also have condeferrable/condeferred
+                is_check_constraint_query = (
+                    "NOT IN" in sql_upper and
+                    ("'P'" in sql_upper or "'U'" in sql_upper or "'F'" in sql_upper) and
+                    "CONTYPE" in sql_upper  # Must explicitly filter by contype
+                )
+
+                # Also detect specific check constraint columns, but NOT if it's a WITH rawindex query
+                is_rawindex_query = "WITH RAWINDEX" in sql_upper
+                has_deferrable = "IS_DEFERRABLE" in sql_upper  # Only exact match, not CONDEFERRABLE
+                has_deferred = "IS_DEFERRED" in sql_upper  # Only exact match, not CONDEFERRED
+
+                # Check constraint query: has is_deferrable/is_deferred columns AND NOT a rawindex query
+                if is_check_constraint_query or (has_deferrable and has_deferred and not is_rawindex_query):
+                    logger.info(
+                        "Check/exclusion constraint query detected - returning empty result",
+                        is_check_query=is_check_constraint_query,
+                        has_deferrable=has_deferrable,
+                        session_id=session_id,
+                    )
+                    # Return empty result with expected columns for check constraint query
+                    columns = [
+                        {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "table_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_type", "type_oid": 18, "type_size": 1, "type_modifier": -1, "format_code": 0},  # char
+                        {"name": "constraint_definition", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text
+                        {"name": "is_deferrable", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},  # bool
+                        {"name": "is_deferred", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},  # bool
+                    ]
+                    return {
+                        "success": True,
+                        "rows": [],
+                        "columns": columns,
+                        "row_count": 0,
+                        "command": "SELECT",
+                        "command_tag": "SELECT 0",
+                    }
+
+                try:
+                    import iris
+
+                    # Query INFORMATION_SCHEMA for constraints
+                    # Map constraint types: PRIMARY KEY -> p, UNIQUE -> u, FOREIGN KEY -> f
+                    constraints_sql = """
+                        SELECT
+                            'public' AS namespace,
+                            TABLE_NAME,
+                            CONSTRAINT_NAME,
+                            CONSTRAINT_TYPE
+                        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                        WHERE TABLE_SCHEMA = 'SQLUser'
+                        ORDER BY TABLE_NAME, CONSTRAINT_NAME
+                    """
+                    result = iris.sql.exec(constraints_sql)
+                    iris_constraints = list(result)
+
+                    logger.info(f"Found {len(iris_constraints)} constraints in IRIS", constraints=iris_constraints[:5])
+
+                    # Prisma expects: namespace, table_name, constraint_name, constraint_type, constraint_definition
+                    # Also need column info for primary key constraints
+                    columns = [
+                        {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "table_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_type", "type_oid": 18, "type_size": 1, "type_modifier": -1, "format_code": 0},  # char
+                        {"name": "constraint_definition", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text
+                        {"name": "column_names", "type_oid": 1009, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text[]
+                    ]
+
+                    # Map IRIS constraint types to PostgreSQL single-char types
+                    type_map = {
+                        'PRIMARY KEY': 'p',
+                        'UNIQUE': 'u',
+                        'FOREIGN KEY': 'f',
+                        'CHECK': 'c',
+                    }
+
+                    rows = []
+                    for constraint in iris_constraints:
+                        namespace = constraint[0]
+                        table_name = constraint[1].lower()
+                        constraint_name = constraint[2].lower()
+                        iris_type = constraint[3]
+                        pg_type = type_map.get(iris_type, 'c')
+
+                        # Get columns for this constraint
+                        col_sql = f"""
+                            SELECT COLUMN_NAME
+                            FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+                            WHERE CONSTRAINT_NAME = '{constraint[2]}'
+                            ORDER BY ORDINAL_POSITION
+                        """
+                        try:
+                            col_result = iris.sql.exec(col_sql)
+                            col_names = [r[0].lower() for r in col_result]
+                            col_names_str = '{' + ','.join(col_names) + '}'  # PostgreSQL array format
+                        except Exception:
+                            col_names = []
+                            col_names_str = '{}'
+
+                        # Build constraint definition
+                        if pg_type == 'p':
+                            definition = f"PRIMARY KEY ({', '.join(col_names)})"
+                        elif pg_type == 'u':
+                            definition = f"UNIQUE ({', '.join(col_names)})"
+                        else:
+                            definition = ""
+
+                        rows.append((
+                            namespace,
+                            table_name,
+                            constraint_name,
+                            pg_type,
+                            definition,
+                            col_names_str,
+                        ))
+
+                    logger.info(f"Returning {len(rows)} constraints to Prisma")
+
+                    return {
+                        "success": True,
+                        "rows": rows,
+                        "columns": columns,
+                        "row_count": len(rows),
+                        "command": "SELECT",
+                        "command_tag": f"SELECT {len(rows)}",
+                    }
+
+                except Exception as e:
+                    logger.error(f"pg_constraint query failed: {e}", error=str(e))
+                    # Fall through to empty result
+                    columns = [
+                        {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "table_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_type", "type_oid": 18, "type_size": 1, "type_modifier": -1, "format_code": 0},
+                        {"name": "constraint_definition", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                    ]
+                    return {
+                        "success": True,
+                        "rows": [],
+                        "columns": columns,
+                        "row_count": 0,
+                        "command": "SELECT",
+                        "command_tag": "SELECT 0",
+                    }
+
+            # INFORMATION_SCHEMA.SEQUENCES - Return empty sequence information for Prisma
+            # Prisma queries sequences using PostgreSQL-style syntax with colons
+            # IRIS interprets : as host variable prefix, so we intercept this
+            if "INFORMATION_SCHEMA.SEQUENCES" in sql_upper or ("SEQUENCE_NAME" in sql_upper and "SEQUENCE_SCHEMA" in sql_upper):
+                logger.info(
+                    "Intercepting sequence query (returning empty - IRIS sequences not exposed)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                # Return empty result for sequence queries
+                columns = [
+                    {"name": "sequence_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "start_value", "type_oid": 20, "type_size": 8, "type_modifier": -1, "format_code": 0},  # bigint
+                    {"name": "min_value", "type_oid": 20, "type_size": 8, "type_modifier": -1, "format_code": 0},
+                    {"name": "max_value", "type_oid": 20, "type_size": 8, "type_modifier": -1, "format_code": 0},
+                    {"name": "increment_by", "type_oid": 20, "type_size": 8, "type_modifier": -1, "format_code": 0},
+                    {"name": "cycle", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},  # bool
+                    {"name": "cache_size", "type_oid": 20, "type_size": 8, "type_modifier": -1, "format_code": 0},
+                ]
+
+                return {
+                    "success": True,
+                    "rows": [],  # No sequences to report
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # pg_extension - Return empty extension information for Prisma introspection
+            # Prisma queries pg_extension for installed PostgreSQL extensions
+            # IRIS doesn't have PostgreSQL-style extensions, return empty
+            if "PG_EXTENSION" in sql_upper:
+                logger.info(
+                    "Intercepting pg_extension query (returning empty - IRIS has no PG extensions)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                # Return empty result with minimal columns for extension queries
+                columns = [
+                    {"name": "oid", "type_oid": 26, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                    {"name": "extname", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "extversion", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                ]
+
+                return {
+                    "success": True,
+                    "rows": [],  # No extensions installed
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # pg_proc - Return empty function/procedure information for Prisma introspection
+            # Prisma queries pg_proc for stored procedures and functions
+            # IRIS doesn't expose stored procedures via pg_proc, so return empty
+            if "PG_PROC" in sql_upper:
+                logger.info(
+                    "Intercepting pg_proc query (returning empty - IRIS procedures not exposed)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                # Return empty result with minimal columns for procedure queries
+                columns = [
+                    {"name": "oid", "type_oid": 26, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                    {"name": "proname", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "pronamespace", "type_oid": 26, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                ]
+
+                return {
+                    "success": True,
+                    "rows": [],  # No procedures to report
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # pg_views - Return empty view information for Prisma introspection
+            # Prisma sends queries like:
+            # SELECT views.viewname AS view_name, views.definition AS view_sql, views.schemaname AS namespace, ...
+            # FROM pg_catalog.pg_views views INNER JOIN pg_catalog.pg_namespace ...
+            # CRITICAL: Must check BEFORE pg_class since view queries may JOIN with pg_class
+            if "PG_VIEWS" in sql_upper:
+                logger.info(
+                    "Intercepting pg_views query (returning empty - IRIS views not exposed)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                # Return empty result with correct columns for view queries
+                # Prisma expects: view_name, view_sql, namespace, description
+                columns = [
+                    {"name": "view_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "view_sql", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text
+                    {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                    {"name": "description", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text
+                ]
+
+                return {
+                    "success": True,
+                    "rows": [],  # No views to report
+                    "columns": columns,
+                    "row_count": 0,
+                    "command": "SELECT",
+                    "command_tag": "SELECT 0",
+                }
+
+            # pg_class - Return table information from IRIS INFORMATION_SCHEMA
+            # Prisma sends complex queries like:
+            # SELECT tbl.relname AS table_name, namespace.nspname as namespace, ...
+            # FROM pg_class AS tbl JOIN pg_namespace AS namespace ON ...
+            # WHERE namespace.nspname = ANY($1) AND tbl.relkind IN ('r', 'p')
+            # CRITICAL: Only intercept simple pg_class table queries, not JOINs with pg_attribute for column info
+            is_simple_pg_class = (
+                "PG_CLASS" in sql_upper and
+                "PG_ATTRIBUTE" not in sql_upper and  # Not a column info query
+                "ATT.ATTTYPID" not in sql_upper and  # Not a column type query
+                "INFO.COLUMN_NAME" not in sql_upper  # Not an information_schema column query
+            )
+
+            if is_simple_pg_class:
+                logger.info(
+                    "Intercepting pg_class query (returning tables from INFORMATION_SCHEMA)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                try:
+                    import iris
+
+                    # Query INFORMATION_SCHEMA for table list
+                    tables_sql = """
+                        SELECT TABLE_NAME, TABLE_SCHEMA
+                        FROM INFORMATION_SCHEMA.TABLES
+                        WHERE TABLE_TYPE = 'BASE TABLE'
+                        ORDER BY TABLE_SCHEMA, TABLE_NAME
+                    """
+                    result = iris.sql.exec(tables_sql)
+                    iris_tables = [(row[0], row[1]) for row in result]
+
+                    logger.info(f"Found {len(iris_tables)} tables in IRIS", tables=iris_tables[:10])
+
+                    # Map IRIS schemas to PostgreSQL namespaces
+                    # SQLUser -> public (Prisma expects 'public')
+                    schema_mapping = {
+                        'sqluser': 'public',
+                        'SQLUser': 'public',
+                        '%Library': 'pg_catalog',
+                        'INFORMATION_SCHEMA': 'information_schema',
+                    }
+
+                    # CRITICAL: Create OIDGenerator for table OIDs
+                    # Prisma needs OIDs to JOIN pg_class with pg_attribute for column info
+                    oid_gen = OIDGenerator()
+
+                    # Build pg_class-like response based on Prisma's expected columns
+                    # NOTE: Only return columns that Prisma's query requests - do NOT add OID
+                    # Prisma's query: SELECT tbl.relname AS table_name, namespace.nspname as namespace, ...
+                    columns = [
+                        {"name": "table_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "is_partition", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},
+                        {"name": "has_subclass", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},
+                        {"name": "has_row_level_security", "type_oid": 16, "type_size": 1, "type_modifier": -1, "format_code": 0},
+                        {"name": "reloptions", "type_oid": 1009, "type_size": -1, "type_modifier": -1, "format_code": 0},  # text[]
+                        {"name": "description", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                    ]
+
+                    # Filter by namespace if params contain schema filter
+                    target_namespaces = ['public']  # Default to public
+                    if params and len(params) > 0 and params[0] is not None:
+                        param0 = params[0]
+                        if isinstance(param0, list):
+                            target_namespaces = [n.lower() for n in param0]
+                        elif isinstance(param0, str):
+                            # Parse array string
+                            if param0.startswith('[') and param0.endswith(']'):
+                                inner = param0[1:-1].strip()
+                                if inner:
+                                    target_namespaces = [s.strip().strip('"').strip("'").lower() for s in inner.split(',')]
+                            elif param0.startswith('{') and param0.endswith('}'):
+                                inner = param0[1:-1]
+                                if inner:
+                                    target_namespaces = [s.strip().strip('"').lower() for s in inner.split(',')]
+                            else:
+                                target_namespaces = [param0.lower()]
+
+                    logger.info(f"pg_class: filtering for namespaces {target_namespaces}")
+
+                    rows = []
+                    for table_name, table_schema in iris_tables:
+                        # Map IRIS schema to PostgreSQL namespace
+                        pg_namespace = schema_mapping.get(table_schema, table_schema.lower())
+
+                        # Only include tables in target namespaces
+                        if pg_namespace in target_namespaces:
+                            # Return only the 7 columns that Prisma's query requests
+                            rows.append((
+                                table_name.lower(),  # table_name (lowercase for PostgreSQL)
+                                pg_namespace,        # namespace
+                                False,               # is_partition
+                                False,               # has_subclass
+                                False,               # has_row_level_security
+                                None,                # reloptions (array)
+                                None,                # description
+                            ))
+
+                    logger.info(f"pg_class: returning {len(rows)} tables for namespaces {target_namespaces}")
+
+                    return {
+                        "success": True,
+                        "rows": rows,
+                        "columns": columns,
+                        "row_count": len(rows),
+                        "command": "SELECT",
+                        "command_tag": f"SELECT {len(rows)}",
+                    }
+
+                except Exception as e:
+                    logger.error(f"pg_class interception failed: {e}", error=str(e))
+                    # Fall through to normal execution (which will fail, but gives proper error)
+
+            # Prisma column info query - Return IRIS column metadata from INFORMATION_SCHEMA
+            # Prisma sends:
+            # SELECT oid.namespace, info.table_name, info.column_name, format_type(att.atttypid, att.atttypmod) as formatted_type, ...
+            # FROM information_schema.columns info JOIN pg_attribute att ON ...
+            # WHERE namespace = ANY($1) AND table_name = ANY($2)
+            # CRITICAL: Must be BEFORE generic pg_attribute handler
+            if "INFO.TABLE_NAME" in sql_upper and "INFO.COLUMN_NAME" in sql_upper and "FORMAT_TYPE" in sql_upper:
+                logger.info(
+                    "Intercepting Prisma column info query (returning IRIS columns from INFORMATION_SCHEMA)",
+                    sql_preview=sql[:200],
+                    session_id=session_id,
+                )
+
+                try:
+                    import iris
+
+                    # Query INFORMATION_SCHEMA.COLUMNS for column metadata
+                    # Filter by SQLUser schema (maps to public)
+                    columns_sql = """
+                        SELECT
+                            'public' AS namespace,
+                            TABLE_NAME,
+                            COLUMN_NAME,
+                            DATA_TYPE,
+                            COALESCE(NUMERIC_PRECISION, 0) AS numeric_precision,
+                            COALESCE(NUMERIC_SCALE, 0) AS numeric_scale,
+                            COALESCE(CHARACTER_MAXIMUM_LENGTH, 0) AS max_length,
+                            IS_NULLABLE,
+                            COLUMN_DEFAULT,
+                            ORDINAL_POSITION
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_SCHEMA = 'SQLUser'
+                        ORDER BY TABLE_NAME, ORDINAL_POSITION
+                    """
+                    result = iris.sql.exec(columns_sql)
+                    iris_columns = list(result)
+
+                    logger.info(f"Found {len(iris_columns)} columns in IRIS", column_count=len(iris_columns))
+
+                    # Type mapping is now configurable via type_mapping module
+                    # Uses get_type_mapping() which can be configured via:
+                    # - Environment variables (PGWIRE_TYPE_MAP_<TYPE>=pg_type:udt_name:oid)
+                    # - Configuration file (type_mapping.json)
+                    # - Programmatic API (configure_type_mapping())
+                    #
+                    # CRITICAL: Prisma uses udt_name (e.g., 'int4', 'varchar') for type mapping
+                    # data_type is the SQL standard name, udt_name is the PostgreSQL internal name
+
+                    # Build response with Prisma's expected columns
+                    # Prisma expects: namespace, table_name, column_name, data_type, full_data_type,
+                    # formatted_type, udt_name, numeric_precision, numeric_scale, max_length, is_nullable,
+                    # column_default, ordinal_position, is_identity, is_generated
+                    # CRITICAL: udt_name is used by Prisma for type mapping (int4 → Int, varchar → String)
+                    response_columns = [
+                        {"name": "namespace", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "table_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "column_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},
+                        {"name": "data_type", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # SQL standard name (e.g., 'integer')
+                        {"name": "full_data_type", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},  # Full type with precision
+                        {"name": "formatted_type", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                        {"name": "udt_name", "type_oid": 19, "type_size": 64, "type_modifier": -1, "format_code": 0},  # PostgreSQL internal name (e.g., 'int4')
+                        {"name": "numeric_precision", "type_oid": 23, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                        {"name": "numeric_scale", "type_oid": 23, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                        {"name": "character_maximum_length", "type_oid": 23, "type_size": 4, "type_modifier": -1, "format_code": 0},  # Prisma expects this name
+                        {"name": "is_nullable", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                        {"name": "column_default", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                        {"name": "ordinal_position", "type_oid": 23, "type_size": 4, "type_modifier": -1, "format_code": 0},
+                        {"name": "is_identity", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                        {"name": "is_generated", "type_oid": 25, "type_size": -1, "type_modifier": -1, "format_code": 0},
+                    ]
+
+                    rows = []
+                    for col in iris_columns:
+                        namespace = col[0]
+                        table_name = col[1].lower()  # Lowercase for PostgreSQL
+                        column_name = col[2].lower()
+                        iris_data_type = col[3].upper() if col[3] else 'VARCHAR'
+                        # Convert to int, handling strings and None
+                        numeric_precision = int(col[4]) if col[4] and str(col[4]).isdigit() else 0
+                        numeric_scale = int(col[5]) if col[5] and str(col[5]).isdigit() else 0
+                        max_length = int(col[6]) if col[6] and str(col[6]).isdigit() else 0
+                        is_nullable = 'YES' if col[7] == 'YES' else 'NO'
+                        column_default = col[8]
+                        ordinal_position = int(col[9]) if col[9] and str(col[9]).isdigit() else 0
+
+                        # Map to PostgreSQL format_type and udt_name using configurable type mapping
+                        base_type = iris_data_type.split('(')[0]
+                        pg_type, udt_name, _type_oid = get_type_mapping(base_type)
+
+                        # Build formatted_type with precision/length
+                        if max_length > 0 and pg_type in ('character varying', 'character'):
+                            formatted_type = f"{pg_type}({max_length})"
+                        elif numeric_precision > 0 and pg_type == 'numeric':
+                            formatted_type = f"numeric({numeric_precision},{numeric_scale})"
+                        else:
+                            formatted_type = pg_type
+
+                        # data_type is the base PostgreSQL type name (lowercase)
+                        data_type = pg_type
+                        # full_data_type includes precision/scale (same as formatted_type for Prisma)
+                        full_data_type = formatted_type
+
+                        # Clean up column_default - remove IRIS-specific syntax
+                        # Prisma expects NULL for no default, or valid SQL expression
+                        clean_default = None
+                        if column_default:
+                            default_upper = str(column_default).upper()
+                            # Skip IRIS internal defaults that aren't meaningful to Prisma
+                            if 'AUTOINCREMENT' in default_upper or 'ROWVERSION' in default_upper:
+                                clean_default = None  # Will be handled by @id or identity
+                            elif default_upper in ('NULL', ''):
+                                clean_default = None
+                            else:
+                                clean_default = column_default
+
+                        # Detect identity columns (IRIS uses AUTOINCREMENT)
+                        is_identity = 'NO'
+                        if column_default and 'AUTOINCREMENT' in str(column_default).upper():
+                            is_identity = 'YES'  # Prisma uses this to detect @id
+
+                        rows.append((
+                            namespace,
+                            table_name,
+                            column_name,
+                            data_type,  # SQL standard name (e.g., 'integer')
+                            full_data_type,  # Full type with precision
+                            formatted_type,
+                            udt_name,  # PostgreSQL internal name (e.g., 'int4') - CRITICAL for Prisma type mapping
+                            numeric_precision,
+                            numeric_scale,
+                            max_length,  # character_maximum_length
+                            is_nullable,
+                            clean_default,
+                            ordinal_position,
+                            is_identity,
+                            'NEVER',  # is_generated
+                        ))
+
+                    logger.info(f"Returning {len(rows)} column definitions to Prisma")
+
+                    return {
+                        "success": True,
+                        "rows": rows,
+                        "columns": response_columns,
+                        "row_count": len(rows),
+                        "command": "SELECT",
+                        "command_tag": f"SELECT {len(rows)}",
+                    }
+
+                except Exception as e:
+                    logger.error(f"Prisma column info query failed: {e}", error=str(e))
+                    # Fall through to generic handler
 
             # Composite types queries (pg_attribute, att.attname) - Return empty with column metadata
             # Npgsql queries for composite type definitions, but IRIS doesn't have these
@@ -1349,12 +2135,14 @@ class IRISExecutor:
                         "typnotnull",
                         "elemtypoid",
                     ]
+                    column_aliases = {}
                 else:
                     select_clause = select_match.group(1)
                     # Extract column names (handle aliases like "t.oid", "ns.nspname")
                     # Remove table prefixes (ns., t., typ., att., etc.)
                     column_parts = [col.strip() for col in select_clause.split(",")]
                     requested_columns = []
+                    column_aliases = {}  # Maps source column to alias
                     for part in column_parts:
                         # Extract column name after dot (if exists) or use whole part
                         if "." in part:
@@ -1362,13 +2150,19 @@ class IRISExecutor:
                         else:
                             col_name = part.strip()
 
-                        # Remove AS aliases
+                        # Handle AS aliases - extract both source column and alias
+                        alias = None
                         if " AS " in col_name.upper():
-                            col_name = col_name.split()[0]
+                            parts = col_name.split()
+                            as_idx = next(i for i, p in enumerate(parts) if p.upper() == "AS")
+                            col_name = parts[0]  # Source column name
+                            alias = parts[as_idx + 1] if as_idx + 1 < len(parts) else None
 
                         # Check if this is a known column
                         if col_name in available_columns:
                             requested_columns.append(col_name)
+                            if alias:
+                                column_aliases[col_name] = alias
                         else:
                             logger.warning(
                                 f"Unknown column '{col_name}' in SELECT clause, skipping"
@@ -1387,27 +2181,79 @@ class IRISExecutor:
                             "typnotnull",
                             "elemtypoid",
                         ]
+                        column_aliases = {}
 
                 logger.info(f"🔍 Parsed SELECT clause: requesting columns {requested_columns}")
 
+                # Parse namespace filter from WHERE clause (nspname = ANY(?))
+                # Prisma sends: WHERE nspname = ANY($1) with params=['public']
+                requested_namespaces = None  # None means no filter, return all
+                if params and len(params) > 0 and params[0] is not None:
+                    # Parse namespace parameter similar to pg_namespace handler
+                    filter_names = []
+                    param0 = params[0]
+
+                    if isinstance(param0, list):
+                        filter_names = param0
+                    elif isinstance(param0, str):
+                        import json
+                        try:
+                            parsed = json.loads(param0)
+                            if isinstance(parsed, list):
+                                filter_names = parsed
+                            else:
+                                filter_names = [str(parsed)]
+                        except json.JSONDecodeError:
+                            # Handle PostgreSQL array format: {public,pg_catalog}
+                            if param0.startswith('{') and param0.endswith('}'):
+                                inner = param0[1:-1]
+                                if inner:
+                                    filter_names = [s.strip().strip('"') for s in inner.split(',')]
+                            # Handle Python-like array format: ['public']
+                            elif param0.startswith('[') and param0.endswith(']'):
+                                inner = param0[1:-1].strip()
+                                if inner:
+                                    filter_names = [s.strip().strip('"').strip("'") for s in inner.split(',')]
+                            elif param0 == '[]' or param0 == '{}':
+                                filter_names = []
+                            else:
+                                filter_names = [param0]
+                    else:
+                        filter_names = [str(param0)]
+
+                    if filter_names:
+                        requested_namespaces = [n.lower() for n in filter_names if n]
+                        logger.info(f"🔍 pg_type: filtering by namespaces {requested_namespaces}")
+
+                # Check if pg_catalog is in requested namespaces
+                # All built-in types are in pg_catalog namespace
+                include_types = True
+                if requested_namespaces is not None:
+                    if "pg_catalog" not in requested_namespaces:
+                        # Only return types if pg_catalog is requested
+                        include_types = False
+                        logger.info(f"🔍 pg_type: pg_catalog not in {requested_namespaces}, returning 0 rows")
+
                 # Build rows based on requested column order
                 rows = []
-                for i in range(len(base_types["oid"])):
-                    row = []
-                    for col_name in requested_columns:
-                        if col_name in ["oid", "typname"]:
-                            # These are lists (one value per type)
-                            row.append(base_types[col_name][i])
-                        else:
-                            # These are scalars (same for all types)
-                            row.append(base_types[col_name])
-                    rows.append(tuple(row))
+                if include_types:
+                    for i in range(len(base_types["oid"])):
+                        row = []
+                        for col_name in requested_columns:
+                            if col_name in ["oid", "typname"]:
+                                # These are lists (one value per type)
+                                row.append(base_types[col_name][i])
+                            else:
+                                # These are scalars (same for all types)
+                                row.append(base_types[col_name])
+                        rows.append(tuple(row))
 
-                # Build column metadata in requested order
+                # Build column metadata in requested order (use aliases if defined)
                 columns = []
                 for col_name in requested_columns:
                     col_meta = available_columns[col_name].copy()
-                    col_meta["name"] = col_name
+                    # Use alias if defined, otherwise use source column name
+                    col_meta["name"] = column_aliases.get(col_name, col_name)
                     columns.append(col_meta)
 
                 return {
@@ -1559,6 +2405,169 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
+                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
+                # Prisma sends: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
+                import re
+                import datetime as dt
+                original_sql_for_log = optimized_sql[:80]
+
+                # CRITICAL: Convert PostgreSQL timestamp microseconds to IRIS timestamp strings
+                # Prisma sends timestamps as int64 microseconds since 2000-01-01 (PostgreSQL epoch)
+                # IRIS expects timestamps as ISO 8601 strings
+                if optimized_params and re.search(r'\bINSERT\b', optimized_sql, re.IGNORECASE):
+                    # Check for timestamp-like values (large integers that could be microseconds)
+                    # PostgreSQL epoch is 2000-01-01, so timestamps from 2020-2030 are roughly:
+                    # 20 years * 365 * 24 * 60 * 60 * 1_000_000 = ~630_720_000_000_000
+                    # 30 years = ~946_080_000_000_000
+                    PG_EPOCH = dt.datetime(2000, 1, 1, 0, 0, 0)
+                    MIN_TIMESTAMP = 500_000_000_000_000  # ~2015
+                    MAX_TIMESTAMP = 1_500_000_000_000_000  # ~2047
+
+                    new_params = list(optimized_params)
+                    for i, param in enumerate(new_params):
+                        if isinstance(param, int) and MIN_TIMESTAMP < param < MAX_TIMESTAMP:
+                            # This looks like a PostgreSQL timestamp in microseconds
+                            try:
+                                timestamp_obj = PG_EPOCH + dt.timedelta(microseconds=param)
+                                new_params[i] = timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
+                                logger.info(
+                                    "Converted PostgreSQL timestamp to IRIS format",
+                                    param_index=i,
+                                    original_value=param,
+                                    converted_value=new_params[i],
+                                    session_id=session_id,
+                                )
+                            except (ValueError, OverflowError) as e:
+                                logger.warning(
+                                    "Failed to convert timestamp parameter",
+                                    param_index=i,
+                                    value=param,
+                                    error=str(e),
+                                    session_id=session_id,
+                                )
+                    optimized_params = tuple(new_params)
+                # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
+                optimized_sql = re.sub(
+                    r'"public"\s*\.\s*"(\w+)"',
+                    r'SQLUser."\1"',
+                    optimized_sql,
+                    flags=re.IGNORECASE
+                )
+                # Also handle public."tablename" without quotes on public
+                optimized_sql = re.sub(
+                    r'\bpublic\s*\.\s*"(\w+)"',
+                    r'SQLUser."\1"',
+                    optimized_sql,
+                    flags=re.IGNORECASE
+                )
+                if original_sql_for_log != optimized_sql[:80]:
+                    logger.info(
+                        "Schema translation applied: public -> SQLUser",
+                        original_preview=original_sql_for_log,
+                        translated_preview=optimized_sql[:80],
+                        session_id=session_id,
+                    )
+
+                # CRITICAL: Handle INSERT/UPDATE/DELETE...RETURNING (IRIS doesn't support RETURNING)
+                # Prisma sends: INSERT INTO table (cols) VALUES (vals) RETURNING col1, col2, ...
+                #           or: UPDATE table SET ... WHERE ... RETURNING col1, col2, ...
+                #           or: DELETE FROM table WHERE ... RETURNING col1, col2, ...
+                # We need to: 1) Strip RETURNING, 2) Execute statement, 3) Return the affected row(s)
+                returning_columns = None
+                returning_table = None
+                returning_where_clause = None  # For UPDATE/DELETE
+                returning_operation = None  # 'INSERT', 'UPDATE', or 'DELETE'
+                if re.search(r'\bRETURNING\b', optimized_sql, re.IGNORECASE):
+                    # Extract RETURNING columns
+                    returning_match = re.search(
+                        r'\bRETURNING\s+(.+)$',
+                        optimized_sql,
+                        re.IGNORECASE | re.DOTALL
+                    )
+                    if returning_match:
+                        returning_clause = returning_match.group(1).strip()
+                        # Parse column names from RETURNING clause
+                        # Format: "schema"."table"."col1", "schema"."table"."col2", ...
+                        # Or just: col1, col2, ...
+                        raw_cols = [c.strip() for c in returning_clause.split(',')]
+                        returning_columns = []
+                        for col in raw_cols:
+                            # Extract just the column name (last part after dots)
+                            col_match = re.search(r'"?(\w+)"?\s*$', col)
+                            if col_match:
+                                returning_columns.append(col_match.group(1))
+
+                        # Determine operation type and extract table/where clause
+                        sql_upper = optimized_sql.upper()
+                        if sql_upper.strip().startswith('INSERT'):
+                            returning_operation = 'INSERT'
+                            # Extract table name from INSERT INTO clause
+                            table_match = re.search(
+                                r'INSERT\s+INTO\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                                optimized_sql,
+                                re.IGNORECASE
+                            )
+                            if table_match:
+                                returning_table = table_match.group(1)
+                        elif sql_upper.strip().startswith('UPDATE'):
+                            returning_operation = 'UPDATE'
+                            # Extract table name from UPDATE clause
+                            table_match = re.search(
+                                r'UPDATE\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                                optimized_sql,
+                                re.IGNORECASE
+                            )
+                            if table_match:
+                                returning_table = table_match.group(1)
+                            # Extract WHERE clause (everything between WHERE and RETURNING)
+                            where_match = re.search(
+                                r'\bWHERE\s+(.+?)\s+RETURNING\b',
+                                optimized_sql,
+                                re.IGNORECASE | re.DOTALL
+                            )
+                            if where_match:
+                                returning_where_clause = where_match.group(1).strip()
+                        elif sql_upper.strip().startswith('DELETE'):
+                            returning_operation = 'DELETE'
+                            # Extract table name from DELETE FROM clause
+                            table_match = re.search(
+                                r'DELETE\s+FROM\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                                optimized_sql,
+                                re.IGNORECASE
+                            )
+                            if table_match:
+                                returning_table = table_match.group(1)
+                            # Extract WHERE clause
+                            where_match = re.search(
+                                r'\bWHERE\s+(.+?)\s+RETURNING\b',
+                                optimized_sql,
+                                re.IGNORECASE | re.DOTALL
+                            )
+                            if where_match:
+                                returning_where_clause = where_match.group(1).strip()
+
+                        logger.info(
+                            "RETURNING clause detected - will emulate",
+                            returning_operation=returning_operation,
+                            returning_columns=returning_columns,
+                            returning_table=returning_table,
+                            returning_where_clause=returning_where_clause[:100] if returning_where_clause else None,
+                            session_id=session_id,
+                        )
+
+                        # Strip RETURNING clause from SQL
+                        optimized_sql = re.sub(
+                            r'\s+RETURNING\s+.+$',
+                            '',
+                            optimized_sql,
+                            flags=re.IGNORECASE | re.DOTALL
+                        )
+                        logger.info(
+                            "Stripped RETURNING clause",
+                            sql_preview=optimized_sql[:100],
+                            session_id=session_id,
+                        )
+
                 logger.debug(
                     "Executing IRIS query",
                     sql_preview=optimized_sql[:200],
@@ -1578,6 +2587,57 @@ class IRISExecutor:
 
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
+
+                # SPECIAL CASE: DELETE with RETURNING - we need to SELECT BEFORE deleting
+                # because after DELETE the row won't exist anymore
+                delete_returning_result = None
+                if returning_operation == 'DELETE' and returning_columns and returning_table and returning_where_clause:
+                    try:
+                        col_list = ", ".join([f'"{col}"' for col in returning_columns])
+                        # Translate the WHERE clause schema references
+                        translated_where = re.sub(
+                            r'"public"\s*\.\s*"(\w+)"',
+                            r'SQLUser."\1"',
+                            returning_where_clause,
+                            flags=re.IGNORECASE
+                        )
+                        translated_where = re.sub(
+                            r'\bpublic\s*\.\s*"(\w+)"',
+                            r'SQLUser."\1"',
+                            translated_where,
+                            flags=re.IGNORECASE
+                        )
+                        select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE {translated_where}'
+
+                        # Count ? placeholders to get params
+                        where_param_count = len(re.findall(r'\?', returning_where_clause))
+                        if optimized_params and where_param_count > 0:
+                            # For DELETE, all params are for WHERE clause
+                            where_params = optimized_params[-where_param_count:]
+                            logger.info(
+                                "Pre-DELETE: Fetching row before deletion",
+                                select_sql=select_sql[:200],
+                                where_params=where_params,
+                                session_id=session_id,
+                            )
+                            delete_returning_result = iris.sql.exec(select_sql, *where_params)
+                        else:
+                            delete_returning_result = iris.sql.exec(select_sql)
+
+                        # Materialize the result before DELETE (iterator would be invalid after)
+                        delete_returning_rows = list(delete_returning_result)
+                        logger.info(
+                            "Pre-DELETE: Row captured for RETURNING",
+                            row_count=len(delete_returning_rows),
+                            session_id=session_id,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Pre-DELETE SELECT failed",
+                            error=str(e),
+                            session_id=session_id,
+                        )
+                        delete_returning_rows = []
 
                 # CRITICAL FIX: Split SQL by semicolons to handle multiple statements
                 # IRIS iris.sql.exec() cannot handle "STMT1; STMT2" in a single call
@@ -1616,6 +2676,140 @@ class IRISExecutor:
                         result = iris.sql.exec(optimized_sql, *optimized_params)
                     else:
                         result = iris.sql.exec(optimized_sql)
+
+                # RETURNING emulation: After INSERT/UPDATE/DELETE, fetch the affected row(s)
+                if returning_columns and returning_table and returning_operation:
+                    logger.info(
+                        f"Emulating RETURNING for {returning_operation}",
+                        table=returning_table,
+                        columns=returning_columns,
+                        operation=returning_operation,
+                        session_id=session_id,
+                    )
+                    try:
+                        col_list = ", ".join([f'"{col}"' for col in returning_columns])
+
+                        if returning_operation == 'INSERT':
+                            # Get the last inserted ID using LAST_IDENTITY()
+                            id_result = iris.sql.exec("SELECT LAST_IDENTITY()")
+                            last_id = None
+                            for row in id_result:
+                                last_id = row[0]
+                                break
+
+                            # Handle empty string (LAST_IDENTITY() returns '' for non-IDENTITY tables)
+                            if last_id is None or last_id == '' or last_id == 0:
+                                # Fallback: use MAX(id) - not ideal for concurrent inserts but works
+                                logger.info(
+                                    "LAST_IDENTITY() returned empty, falling back to MAX(id)",
+                                    last_id_value=repr(last_id),
+                                    session_id=session_id,
+                                )
+                                max_result = iris.sql.exec(f'SELECT MAX("id") FROM SQLUser."{returning_table}"')
+                                for row in max_result:
+                                    last_id = row[0]
+                                    break
+
+                            if last_id is not None and last_id != '' and last_id != 0:
+                                # Build SELECT to fetch the inserted row
+                                select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE "id" = ?'
+                                logger.info(
+                                    "Fetching inserted row",
+                                    select_sql=select_sql,
+                                    last_id=last_id,
+                                    session_id=session_id,
+                                )
+                                result = iris.sql.exec(select_sql, last_id)
+                            else:
+                                logger.warning(
+                                    "Could not determine last inserted ID - RETURNING emulation may fail",
+                                    last_id_value=repr(last_id),
+                                    session_id=session_id,
+                                )
+
+                        elif returning_operation == 'DELETE':
+                            # For DELETE, we already captured the row BEFORE deletion
+                            # Use the pre-captured delete_returning_rows
+                            if delete_returning_rows:
+                                logger.info(
+                                    "Using pre-captured DELETE RETURNING rows",
+                                    row_count=len(delete_returning_rows),
+                                    session_id=session_id,
+                                )
+                                # Create a mock result object that yields the pre-captured rows
+                                class MockResult:
+                                    def __init__(self, rows):
+                                        self._rows = rows
+                                        self._meta = None  # No metadata available
+                                    def __iter__(self):
+                                        return iter(self._rows)
+                                result = MockResult(delete_returning_rows)
+                            else:
+                                logger.warning(
+                                    "DELETE RETURNING: No pre-captured rows available",
+                                    session_id=session_id,
+                                )
+
+                        elif returning_operation == 'UPDATE':
+                            # For UPDATE, use the WHERE clause to fetch the affected row(s)
+                            if returning_where_clause:
+                                # Translate the WHERE clause schema references
+                                translated_where = re.sub(
+                                    r'"public"\s*\.\s*"(\w+)"',
+                                    r'SQLUser."\1"',
+                                    returning_where_clause,
+                                    flags=re.IGNORECASE
+                                )
+                                # Also handle unquoted public references
+                                translated_where = re.sub(
+                                    r'\bpublic\s*\.\s*"(\w+)"',
+                                    r'SQLUser."\1"',
+                                    translated_where,
+                                    flags=re.IGNORECASE
+                                )
+
+                                # Build SELECT with the same WHERE clause
+                                select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE {translated_where}'
+
+                                logger.info(
+                                    f"Fetching UPDATEd row(s) using WHERE clause",
+                                    select_sql=select_sql[:200],
+                                    param_count=len(optimized_params) if optimized_params else 0,
+                                    session_id=session_id,
+                                )
+
+                                # For UPDATE, the WHERE clause params are the LAST params
+                                # Prisma UPDATE format: UPDATE SET col=$1 WHERE id=$2
+                                # Note: By this point, $N placeholders have been converted to ?
+                                where_param_count = len(re.findall(r'\?', returning_where_clause))
+
+                                if optimized_params and where_param_count > 0:
+                                    # Take the last N params for the WHERE clause
+                                    where_params = optimized_params[-where_param_count:]
+                                    logger.info(
+                                        "Using WHERE clause parameters",
+                                        where_param_count=where_param_count,
+                                        where_params=where_params,
+                                        session_id=session_id,
+                                    )
+
+                                    # The SELECT already uses ? placeholders
+                                    result = iris.sql.exec(select_sql, *where_params)
+                                else:
+                                    # No params needed
+                                    result = iris.sql.exec(select_sql)
+                            else:
+                                logger.warning(
+                                    "UPDATE without WHERE clause - RETURNING emulation may fail",
+                                    session_id=session_id,
+                                )
+                    except Exception as e:
+                        logger.error(
+                            "RETURNING emulation failed",
+                            error=str(e),
+                            operation=returning_operation,
+                            session_id=session_id,
+                        )
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -3031,6 +4225,9 @@ class IRISExecutor:
         Handles:
         - SELECT * FROM table_name
         - SELECT col1, col2 FROM table_name
+        - SELECT * FROM "table_name"
+        - SELECT * FROM "schema"."table_name" (Prisma format)
+        - SELECT * FROM schema."table_name"
         - SELECT * FROM table_name WHERE ...
 
         Returns:
@@ -3038,12 +4235,22 @@ class IRISExecutor:
         """
         import re
 
-        # Simple regex to extract table name from SELECT ... FROM table_name
-        # Pattern: SELECT ... FROM <table_name>
-        match = re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
+        # CRITICAL FIX: Handle Prisma-style quoted identifiers
+        # Prisma sends: FROM "public"."test_users"
+        # We need to extract "test_users" (the table name, not schema)
+
+        # Pattern 1: FROM "schema"."table_name" - extract last quoted identifier
+        match = re.search(r'\bFROM\s+(?:"?\w+"?\s*\.\s*)*"?(\w+)"?', sql, re.IGNORECASE)
         if match:
             table_name = match.group(1)
             logger.debug(f"Extracted table name: {table_name}", sql=sql[:100])
+            return table_name
+
+        # Fallback: Simple unquoted table name
+        match = re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
+        if match:
+            table_name = match.group(1)
+            logger.debug(f"Extracted table name (simple): {table_name}", sql=sql[:100])
             return table_name
 
         return None

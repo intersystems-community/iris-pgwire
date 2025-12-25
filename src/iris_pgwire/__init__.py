@@ -13,4 +13,26 @@ __author__ = "IRIS PGWire Team"
 # when running with python -m iris_pgwire.server
 # Users can import directly: from iris_pgwire.server import PGWireServer
 
-__all__ = ["__version__", "__author__"]
+# Export type mapping functions for programmatic configuration
+from .type_mapping import (
+    configure_type_mapping,
+    configure_type_mappings,
+    get_type_mapping,
+    get_all_type_mappings,
+    reset_type_mappings,
+    load_type_mappings_from_file,
+    dump_type_mappings_to_json,
+)
+
+__all__ = [
+    "__version__",
+    "__author__",
+    # Type mapping API
+    "configure_type_mapping",
+    "configure_type_mappings",
+    "get_type_mapping",
+    "get_all_type_mappings",
+    "reset_type_mappings",
+    "load_type_mappings_from_file",
+    "dump_type_mappings_to_json",
+]
