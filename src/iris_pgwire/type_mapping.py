@@ -254,5 +254,142 @@ def dump_type_mappings_to_json(path: str | Path) -> None:
     logger.info(f"Exported type mappings to {path}")
 
 
+# OID → Type reverse lookup (T003)
+# Maps PostgreSQL type OID to (pg_data_type, pg_udt_name, iris_type)
+# Used by format_type() to convert OID back to type name
+OID_TO_TYPE: dict[int, tuple[str, str]] = {
+    # Build from DEFAULT_TYPE_MAPPINGS
+    oid: (pg_data_type, pg_udt_name)
+    for iris_type, (pg_data_type, pg_udt_name, oid) in DEFAULT_TYPE_MAPPINGS.items()
+}
+
+# Add PostgreSQL-specific types not in DEFAULT_TYPE_MAPPINGS
+OID_TO_TYPE.update({
+    1266: ('time with time zone', 'timetz'),      # TIMETZ
+    1560: ('bit', 'bit'),                         # BIT fixed-length
+    1562: ('bit varying', 'varbit'),              # BIT VARYING
+})
+
+
+def get_type_by_oid(type_oid: int) -> tuple[str, str] | None:
+    """
+    Get PostgreSQL type info from OID (T004).
+
+    Args:
+        type_oid: PostgreSQL type OID
+
+    Returns:
+        Tuple of (pg_data_type, pg_udt_name) or None if unknown
+
+    Example:
+        get_type_by_oid(23) returns ('integer', 'int4')
+        get_type_by_oid(1043) returns ('character varying', 'varchar')
+        get_type_by_oid(99999) returns None
+    """
+    return OID_TO_TYPE.get(type_oid)
+
+
+class TypeModifier:
+    """
+    Type Modifier (typmod) decoder for parameterized PostgreSQL types (T005).
+
+    PostgreSQL encodes type parameters (length, precision, scale) in a single
+    integer called typmod. This class decodes those values back to human-readable
+    format for format_type() output.
+
+    References:
+        - PostgreSQL src/backend/utils/adt/format_type.c
+        - contracts/format_type_contract.md
+    """
+
+    @staticmethod
+    def decode_char_length(typmod: int) -> int | None:
+        """
+        Decode character type length from typmod.
+
+        Character types (CHAR, VARCHAR) encode length as: typmod = length + 4
+
+        Args:
+            typmod: Type modifier value
+
+        Returns:
+            Length in characters, or None if unlimited (-1)
+
+        Example:
+            decode_char_length(259) returns 255  # varchar(255)
+            decode_char_length(-1) returns None  # varchar (unlimited)
+        """
+        if typmod < 0:
+            return None
+        return typmod - 4
+
+    @staticmethod
+    def decode_numeric_precision(typmod: int) -> tuple[int, int] | None:
+        """
+        Decode NUMERIC precision and scale from typmod.
+
+        NUMERIC encodes as: typmod = ((precision << 16) + scale) + 4
+
+        Args:
+            typmod: Type modifier value
+
+        Returns:
+            Tuple of (precision, scale), or None if no modifier
+
+        Example:
+            decode_numeric_precision(655366) returns (10, 2)  # numeric(10,2)
+            decode_numeric_precision(-1) returns None  # numeric (no limit)
+        """
+        if typmod < 0:
+            return None
+
+        packed = typmod - 4
+        precision = packed >> 16
+        scale = packed & 0xFFFF
+        return (precision, scale)
+
+    @staticmethod
+    def decode_timestamp_precision(typmod: int) -> int | None:
+        """
+        Decode timestamp/time fractional seconds precision.
+
+        Timestamp types encode as: typmod = precision + 4
+
+        Args:
+            typmod: Type modifier value
+
+        Returns:
+            Precision (0-6), or None for default (6)
+
+        Example:
+            decode_timestamp_precision(7) returns 3  # timestamp(3)
+            decode_timestamp_precision(-1) returns None  # timestamp (default 6)
+        """
+        if typmod < 0:
+            return None
+        return typmod - 4
+
+    @staticmethod
+    def decode_bit_length(typmod: int) -> int | None:
+        """
+        Decode BIT/BIT VARYING length from typmod.
+
+        Bit types encode as: typmod = length + 4
+
+        Args:
+            typmod: Type modifier value
+
+        Returns:
+            Bit length, or None if unlimited
+
+        Example:
+            decode_bit_length(36) returns 32  # bit(32)
+            decode_bit_length(-1) returns None  # bit varying (unlimited)
+        """
+        if typmod < 0:
+            return None
+        return typmod - 4
+
+
 # Initialize type mappings from environment on module load
 load_type_mappings_from_env()
