@@ -18,13 +18,12 @@ Then AI coding assistants arrived. And I became a "Yes Man" for bots.
 
 When I first started using AI coding assistants (Windsurf, then Cline, then Roo Code, now Claude Code), it felt like magic. Natural language → working code. I said "yes" to every suggestion, every refactor, every wild idea.
 
-My first major AI-assisted project was an internal project I started a few months ago - a vector search and "RAG templates" collection for IRIS. I was so excited I let the bot run wild:
+My first major AI-assisted project was an internal project I started a few months ago - a collection of Python scripts and pipelines for IRIS. I was so excited I let the bot run wild:
 
-
-*"Implement semantic search!"* Yes!
-*"Build a full RAG pipeline!"* Yes!
-*"Make it extensible!"* Yes!
-*"Add MCP support!"* Yes!
+*"Add this feature!"* Yes!
+*"Refactor that module!"* Yes!
+*"Make it configurable!"* Yes!
+*"Add more integrations!"* Yes!
 
 The creative energy was back. Code was flowing. I felt productive again.
 
@@ -32,7 +31,7 @@ Then my intern - a software engineering major - looked over the codebase.
 
 He was **NOT impressed**.
 
-Though I had implemented about 6 complete RAG methods based on academic papers, only 2 of them "really worked" -- the pytests were passing, but they had a lot of mocks that were being used instead of real database queries. In many cases "fast iteration" was admittedly "AI slop" - inconsistent patterns, duplicated logic, questionable architectural decisions. The bot had said "yes" to everything I asked, but nobody was saying "no" to bad ideas or "wait, let's think about this first."
+Though I had implemented several complete modules and pipelines, only some of them "really worked" -- the tests were passing, but they had a lot of mocks that were being used instead of real database queries. In many cases "fast iteration" was admittedly "AI slop" - inconsistent patterns, duplicated logic, questionable architectural decisions. The bot had said "yes" to everything I asked, but nobody was saying "no" to bad ideas or "wait, let's think about this first."
 
 ---
 
