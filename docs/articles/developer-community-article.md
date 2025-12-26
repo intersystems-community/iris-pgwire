@@ -1,7 +1,5 @@
 # IRIS PGWire: Building Software Sanely with AI and Specifications
 
-*A Holiday Gift from DevRel: Lessons from 27 Specs and Real Production Code*
-
 **By Thomas Dyar, Sr. Manager AI Platform and Ecosystem, InterSystems**
 
 ---
