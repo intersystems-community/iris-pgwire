@@ -171,13 +171,13 @@ specs/
 ├── 001-postgresql-wire-protocol/    # Where it all began
 ├── 002-sql-query-processing/        # Query translation layer
 ├── 003-iris-integration-layer/      # IRIS backend connection
+├── ...
 ├── 006-vector-operations-pgvector/  # AI/ML vector support
-├── 008-copy-protocol-bulk-operations/
-├── 010-security-production-readiness/
+├── ...
 ├── 012-client-compatibility-testing/ # 8-language test matrix
+├── ...
 ├── 019-async-sqlalchemy-based/      # FastAPI integration
-├── 025-comprehensive-code-and/      # Quality validation
-├── 026-doc-review/                  # Documentation audit
+├── ...
 └── 027-open-exchange/               # This publication!
     ├── spec.md                      # Package requirements
     ├── research.md                  # Market analysis
