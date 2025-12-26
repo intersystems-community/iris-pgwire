@@ -6,9 +6,9 @@
 
 ## The Rut
 
-I'll be honest: Up to a year agoI was not doing much coding -- I was sick of it.
+I'll be honest: Earlier this year, I was not doing much coding -- I was sick of it.
 
-I had been a hands-on software engineer and data scientist After years, but a few years before starting at InterSystems I had gotten worn down by the tedium  of software development. The endless cycle of boilerplate, debugging, and context-switching left me creatively depleted. Like Jim Carrey's character in *Yes Man*, I found myself saying "no" and "not *again*" -- so much so that I switched jobs! But I must say that I missed the creative aspects of coding.
+After 15 years as a hands-on software engineer and data scientist, I got burned out around 2015. I switched to business development roles focused on "external innovation," then joined InterSystems in 2019 as a product manager. I missed the creative aspects of coding, but not the tedium. The endless cycle of boilerplate, debugging, and context-switching had left me creatively depleted. Like Jim Carrey's character in *Yes Man*, I found myself saying "no" to new projects -- so much so that I had switched careers!
 
 Then AI coding assistants arrived. And I became a "Yes Man" for bots.
 
@@ -116,8 +116,8 @@ psql -h localhost -p 5432 -U _SYSTEM -d USER
 
 **2. Standard SQL, IRIS Power**
 ```sql
--- This runs on IRIS, but feels like Postgres
-SELECT COUNT(*) FROM MyPatients WHERE category = "Follow-up";
+-- This runs on IRIS, but feels like PostgreSQL
+SELECT COUNT(*) FROM MyPatients WHERE category = 'Follow-up';
 ```
 
 **3. The "Killer Feature": pgvector Syntax on IRIS**
@@ -125,12 +125,10 @@ This is where it gets interesting. You can use standard `pgvector` distance oper
 
 ```sql
 -- Semantic search using the pgvector <=> (cosine distance) operator
-SELECT id, content 
-FROM medical_notes 
-ORDER BY embedding <=> TO_VECTOR("[0.1, 0.2, 0.3...]", DOUBLE) 
+SELECT id, content
+FROM medical_notes
+ORDER BY embedding <=> TO_VECTOR("[0.1, 0.2, 0.3...]", DOUBLE)
 LIMIT 5;
-```
-psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 ```
 
 ### The "Impossible" Connection: No IRIS Driver? No Problem.
@@ -197,7 +195,7 @@ And became a structured specification with user stories, acceptance criteria, an
 - **Spec 027**: "Let's share this with the world"
 - **Spec 031**: "Can Prisma ORM introspect IRIS schemas?"
 
-**The result:** Over 100 tests passing across 8 programming languages. Production-ready.
+**The result:** Over 100 tests passing across 8 programming languages. Ready to use.
 
 ---
 
@@ -231,7 +229,7 @@ Every user story in the spec maps to acceptance criteria. Every acceptance crite
 
 ### specify-kit
 - **GitHub**: https://github.com/github/spec-kit
-- **Usage**: Add to your Claude Code project at the command line with `specify init --here`and then in Claude Code run `/specify <what you want to build>`
+- **Usage**: Add to your Claude Code project at the command line with `specify init --here` and then in Claude Code run `/specify <what you want to build>`
 - **Alternative**: [Kiro by AWS](https://kiro.dev) - similar spec-driven approach in a full IDE
 
 ---
