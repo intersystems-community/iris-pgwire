@@ -30,7 +30,7 @@ Connect **any PostgreSQL-compatible tool** to InterSystems IRIS without custom d
 ### Docker (Fastest - 60 seconds)
 
 ```bash
-git clone https://github.com/isc-tdyar/iris-pgwire.git
+git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 docker-compose up -d
 
@@ -274,7 +274,7 @@ conn = psycopg.connect("host=localhost port=5432 user=_SYSTEM password=SYS dbnam
 **IRIS Wallet**: Encrypted credential storage with audit trail (zero plain-text passwords in code)
 **SCRAM-SHA-256**: Industry best practice for password authentication (replaces deprecated MD5)
 
-See [Authentication Guide](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/DEPLOYMENT.md#authentication) for detailed configuration
+See [Authentication Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md#authentication) for detailed configuration
 
 ---
 
@@ -304,7 +304,7 @@ docker-compose --profile bi-tools up superset
 # Access: http://localhost:8088 (admin / admin)
 ```
 
-**Try the Healthcare Demo**: Complete working example with 250 patient records and 400 lab results - see [Superset Healthcare Example](https://github.com/isc-tdyar/iris-pgwire/blob/main/examples/superset-iris-healthcare/README.md) for <10 minute setup.
+**Try the Healthcare Demo**: Complete working example with 250 patient records and 400 lab results - see [Superset Healthcare Example](https://github.com/intersystems-community/iris-pgwire/blob/main/examples/superset-iris-healthcare/README.md) for <10 minute setup.
 
 #### Metabase
 User-friendly business intelligence tool with visual query builder.
@@ -354,7 +354,7 @@ LIMIT 10
 - ✅ Binary parameter encoding (40% more compact than text)
 - ✅ 100% success rate across all dimensions and execution paths
 
-**Detailed Benchmarks**: See [benchmarks/README_4WAY.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/benchmarks/README_4WAY.md) and [Vector Parameter Binding](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)
+**Detailed Benchmarks**: See [benchmarks/README_4WAY.md](https://github.com/intersystems-community/iris-pgwire/blob/main/benchmarks/README_4WAY.md) and [Vector Parameter Binding](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)
 
 ---
 
@@ -400,7 +400,7 @@ LIMIT 10
 - **Query Translation**: SQL rewriting, pgvector → IRIS vector functions
 - **Connection Pooling**: Async pool with configurable limits (DBAPI backend)
 
-**Detailed Architecture**: See [Dual-Path Architecture](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)
+**Detailed Architecture**: See [Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)
 
 ---
 
@@ -417,7 +417,7 @@ LIMIT 10
 
 ```bash
 # Clone repository
-git clone https://github.com/isc-tdyar/iris-pgwire.git
+git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 
 # Start services
@@ -475,19 +475,19 @@ irispython -m iris_pgwire.server
 ## 📚 Documentation
 
 ### Getting Started
-- **[Installation Guide](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/DEPLOYMENT.md)** - Detailed deployment instructions
-- **[BI Tools Setup](https://github.com/isc-tdyar/iris-pgwire/blob/main/examples/BI_TOOLS_SETUP.md)** - Superset, Metabase, Grafana integration
-- **[Developer Guide](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/developer_guide.md)** - Development setup and contribution
+- **[Installation Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)** - Detailed deployment instructions
+- **[BI Tools Setup](https://github.com/intersystems-community/iris-pgwire/blob/main/examples/BI_TOOLS_SETUP.md)** - Superset, Metabase, Grafana integration
+- **[Developer Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/developer_guide.md)** - Development setup and contribution
 
 ### Core Features
-- **[Vector Parameter Binding](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vector support
-- **[DBAPI Backend Guide](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/DBAPI_BACKEND.md)** - Connection pooling configuration
-- **[Testing Guide](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/testing.md)** - Test framework and validation
+- **[Vector Parameter Binding](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vector support
+- **[DBAPI Backend Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DBAPI_BACKEND.md)** - Connection pooling configuration
+- **[Testing Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/testing.md)** - Test framework and validation
 
 ### Architecture
-- **[Dual-Path Architecture](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)** - DBAPI vs Embedded execution
-- **[Embedded Python Servers](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/EMBEDDED_PYTHON_SERVERS_HOWTO.md)** - Running inside IRIS
-- **[Client Compatibility](https://github.com/isc-tdyar/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md)** - PostgreSQL client matrix
+- **[Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)** - DBAPI vs Embedded execution
+- **[Embedded Python Servers](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/EMBEDDED_PYTHON_SERVERS_HOWTO.md)** - Running inside IRIS
+- **[Client Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md)** - PostgreSQL client matrix
 
 ---
 
@@ -508,7 +508,7 @@ irispython -m iris_pgwire.server
 **SSL/TLS**: Delegated to reverse proxy (nginx/HAProxy) - industry-standard pattern matching QuestDB, Tailscale pgproxy
 **Kerberos**: Not implemented - matches PgBouncer, YugabyteDB, PGAdapter (use OAuth 2.0 instead)
 
-See [KNOWN_LIMITATIONS.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/KNOWN_LIMITATIONS.md) for detailed deployment guidance and industry comparison
+See [KNOWN_LIMITATIONS.md](https://github.com/intersystems-community/iris-pgwire/blob/main/KNOWN_LIMITATIONS.md) for detailed deployment guidance and industry comparison
 
 ---
 
@@ -543,7 +543,7 @@ Connection path latency comparison (50 iterations, 128-dimensional vectors):
 - PGWire adds ~4ms protocol translation overhead for PostgreSQL client compatibility
 - For maximum performance, use IRIS DBAPI driver directly when PostgreSQL compatibility isn't required
 
-*Benchmarks from 2025-10-05. See [benchmarks/README_4WAY.md](https://github.com/isc-tdyar/iris-pgwire/blob/main/benchmarks/README_4WAY.md) for methodology.*
+*Benchmarks from 2025-10-05. See [benchmarks/README_4WAY.md](https://github.com/intersystems-community/iris-pgwire/blob/main/benchmarks/README_4WAY.md) for methodology.*
 
 **Run Your Own Benchmarks**:
 ```bash
@@ -563,7 +563,7 @@ python3 benchmarks/4way_comparison.py \
 
 ```bash
 # Clone repository
-git clone https://github.com/isc-tdyar/iris-pgwire.git
+git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 
 # Install development dependencies
@@ -582,7 +582,7 @@ pytest -v
 
 ## 🔗 Links
 
-- **Repository**: https://github.com/isc-tdyar/iris-pgwire
+- **Repository**: https://github.com/intersystems-community/iris-pgwire
 - **IRIS Documentation**: https://docs.intersystems.com/iris/
 - **PostgreSQL Protocol**: https://www.postgresql.org/docs/current/protocol.html
 - **pgvector**: https://github.com/pgvector/pgvector
@@ -591,7 +591,7 @@ pytest -v
 
 ## 📄 License
 
-MIT License - See [LICENSE](https://github.com/isc-tdyar/iris-pgwire/blob/main/LICENSE) for details
+MIT License - See [LICENSE](https://github.com/intersystems-community/iris-pgwire/blob/main/LICENSE) for details
 
 ---
 
@@ -672,4 +672,4 @@ with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
 
 ---
 
-**Questions?** File an issue on [GitHub](https://github.com/isc-tdyar/iris-pgwire/issues)
+**Questions?** File an issue on [GitHub](https://github.com/intersystems-community/iris-pgwire/issues)

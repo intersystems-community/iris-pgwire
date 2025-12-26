@@ -95,7 +95,7 @@ IRIS PGWire is my Christmas gift to the InterSystems developer community. It's a
 
 ```bash
 # Quick Start
-git clone https://github.com/isc-tdyar/iris-pgwire.git
+git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 docker-compose up -d
 
@@ -218,7 +218,7 @@ Every user story in the spec maps to acceptance criteria. Every acceptance crite
 ## Try It Yourself
 
 ### IRIS PGWire
-- **GitHub**: https://github.com/isc-tdyar/iris-pgwire
+- **GitHub**: https://github.com/intersystems-community/iris-pgwire
 - **Open Exchange**: Coming soon!
 - **Quick Start**: 60 seconds with Docker
 
@@ -247,7 +247,7 @@ Happy Holidays from InterSystems. May your prompts be clear and your tests be gr
 
 ## Resources
 
-- [IRIS PGWire GitHub Repository](https://github.com/isc-tdyar/iris-pgwire) - The "after" (27 specs, 171 tests)
+- [IRIS PGWire GitHub Repository](https://github.com/intersystems-community/iris-pgwire) - The "after" (27 specs, 171 tests)
 - [Internal project started a few months ago](https://github.com/isc-tdyar/iris-vector-rag) - The "before" (no specs, AI slop)
 - [specify-kit Claude Code Workflow](https://github.com/ProfSynapse/specify-kit)
 - [Kiro - AWS Spec-Driven Development](https://kiro.dev)
