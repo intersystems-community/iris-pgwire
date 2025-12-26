@@ -94,12 +94,18 @@ IRIS PGWire is my Christmas gift to the InterSystems developer community. It's a
 - **pgvector syntax** - use `<=>` for cosine similarity, `<#>` for dot product
 
 ```bash
-# Quick Start
+# Quick Start (Option 1: Docker)
 git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 docker-compose up -d
 
+# Quick Start (Option 2: PyPI)
+pip install iris-pgwire
+iris-pgwire  # Start the server
+
 # Connect with any PostgreSQL client
+psql -h localhost -p 5432 -U _SYSTEM -d USER
+```
 
 ### Quick Demo: From Zero to Analytics
 
@@ -219,6 +225,7 @@ Every user story in the spec maps to acceptance criteria. Every acceptance crite
 
 ### IRIS PGWire
 - **GitHub**: https://github.com/intersystems-community/iris-pgwire
+- **PyPI**: https://pypi.org/project/iris-pgwire/ - `pip install iris-pgwire`
 - **Open Exchange**: Coming soon!
 - **Quick Start**: 60 seconds with Docker
 
