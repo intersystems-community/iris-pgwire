@@ -109,25 +109,47 @@ psql -h localhost -p 5432 -U _SYSTEM -d USER
 
 Once your container is up, you’re not just connected to a database—you’re connected to an ecosystem.
 
-**1. The Classic Handshake (psql)**
+**1. The Classic Handshake**
 ```bash
-psql -h localhost -p 5432 -U _SYSTEM -d USER
+psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!' as message"
 ```
 
-**2. Standard SQL, IRIS Power**
+**2. Create Sample Data**
+```sql
+-- Create a table and insert some data
+CREATE TABLE public.Patients (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100),
+    category VARCHAR(50)
+);
+
+INSERT INTO public.Patients VALUES (1, 'John Doe', 'Follow-up');
+INSERT INTO public.Patients VALUES (2, 'Jane Smith', 'New Patient');
+INSERT INTO public.Patients VALUES (3, 'Bob Johnson', 'Follow-up');
+```
+
+**3. Standard SQL, IRIS Power**
 ```sql
 -- This runs on IRIS, but feels like PostgreSQL
-SELECT COUNT(*) FROM MyPatients WHERE category = 'Follow-up';
+SELECT COUNT(*) FROM public.Patients WHERE category = 'Follow-up';
+-- Returns: 2
 ```
 
-**3. The "Killer Feature": pgvector Syntax on IRIS**
-This is where it gets interesting. You can use standard `pgvector` distance operators, and IRIS PGWire translates them into native IRIS vector functions on the fly:
+**4. The "Killer Feature": Vector Search**
+IRIS PGWire translates PostgreSQL `pgvector` syntax into native IRIS vector functions:
 
 ```sql
--- Semantic search using the pgvector <=> (cosine distance) operator
+-- Create a table with vector embeddings
+CREATE TABLE documents (
+    id INTEGER PRIMARY KEY,
+    content VARCHAR(500),
+    embedding VECTOR(DOUBLE, 3)
+);
+
+-- Query with pgvector operators (translated to IRIS automatically)
 SELECT id, content
-FROM medical_notes
-ORDER BY embedding <=> TO_VECTOR("[0.1, 0.2, 0.3...]", DOUBLE)
+FROM documents
+ORDER BY embedding <=> TO_VECTOR('[0.1, 0.2, 0.3]', DOUBLE)
 LIMIT 5;
 ```
 
