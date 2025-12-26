@@ -84,7 +84,13 @@ The system asks clarifying questions, documents decisions, and generates impleme
 
 ## The Proof: IRIS PGWire
 
-IRIS PGWire is my Christmas gift to the InterSystems developer community. It's a PostgreSQL wire protocol server that lets you connect **any** PostgreSQL client to IRIS:
+IRIS PGWire is my (slightly late) Christmas gift to the InterSystems developer community. It's a PostgreSQL wire protocol server that lets you connect nearly **any** PostgreSQL client to IRIS.
+
+Don't get me wrong - InterSystems has excellent, production-grade drivers: high-performance xDBC, native DB-API, and soon an officially supported SQLAlchemy adapter. These are the right choice for production systems.
+
+But IRIS PGWire isn't about replacing those. It's about **possibilities**. It's about that BI tool your team wants to try that only supports PostgreSQL. It's about experimenting with a new ORM without waiting for official support. It's about saying "yes" to tools that don't have IRIS drivers - and having it just work.
+
+Plus, it's a **lot** more fun:
 
 - **psql, DBeaver, Superset, Metabase, Grafana** - zero configuration
 - **psycopg3, asyncpg, SQLAlchemy, pandas** - all your Python favorites
