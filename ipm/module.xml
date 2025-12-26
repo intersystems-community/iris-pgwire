@@ -3,10 +3,12 @@
   <Document name="iris-pgwire.ZPM">
     <Module>
       <Name>iris-pgwire</Name>
-      <Version>0.1.0</Version>
+      <Version>1.0.0</Version>
       <Description>PostgreSQL wire protocol server for InterSystems IRIS with DBAPI backend and vector support</Description>
-      <Author>InterSystems Community</Author>
-      <Keywords>postgresql,pgwire,vector,iris,dbapi,pgvector</Keywords>
+      <Author>Thomas Dyar</Author>
+      <Homepage>https://github.com/intersystems-community/iris-pgwire</Homepage>
+      <Keywords>postgresql,pgwire,vector,iris,dbapi,pgvector,orm,prisma,drizzle</Keywords>
+      <License>MIT</License>
 
       <!-- System Requirements -->
       <SystemRequirements>
