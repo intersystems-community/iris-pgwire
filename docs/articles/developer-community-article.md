@@ -164,7 +164,7 @@ npx prisma generate
 
 ### Built with Structured AI Collaboration
 
-What makes this project interesting isn't just the code - it's how it was built. The `specs/` directory contains **27 feature specifications** documenting the entire development journey:
+What makes this project interesting isn't just the code - it's how it was built. The `specs/` directory contains **31 feature specifications** documenting the entire development journey:
 
 ```
 specs/
@@ -178,11 +178,12 @@ specs/
 ├── ...
 ├── 019-async-sqlalchemy-based/      # FastAPI integration
 ├── ...
-└── 027-open-exchange/               # This publication!
-    ├── spec.md                      # Package requirements
-    ├── research.md                  # Market analysis
-    ├── plan.md                      # Publication strategy
-    └── tasks.md                     # Implementation steps
+├── 027-open-exchange/               # Package publication
+├── 030-pg-schema-mapping/           # PostgreSQL schema compatibility
+└── 031-prisma-catalog-support/      # ORM introspection support
+    ├── spec.md                      # Feature requirements
+    ├── plan.md                      # Implementation strategy
+    └── tasks.md                     # Task breakdown
 ```
 
 Each feature started as a natural language description like:
@@ -196,8 +197,9 @@ And became a structured specification with user stories, acceptance criteria, an
 - **Spec 006**: "What about vector search and AI workloads?"
 - **Spec 019**: "FastAPI developers need async support"
 - **Spec 027**: "Let's share this with the world"
+- **Spec 031**: "Can Prisma ORM introspect IRIS schemas?"
 
-**The result:** 171 tests passing across 8 programming languages. Production-ready.
+**The result:** Over 100 tests passing across 8 programming languages. Production-ready.
 
 ---
 
@@ -254,7 +256,7 @@ Happy Holidays from InterSystems. May your prompts be clear and your tests be gr
 
 ## Resources
 
-- [IRIS PGWire GitHub Repository](https://github.com/intersystems-community/iris-pgwire) - The "after" (27 specs, 171 tests)
+- [IRIS PGWire GitHub Repository](https://github.com/intersystems-community/iris-pgwire) - The "after" (31 specs, 100+ tests)
 - [Internal project started a few months ago](https://github.com/isc-tdyar/iris-vector-rag) - The "before" (no specs, AI slop)
 - [specify-kit Claude Code Workflow](https://github.com/ProfSynapse/specify-kit)
 - [Kiro - AWS Spec-Driven Development](https://kiro.dev)
