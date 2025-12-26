@@ -16,7 +16,7 @@ Then AI coding assistants arrived. And I became a "Yes Man" for bots.
 
 ## Act I: Exuberance ("Yes to Everything!")
 
-When I first started using AI coding assistants (Windsurf, then Cline, then Roo Code, now Claude Code), it felt like magic. Natural language → working code. I said "yes" to every suggestion, every refactor, every wild idea.
+When I first started using AI coding assistants (Windsurf, then Cline, then Roo Code, now Claude Code and flirting with opencode), it felt like magic. Natural language → working code. I said "yes" to every suggestion, every refactor, every wild idea.
 
 My first major AI-assisted project was an internal project I started a few months ago - a collection of Python scripts and pipelines for IRIS. I was so excited I let the bot run wild:
 
@@ -29,7 +29,7 @@ The creative energy was back. Code was flowing. I felt productive again.
 
 Then my intern - a software engineering major - looked over the codebase.
 
-He was **NOT impressed**.
+He was **NOT** impressed.
 
 Though I had implemented several complete modules and pipelines, only some of them "really worked" -- the tests were passing, but they had a lot of mocks that were being used instead of real database queries. In many cases "fast iteration" was admittedly "AI slop" - inconsistent patterns, duplicated logic, questionable architectural decisions. The bot had said "yes" to everything I asked, but nobody was saying "no" to bad ideas or "wait, let's think about this first."
 
@@ -86,11 +86,11 @@ The system asks clarifying questions, documents decisions, and generates impleme
 
 IRIS PGWire is my (slightly late) Christmas gift to the InterSystems developer community. It's a PostgreSQL wire protocol server that lets you connect nearly **any** PostgreSQL client to IRIS.
 
-Don't get me wrong - InterSystems has excellent, production-grade drivers: high-performance xDBC, native DB-API, and soon an officially supported SQLAlchemy adapter. These are the right choice for production systems.
+Don't get me wrong - InterSystems has excellent, production-grade drivers: high-performance xDBC, native DB-API, and soon an officially supported SQLAlchemy adapter. These are the right choice for production systems where you are in control of the stack and can ensure that your application is secure, performant, and reliable.
 
-But IRIS PGWire isn't about replacing those. It's about **possibilities**. It's about that BI tool your team wants to try that only supports PostgreSQL. It's about experimenting with a new ORM without waiting for official support. It's about saying "yes" to tools that don't have IRIS drivers - and having it just work.
+But iris-pgwire isn't about replacing those. It's about **possibilities**. It's about that BI tool your team wants to try that only supports PostgreSQL connection strings. It's about experimenting with a new ORM without waiting for official support. It's about saying "yes" to tools that don't have IRIS drivers - and having it just work.
 
-Plus, it's a **lot** more fun:
+Plus, it's a **lot** of fun:
 
 - **psql, DBeaver, Superset, Metabase, Grafana** - zero configuration
 - **psycopg3, asyncpg, SQLAlchemy, pandas** - all your Python favorites
@@ -223,6 +223,20 @@ And became a structured specification with user stories, acceptance criteria, an
 - **Spec 031**: "Can Prisma ORM introspect IRIS schemas?"
 
 **The result:** Over 100 tests passing across 8 programming languages. Ready to use.
+
+### Note Bene: On AI "Slop" and Hallucination
+
+Can I guarantee you won't find "AI slop" in this repo? Absolutely not - the funny thing about LLMs is that hallucination and inaccuracy is pretty much **baked into how they work**!
+
+[Research shows](https://arxiv.org/abs/2311.05232) that hallucinations in large language models arise from their fundamental architecture - the way transformers predict next tokens based on subsequence associations. As [OpenAI's recent paper](https://arxiv.org/abs/2501.12491) explains, language models hallucinate because training procedures reward guessing over acknowledging uncertainty.
+
+No matter how much you try to "tame the beast" you will only be fighting a natural tendency to go astray from the facts. This generative creative capacity is partly the source of the power of modern AI, and somewhat ironically the first "killer app" for LLMs IMHO is coding assistants.
+
+Why? Because via "agentic" loops that can iteratively **verify** the correctness of what is generated, you arrive at useful, working code. As [Eno Reyes from Factory AI](https://www.youtube.com/watch?v=example) emphasized at the AI Engineer Code Summit: **"verification over specification"** - stop telling agents exactly how to solve problems and instead tell them what correct looks like.
+
+The Anthropic team's [Agent Skills approach](https://www.anthropic.com/agent-skills) takes this further with progressive disclosure - building reusable skills with built-in verification rather than trying to specify every detail upfront.
+
+**The bottom line**: Specifications help immensely, but they're not magic. Tests, verification, and iterative refinement remain essential when working with AI assistants.
 
 ---
 
