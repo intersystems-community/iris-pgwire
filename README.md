@@ -622,7 +622,7 @@ MIT License - See [LICENSE](https://github.com/intersystems-community/iris-pgwir
 - **L2/Euclidean** (`<->`): ❌ Not implemented
 
 #### PostgreSQL Compatibility
-- **System catalogs**: `pg_type`, `pg_catalog` not available (IRIS uses INFORMATION_SCHEMA)
+- **System catalogs**: Partial `pg_catalog` support for ORM introspection (6 tables + 5 functions) - see [PG_CATALOG.md](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)
 - **CREATE EXTENSION**: Not supported (IRIS has native vector support)
 
 #### Tools That Won't Work via PGWire
