@@ -93,7 +93,7 @@ But iris-pgwire isn't about replacing those. It's about **possibilities**. It's 
 Plus, it's a **lot** of fun:
 
 - **psql, DBeaver, Superset, Metabase, Grafana** - zero configuration
-- **psycopg3, asyncpg, SQLAlchemy, pandas** - all your Python favorites
+- **psycopg3, asyncpg, node-postgres, Npgsql** - 171 tests across 8 languages
 - **pgvector syntax** - use `<=>` for cosine similarity, `<#>` for dot product
 
 ```bash

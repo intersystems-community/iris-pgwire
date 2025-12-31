@@ -1,5 +1,9 @@
 # IRIS PostgreSQL Wire Protocol - Production Deployment Guide
 
+**Quick Links**: [Installation](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/INSTALLATION.md) | [Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ARCHITECTURE.md) | [Performance](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md) | [Features](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/FEATURES_OVERVIEW.md)
+
+---
+
 ## Overview
 
 Complete PostgreSQL wire protocol server for InterSystems IRIS with enterprise-grade features:
@@ -9,6 +13,8 @@ Complete PostgreSQL wire protocol server for InterSystems IRIS with enterprise-g
 - **Production Optimized**: Back-pressure controls, streaming, memory management
 - **Enterprise Security**: SCRAM-SHA-256 authentication, TLS encryption
 - **High Performance**: Bulk operations, connection pooling, resource controls
+
+See [Installation Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/INSTALLATION.md) for quick setup or [Architecture Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ARCHITECTURE.md) for system design details.
 
 ## Architecture
 

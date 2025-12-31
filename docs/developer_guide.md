@@ -1,8 +1,14 @@
 # IRIS SQL Translation System - Developer Guide
 
+**Quick Links**: [Installation](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/INSTALLATION.md) | [Testing Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/testing.md) | [Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ARCHITECTURE.md) | [Features](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/FEATURES_OVERVIEW.md)
+
+---
+
 ## Overview
 
 This guide provides comprehensive documentation for developers working with the IRIS SQL Translation System. The system translates InterSystems IRIS SQL constructs to PostgreSQL equivalents with constitutional compliance monitoring and high-performance caching.
+
+For production deployment, see [Deployment Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md). For client compatibility testing, see [Client Recommendations](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md).
 
 ## Architecture Overview
 

@@ -33,7 +33,7 @@
 ### Vector Operations
 - **Cosine distance** (`<=>`): ✅ Supported → `VECTOR_COSINE()`
 - **Dot product** (`<#>`): ✅ Supported → `VECTOR_DOT_PRODUCT()`
-- **L2/Euclidean** (`<->`): ❌ Not implemented
+- **L2/Euclidean** (`<->`): ❌ Not available (IRIS database limitation - only cosine and dot product supported)
 
 ### PostgreSQL Compatibility
 - **System catalogs**: Partial `pg_catalog` support (6 tables + 5 functions) - see [PG_CATALOG.md](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)
@@ -67,7 +67,6 @@
 - **Advanced SQL features**: CTEs (Common Table Expressions), window functions
 - **Additional catalog tables**: Expand pg_catalog coverage for more ORMs
 - **Additional catalog functions**: More PostgreSQL utility functions
-- **L2 distance support**: `<->` operator for Euclidean similarity
 
 ### Tooling
 - **Prometheus metrics endpoint**: Built-in observability

@@ -320,7 +320,7 @@ class TestDualPathComparison:
 
 ## References
 
-- HNSW Investigation: [docs/HNSW_INVESTIGATION.md](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/HNSW_INVESTIGATION.md)
+- HNSW Investigation: [docs/investigations/HNSW_INVESTIGATION.md](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/investigations/HNSW_INVESTIGATION.md)
 - Constitutional Governance: [src/iris_pgwire/constitutional.py](https://github.com/intersystems-community/iris-pgwire/blob/main/src/iris_pgwire/constitutional.py)
 - CLAUDE.md: [CLAUDE.md](https://github.com/intersystems-community/iris-pgwire/blob/main/CLAUDE.md)
 - User Requirement: "we need to put this in the specs and constitution!!!!!!!"

@@ -119,7 +119,7 @@ irispython -m iris_pgwire.server
 - True VECTOR type handling
 - Single-process deployment
 
-**Learn More**: [Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)
+**Learn More**: [Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/architecture/DUAL_PATH_ARCHITECTURE.md)
 
 ---
 

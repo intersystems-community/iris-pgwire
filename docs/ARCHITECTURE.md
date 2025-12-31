@@ -1,7 +1,7 @@
 # Architecture: IRIS PGWire System Design
 
 **Last Updated**: 2025-12-27
-**Related**: [Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md), [Performance](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md), [Deployment](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)
+**Related**: [Dual-Path Architecture](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/architecture/DUAL_PATH_ARCHITECTURE.md), [Performance](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md), [Deployment](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)
 
 ---
 
@@ -226,7 +226,7 @@ irispython -m iris_pgwire.server
 
 **Performance**: Embedded backend eliminates 1-3ms network overhead present in DBAPI mode.
 
-**Learn More**: [Dual-Path Architecture Details](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md)
+**Learn More**: [Dual-Path Architecture Details](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/architecture/DUAL_PATH_ARCHITECTURE.md)
 
 ---
 
@@ -488,7 +488,7 @@ print(f"Active: {stats.active}, Idle: {stats.idle}, Overflow: {stats.overflow}")
 
 ## See Also
 
-- [Dual-Path Architecture Details](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DUAL_PATH_ARCHITECTURE.md) - DBAPI vs Embedded comparison
+- [Dual-Path Architecture Details](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/architecture/DUAL_PATH_ARCHITECTURE.md) - DBAPI vs Embedded comparison
 - [Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md) - Detailed performance analysis
 - [Deployment Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md) - Production deployment
 - [PG_CATALOG Documentation](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md) - Catalog emulation details

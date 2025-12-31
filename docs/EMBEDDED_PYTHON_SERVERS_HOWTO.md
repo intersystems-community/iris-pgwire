@@ -617,7 +617,7 @@ logger.info("🔧 TEST: Logging is working")
 ### Project-Specific
 
 - `docs/E2E_FINDINGS.md` - Vector parameter limitation discovery
-- `docs/HNSW_INVESTIGATION.md` - HNSW index performance analysis
+- `docs/investigations/HNSW_INVESTIGATION.md` - HNSW index performance analysis
 - `.specify/memory/constitution.md` - Principle VI (Vector Performance Requirements)
 
 ---

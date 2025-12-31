@@ -3,6 +3,8 @@
 **Last Updated**: 2025-10-02
 **Feature**: Vector Query Optimizer (013-vector-query-optimizer)
 
+**Quick Links**: [Vector Operations Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md) | [Quick Start Examples](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/QUICKSTART_EXAMPLES.md) | [Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md) | [Testing Results](https://github.com/intersystems-community/iris-pgwire/blob/main/tests/client_compatibility/CLIENT_COMPATIBILITY_SUMMARY.md)
+
 ---
 
 ## Quick Reference

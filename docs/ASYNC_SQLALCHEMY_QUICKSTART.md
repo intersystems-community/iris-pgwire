@@ -221,8 +221,8 @@ NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:iris.psycopg
 ## Full Documentation
 
 - **Implementation Details**: `docs/SQLALCHEMY_ASYNC_SUPPORT.md`
-- **REST API Strategy**: `docs/REST_API_STRATEGY.md`
-- **Recent Developments**: `docs/RECENT_DEVELOPMENTS.md`
+- **REST API Strategy**: `docs/architecture/REST_API_STRATEGY.md`
+- **Recent Developments**: `docs/investigations/RECENT_DEVELOPMENTS.md`
 - **Test Suite**: `tests/test_sqlalchemy_async.py`
 
 ---

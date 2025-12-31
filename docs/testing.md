@@ -4,6 +4,8 @@
 **Last Updated**: 2025-10-04
 **Specification**: `specs/017-correct-testing-framework/`
 
+**Quick Links**: [Client Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md) | [Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md) | [Developer Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/developer_guide.md)
+
 ---
 
 ## Table of Contents

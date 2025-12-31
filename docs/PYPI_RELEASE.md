@@ -46,9 +46,9 @@ All PyPI hygiene checks have been completed and the package is ready for publica
 **Included in distribution**:
 - `/src/iris_pgwire/` - Main package code
 - `/docs/` - User-facing documentation (4 files):
-  - DUAL_PATH_ARCHITECTURE.md
-  - HNSW_FINDINGS_2025_10_02.md
-  - TRANSLATION_API.md
+  - architecture/DUAL_PATH_ARCHITECTURE.md
+  - investigations/HNSW_FINDINGS_2025_10_02.md
+  - architecture/TRANSLATION_API.md
   - VECTOR_PARAMETER_BINDING.md
 - `/examples/` - User examples (6 files):
   - BI_TOOLS_SETUP.md
