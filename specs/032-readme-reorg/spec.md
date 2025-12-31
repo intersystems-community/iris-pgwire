@@ -2,7 +2,8 @@
 
 **Feature Branch**: `032-readme-reorg`
 **Created**: 2025-12-27
-**Status**: Draft
+**Completed**: 2025-12-31
+**Status**: ✅ Complete
 **Input**: User description: "Reorganize documentation to make README more succinct and link to deeper info"
 
 ## Execution Flow (main)
