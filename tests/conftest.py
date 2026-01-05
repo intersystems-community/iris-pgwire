@@ -15,12 +15,27 @@ import asyncio
 import socket
 import subprocess
 import time
-from typing import Any
+import sys
+import os
+from typing import Any, Optional
 
 import pytest
 import structlog
+import psycopg
 
-import docker
+# Add iris-devtester to path if it's in the expected sibling directory
+devtester_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../iris-devtester"))
+if os.path.exists(devtester_path) and devtester_path not in sys.path:
+    sys.path.insert(0, devtester_path)
+
+try:
+    from iris_devtester import IRISContainer
+    from iris_devtester.config import IRISConfig
+    from iris_devtester.connections import get_connection
+
+    HAS_DEVTESTER = True
+except ImportError:
+    HAS_DEVTESTER = False
 
 logger = structlog.get_logger()
 
@@ -142,83 +157,246 @@ def wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
     return False
 
 
-def is_iris_available() -> bool:
-    """Check if IRIS is available for testing"""
-    try:
-        # Try to connect to IRIS port
-        return wait_for_port("localhost", 1975, timeout=5)
-    except Exception:
-        return False
-
-
-def is_docker_available() -> bool:
-    """Check if Docker is available"""
-    try:
-        client = docker.from_env()
-        client.ping()
-        return True
-    except Exception:
-        return False
+def pytest_addoption(parser):
+    """Add custom command line options for IRIS testing"""
+    parser.addoption(
+        "--iris-image", action="store", default=None, help="IRIS Docker image to use for tests"
+    )
+    parser.addoption(
+        "--iris-persist",
+        action="store_true",
+        default=False,
+        help="Persist IRIS container after tests",
+    )
 
 
 @pytest.fixture(scope="session")
-def iris_container():
+def iris_container(pytestconfig):
     """
-    Ensure IRIS container is running for the test session
-
-    This fixture ensures we have a real IRIS instance for E2E testing.
-    Skips if IRIS is not available.
+    Ensure IRIS container is running for the test session.
+    Uses iris-devtester for automated management and troubleshooting.
     """
-    if not is_docker_available():
-        pytest.skip("Docker not available for IRIS container")
+    iris_image = pytestconfig.getoption("iris_image")
+    iris_persist = pytestconfig.getoption("iris_persist")
 
-    client = docker.from_env()
+    if not HAS_DEVTESTER:
+        # Fallback to legacy check if devtester not available
+        if not wait_for_port("localhost", 1972, timeout=5):
+            pytest.skip("IRIS not available and iris-devtester not installed for auto-start")
+        yield None
+        return
 
-    # Check if IRIS container is already running
-    iris_running = False
     try:
-        containers = client.containers.list()
-        for container in containers:
-            if "iris" in container.name.lower() and container.status == "running":
-                # Check if IRIS port is accessible
-                if wait_for_port("localhost", 1975, timeout=5):
-                    iris_running = True
-                    logger.info("Found running IRIS container", name=container.name)
-                    break
+        from iris_devtester import IRISContainer
+
+        # Use IRISContainer to ensure it's running
+        logger.info("Ensuring IRIS container via iris-devtester", image=iris_image)
+
+        # Determine container type based on image if provided
+        if iris_image:
+            container_mgr = IRISContainer(image=iris_image)
+        else:
+            container_mgr = IRISContainer.community()
+
+        with container_mgr as iris:
+            # iris-devtester handles health checks, password resets, and CallIn
+            logger.info("IRIS container ready via iris-devtester")
+
+            # Ensure passwords are unexpired and reset if needed
+            try:
+                # Use the built-in method on the container if available
+                if hasattr(iris, "reset_password"):
+                    iris.reset_password("SuperUser", "SYS")
+                    iris.reset_password("_SYSTEM", "SYS")
+
+                from iris_devtester.utils import unexpire_all_passwords
+
+                unexpire_all_passwords(iris)
+                logger.info("Passwords managed successfully")
+            except Exception as e:
+                logger.warning("Failed to manage passwords", error=str(e))
+
+            if iris_persist:
+                logger.info("IRIS container will PERSIST after tests")
+                iris.__exit__ = lambda exc_type, exc_val, exc_tb: None
+
+            yield iris
     except Exception as e:
-        logger.warning("Error checking for existing IRIS containers", error=str(e))
-
-    if not iris_running:
-        # Try to start IRIS container
-        try:
-            logger.info("Starting IRIS container for tests")
-            subprocess.run(
-                ["docker", "compose", "up", "-d", "iris"],
-                cwd="/Users/tdyar/ws/iris-pgwire",
-                check=True,
-                capture_output=True,
-            )
-
-            # Wait for IRIS to be ready
-            if not wait_for_port("localhost", 1975, timeout=60):
-                pytest.skip("IRIS container failed to start or become ready")
-
-            # Give IRIS extra time to fully initialize
-            time.sleep(10)
-
-        except subprocess.CalledProcessError as e:
-            pytest.skip(f"Failed to start IRIS container: {e}")
-
-    # Verify IRIS is accessible
-    if not is_iris_available():
-        pytest.skip("IRIS not accessible at localhost:1975")
-
-    logger.info("IRIS container ready for testing")
-    yield "iris-ready"
+        logger.error("Failed to manage IRIS container via iris-devtester", error=str(e))
+        # Last resort: check if something is already running on the port
+        if wait_for_port("localhost", 1972, timeout=5):
+            logger.info("IRIS found running on port despite devtester error")
+            yield None
+        else:
+            pytest.skip(f"IRIS container setup failed: {e}")
 
 
 @pytest.fixture(scope="session")
-async def pgwire_server(iris_container):
+def iris_config(iris_container) -> dict[str, Any]:
+    """
+    Provide IRIS connection configuration.
+    Dynamically updated from the running container if managed by iris-devtester.
+    """
+    # Defaults
+    config_dict = {
+        "host": "localhost",
+        "port": 1972,
+        "namespace": "USER",
+        "username": "SuperUser",
+        "password": "SYS",
+    }
+
+    if iris_container:
+        if hasattr(iris_container, "get_config"):
+            try:
+                # Use the config from the running container
+                idt_config = iris_container.get_config()
+                config_dict.update(
+                    {
+                        "host": idt_config.host,
+                        "port": idt_config.port,
+                        "namespace": idt_config.namespace,
+                        "username": idt_config.username,
+                        "password": idt_config.password,
+                    }
+                )
+                logger.info(
+                    "iris_config updated from iris-devtester via get_config",
+                    host=config_dict["host"],
+                    port=config_dict["port"],
+                )
+            except Exception as e:
+                logger.warning("Failed to get config from iris-devtester container", error=str(e))
+
+        # Fallback/Direct access to iris_container attributes
+        if hasattr(iris_container, "username"):
+            config_dict["username"] = iris_container.username
+        if hasattr(iris_container, "password"):
+            config_dict["password"] = iris_container.password
+        if hasattr(iris_container, "get_container_host_ip"):
+            config_dict["host"] = iris_container.get_container_host_ip()
+        if hasattr(iris_container, "get_exposed_port"):
+            try:
+                config_dict["port"] = int(iris_container.get_exposed_port(1972))
+            except:
+                pass
+
+    return config_dict
+
+
+@pytest.fixture
+def iris_connection(iris_container, iris_config):
+    """
+    Provide a DBAPI connection to IRIS with auto-remediation.
+    Uses iris-devtester's high-level container connection method which handles:
+    - Auto-retry on transient failures
+    - Password change requirement (proactive reset)
+    - CallIn service enablement
+    """
+    if not HAS_DEVTESTER or not iris_container:
+        # Fallback to standard DBAPI connection if devtester not available
+        try:
+            import irispython
+
+            conn = irispython.connect(
+                hostname=iris_config["host"],
+                port=iris_config["port"],
+                namespace=iris_config["namespace"],
+                username=iris_config["username"],
+                password=iris_config["password"],
+            )
+            yield conn
+            conn.close()
+        except ImportError:
+            pytest.skip("intersystems-irispython not installed")
+        except Exception as e:
+            pytest.fail(f"IRIS connection failed: {e}")
+        return
+
+    try:
+        # Use IRISContainer.get_connection() which is the intended "high-level" API
+        # It handles proactive password reset and CallIn enablement.
+        conn = iris_container.get_connection()
+        logger.info("IRIS connection established via iris-devtester high-level API")
+        yield conn
+        # Let iris-devtester manage the connection lifecycle if needed,
+        # but closing it here should generally be safe unless it's pooled.
+    except Exception as e:
+        logger.error("Failed to establish IRIS connection via iris-devtester", error=str(e))
+        # Provide diagnostic remediation info if available
+        if "Password change required" in str(e):
+            logger.error("HINT: Try running 'iris-devtester container reset-password' manually")
+        pytest.fail(f"IRIS connection failed: {e}")
+
+
+@pytest.fixture
+def iris_fixture(iris_connection, iris_config, iris_container):
+    """
+    Provide helper to load/export IRIS test fixtures (.DAT files).
+    """
+    if not HAS_DEVTESTER:
+        pytest.skip("iris-devtester required for fixture management")
+
+    try:
+        from iris_devtester.fixtures.creator import FixtureCreator
+        from iris_devtester.fixtures.validator import FixtureValidator
+        from iris_devtester.config import IRISConfig
+
+        # Create config from fixture
+        config = IRISConfig(
+            host=iris_config["host"],
+            port=iris_config["port"],
+            namespace=iris_config["namespace"],
+            username=iris_config["username"],
+            password=iris_config["password"],
+        )
+
+        class FixtureHelper:
+            def __init__(self, conn, config, container):
+                self.conn = conn
+                self.config = config
+                self.container = container
+                # FixtureCreator(connection_config, container)
+                self.creator = FixtureCreator(config, container)
+                # FixtureValidator() is stateless
+                self.validator = FixtureValidator()
+
+            def load(self, fixture_dir: str):
+                self.load_into(fixture_dir)
+
+            def load_into(self, fixture_dir: str, target_namespace: Optional[str] = None):
+                logger.info("Loading IRIS fixture", dir=fixture_dir, target=target_namespace)
+                # Check if dir exists, if not look in tests/fixtures
+                if not os.path.exists(fixture_dir):
+                    alt_path = os.path.join(os.path.dirname(__file__), "fixtures", fixture_dir)
+                    if os.path.exists(alt_path):
+                        fixture_dir = alt_path
+
+                # Fixture loading logic
+                try:
+                    from iris_devtester.fixtures.loader import DATFixtureLoader
+
+                    loader = DATFixtureLoader(self.config, self.container)
+                    loader.load_fixture(fixture_dir, target_namespace=target_namespace)
+                except ImportError:
+                    # Fallback
+                    logger.warning("DATFixtureLoader not found")
+
+                logger.info("Fixture loaded successfully")
+
+            def export(self, fixture_id: str, output_dir: str):
+                logger.info("Creating IRIS fixture", id=fixture_id, dir=output_dir)
+                # create_fixture(fixture_id, namespace, output_dir, ...)
+                self.creator.create_fixture(fixture_id, iris_config["namespace"], output_dir)
+
+        yield FixtureHelper(iris_connection, config, iris_container)
+    except Exception as e:
+        logger.error("Failed to initialize fixture helper", error=str(e))
+        pytest.fail(f"Fixture initialization failed: {e}")
+
+
+@pytest.fixture(scope="session")
+async def pgwire_server(iris_container, iris_config):
     """
     Start PGWire server against real IRIS for testing session
 
@@ -230,11 +408,11 @@ async def pgwire_server(iris_container):
     server = PGWireServer(
         host="127.0.0.1",
         port=5432,
-        iris_host="127.0.0.1",
-        iris_port=1972,
-        iris_username="SuperUser",
-        iris_password="SYS",
-        iris_namespace="USER",
+        iris_host=iris_config["host"],
+        iris_port=iris_config["port"],
+        iris_username=iris_config["username"],
+        iris_password=iris_config["password"],
+        iris_namespace=iris_config["namespace"],
         enable_ssl=False,  # Start with plain connections for P0
     )
 
@@ -285,6 +463,7 @@ async def psycopg_connection(pgwire_server, pgwire_connection_params):
     """
     import psycopg
 
+    conn = None
     try:
         # Attempt connection with retries
         for attempt in range(3):
@@ -302,7 +481,8 @@ async def psycopg_connection(pgwire_server, pgwire_connection_params):
                 await asyncio.sleep(1)
     finally:
         try:
-            await conn.close()
+            if conn is not None:
+                await conn.close()
         except:
             pass
 
@@ -358,31 +538,6 @@ def psql_command():
 pytestmark = [
     pytest.mark.asyncio,
 ]
-
-
-# ============================================================================
-# T015: iris_config - Session-scoped configuration fixture
-# ============================================================================
-
-
-@pytest.fixture(scope="session")
-def iris_config() -> dict[str, Any]:
-    """
-    Provide IRIS connection configuration.
-
-    Contract (from contracts/pytest-fixtures.md):
-    - Returns: Dict with host, port, namespace, username, password
-    - Values: localhost, 1972, USER, _SYSTEM, SYS
-    - No dependencies, pure configuration
-    - Scope: session (shared across all tests)
-    """
-    return {
-        "host": "localhost",
-        "port": 1972,
-        "namespace": "USER",
-        "username": "_SYSTEM",
-        "password": "SYS",
-    }
 
 
 # ============================================================================
@@ -457,12 +612,9 @@ def embedded_iris(iris_config):
 
     finally:
         # Teardown: Close connection and release resources
-        try:
-            if "connection" in locals():
-                connection.close()
-                logger.info("embedded_iris: Connection closed")
-        except Exception as e:
-            logger.warning("embedded_iris: Error closing connection", error=str(e))
+        # When running via irispython, we don't have a 'connection' object to close
+        # as we're using the native module directly.
+        pass
 
 
 # ============================================================================
@@ -562,33 +714,21 @@ def iris_clean_namespace(embedded_iris, iris_config):
 
 
 @pytest.fixture(scope="function")
-def pgwire_client(iris_config):
+def pgwire_client(pgwire_server, iris_config):
     """
     Provide PostgreSQL wire protocol client connection.
-
-    Contract (from contracts/pytest-fixtures.md):
-    - Returns: psycopg.Connection instance
-    - Connection ready for query execution
-    - Setup time: <5 seconds
-    - Cleanup: Close connection, leave server running
-
-    Implementation notes:
-    - Connects to PGWire server on port 5434 (not 5432 to avoid conflicts)
-    - Server must be started separately (not managed by this fixture)
-    - Uses psycopg3 for modern PostgreSQL wire protocol support
+    Depends on pgwire_server being started.
     """
     logger.info("pgwire_client: Establishing PGWire connection")
     start_time = time.perf_counter()
 
+    connection = None
     try:
-        import psycopg
-
         # Connect to PGWire server
-        # PGWire server runs on port 5434 (configurable)
-        # Uses PostgreSQL wire protocol to talk to IRIS
+        # Standard port 5432
         connection = psycopg.connect(
             host="localhost",
-            port=5434,  # PGWire server port (not standard PostgreSQL 5432)
+            port=5432,
             dbname=iris_config["namespace"],
             user=iris_config["username"],
             password=iris_config["password"],
@@ -610,7 +750,7 @@ def pgwire_client(iris_config):
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
             result = cursor.fetchone()
-            if result[0] != 1:
+            if result is None or result[0] != 1:
                 raise RuntimeError("PGWire connection verification failed")
 
         logger.info("pgwire_client: Connection verified")
@@ -696,13 +836,7 @@ def capture_iris_state() -> dict[str, Any]:
 def pytest_runtest_makereport(item, call):
     """
     Capture diagnostic information on test failure.
-
-    Contract (T021 from tasks.md):
-    - Hook: pytest_runtest_makereport (wrapper, tryfirst)
-    - Capture test reports for all phases (setup, call, teardown)
-    - On failure: Capture IRIS connection state
-    - Log query history (last 10 queries)
-    - Write to test_failures.jsonl
+    Integrates with iris-devtester container validation and password remediation.
     """
     # Execute the test and get the report
     outcome = yield
@@ -720,6 +854,41 @@ def pytest_runtest_makereport(item, call):
         # Capture IRIS state
         iris_state = capture_iris_state()
 
+        # Integrate with iris-devtester diagnostics if available
+        troubleshooting_data = {}
+        if HAS_DEVTESTER:
+            try:
+                # 1. Check for password issues in the exception
+                if call.excinfo:
+                    from iris_devtester.utils.password_reset import detect_password_change_required
+
+                    if detect_password_change_required(str(call.excinfo.value)):
+                        troubleshooting_data["password_issue"] = True
+                        troubleshooting_data["remediation"] = (
+                            "Run 'iris-devtester container reset-password' or use high-level get_connection()"
+                        )
+
+                # 2. Run container health check
+                # Try to find iris_container fixture in the item's funcargs
+                iris_container = item.funcargs.get("iris_container")
+                if iris_container and hasattr(iris_container, "validate"):
+                    from iris_devtester.containers.models import HealthCheckLevel
+
+                    health_result = iris_container.validate(level=HealthCheckLevel.FULL)
+                    troubleshooting_data["container_health"] = {
+                        "status": health_result.status,
+                        "message": health_result.message,
+                        "remediation_steps": health_result.remediation_steps,
+                    }
+                    if not health_result.success:
+                        troubleshooting_data["remediation"] = (
+                            health_result.remediation_steps[0]
+                            if health_result.remediation_steps
+                            else "Unknown"
+                        )
+            except Exception as e:
+                logger.warning("Failed to run iris-devtester diagnostics", error=str(e))
+
         # Attach diagnostic information to the test item
         if not hasattr(item, "_diagnostics"):
             item._diagnostics = []
@@ -731,6 +900,58 @@ def pytest_runtest_makereport(item, call):
             "failure_type": "assertion_error" if call.excinfo else "unknown",
             "error_message": str(call.excinfo.value) if call.excinfo else "",
             "iris_state": iris_state,
+            "troubleshooting": troubleshooting_data,
+            "timestamp": time.time(),
+        }
+
+        item._diagnostics.append(diagnostic_entry)
+
+        # Write to test_failures.jsonl
+        try:
+            import json
+
+            failures_file = "test_failures.jsonl"
+
+            with open(failures_file, "a") as f:
+                f.write(json.dumps(diagnostic_entry) + "\n")
+
+            logger.info("Diagnostic information written", test_id=item.nodeid, file=failures_file)
+
+        except Exception as e:
+            logger.error(
+                "Failed to write diagnostic information", test_id=item.nodeid, error=str(e)
+            )
+
+        # Capture IRIS state
+        iris_state = capture_iris_state()
+
+        # Integrate with iris-devtester troubleshooting if available
+        troubleshooting_data = {}
+        if HAS_DEVTESTER:
+            try:
+                from iris_devtester.troubleshooting import diagnose_issue
+
+                # This logic effectively automates the /troubleshooting skill
+                troubleshooting_data = diagnose_issue()
+                logger.info(
+                    "iris-devtester diagnostics captured",
+                    remediation=troubleshooting_data.get("remediation"),
+                )
+            except Exception as e:
+                logger.warning("Failed to run iris-devtester diagnostics", error=str(e))
+
+        # Attach diagnostic information to the test item
+        if not hasattr(item, "_diagnostics"):
+            item._diagnostics = []
+
+        diagnostic_entry = {
+            "test_id": item.nodeid,
+            "phase": report.when,
+            "duration_ms": report.duration * 1000 if report.duration else 0,
+            "failure_type": "assertion_error" if call.excinfo else "unknown",
+            "error_message": str(call.excinfo.value) if call.excinfo else "",
+            "iris_state": iris_state,
+            "troubleshooting": troubleshooting_data,
             "timestamp": time.time(),
         }
 

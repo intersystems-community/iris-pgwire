@@ -44,6 +44,15 @@ This framework follows the project's constitutional principles:
 - **Principle III**: Protocol Fidelity (real PostgreSQL clients)
 - **Principle V**: Diagnostic Excellence (comprehensive failure capture)
 
+### Automated Infrastructure with iris-devtester
+
+The framework now integrates with `iris-devtester` to provide automated container management and troubleshooting.
+
+✅ **Automated Containers**: `iris_container` fixture automatically starts an IRIS instance if one is not running.
+✅ **Auto-Remediation**: `iris_connection` automatically handles "Password change required" and enables CallIn services.
+✅ **Test Fixtures**: `iris_fixture` allows loading and exporting reproducible test data sets via `.DAT` files.
+✅ **Agentic Diagnostics**: Failures trigger the `/troubleshooting` skill logic to provide remediation hints in `test_failures.jsonl`.
+
 ---
 
 ## Quick Start
@@ -253,6 +262,46 @@ def test_pgwire_query(pgwire_client):
 - psycopg3 installed (`pip install psycopg>=3.1.0`)
 
 **Cleanup**: Connection closed after test
+
+### `iris_connection` (Function-Scoped)
+
+**Purpose**: Provides a DBAPI connection to IRIS with auto-remediation
+
+**Returns**: `irispython.Connection` (or equivalent DBAPI connection)
+
+**Features**:
+- Auto-retries on transient connection failures
+- Automatically handles "ChangePassword" requirement
+- Enables CallIn service if disabled
+
+**Example**:
+```python
+def test_with_remediation(iris_connection):
+    with iris_connection.cursor() as cur:
+        cur.execute("SELECT 1")
+        assert cur.fetchone()[0] == 1
+```
+
+---
+
+### `iris_fixture` (Function-Scoped)
+
+**Purpose**: Load and export IRIS test data sets (.DAT files)
+
+**Returns**: Fixture helper object
+
+**Methods**:
+- `load(dat_file)`: Loads a .DAT file into IRIS
+- `export(table_name, output_file)`: Exports a table to a .DAT file
+
+**Example**:
+```python
+def test_vector_search(iris_fixture, iris_connection):
+    iris_fixture.load("healthcare_data.dat")
+    with iris_connection.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM Patients")
+        assert cur.fetchone()[0] > 0
+```
 
 ---
 

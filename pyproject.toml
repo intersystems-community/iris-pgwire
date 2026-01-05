@@ -78,6 +78,7 @@ test = [
     # [binary] includes C extension + libpq, no system dependencies needed
     "psycopg[binary]>=3.1.0",
     "docker>=6.0.0",
+    "iris-devtester>=0.1.0",
     # Runtime dependencies needed when importing iris_pgwire modules in tests
     "sqlparse>=0.4.0",
     # Kerberos test realm isolation (constitutional TDD requirement - feature 024)
