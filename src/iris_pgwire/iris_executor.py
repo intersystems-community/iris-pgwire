@@ -17,6 +17,7 @@ import structlog
 from .conversions import (
     BulkInsertJob,
     DdlErrorHandler,
+    DdlSplitter,
     horolog_to_pg,
     pg_to_horolog,
 )
@@ -63,8 +64,9 @@ class IRISExecutor:
         # Column alias extraction for PostgreSQL compatibility
         self.alias_extractor = AliasExtractor()
 
-        # DDL idempotency handler
+        # DDL idempotency and splitting handlers
         self.ddl_handler = DdlErrorHandler()
+        self.ddl_splitter = DdlSplitter()
 
         # Reusable translators to reduce overhead in hot paths
         self.sql_translator = SQLTranslator()
@@ -344,11 +346,24 @@ class IRISExecutor:
         if stmt:
             statements.append(stmt)
 
+        # Stage 2: Split multi-action ALTER TABLE statements
+        # IRIS typically requires separate ALTER TABLE statements for each action
+        final_statements = []
+        for stmt in statements:
+            if stmt.upper().startswith("ALTER TABLE"):
+                split_ddl = self.ddl_splitter.split_alter_table(stmt)
+                final_statements.extend(split_ddl)
+            else:
+                final_statements.append(stmt)
+
         logger.debug(
-            "Split SQL into statements", total_statements=len(statements), original_length=len(sql)
+            "Split SQL into statements",
+            total_statements=len(final_statements),
+            original_statements=len(statements),
+            original_length=len(sql),
         )
 
-        return statements
+        return final_statements
 
     async def test_connection(self):
         """Test IRIS connectivity before starting server"""
@@ -3965,9 +3980,24 @@ class IRISExecutor:
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
 
-                # Execute query using safe execution wrapper
-                # For external mode, safe_execute returns a cursor or split result
-                cursor = self._safe_execute(optimized_sql, optimized_params, is_embedded=False)
+                # CRITICAL FIX: Split SQL by semicolons and handle multi-action ALTER TABLE
+                statements = self._split_sql_statements(optimized_sql)
+
+                if len(statements) > 1:
+                    logger.info(
+                        "Executing multiple statements (external mode)",
+                        statement_count=len(statements),
+                        session_id=session_id,
+                    )
+                    # Execute all statements except the last
+                    for stmt in statements[:-1]:
+                        self._safe_execute(stmt, optimized_params, is_embedded=False)
+
+                    # Execute last statement and capture cursor
+                    cursor = self._safe_execute(statements[-1], optimized_params, is_embedded=False)
+                else:
+                    # Single statement - execute normally
+                    cursor = self._safe_execute(optimized_sql, optimized_params, is_embedded=False)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000

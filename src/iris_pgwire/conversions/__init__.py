@@ -10,6 +10,7 @@ from .date_horolog import (
     pg_to_horolog,
 )
 from .ddl_idempotency import DdlErrorHandler, DdlResult
+from .ddl_splitter import DdlSplitter
 from .json_path import JsonPathBuilder
 from .vector_syntax import HnswIndexSpec, normalize_vector
 
@@ -21,6 +22,7 @@ __all__ = [
     "pg_to_horolog",
     "DdlErrorHandler",
     "DdlResult",
+    "DdlSplitter",
     "JsonPathBuilder",
     "HnswIndexSpec",
     "normalize_vector",

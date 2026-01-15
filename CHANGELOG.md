@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multi-Action ALTER TABLE Splitting**: Automatically decomposes PostgreSQL-style multi-column `ALTER TABLE` statements (e.g., multiple `ADD COLUMN` or `DROP COLUMN` actions) into individual IRIS-compatible statements.
 - **IRIS Bridge Gaps** (Feature 026): Comprehensive performance and functionality enhancements for IRIS integration
   - **Fast Path Bulk Insert**: Protocol-level batching achieving 3,700+ rows/second (11× improvement)
   - **HNSW Index Translation**: Support for PostgreSQL `USING hnsw` translated to IRIS `AS HNSW`
