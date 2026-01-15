@@ -12,7 +12,7 @@ Feature: 018-add-dbapi-option
 Data Model: Entity #3 - VectorQueryRequest
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 

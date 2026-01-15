@@ -10,7 +10,7 @@ Constitutional Compliance: Real-time performance metrics and SLA monitoring.
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -607,7 +607,7 @@ class TranslationMetricsCollector:
                     "otel_available": OTEL_AVAILABLE,
                     "prometheus_available": PROMETHEUS_AVAILABLE,
                 },
-                "collection_timestamp": datetime.utcnow().isoformat(),
+                "collection_timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
     def get_prometheus_metrics(self) -> str | None:
@@ -636,7 +636,7 @@ class TranslationMetricsCollector:
         try:
             # Collect current metrics in a format suitable for IRIS /api/monitor
             metrics_data = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "source": "iris_pgwire_translator",
                 "metrics": {},
             }

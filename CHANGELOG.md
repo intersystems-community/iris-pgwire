@@ -8,28 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IRIS Bridge Gaps** (Feature 026): Comprehensive performance and functionality enhancements for IRIS integration
+  - **Fast Path Bulk Insert**: Protocol-level batching achieving 3,700+ rows/second (11× improvement)
+  - **HNSW Index Translation**: Support for PostgreSQL `USING hnsw` translated to IRIS `AS HNSW`
+  - **Recursive JSON Pathing**: Support for nested `->` and `->>` operators translated to `JSON_VALUE`
+  - **DDL Idempotency**: Full `IF NOT EXISTS` support for `CREATE TABLE` and `CREATE INDEX`
+  - **Simple Query Translation**: Enabled full SQL translation for the standard PostgreSQL query protocol
 - **P6 COPY Protocol** (Feature 023): PostgreSQL COPY FROM STDIN and COPY TO STDOUT for bulk data operations
   - Bulk data import/export with CSV processing and streaming
   - 1000-row batching for memory efficiency (<100MB for 1M rows)
   - Transaction integration with automatic rollback on errors
   - Query-based export support (`COPY (SELECT ...) TO STDOUT`)
   - Performance: 600+ rows/second sustained throughput
-- **Package Quality Validation System** (Feature 025): Automated PyPI readiness validation
-  - Comprehensive validators for metadata, code quality, security, and documentation
-  - CLI tool: `python -m iris_pgwire.quality` with JSON/Markdown output
-  - Integration with pyroma, black, ruff, mypy, bandit, pip-audit, interrogate
-  - 95.4% docstring coverage (exceeds 80% target)
-  - PEP 621 dynamic versioning support
-- **PostgreSQL Parameter Placeholders** (Feature 018): Support for `$1, $2` parameter syntax with type inference
-  - Automatic type inference from CAST expressions (`$1::INTEGER`)
-  - Translation to IRIS `?` placeholders with proper type mapping
-  - asyncpg client compatibility improvements
-- **PostgreSQL Transaction Verbs** (Feature 022): BEGIN/COMMIT/ROLLBACK translation
-  - Translation of PostgreSQL `BEGIN` to IRIS `START TRANSACTION`
-  - Full transaction state management
-  - Constitutional compliance: <0.1ms translation overhead
 
 ### Fixed
+- Fixed critical bug in translation cache causing `TypeError` with mixed naive/aware datetimes
+- Standardized all internal timestamps to timezone-aware UTC
+- Fixed `CREATE INDEX` idempotency via specialized comment marker `/* IF_NOT_EXISTS */`
 - Dynamic versioning recognition in package metadata validation
 - Python bytecode cleanup (95+ artifacts removed from git)
 - Black code formatting (20 files reformatted to compliance)
@@ -41,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded cryptography to 46.0.3 (fixes 1 HIGH severity CVE)
 
 ### Performance
+- High-performance DML Fast Path: Buffering and collapsing `Sync` cycles into bulk IRIS calls
 - IRIS executemany() optimization for 4-10× performance improvement in bulk operations
 - COPY protocol optimized for 600+ rows/second sustained throughput
 - Memory-efficient streaming for large result sets

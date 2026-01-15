@@ -7,6 +7,8 @@ Supports the 87+ IRIS-specific SQL constructs identified in the specification.
 Constitutional Compliance: High-confidence mappings with proven translations.
 """
 
+from typing import Any
+
 from ..models import FunctionMapping
 
 
@@ -30,6 +32,9 @@ class IRISFunctionRegistry:
 
         # JSON Functions
         self._add_json_functions()
+
+        # Vector Functions
+        self._add_vector_functions()
 
         # Mathematical Functions
         self._add_math_functions()
@@ -319,6 +324,29 @@ class IRISFunctionRegistry:
             )
         )
 
+    def _add_vector_functions(self):
+        """Add IRIS vector function mappings"""
+
+        # VECTOR_COSINE - Vector cosine distance
+        self.add_mapping(
+            FunctionMapping(
+                iris_function="vector_cosine_distance",
+                postgresql_function="VECTOR_COSINE",
+                confidence=0.95,
+                notes="Direct mapping to IRIS VECTOR_COSINE",
+            )
+        )
+
+        # VECTOR_DOT_PRODUCT - Vector inner product distance
+        self.add_mapping(
+            FunctionMapping(
+                iris_function="vector_ip_distance",
+                postgresql_function="VECTOR_DOT_PRODUCT",
+                confidence=0.95,
+                notes="Direct mapping to IRIS VECTOR_DOT_PRODUCT",
+            )
+        )
+
     def _add_math_functions(self):
         """Add IRIS mathematical function mappings"""
 
@@ -511,7 +539,7 @@ class IRISFunctionRegistry:
 
         return matches
 
-    def get_mapping_stats(self) -> dict[str, any]:
+    def get_mapping_stats(self) -> dict[str, Any]:
         """Get statistics about function mappings"""
         total_mappings = len(self._mappings)
         high_confidence = len([m for m in self._mappings.values() if m.confidence >= 0.9])

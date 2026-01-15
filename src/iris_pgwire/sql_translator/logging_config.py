@@ -10,7 +10,7 @@ Constitutional Compliance: Comprehensive audit trail and performance monitoring.
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -175,7 +175,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record):
         log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -338,7 +338,7 @@ class TranslationLogger:
         perf_logger = logging.getLogger("iris_pgwire.performance")
 
         perf_data = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
             "correlation_id": correlation_id,
             "event_type": "performance_metrics",

@@ -12,16 +12,21 @@ import pytest
 
 @pytest.mark.contract
 @pytest.mark.asyncio
-async def test_bulk_insert_contract():
+async def test_bulk_insert_contract(mocker):
     """
     FR-005: bulk_insert must accept table, columns, rows; return count.
     FR-006: Must use batching to achieve <100MB memory for 1M rows.
-
-    Expected: FAIL - BulkExecutor class doesn't exist yet
     """
     from iris_pgwire.bulk_executor import BulkExecutor
 
-    executor = BulkExecutor()
+    mock_iris = mocker.Mock()
+    mock_iris.execute_many.return_value = {"success": True, "rows_affected": 2}
+    mock_iris.execute_query.return_value = {
+        "success": True,
+        "rows": [["PatientID", "INT"], ["FirstName", "VARCHAR"], ["LastName", "VARCHAR"]],
+    }
+
+    executor = BulkExecutor(mock_iris)
 
     async def rows():
         yield {"PatientID": 1, "FirstName": "John", "LastName": "Smith"}
@@ -42,15 +47,24 @@ async def test_bulk_insert_contract():
 
 @pytest.mark.contract
 @pytest.mark.asyncio
-async def test_bulk_insert_batching_contract():
+async def test_bulk_insert_batching_contract(mocker):
     """
     Verify bulk_insert uses 1000-row batching (not full buffering).
-
-    Expected: FAIL - BulkExecutor class doesn't exist yet
     """
     from iris_pgwire.bulk_executor import BulkExecutor
 
-    executor = BulkExecutor()
+    mock_iris = mocker.Mock()
+    mock_iris.execute_many.side_effect = [
+        {"success": True, "rows_affected": 1000, "_execution_path": "dbapi_executemany"},
+        {"success": True, "rows_affected": 1000, "_execution_path": "dbapi_executemany"},
+        {"success": True, "rows_affected": 500, "_execution_path": "dbapi_executemany"},
+    ]
+    mock_iris.execute_query.return_value = {
+        "success": True,
+        "rows": [["PatientID", "INT"], ["FirstName", "VARCHAR"]],
+    }
+
+    executor = BulkExecutor(mock_iris)
 
     async def large_dataset():
         for i in range(2500):  # 2.5 batches
@@ -66,3 +80,4 @@ async def test_bulk_insert_batching_contract():
 
     # Contract: Processes all rows
     assert row_count == 2500, "Expected all 2500 rows processed in batches"
+    assert mock_iris.execute_many.call_count == 3

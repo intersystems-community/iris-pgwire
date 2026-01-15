@@ -15,7 +15,8 @@ class PGWireExecutor:
         self,
         host: str = "localhost",
         port: int = 5432,
-        database: str = "USER"
+        database: str = "USER",
+        timeout_seconds: int = 30,
     ):
         """
         Initialize PGWire executor.
@@ -24,20 +25,19 @@ class PGWireExecutor:
             host: PGWire server host
             port: PGWire server port (default 5432)
             database: IRIS namespace
+            timeout_seconds: Query timeout in seconds
         """
         self.host = host
         self.port = port
         self.database = database
+        self.timeout_seconds = timeout_seconds
         self.connection: Optional[psycopg.Connection] = None
 
     def connect(self):
         """Establish connection to PGWire server."""
         if self.connection is None:
             self.connection = psycopg.connect(
-                host=self.host,
-                port=self.port,
-                dbname=self.database,
-                connect_timeout=10
+                host=self.host, port=self.port, dbname=self.database, connect_timeout=10
             )
 
     def execute(self, query: str) -> Any:

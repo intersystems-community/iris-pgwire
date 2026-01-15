@@ -283,7 +283,7 @@ class TestIRISDocumentFilterRegistry:
         sql = "SELECT data['user']['name'] FROM docs"
         translated_sql, mappings = self.registry.translate_document_filters(sql)
 
-        # Should translate bracket notation
+        # Should translate bracket notation to PostgreSQL jsonb
         assert "->" in translated_sql
 
     def test_search_filters(self):

@@ -97,6 +97,7 @@ class IdentifierNormalizer:
             "BOOL",
             "TEXT",
             "CHAR",
+            "VECTOR",
             "CASCADE",
             "RESTRICT",
             "NO",

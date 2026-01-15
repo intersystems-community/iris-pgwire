@@ -19,6 +19,8 @@ import re
 import secrets
 import ssl
 import struct
+import datetime
+from datetime import timezone
 from typing import Any
 
 import structlog
@@ -263,6 +265,13 @@ class PGWireProtocol:
         self.copy_handler = CopyHandler(self.csv_processor, self.bulk_executor)
         self.copy_state = None  # Track ongoing COPY operation state
 
+        # Batch execution buffering (collapses repeated Bind/Execute into execute_many)
+        self.batch_sql = None
+        self.batch_params = []
+        self.batch_statement_name = None
+        self.batch_portal_name = None
+        self.batch_max_rows = 0
+
         logger.info(
             "Protocol handler initialized",
             connection_id=connection_id,
@@ -300,7 +309,6 @@ class PGWireProtocol:
                 session_id=session_id,
                 trace_id=f"conn_{self.connection_id}",
             ) as tracker:
-
                 # Create translation context
                 context = TranslationContext(
                     original_sql=original_sql,
@@ -494,9 +502,11 @@ class PGWireProtocol:
         # Pattern: Prisma column info query - has 2 ANY patterns but sends only 1 param
         # Query: SELECT ... FROM information_schema.columns ... WHERE namespace = ANY($1) AND table_name = ANY($2)
         # Prisma sends: 1 param (namespace array)
-        if ("INFO.TABLE_NAME" in sql_upper or "INFORMATION_SCHEMA" in sql_upper) and \
-           ("INFO.COLUMN_NAME" in sql_upper or "COLUMN_NAME" in sql_upper) and \
-           "FORMAT_TYPE" in sql_upper:
+        if (
+            ("INFO.TABLE_NAME" in sql_upper or "INFORMATION_SCHEMA" in sql_upper)
+            and ("INFO.COLUMN_NAME" in sql_upper or "COLUMN_NAME" in sql_upper)
+            and "FORMAT_TYPE" in sql_upper
+        ):
             logger.info(
                 "Prisma column info query detected - returning 1 param (namespace only)",
                 connection_id=self.connection_id,
@@ -673,9 +683,7 @@ class PGWireProtocol:
             )
             raise ConnectionAbortedError("Connection closed during probe")
         except Exception as e:
-            logger.error(
-                "Probe handling failed", connection_id=self.connection_id, error=str(e)
-            )
+            logger.error("Probe handling failed", connection_id=self.connection_id, error=str(e))
             raise
 
     async def handle_startup_sequence(self):
@@ -1433,6 +1441,9 @@ class PGWireProtocol:
         only after the LAST statement completes.
         """
         try:
+            # Ensure any buffered DML is flushed before starting a new Simple Query
+            await self.flush_batch()
+
             # Parse query string (null-terminated)
             query = body.rstrip(b"\x00").decode("utf-8")
             logger.info(
@@ -1553,20 +1564,9 @@ class PGWireProtocol:
             # - pg_enum still returns empty (IRIS has no enum types)
             # See iris_executor.py lines 989-1053 for implementation
 
-            # For now, bypass SQL translation to test core query execution
-            # TODO: Fix SQL translation issue with TranslationResult
-            translation_result = {
-                "success": True,
-                "original_sql": query,
-                "translated_sql": query,
-                "translation_used": False,
-                "construct_mappings": [],
-                "performance_stats": {"translation_time_ms": 0.0},
-                "warnings": [],
-            }
-
-            # Use original SQL for execution (no translation for now)
-            final_sql = query
+            # Perform SQL translation
+            translation_result = await self.translate_sql(query)
+            final_sql = translation_result["translated_sql"]
 
             # CRITICAL FIX: Ensure queries have semicolons for IRIS compatibility
             # IRIS SQL parser requires semicolons to distinguish string literals from parameters
@@ -1629,8 +1629,11 @@ class PGWireProtocol:
                 await self.send_ready_for_query()
 
     async def send_query_result(
-        self, result: dict[str, Any], send_ready: bool = True, send_row_description: bool = True,
-        result_formats: list[int] = None
+        self,
+        result: dict[str, Any],
+        send_ready: bool = True,
+        send_row_description: bool = True,
+        result_formats: list[int] = None,
     ):
         """
         Send query results from IRIS execution.
@@ -2540,6 +2543,42 @@ class PGWireProtocol:
 
     # P2: Extended Protocol Message Handlers
 
+    async def flush_batch(self):
+        """
+        Execute any buffered parameters using executemany() for high performance.
+        This collapses a sequence of Bind/Execute messages into one IRIS call.
+        """
+        if not self.batch_params:
+            return
+
+        params_to_exec = self.batch_params
+        sql_to_exec = self.batch_sql
+
+        # Clear batch state
+        self.batch_sql = None
+        self.batch_params = []
+        self.batch_statement_name = None
+        self.batch_portal_name = None
+        self.batch_max_rows = 0
+
+        logger.debug(
+            "🚀 FLUSHING BATCH",
+            connection_id=self.connection_id,
+            batch_size=len(params_to_exec),
+            sql_preview=sql_to_exec[:100] if sql_to_exec else "None",
+        )
+
+        try:
+            if not sql_to_exec:
+                return
+
+            await self.iris_executor.execute_many(
+                sql_to_exec, params_to_exec, session_id=f"batch_{self.connection_id}"
+            )
+        except Exception as e:
+            logger.error("Batch flush failed", connection_id=self.connection_id, error=str(e))
+            await self.send_error_response("ERROR", "XX000", "internal_error", f"Batch failed: {e}")
+
     async def handle_parse_message(self, body: bytes):
         """
         P2: Handle Parse message for prepared statements
@@ -2769,9 +2808,8 @@ class PGWireProtocol:
             # 1. Client sends 0 parameter types (asyncpg behavior), OR
             # 2. Client sends parameters with OID 0 (unspecified) - Prisma's Rust driver does this
             # Without proper OIDs, Prisma fails with "Couldn't serialize value into `unknown`"
-            needs_inference = (
-                "?" in translation_result["translated_sql"] and
-                (num_params == 0 or all(pt == 0 for pt in param_types))
+            needs_inference = "?" in translation_result["translated_sql"] and (
+                num_params == 0 or all(pt == 0 for pt in param_types)
             )
             if needs_inference:
                 inferred_param_count = translation_result["translated_sql"].count("?")
@@ -3005,7 +3043,14 @@ class PGWireProtocol:
                 "result_formats": result_formats,  # Store for use in send_data_row
             }
 
-            logger.info(
+            # Batch Execution Interception
+            if self.batch_statement_name != statement_name:
+                await self.flush_batch()
+                self.batch_statement_name = statement_name
+
+            self.batch_portal_name = portal_name
+
+            logger.debug(
                 "Bound portal",
                 connection_id=self.connection_id,
                 portal_name=portal_name,
@@ -3066,7 +3111,11 @@ class PGWireProtocol:
                 # Check if query has RETURNING clause (INSERT/UPDATE/DELETE with RETURNING)
                 has_returning = "RETURNING" in query_upper
 
-                if query_upper.startswith("SELECT") or query_upper.startswith("SHOW") or has_returning:
+                if (
+                    query_upper.startswith("SELECT")
+                    or query_upper.startswith("SHOW")
+                    or has_returning
+                ):
                     # Execute metadata discovery to get column information
                     # Use LIMIT 0 pattern to avoid fetching actual data
                     # For RETURNING queries, we'll send synthetic column metadata based on RETURNING columns
@@ -3074,22 +3123,23 @@ class PGWireProtocol:
                         # Special handling for RETURNING queries - extract columns from RETURNING clause
                         if has_returning and not query_upper.startswith("SELECT"):
                             import re
+
                             # Extract RETURNING columns from query
                             # Format: RETURNING "schema"."table"."col1", "schema"."table"."col2", ...
                             returning_match = re.search(
-                                r'\bRETURNING\s+(.+)$',
-                                query,
-                                re.IGNORECASE | re.DOTALL
+                                r"\bRETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL
                             )
                             if returning_match:
-                                returning_clause = returning_match.group(1).strip().rstrip(';')  # Remove trailing semicolon
+                                returning_clause = (
+                                    returning_match.group(1).strip().rstrip(";")
+                                )  # Remove trailing semicolon
                                 logger.info(
                                     "🔍 DEBUG: RETURNING clause parsed",
                                     connection_id=self.connection_id,
                                     returning_clause=returning_clause[:200],
                                     returning_clause_len=len(returning_clause),
                                 )
-                                raw_cols = [c.strip() for c in returning_clause.split(',')]
+                                raw_cols = [c.strip() for c in returning_clause.split(",")]
                                 logger.info(
                                     "🔍 DEBUG: Raw columns from split",
                                     connection_id=self.connection_id,
@@ -3106,19 +3156,25 @@ class PGWireProtocol:
                                         # Note: Default to text (25) for unknown columns
                                         # Use int4 for id columns, bigint for timestamp-like columns
                                         # (Prisma often stores timestamps as BigInt)
-                                        if col_name.lower() == 'id':
+                                        if col_name.lower() == "id":
                                             type_oid = 23  # int4
-                                        elif col_name.lower() in ('created_at', 'updated_at', 'deleted_at'):
+                                        elif col_name.lower() in (
+                                            "created_at",
+                                            "updated_at",
+                                            "deleted_at",
+                                        ):
                                             type_oid = 20  # bigint - JS/Prisma often stores timestamps as bigint
                                         else:
                                             type_oid = 25  # text
-                                        returning_columns.append({
-                                            "name": col_name,
-                                            "type_oid": type_oid,
-                                            "type_size": -1,
-                                            "type_modifier": -1,
-                                            "format_code": 0,
-                                        })
+                                        returning_columns.append(
+                                            {
+                                                "name": col_name,
+                                                "type_oid": type_oid,
+                                                "type_size": -1,
+                                                "type_modifier": -1,
+                                                "format_code": 0,
+                                            }
+                                        )
 
                                 logger.info(
                                     "🔍 Describe: Sending synthetic RowDescription for RETURNING",
@@ -3214,74 +3270,40 @@ class PGWireProtocol:
 
             elif describe_type == "P":
                 # Describe portal
-                logger.info(
-                    "🔍🔍🔍 DESCRIBE PORTAL START",
-                    connection_id=self.connection_id,
-                    portal_name=name,
-                )
-
                 if name not in self.portals:
                     raise ValueError(f"Portal '{name}' does not exist")
 
-                # For Extended Protocol, we need to describe the result columns
-                # We'll execute the query to get column metadata, then send RowDescription
                 portal = self.portals[name]
                 statement_name = portal["statement"]
-
-                logger.info(
-                    "🔍🔍🔍 PORTAL FOUND",
-                    connection_id=self.connection_id,
-                    portal_name=name,
-                    statement_name=statement_name,
-                    has_statement=statement_name in self.prepared_statements,
-                )
 
                 if statement_name in self.prepared_statements:
                     stmt = self.prepared_statements[statement_name]
                     query = stmt.get("translated_query", stmt.get("query", ""))
-
-                    # Check if this is a SELECT or SHOW query that returns rows
-                    # SHOW commands also return result sets and need RowDescription
                     query_upper = query.strip().upper()
-                    logger.info(
-                        "🔍 Describe: Checking query type",
-                        query_upper_preview=query_upper[:100],
-                        is_select=query_upper.startswith("SELECT"),
-                        is_show=query_upper.startswith("SHOW"),
-                    )
+
+                    # Batch Execution Interception:
+                    # Short-circuit Describe portal for DML statements.
+                    is_dml = any(query_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"])
+                    has_returning = "RETURNING" in query_upper
+
+                    if is_dml and not has_returning:
+                        await self.send_no_data()
+                        return
+
                     if query_upper.startswith("SELECT") or query_upper.startswith("SHOW"):
-                        # Execute query to get column metadata
-                        logger.info(
-                            "🔍 Describe: Executing query to get column metadata", query=query[:100]
-                        )
                         try:
-                            # CRITICAL: Use empty list [] as default, not None
                             result = await self.iris_executor.execute_query(
                                 query, params=portal.get("params", [])
                             )
                             if result.get("success") and result.get("columns"):
-                                # CRITICAL FIX: Pass result_formats from portal to send_row_description
-                                # This ensures RowDescription format_code matches DataRow format
                                 result_formats = portal.get("result_formats", [])
                                 await self.send_row_description(result["columns"], result_formats)
-                                logger.info(
-                                    "Sent RowDescription for portal Describe",
-                                    connection_id=self.connection_id,
-                                    portal_name=name,
-                                    column_count=len(result["columns"]),
-                                    result_formats=result_formats,
-                                )
                             else:
                                 await self.send_no_data()
                         except Exception as e:
-                            logger.warning(
-                                "Failed to get column metadata for Describe",
-                                connection_id=self.connection_id,
-                                error=str(e),
-                            )
+                            logger.warning(f"Metadata discovery failed for portal {name}: {e}")
                             await self.send_no_data()
                     else:
-                        # Non-SELECT queries return NoData
                         await self.send_no_data()
                 else:
                     await self.send_no_data()
@@ -3449,6 +3471,36 @@ class PGWireProtocol:
             # NOTE: PostgreSQL $1, $2 parameters were already translated to IRIS ? syntax
             # in handle_parse_message(), so query already has correct parameter placeholders
 
+            # Batch Execution Interception (Fast Insert Breakthrough)
+            # Intercept INSERT/UPDATE/DELETE (DML) without RETURNING for protocol-level batching.
+            # Standard PostgreSQL clients (psycopg3) send Sync every 5 rows, which is slow.
+            # We buffer parameters and send synthetic CommandComplete to keep client pipe full.
+            query_upper = query.strip().upper()
+            is_dml = any(query_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"])
+            has_returning = "RETURNING" in query_upper
+
+            if is_dml and not has_returning:
+                # Store SQL if first row in batch
+                if not self.batch_params:
+                    self.batch_sql = query
+
+                # Buffer parameters
+                self.batch_params.append(params if params else [])
+
+                # Send synthetic CommandComplete immediately to client
+                # This tricks the client into sending the next row immediately.
+                tag = f"{query_upper.split()[0]} 0 1\x00".encode("utf-8")
+                msg_len = 4 + len(tag)
+                self.writer.write(struct.pack("!cI", MSG_COMMAND_COMPLETE, msg_len) + tag)
+                await self.writer.drain()
+
+                logger.debug(
+                    "Buffered DML row (Fast Path)",
+                    connection_id=self.connection_id,
+                    buffer_size=len(self.batch_params),
+                )
+                return
+
             # Execute via IRIS with parameters (vector optimizer will transform if needed)
             result = await self.iris_executor.execute_query(
                 query, params=params if params else None
@@ -3485,11 +3537,24 @@ class PGWireProtocol:
         Sync message has no body.
         """
         try:
-            logger.info("🔄 Sync received, sending ReadyForQuery", connection_id=self.connection_id)
-            # Send ReadyForQuery to indicate we're ready for the next command
-            await self.send_ready_for_query()
+            # Fast Path: Defer batch flush until buffer size reaches 500.
+            # This allows multiple Sync cycles to be aggregated into one IRIS call.
+            if len(self.batch_params) >= 500:
+                logger.info(
+                    "🔄 Sync: Buffer limit reached, flushing batch",
+                    connection_id=self.connection_id,
+                    size=len(self.batch_params),
+                )
+                await self.flush_batch()
+            else:
+                logger.debug(
+                    "🔄 Sync: Deferring flush",
+                    connection_id=self.connection_id,
+                    buffer_size=len(self.batch_params),
+                )
 
-            logger.info("✅ Sync processed, ReadyForQuery sent", connection_id=self.connection_id)
+            # ALWAYS send ReadyForQuery to keep the client pipeline moving.
+            await self.send_ready_for_query()
 
         except Exception as e:
             logger.error(
@@ -3505,6 +3570,9 @@ class PGWireProtocol:
         - name (null-terminated string)
         """
         try:
+            # Ensure any buffered DML is flushed before closing
+            await self.flush_batch()
+
             if len(body) < 2:
                 raise ValueError("Invalid Close message: too short")
 
@@ -3712,7 +3780,9 @@ class PGWireProtocol:
                     pg_microseconds = struct.unpack("!q", data)[0]
                     PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
                     timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
-                    return timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")  # Convert to ISO string for IRIS
+                    return timestamp_obj.strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )  # Convert to ISO string for IRIS
                 elif param_type_oid == 1184 and len(data) == 8:  # TIMESTAMPTZ (with timezone)
                     # Same as TIMESTAMP but with timezone - PostgreSQL stores as UTC microseconds
                     import datetime
@@ -3720,7 +3790,9 @@ class PGWireProtocol:
                     pg_microseconds = struct.unpack("!q", data)[0]
                     PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
                     timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
-                    return timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")  # Convert to ISO string for IRIS
+                    return timestamp_obj.strftime(
+                        "%Y-%m-%d %H:%M:%S.%f"
+                    )  # Convert to ISO string for IRIS
                 # Fallback: Infer type from data length when OID not specified
                 elif len(data) == 1:
                     # Could be boolean - treat as boolean
@@ -4429,7 +4501,7 @@ class PGWireProtocol:
         field_count = len(columns) if columns else 2
 
         # All fields in text format (0)
-        field_formats = struct.pack(f'!{"H" * field_count}', *([0] * field_count))
+        field_formats = struct.pack(f"!{'H' * field_count}", *([0] * field_count))
 
         message_length = 4 + 1 + 2 + len(field_formats)
         message = (

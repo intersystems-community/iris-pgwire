@@ -134,7 +134,7 @@ class TestIRISUserManager:
             ("user3", 1, "", "USER", None, "2024-01-03"),
         ]
 
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = mock_results
@@ -166,7 +166,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_get_iris_users_with_namespace_filter(self):
         """Test IRIS user retrieval with namespace filter"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = []
@@ -198,7 +198,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_create_iris_user_success(self):
         """Test successful IRIS user creation"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = [0]  # User doesn't exist
@@ -218,7 +218,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_create_iris_user_already_exists(self):
         """Test IRIS user creation when user already exists"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchone.return_value = [1]  # User exists
@@ -245,7 +245,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_update_iris_user_password(self):
         """Test IRIS user password update"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor
@@ -267,7 +267,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_disable_iris_user(self):
         """Test IRIS user disable"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_conn.cursor.return_value = mock_cursor
@@ -342,7 +342,7 @@ class TestIRISUserManager:
     @pytest.mark.asyncio
     async def test_constitutional_compliance_sla(self):
         """Test constitutional compliance SLA requirement"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
             mock_cursor.fetchall.return_value = []

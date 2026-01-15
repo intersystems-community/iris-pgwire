@@ -13,8 +13,10 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+
+import structlog
 
 from .cache import generate_cache_key, get_cache
 from .debug import get_tracer
@@ -40,6 +42,8 @@ from .validator import (
     ValidationResult,
     get_validator,
 )
+
+logger = structlog.get_logger()
 
 
 @dataclass
@@ -130,7 +134,7 @@ class IRISSQLTranslator:
         # Constitutional monitoring
         self._sla_violations = 0
         self._total_translations = 0
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc)
 
         # Setup logging
         self.logger = logging.getLogger("iris_pgwire.sql_translator")
@@ -155,12 +159,13 @@ class IRISSQLTranslator:
             try:
                 # Start debug trace
                 debug_trace = None
-                if self.enable_debug and trace_id:
+                if self.enable_debug and trace_id and self.tracer:
                     debug_trace = self.tracer.start_trace(trace_id, context.original_sql)
 
                 # Check cache first
                 cache_entry = None
-                if self.enable_caching and context.enable_caching:
+                cache_key = None
+                if self.enable_caching and context.enable_caching and self.cache:
                     cache_key = generate_cache_key(
                         context.original_sql, context.parameters, {"session_id": context.session_id}
                     )
@@ -172,7 +177,7 @@ class IRISSQLTranslator:
                             context.session_id, timer.elapsed_ms, cache_hit=True
                         )
 
-                        if debug_trace:
+                        if debug_trace and trace_id and self.tracer:
                             self.tracer.add_parsing_step(
                                 trace_id,
                                 "cache_hit",
@@ -202,12 +207,19 @@ class IRISSQLTranslator:
 
                 # Cache result if successful (no errors in warnings)
                 is_successful = not any("failed" in w.lower() for w in translation_result.warnings)
-                if is_successful and self.enable_caching and context.enable_caching and cache_key:
+                if (
+                    is_successful
+                    and self.enable_caching
+                    and context.enable_caching
+                    and self.cache
+                    and cache_key
+                ):
                     self.cache.put(
                         cache_key,
                         translation_result.translated_sql,
                         translation_result.construct_mappings,
                         translation_result.performance_stats,
+                        original_sql=context.original_sql,
                     )
 
                 # Update session stats
@@ -225,7 +237,7 @@ class IRISSQLTranslator:
                 # Constitutional compliance check
                 if timer.elapsed_ms > 5.0:  # 5ms SLA
                     self._sla_violations += 1
-                    if debug_trace:
+                    if debug_trace and trace_id and self.tracer:
                         self.tracer.add_warning(
                             trace_id,
                             f"Translation exceeded 5ms SLA: {timer.elapsed_ms}ms",
@@ -235,10 +247,11 @@ class IRISSQLTranslator:
                 return translation_result
 
             except Exception as e:
-                self.logger.error(f"Translation failed: {e}")
+                logger.error(f"Translation failed: {e}")
 
-                if debug_trace and trace_id:
-                    self.tracer.add_error(trace_id, str(e), "TranslationError")
+                if debug_trace and trace_id and self.tracer:
+                    if hasattr(self.tracer, "add_error"):
+                        self.tracer.add_error(trace_id, str(e), "TranslationError")
                     self.tracer.complete_trace(trace_id, "", False, timer.elapsed_ms)
 
                 return TranslationResult(
@@ -278,7 +291,7 @@ class IRISSQLTranslator:
                     debug_mode=self.enable_debug,
                 )
 
-            if debug_trace and trace_id:
+            if debug_trace and trace_id and self.tracer:
                 self.tracer.add_parsing_step(
                     trace_id,
                     "parse_constructs",
@@ -306,8 +319,27 @@ class IRISSQLTranslator:
             # Step 4: Final cleanup and optimization
             translated_sql = self._finalize_translation(translated_sql, trace_id, debug_trace)
 
+            # Audit logging: Record all transformations applied
+            if construct_mappings:
+                logger.info(
+                    "Audit: SQL transformations applied",
+                    original_sql=context.original_sql[:200],
+                    translated_sql=translated_sql[:200],
+                    mapping_count=len(construct_mappings),
+                    mappings=[
+                        {
+                            "type": m.construct_type.value,
+                            "original": m.original_syntax,
+                            "translated": m.translated_syntax,
+                        }
+                        for m in construct_mappings
+                    ],
+                    session_id=context.session_id,
+                    trace_id=trace_id,
+                )
+
             # Complete debug trace
-            if debug_trace and trace_id:
+            if debug_trace and trace_id and self.tracer:
                 self.tracer.complete_trace(trace_id, translated_sql, True, total_timer.elapsed_ms)
 
             return TranslationResult(
@@ -386,7 +418,6 @@ class IRISSQLTranslator:
     ) -> str:
         """Translate IRIS functions to PostgreSQL equivalents"""
         with PerformanceTimer() as timer:
-
             for construct in function_constructs:
                 # Get function name from metadata (parser stores it there)
                 function_name = construct.metadata.get("function_name", construct.original_text)
@@ -462,7 +493,6 @@ class IRISSQLTranslator:
     ) -> str:
         """Translate IRIS data types to PostgreSQL equivalents"""
         with PerformanceTimer() as timer:
-
             for construct in datatype_constructs:
                 mapping = self.datatype_registry.get_mapping(construct.original_text)
 
@@ -504,7 +534,6 @@ class IRISSQLTranslator:
     ) -> str:
         """Translate IRIS SQL constructs to PostgreSQL equivalents"""
         with PerformanceTimer() as timer:
-
             translated_sql, mappings = self.construct_registry.translate_constructs(sql)
             construct_mappings.extend(mappings)
 
@@ -529,7 +558,6 @@ class IRISSQLTranslator:
     ) -> str:
         """Translate IRIS document filter operations to PostgreSQL jsonb"""
         with PerformanceTimer() as timer:
-
             translated_sql, mappings = self.document_filter_registry.translate_document_filters(sql)
             construct_mappings.extend(mappings)
 
@@ -550,7 +578,7 @@ class IRISSQLTranslator:
         # Simple parameter substitution - could be enhanced
         result = function_template
         for i, param in enumerate(parameters):
-            placeholder = f"${i+1}"
+            placeholder = f"${i + 1}"
             if placeholder in result:
                 result = result.replace(placeholder, param)
         return result
@@ -571,14 +599,16 @@ class IRISSQLTranslator:
             trace_id=trace_id,
         )
 
-        return self.validator.validate_query_equivalence(validation_context)
+        if self.validator:
+            return self.validator.validate_query_equivalence(validation_context)
+        else:
+            return ValidationResult(success=True, confidence=1.0)
 
     def _finalize_translation(
         self, sql: str, trace_id: str | None, debug_trace: DebugTrace | None
     ) -> str:
         """Final cleanup and optimization of translated SQL"""
         with PerformanceTimer() as timer:
-
             # Remove extra whitespace
             sql = " ".join(sql.split())
 
@@ -614,7 +644,7 @@ class IRISSQLTranslator:
             if session_id:
                 if session_id not in self._sessions:
                     self._sessions[session_id] = TranslationSession(
-                        session_id=session_id, created_at=datetime.utcnow()
+                        session_id=session_id, created_at=datetime.now(timezone.utc)
                     )
 
                 session = self._sessions[session_id]
@@ -636,7 +666,7 @@ class IRISSQLTranslator:
     def get_translation_stats(self) -> dict[str, Any]:
         """Get comprehensive translation statistics"""
         with self._lock:
-            uptime_seconds = (datetime.utcnow() - self._start_time).total_seconds()
+            uptime_seconds = (datetime.now(timezone.utc) - self._start_time).total_seconds()
 
             # Calculate rates
             translations_per_second = (

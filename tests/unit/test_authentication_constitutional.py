@@ -84,15 +84,13 @@ class TestAuthenticationConstitutionalCompliance:
     @pytest.mark.asyncio
     async def test_authentication_sla_violation_logging(self, authenticator):
         """Test SLA violation triggers constitutional compliance check"""
-        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
-            # Mock slow IRIS authentication (>5ms)
-            async def slow_iris_auth():
-                await asyncio.sleep(0.006)  # 6ms delay
-                return True, "session_123"
 
-            mock_thread.return_value = slow_iris_auth()
+        async def mock_to_thread(f, *args, **kwargs):
+            await asyncio.sleep(0.006)
+            return True, "session_123"
 
-            with patch("iris_pgwire.auth.get_governor") as mock_governor:
+        with patch("iris_pgwire.auth.scram.asyncio.to_thread", side_effect=mock_to_thread):
+            with patch("iris_pgwire.auth.scram.get_governor") as mock_governor:
                 mock_gov = Mock()
                 mock_governor.return_value = mock_gov
 
@@ -112,13 +110,10 @@ class TestAuthenticationConstitutionalCompliance:
         """Test IRIS authentication provider constitutional compliance"""
         provider = IRISAuthenticationProvider(mock_iris_config)
 
-        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
-            # Mock fast IRIS authentication
-            async def fast_iris_auth():
-                return True, "session_456"
+        async def mock_to_thread(f, *args, **kwargs):
+            return True, "session_456"
 
-            mock_thread.return_value = fast_iris_auth()
-
+        with patch("iris_pgwire.auth.scram.asyncio.to_thread", side_effect=mock_to_thread):
             start_time = time.perf_counter()
             success, session_id = await provider.validate_iris_user("testuser", "testpass")
             end_time = time.perf_counter()
@@ -182,13 +177,11 @@ class TestAuthenticationConstitutionalCompliance:
     @pytest.mark.asyncio
     async def test_authentication_error_constitutional_compliance(self, authenticator):
         """Test constitutional compliance even during authentication errors"""
-        with patch("iris_pgwire.auth.asyncio.to_thread") as mock_thread:
-            # Mock IRIS authentication failure
-            async def failing_iris_auth():
-                raise Exception("IRIS connection failed")
 
-            mock_thread.return_value = failing_iris_auth()
+        async def mock_to_thread(f, *args, **kwargs):
+            raise Exception("IRIS connection failed")
 
+        with patch("iris_pgwire.auth.scram.asyncio.to_thread", side_effect=mock_to_thread):
             start_time = time.perf_counter()
             result = await authenticator.authenticate(
                 connection_id="test-conn-error", username="testuser", auth_data=b"test-auth-data"

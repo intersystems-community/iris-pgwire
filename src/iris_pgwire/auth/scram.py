@@ -27,8 +27,8 @@ from typing import Any
 
 import structlog
 
-from .constitutional import get_governor
-from .performance_monitor import get_monitor
+from iris_pgwire.constitutional import get_governor
+from iris_pgwire.performance_monitor import get_monitor
 
 logger = logging.getLogger(__name__)
 structured_logger = structlog.get_logger(__name__)

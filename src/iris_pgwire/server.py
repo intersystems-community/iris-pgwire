@@ -32,11 +32,17 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
-# Force reload of iris_executor BEFORE importing to bypass Python module cache
+# Force reload of core modules BEFORE importing to bypass Python module cache
 # This ensures code changes are picked up in development without container rebuilds
 import iris_pgwire.iris_executor
+import iris_pgwire.protocol
+import iris_pgwire.bulk_executor
+import iris_pgwire.vector_optimizer
 
-reloaded_module = importlib.reload(iris_pgwire.iris_executor)
+importlib.reload(iris_pgwire.iris_executor)
+importlib.reload(iris_pgwire.protocol)
+importlib.reload(iris_pgwire.bulk_executor)
+importlib.reload(iris_pgwire.vector_optimizer)
 
 # NOW import after reload
 from .integratedml import enhance_iris_executor_with_integratedml
@@ -66,7 +72,6 @@ class PGWireServer:
         ssl_key_path: str | None = None,
         enable_scram: bool = False,
     ):
-
         self.host = host
         self.port = port
         self.enable_ssl = enable_ssl

@@ -196,7 +196,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_success(self):
         """Test successful IRIS user validation"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             # Mock successful IRIS connection and query
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
@@ -217,7 +217,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_failure(self):
         """Test failed IRIS user validation"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             # Mock IRIS connection failure
             mock_create_conn.side_effect = Exception("Connection failed")
 
@@ -231,7 +231,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_exists_success(self):
         """Test successful IRIS user existence check"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             # Mock successful IRIS connection and user check
             mock_conn = MagicMock()
             mock_cursor = MagicMock()
@@ -255,7 +255,7 @@ class TestIRISAuthenticationProvider:
     @pytest.mark.asyncio
     async def test_validate_iris_user_exists_not_found(self):
         """Test IRIS user existence check for non-existent user"""
-        with patch("iris.createConnection") as mock_create_conn:
+        with patch("iris.createConnection", create=True) as mock_create_conn:
             # Mock successful connection but user not found
             mock_conn = MagicMock()
             mock_cursor = MagicMock()

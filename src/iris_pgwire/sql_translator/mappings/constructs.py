@@ -8,7 +8,9 @@ Constitutional Compliance: Comprehensive syntax translation preserving query sem
 """
 
 import re
+from typing import Any
 
+from ...conversions.vector_syntax import HnswIndexSpec
 from ..models import ConstructMapping, ConstructType, SourceLocation
 
 
@@ -30,6 +32,7 @@ class IRISSQLConstructRegistry:
         self._add_set_operations()
         self._add_window_functions()
         self._add_common_table_expressions()
+        self._add_index_constructs()
 
     def _add_top_clause_constructs(self):
         """Add TOP clause construct mappings"""
@@ -234,11 +237,51 @@ class IRISSQLConstructRegistry:
             notes="Preserve RECURSIVE CTE syntax",
         )
 
+    def _add_index_constructs(self):
+        """Add index-related construct mappings"""
+
+        # CREATE INDEX IF NOT EXISTS support
+        # IRIS doesn't support IF NOT EXISTS for indexes in the parser.
+        # We strip it and let IRISExecutor's DdlErrorHandler handle the "already exists" error.
+        self.add_construct(
+            name="CREATE_INDEX_IF_NOT_EXISTS",
+            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS",
+            replacement=lambda m: m.group(0).replace("IF NOT EXISTS", "").replace("  ", " ")
+            + " /* IF_NOT_EXISTS */",
+            confidence=1.0,
+            construct_type=ConstructType.SYNTAX,
+            notes="Strip IF NOT EXISTS from CREATE INDEX for IRIS compatibility",
+        )
+
+        # HNSW Index Support (PostgreSQL USING hnsw -> IRIS AS HNSW)
+        self.add_construct(
+            name="HNSW_INDEX",
+            pattern=r"CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s+USING\s+hnsw\s*\([^)]+\)",
+            replacement=None,  # Handled by post_process
+            post_process=self._translate_hnsw_index,
+            confidence=0.95,
+            construct_type=ConstructType.SYNTAX,
+            notes="Translate PostgreSQL HNSW index to IRIS syntax",
+        )
+
+    def _translate_hnsw_index(self, match: re.Match, full_sql: str) -> str:
+        """Translate HNSW index creation to IRIS syntax"""
+        sql = match.group(0)
+        try:
+            spec = HnswIndexSpec.from_postgres_sql(sql)
+            if spec:
+                return spec.to_iris_sql()
+        except ValueError as e:
+            # Re-raise as syntax error for the translator to handle
+            raise ValueError(f"HNSW translation error: {e}") from e
+
+        return sql
+
     def add_construct(
         self,
         name: str,
         pattern: str,
-        replacement: str | None,
+        replacement: Any,
         confidence: float = 1.0,
         construct_type: ConstructType = ConstructType.SYNTAX,
         notes: str = "",
@@ -378,7 +421,7 @@ class IRISSQLConstructRegistry:
         """Get all registered construct names"""
         return set(self._construct_patterns.keys())
 
-    def validate_construct_pattern(self, pattern: str) -> dict[str, any]:
+    def validate_construct_pattern(self, pattern: str) -> dict[str, Any]:
         """Validate a regex pattern for construct matching"""
         try:
             compiled_pattern = re.compile(pattern, re.IGNORECASE)
@@ -386,7 +429,7 @@ class IRISSQLConstructRegistry:
         except re.error as e:
             return {"valid": False, "error": str(e), "warnings": ["Invalid regex pattern"]}
 
-    def get_mapping_stats(self) -> dict[str, any]:
+    def get_mapping_stats(self) -> dict[str, Any]:
         """Get statistics about construct mappings"""
         total_constructs = len(self._construct_patterns)
 
