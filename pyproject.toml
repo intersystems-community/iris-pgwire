@@ -65,6 +65,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
+    "prometheus-client>=0.17.0",
 ]
 
 [project.optional-dependencies]
@@ -79,6 +80,7 @@ test = [
     "psycopg[binary]>=3.1.0",
     "docker>=6.0.0",
     "iris-devtester>=0.1.0",
+    "pytest-benchmark>=4.0.0",
     # Runtime dependencies needed when importing iris_pgwire modules in tests
     "sqlparse>=0.4.0",
     # Kerberos test realm isolation (constitutional TDD requirement - feature 024)
@@ -202,6 +204,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"src/iris_pgwire/conversions/**/*.py" = [
+    "ANN001", # Missing type annotation for function argument
+    "ANN201", # Missing return type annotation for public function
+]
 "tests/**/*.py" = [
     "E402",  # Module level import not at top (common in test setup)
     "E712",  # Comparison to True/False (explicit in tests)

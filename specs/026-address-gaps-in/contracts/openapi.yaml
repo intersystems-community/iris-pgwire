@@ -1,0 +1,87 @@
+# OpenAPI Specification for IRIS Bridge Gaps API
+openapi: 3.0.3
+info:
+  title: IRIS Bridge Gaps API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+paths:
+  /indexes:
+    post:
+      summary: Create a new HNSW vector index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - dimension
+                - distance_metric
+              properties:
+                name:
+                  type: string
+                dimension:
+                  type: integer
+                distance_metric:
+                  type: string
+                  enum: [cosine, dot_product]
+      responses:
+        "201":
+          description: Index created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorIndex'
+        "400":
+          description: Invalid request
+  /vectors/bulk:
+    post:
+      summary: Bulk insert vectors into an index
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - index_id
+                - file
+              properties:
+                index_id:
+                  type: string
+                  format: uuid
+                jsonpath:
+                  type: string
+                  description: JSONPath expression to extract vectors (optional if vectors are top‑level)
+                file:
+                  type: string
+                  format: binary
+                  description: CSV file of vectors (one per line, comma‑separated)
+      responses:
+        "200":
+          description: Bulk insert successful
+        "400":
+          description: Validation error
+components:
+  schemas:
+    VectorIndex:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        dimension:
+          type: integer
+        distance_metric:
+          type: string
+          enum: [l2, cosine, dot_product]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

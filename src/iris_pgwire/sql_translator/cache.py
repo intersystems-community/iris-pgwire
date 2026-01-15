@@ -11,7 +11,7 @@ import hashlib
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 from typing import Any
 
 from .models import (
@@ -79,7 +79,7 @@ class TranslationCache:
 
         # Performance metrics
         self._metrics = CacheMetrics()
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc)
 
         # Constitutional monitoring
         self._sla_violations = 0
@@ -129,6 +129,7 @@ class TranslationCache:
         construct_mappings: list,
         performance_stats: PerformanceStats | None = None,
         ttl_seconds: int | None = None,
+        original_sql: str | None = None,
     ) -> None:
         """
         Put entry into cache
@@ -139,6 +140,7 @@ class TranslationCache:
             construct_mappings: List of construct mappings
             performance_stats: Performance statistics
             ttl_seconds: TTL override for this entry
+            original_sql: Original SQL statement (required for pattern matching)
         """
         with PerformanceTimer() as timer:
             with self._lock:
@@ -147,7 +149,7 @@ class TranslationCache:
 
                 # Create cache entry
                 entry = CacheEntry(
-                    original_sql=cache_key,  # Using key as original SQL for now
+                    original_sql=original_sql or cache_key,
                     translated_sql=translated_sql,
                     construct_mappings=construct_mappings,
                     performance_stats=performance_stats or PerformanceStats(0.0, False, 0, 0),
@@ -287,7 +289,9 @@ class TranslationCache:
                 "constitutional_compliance": {
                     "sla_violations": self._sla_violations,
                     "max_lookup_time_ms": self._max_lookup_time_ms,
-                    "uptime_seconds": (datetime.utcnow() - self._start_time).total_seconds(),
+                    "uptime_seconds": (
+                        datetime.now(timezone.utc) - self._start_time
+                    ).total_seconds(),
                 },
                 "sample_keys": list(self._cache.keys())[:10],  # First 10 keys for debugging
             }

@@ -144,6 +144,9 @@ class IRISSQLParser:
         patterns["DECODE"] = re.compile(r"\bDECODE\s*\(", re.IGNORECASE)
         patterns["IIF"] = re.compile(r"\bIIF\s*\(", re.IGNORECASE)
         patterns["MINUS"] = re.compile(r"\bMINUS\b", re.IGNORECASE)
+        patterns["INDEX_IF_NOT_EXISTS"] = re.compile(
+            r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS", re.IGNORECASE
+        )
 
         # Data type patterns
         patterns["IRIS_TYPES"] = re.compile(r"\b%\w+\b", re.IGNORECASE)
@@ -468,7 +471,7 @@ class IRISSQLParser:
             return ConstructType.SYNTAX
         elif construct_name in ["DECODE", "IIF"]:
             return ConstructType.FUNCTION
-        elif construct_name in ["MINUS"]:
+        elif construct_name in ["MINUS", "INDEX_IF_NOT_EXISTS"]:
             return ConstructType.SYNTAX
         elif construct_name == "ROWNUM":
             return ConstructType.SYNTAX

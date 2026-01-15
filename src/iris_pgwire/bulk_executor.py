@@ -10,10 +10,16 @@ Constitutional Requirements:
 - Principle IV: Use asyncio.to_thread() for non-blocking IRIS operations
 """
 
-import logging
+import importlib
+import time
+import structlog
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
+from typing import Any
 
-logger = logging.getLogger(__name__)
+from .conversions import date_to_horolog
+
+logger = structlog.get_logger()
 
 
 class BulkExecutor:
@@ -75,7 +81,7 @@ class BulkExecutor:
             batch.append(row_dict)
 
             # Execute batch when full
-            if len(batch) >= batch_size:
+            if len(batch) >= batch_size and actual_column_names is not None:
                 rows_inserted = await self._execute_batch_insert(
                     table_name, actual_column_names, batch
                 )
@@ -83,7 +89,7 @@ class BulkExecutor:
                 batch = []  # Reset batch
 
         # Execute remaining batch
-        if batch:
+        if batch and actual_column_names is not None:
             rows_inserted = await self._execute_batch_insert(table_name, actual_column_names, batch)
             total_rows += rows_inserted
 
@@ -91,7 +97,7 @@ class BulkExecutor:
         return total_rows
 
     async def _execute_batch_insert(
-        self, table_name: str, column_names: list[str], batch: list[dict]
+        self, table_name: str, column_names: list[str], batch: list[dict[str, Any]]
     ) -> int:
         """
         Execute single batch INSERT with try/catch architecture.
@@ -121,12 +127,6 @@ class BulkExecutor:
         """
         if not batch:
             return 0
-
-        import time
-        from datetime import datetime
-
-        # Calculate Horolog epoch once
-        horolog_epoch = datetime(1840, 12, 31).date()
 
         # Get column data types to handle DATE conversion
         column_types = await self._get_column_types(table_name, column_names)
@@ -158,10 +158,14 @@ class BulkExecutor:
                     if value == "" or value is None:
                         params.append(None)
                     elif col_type.upper() == "DATE":
-                        # Convert ISO date to Horolog integer
+                        # Convert ISO date to Horolog integer using centralized utility
                         date_obj = datetime.strptime(value, "%Y-%m-%d").date()
-                        horolog_days = (date_obj - horolog_epoch).days
-                        params.append(horolog_days)
+                        params.append(date_to_horolog(date_obj))
+                    elif isinstance(value, list):
+                        # Convert Python list to IRIS vector string format [...]
+                        # This avoids the DBAPI driver converting it to {...}
+                        vector_str = "[" + ",".join(str(float(v)) for v in value) + "]"
+                        params.append(vector_str)
                     else:
                         params.append(value)
 
@@ -210,8 +214,7 @@ class BulkExecutor:
                         value_parts.append("NULL")
                     elif col_type.upper() == "DATE":
                         date_obj = datetime.strptime(value, "%Y-%m-%d").date()
-                        horolog_days = (date_obj - horolog_epoch).days
-                        value_parts.append(str(horolog_days))
+                        value_parts.append(str(date_to_horolog(date_obj)))
                     else:
                         escaped_value = str(value).replace("'", "''")
                         value_parts.append(f"'{escaped_value}'")
@@ -258,7 +261,7 @@ class BulkExecutor:
             SELECT COLUMN_NAME, DATA_TYPE
             FROM INFORMATION_SCHEMA.COLUMNS
             WHERE LOWER(TABLE_NAME) = LOWER(?)
-            AND UPPER(COLUMN_NAME) IN ({', '.join(['UPPER(?)' for _ in column_names])})
+            AND UPPER(COLUMN_NAME) IN ({", ".join(["UPPER(?)" for _ in column_names])})
         """
 
         params = [table_name] + column_names

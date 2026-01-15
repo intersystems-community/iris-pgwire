@@ -9,7 +9,7 @@ Constitutional Compliance: All models enforce 5ms SLA and provide debug tracing.
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -143,8 +143,8 @@ class CacheEntry:
     translated_sql: str
     construct_mappings: list[ConstructMapping]
     performance_stats: PerformanceStats
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    last_accessed: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     access_count: int = 1
     ttl_seconds: int = 3600  # 1 hour default TTL
 
@@ -160,18 +160,18 @@ class CacheEntry:
     @property
     def is_expired(self) -> bool:
         """Check if cache entry has expired"""
-        age_seconds = (datetime.utcnow() - self.created_at).total_seconds()
+        age_seconds = (datetime.now(timezone.utc) - self.created_at).total_seconds()
         return age_seconds > self.ttl_seconds
 
     def update_access(self):
         """Update access tracking"""
-        self.last_accessed = datetime.utcnow()
+        self.last_accessed = datetime.now(timezone.utc)
         self.access_count += 1
 
     @property
     def age_minutes(self) -> float:
         """Get age of entry in minutes"""
-        return (datetime.utcnow() - self.created_at).total_seconds() / 60
+        return (datetime.now(timezone.utc) - self.created_at).total_seconds() / 60
 
 
 @dataclass

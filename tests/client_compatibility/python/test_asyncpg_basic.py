@@ -47,7 +47,7 @@ async def pool():
     await pool.close()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 class TestAsyncpgBasicConnection:
     """Test basic connection functionality"""
 
@@ -81,7 +81,7 @@ class TestAsyncpgBasicConnection:
         print(f"✅ Database: {db_name}")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 class TestAsyncpgSimpleQueries:
     """Test simple query execution (PostgreSQL Simple Query protocol)"""
 
@@ -138,7 +138,7 @@ class TestAsyncpgSimpleQueries:
         print(f"✅ NULL handling: null_col={result['null_col']}, num_col={result['num_col']}")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 class TestAsyncpgColumnMetadata:
     """Test column metadata and type information"""
 
@@ -177,7 +177,7 @@ class TestAsyncpgColumnMetadata:
             await conn.execute("DROP TABLE IF EXISTS test_empty_asyncpg")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 class TestAsyncpgPreparedStatements:
     """Test prepared statements (Extended Protocol)"""
 
@@ -264,7 +264,7 @@ class TestAsyncpgPreparedStatements:
         print(f"✅ Date parameter: {result}")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 class TestAsyncpgTransactions:
     """Test transaction management"""
 

@@ -38,6 +38,19 @@ __all__ = [
     "GSSAPIAuthenticator",
     "WalletCredentials",
     "AuthenticationSelector",
+    # SCRAM components
+    "AuthenticationState",
+    "AuthenticationMethod",
+    "AuthenticationResult",
+    "ScramCredentials",
+    "IRISAuthenticationProvider",
+    "PostgreSQLAuthenticator",
+    "SCRAMAuthenticator",
+    "create_authentication_ok",
+    "create_authentication_sasl",
+    "create_authentication_sasl_continue",
+    "create_authentication_sasl_final",
+    "create_error_response",
     # OAuth types and errors
     "OAuthToken",
     "OAuthConfig",
@@ -64,6 +77,20 @@ __version__ = "0.1.0"
 __feature__ = "024-research-and-implement"
 
 # Import implementations (Phase 3.4 complete)
+from .scram import (
+    AuthenticationState,
+    AuthenticationMethod,
+    AuthenticationResult,
+    ScramCredentials,
+    IRISAuthenticationProvider,
+    PostgreSQLAuthenticator,
+    SCRAMAuthenticator,
+    create_authentication_ok,
+    create_authentication_sasl,
+    create_authentication_sasl_continue,
+    create_authentication_sasl_final,
+    create_error_response,
+)
 from .auth_selector import (
     AuthenticationSelector,
     AuthMethod,

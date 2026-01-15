@@ -16,7 +16,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
@@ -203,7 +203,7 @@ class IRISConnectionPool:
         Returns:
             ConnectionPoolState with current pool metrics
         """
-        self._last_health_check = datetime.utcnow()
+        self._last_health_check = datetime.now(timezone.utc)
 
         connections_in_use = self._connections_in_use()
         connections_available = self._pool.qsize()

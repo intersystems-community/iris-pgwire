@@ -20,9 +20,7 @@ sys.path.insert(0, str(src_dir))
 specs_dir = Path(__file__).parent.parent.parent / "specs" / "022-postgresql-transaction-verb"
 sys.path.insert(0, str(specs_dir))
 
-from contracts.transaction_translator_interface import CommandType
-
-from iris_pgwire.sql_translator.transaction_translator import TransactionTranslator
+from iris_pgwire.sql_translator.transaction_translator import TransactionTranslator, CommandType
 
 
 class TestTransactionTranslator:

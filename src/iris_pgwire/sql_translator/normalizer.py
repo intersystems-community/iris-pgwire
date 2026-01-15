@@ -13,7 +13,9 @@ Feature 030 Extension:
 """
 
 import time
+import re
 
+from ..conversions.json_path import JsonPathBuilder
 from ..schema_mapper import translate_input_schema
 from .date_translator import DATETranslator
 from .identifier_normalizer import IdentifierNormalizer
@@ -29,6 +31,7 @@ class SQLTranslator:
     Combines:
     - Identifier case normalization (unquoted → UPPERCASE, quoted → preserve)
     - DATE literal translation ('YYYY-MM-DD' → TO_DATE(...))
+    - JSON operator translation (->, ->> → JSON_VALUE/JSON_QUERY)
     """
 
     def __init__(self):
@@ -36,11 +39,17 @@ class SQLTranslator:
         self.identifier_normalizer = IdentifierNormalizer()
         self.date_translator = DATETranslator()
 
+        # Recursive JSON operator pattern
+        self._json_pattern = re.compile(
+            r"(\w+)(?:->>?['\"]\w+['\"]|->>?\d+|\[['\"]\w+['\"]\]|\[\d+\])+", re.IGNORECASE
+        )
+
         # Metrics tracking for last normalization
         self._last_metrics = {
             "normalization_time_ms": 0.0,
             "identifier_count": 0,
             "date_literal_count": 0,
+            "json_operator_count": 0,
             "sla_violated": False,
         }
 
@@ -70,6 +79,7 @@ class SQLTranslator:
                 "normalization_time_ms": 0.0,
                 "identifier_count": 0,
                 "date_literal_count": 0,
+                "json_operator_count": 0,
                 "sla_violated": False,
             }
             return sql
@@ -83,6 +93,12 @@ class SQLTranslator:
         # Step 2: Translate DATE literals ('YYYY-MM-DD' → TO_DATE(...))
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
 
+        # Step 3: Translate JSON operators
+        normalized_sql, json_count = self._translate_json_operators(normalized_sql)
+
+        # Step 4: Translate VECTOR types (VECTOR(128) -> VECTOR(DOUBLE, 128))
+        normalized_sql = self._translate_vector_types(normalized_sql)
+
         # Calculate performance metrics
         end_time = time.perf_counter()
         normalization_time_ms = (end_time - start_time) * 1000
@@ -93,10 +109,46 @@ class SQLTranslator:
             "normalization_time_ms": normalization_time_ms,
             "identifier_count": identifier_count,
             "date_literal_count": date_count,
+            "json_operator_count": json_count,
             "sla_violated": sla_violated,
         }
 
         return normalized_sql
+
+    def _translate_json_operators(self, sql: str) -> tuple[str, int]:
+        """Translate PostgreSQL JSON operators to IRIS JSON_VALUE/JSON_QUERY"""
+        count = 0
+
+        def replace_json(match):
+            nonlocal count
+            try:
+                _, builder = JsonPathBuilder.parse(match.group(0))
+                count += 1
+                return builder.build()
+            except Exception:
+                return match.group(0)
+
+        # We must be careful not to translate inside already translated parts or string literals
+        # SQLTranslator already avoids string literals in other steps, but we should be robust
+        result = self._json_pattern.sub(replace_json, sql)
+        return result, count
+
+    def _translate_vector_types(self, sql: str) -> str:
+        """
+        Translate PostgreSQL VECTOR types to IRIS format.
+        VECTOR(128) -> VECTOR(DOUBLE, 128)
+        """
+        # Match VECTOR(dims) but not VECTOR(type, dims)
+        # Matches: VECTOR(128), vector(512), "VECTOR"(1024)
+        # Replaces with: VECTOR(DOUBLE,128) - no space after comma for maximum compatibility
+
+        def replace_vector(match):
+            dims = match.group(1)
+            return f"VECTOR(DOUBLE,{dims})"
+
+        # Pattern: \bVECTOR\s*\(\s*(\d+)\s*\)
+        result = re.sub(r"\bVECTOR\s*\(\s*(\d+)\s*\)", replace_vector, sql, flags=re.IGNORECASE)
+        return result
 
     def normalize_identifiers(self, sql: str) -> str:
         """

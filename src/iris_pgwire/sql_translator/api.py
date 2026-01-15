@@ -9,7 +9,7 @@ Constitutional Compliance: High-performance API with sub-5ms response times.
 
 import logging
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
@@ -139,7 +139,7 @@ class SQLTranslationAPI:
         # Request tracking
         self._request_count = 0
         self._error_count = 0
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc)
 
         # Constitutional monitoring
         self._sla_violations = 0
@@ -199,7 +199,7 @@ class SQLTranslationAPI:
                     debug_trace=(
                         self._format_debug_trace(result.debug_trace) if result.debug_trace else None
                     ),
-                    timestamp=datetime.utcnow().isoformat(),
+                    timestamp=datetime.now(timezone.utc).isoformat(),
                 )
 
                 return response
@@ -292,7 +292,7 @@ class SQLTranslationAPI:
             return CacheInvalidationResponse(
                 invalidated_count=invalidated_count,
                 pattern=request.pattern,
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
         except HTTPException:
@@ -311,7 +311,7 @@ class SQLTranslationAPI:
         Returns:
             API statistics
         """
-        uptime_seconds = (datetime.utcnow() - self._start_time).total_seconds()
+        uptime_seconds = (datetime.now(timezone.utc) - self._start_time).total_seconds()
         requests_per_second = self._request_count / uptime_seconds if uptime_seconds > 0 else 0.0
         error_rate = self._error_count / self._request_count if self._request_count > 0 else 0.0
 
@@ -377,7 +377,7 @@ class SQLTranslationAPI:
             "error": message,
             "details": details,
             "error_code": error_code,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -474,7 +474,7 @@ def create_translation_api(translator: IRISSQLTranslator | None = None) -> FastA
 
         return {
             "status": health_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "uptime_seconds": stats["api_stats"]["uptime_seconds"],
             "requests_processed": stats["api_stats"]["total_requests"],
             "error_rate": error_rate,

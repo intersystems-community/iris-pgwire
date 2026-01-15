@@ -7,14 +7,50 @@ real-time metrics collection, and constitutional compliance reporting.
 Constitutional Compliance: Sub-5ms translation SLA with detailed monitoring.
 """
 
+import os
 import statistics
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Optional, Literal
+
+# Global switch for performance monitoring
+MONITOR_ENABLED = os.getenv("IRIS_PGWIRE_PERF_MONITOR", "false").lower() == "true"
+
+try:
+    from prometheus_client import Counter, Summary
+
+    HAS_PROMETHEUS = True
+except ImportError:
+    HAS_PROMETHEUS = False
+
+    # Dummy classes for LSP and runtime when prometheus is missing
+    class DummyMetric:
+        def labels(self, *args, **kwargs):
+            return self
+
+        def inc(self, *args, **kwargs):
+            pass
+
+        def observe(self, *args, **kwargs):
+            pass
+
+    Counter = Summary = lambda *args, **kwargs: DummyMetric()
+
+TRANSLATION_LATENCY = Summary(
+    "iris_pgwire_translation_latency_ms", "SQL translation latency in milliseconds", ["component"]
+)
+BULK_INSERT_THROUGHPUT = Summary(
+    "iris_pgwire_bulk_insert_throughput_rows_per_sec", "Bulk insert throughput in rows per second"
+)
+SLA_VIOLATIONS = Counter(
+    "iris_pgwire_sla_violations_total",
+    "Total number of constitutional SLA violations",
+    ["component", "severity"],
+)
 
 
 class MetricType(Enum):
@@ -26,6 +62,8 @@ class MetricType(Enum):
     PARSING_TIME = "parsing_time"
     MAPPING_TIME = "mapping_time"
     API_RESPONSE_TIME = "api_response_time"
+    BULK_INSERT_THROUGHPUT = "bulk_insert_throughput"
+    MEMORY_OVERHEAD = "memory_overhead"
 
 
 class SLAStatus(Enum):
@@ -138,7 +176,7 @@ class PerformanceMonitor:
         self._total_operations = 0
         self._total_violations = 0
         self._consecutive_violations = 0
-        self._start_time = datetime.utcnow()
+        self._start_time = datetime.now(timezone.utc)
 
         # Alert thresholds
         self.warning_threshold_ms = sla_threshold_ms * 0.8  # 80% of SLA
@@ -146,7 +184,7 @@ class PerformanceMonitor:
 
     def record_metric(
         self,
-        metric_type: MetricType,
+        metric_type: MetricType | str,
         value_ms: float,
         component: str,
         session_id: str | None = None,
@@ -167,7 +205,10 @@ class PerformanceMonitor:
         Returns:
             SLA violation record if threshold exceeded, None otherwise
         """
-        timestamp = datetime.utcnow()
+        if not MONITOR_ENABLED:
+            return None
+
+        timestamp = datetime.now(timezone.utc)
 
         with self._lock:
             # Create metric record
@@ -190,6 +231,14 @@ class PerformanceMonitor:
             violation = None
             if value_ms > self.sla_threshold_ms:
                 violation = self._record_sla_violation(metric)
+                if HAS_PROMETHEUS:
+                    SLA_VIOLATIONS.labels(component=component, severity=violation.severity).inc()
+
+            if HAS_PROMETHEUS:
+                if metric_type == MetricType.TRANSLATION_TIME:
+                    TRANSLATION_LATENCY.labels(component=component).observe(value_ms)
+                elif metric_type == MetricType.BULK_INSERT_THROUGHPUT:
+                    BULK_INSERT_THROUGHPUT.observe(value_ms)
 
             # Update consecutive violation tracking
             if violation:
@@ -205,11 +254,11 @@ class PerformanceMonitor:
 
         # Determine severity
         if self._consecutive_violations >= self.critical_violation_threshold:
-            severity = "critical"
+            severity: Literal["critical", "major", "minor"] = "critical"
         elif violation_amount > self.sla_threshold_ms:  # More than double the SLA
-            severity = "major"
+            severity: Literal["critical", "major", "minor"] = "major"
         else:
-            severity = "minor"
+            severity: Literal["critical", "major", "minor"] = "minor"
 
         violation = SLAViolation(
             violation_id=f"v_{int(time.time() * 1000)}_{self._total_violations}",
@@ -267,7 +316,7 @@ class PerformanceMonitor:
                 p99_time_ms=self._percentile(times, 0.99),
                 sla_violations=violations,
                 sla_compliance_rate=compliance_rate,
-                last_updated=datetime.utcnow(),
+                last_updated=datetime.now(timezone.utc),
             )
 
     def get_constitutional_report(self) -> ConstitutionalReport:
@@ -317,7 +366,9 @@ class PerformanceMonitor:
                     "p50_time_ms": statistics.median(all_times),
                     "p95_time_ms": self._percentile(all_times, 0.95),
                     "p99_time_ms": self._percentile(all_times, 0.99),
-                    "uptime_seconds": (datetime.utcnow() - self._start_time).total_seconds(),
+                    "uptime_seconds": (
+                        datetime.now(timezone.utc) - self._start_time
+                    ).total_seconds(),
                 }
 
             # Generate recommendations
@@ -339,7 +390,7 @@ class PerformanceMonitor:
                 component_compliance=component_compliance,
                 recent_violations=recent_violations,
                 recommendations=recommendations,
-                report_timestamp=datetime.utcnow(),
+                report_timestamp=datetime.now(timezone.utc),
             )
 
     def get_real_time_status(self) -> dict[str, Any]:
@@ -368,7 +419,7 @@ class PerformanceMonitor:
                 sla_status = "warning"
 
             return {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "sla_status": sla_status,
                 "sla_threshold_ms": self.sla_threshold_ms,
                 "current_avg_ms": current_avg,
@@ -412,7 +463,7 @@ class PerformanceMonitor:
                 self._total_operations = 0
                 self._total_violations = 0
                 self._consecutive_violations = 0
-                self._start_time = datetime.utcnow()
+                self._start_time = datetime.now(timezone.utc)
                 return cleared
 
     def export_metrics(self, format_type: str = "json") -> str:
@@ -438,7 +489,7 @@ class PerformanceMonitor:
                             comp: self.get_component_stats(comp) for comp in self._component_metrics
                         }.items()
                     },
-                    "export_timestamp": datetime.utcnow().isoformat(),
+                    "export_timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 return json.dumps(metrics_data, indent=2, default=str)
             elif format_type.lower() == "csv":
@@ -465,12 +516,12 @@ class PerformanceMonitor:
 
     def _calculate_ops_per_second(self) -> float:
         """Calculate operations per second"""
-        uptime = (datetime.utcnow() - self._start_time).total_seconds()
+        uptime = (datetime.now(timezone.utc) - self._start_time).total_seconds()
         return self._total_operations / uptime if uptime > 0 else 0.0
 
     def _generate_recommendations(
         self,
-        status: SLAStatus,
+        status: SLAStatus | str,
         compliance_rate: float,
         component_compliance: dict[str, ComponentStats],
     ) -> list[str]:
@@ -551,20 +602,29 @@ class PerformanceTracker:
         self.violation = None
 
     def __enter__(self):
+        if not MONITOR_ENABLED:
+            return self
         self.start_time = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.start_time:
+        if MONITOR_ENABLED and self.start_time:
+            # Use perf_counter for duration to avoid timezone/clock-jump issues
             elapsed_ms = (time.perf_counter() - self.start_time) * 1000
-            self.violation = _monitor.record_metric(
-                self.metric_type,
-                elapsed_ms,
-                self.component,
-                self.session_id,
-                self.trace_id,
-                **self.metadata,
-            )
+
+            # Use a safe try-except to ensure performance monitoring never crashes the main path
+            try:
+                self.violation = _monitor.record_metric(
+                    self.metric_type,
+                    elapsed_ms,
+                    self.component,
+                    self.session_id,
+                    self.trace_id,
+                    **self.metadata,
+                )
+            except Exception:
+                # Silently ignore monitoring errors in production-like environments
+                pass
 
 
 # Export main components

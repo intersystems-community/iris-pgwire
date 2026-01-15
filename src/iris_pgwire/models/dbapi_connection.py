@@ -12,7 +12,7 @@ Feature: 018-add-dbapi-option
 Data Model: Entity #4 - DBAPIConnection
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -112,7 +112,7 @@ class DBAPIConnection(BaseModel):
         Returns:
             Seconds since connection creation
         """
-        return (datetime.utcnow() - self.created_at).total_seconds()
+        return (datetime.now(timezone.utc) - self.created_at).total_seconds()
 
     def should_recycle(self) -> bool:
         """
@@ -126,7 +126,7 @@ class DBAPIConnection(BaseModel):
     def mark_in_use(self) -> None:
         """Mark connection as in-use (acquired from pool)."""
         self.state = ConnectionState.IN_USE
-        self.last_used_at = datetime.utcnow()
+        self.last_used_at = datetime.now(timezone.utc)
 
     def mark_idle(self) -> None:
         """Mark connection as idle (returned to pool)."""
@@ -158,7 +158,7 @@ class DBAPIConnection(BaseModel):
         """
         self.total_queries += 1
         self.total_acquisition_time_ms += acquisition_time_ms
-        self.last_used_at = datetime.utcnow()
+        self.last_used_at = datetime.now(timezone.utc)
 
         if not success:
             self.total_errors += 1
@@ -172,7 +172,7 @@ class DBAPIConnection(BaseModel):
             error_message: Error message if health check failed
         """
         self.is_healthy = is_healthy
-        self.last_health_check_at = datetime.utcnow()
+        self.last_health_check_at = datetime.now(timezone.utc)
 
         if not is_healthy and error_message:
             self.last_error = error_message

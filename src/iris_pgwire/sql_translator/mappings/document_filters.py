@@ -8,8 +8,13 @@ Constitutional Compliance: Accurate document query translation preserving semant
 """
 
 import re
+import logging
+from typing import Any
 
+from ...conversions.json_path import JsonPathBuilder
 from ..models import ConstructMapping, ConstructType, SourceLocation
+
+logger = logging.getLogger(__name__)
 
 
 class IRISDocumentFilterRegistry:
@@ -534,7 +539,7 @@ class IRISDocumentFilterRegistry:
         """Get all registered filter names"""
         return set(self._filter_patterns.keys())
 
-    def get_mapping_stats(self) -> dict[str, any]:
+    def get_mapping_stats(self) -> dict[str, Any]:
         """Get statistics about document filter mappings"""
         total_filters = len(self._filter_patterns)
 

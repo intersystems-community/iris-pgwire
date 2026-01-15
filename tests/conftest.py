@@ -396,49 +396,65 @@ def iris_fixture(iris_connection, iris_config, iris_container):
 
 
 @pytest.fixture(scope="session")
-async def pgwire_server(iris_container, iris_config):
+def pgwire_server(iris_container, iris_config):
     """
-    Start PGWire server against real IRIS for testing session
-
-    Returns when PGWire server is ready to accept connections.
+    Start PGWire server against real IRIS for testing session in a separate thread.
+    This prevents deadlocks when synchronous pgwire_client fixtures block the main thread.
     """
     from iris_pgwire.server import PGWireServer
+    import threading
 
     # Configure server for testing
     server = PGWireServer(
         host="127.0.0.1",
-        port=5432,
+        port=5434,
         iris_host=iris_config["host"],
         iris_port=iris_config["port"],
         iris_username=iris_config["username"],
         iris_password=iris_config["password"],
         iris_namespace=iris_config["namespace"],
-        enable_ssl=False,  # Start with plain connections for P0
+        enable_ssl=False,
     )
 
-    # Start server in background task
-    server_task = asyncio.create_task(server.start())
+    stop_event = threading.Event()
 
-    # Wait for server to be ready
-    try:
-        # Give server more time to start up
-        await asyncio.sleep(3)
-        if not wait_for_port("127.0.0.1", 5432, timeout=15):
-            server_task.cancel()
-            pytest.fail("PGWire server failed to start")
+    def run_server():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-        logger.info("PGWire server ready for testing")
-        yield server
+        async def start_and_wait():
+            await server.start()
+            # server.start() calls serve_forever(), so we wait for stop_event
+            while not stop_event.is_set():
+                await asyncio.sleep(0.1)
+            await server.stop()
 
-    finally:
-        # Cleanup
-        logger.info("Shutting down PGWire server")
-        server_task.cancel()
-        await server.stop()
         try:
-            await server_task
-        except asyncio.CancelledError:
-            pass
+            loop.run_until_complete(start_and_wait())
+        finally:
+            loop.close()
+
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
+
+    # Wait for server to be ready using active polling
+    logger.info("Waiting for PGWire server to be ready...")
+    start_wait = time.perf_counter()
+    while time.perf_counter() - start_wait < 30:
+        if wait_for_port("127.0.0.1", 5434, timeout=0.1):
+            logger.info(f"PGWire server ready after {time.perf_counter() - start_wait:.2f}s")
+            break
+        time.sleep(0.5)
+    else:
+        stop_event.set()
+        pytest.fail("PGWire server failed to start in separate thread")
+
+    yield server
+
+    # Cleanup
+    logger.info("Shutting down PGWire server thread")
+    stop_event.set()
+    server_thread.join(timeout=5)
 
 
 @pytest.fixture
@@ -446,7 +462,7 @@ def pgwire_connection_params():
     """Connection parameters for PGWire server"""
     return {
         "host": "127.0.0.1",
-        "port": 5432,
+        "port": 5434,
         "user": "test_user",
         "dbname": "USER",
         "connect_timeout": 10,
@@ -487,57 +503,79 @@ async def psycopg_connection(pgwire_server, pgwire_connection_params):
             pass
 
 
-@pytest.fixture
-def psql_command():
+@pytest.fixture(scope="function")
+def pgwire_client(pgwire_server, iris_config):
     """
-    Real psql command for CLI testing
-
-    Returns a function that executes psql with our connection parameters.
+    Provide PostgreSQL wire protocol client connection.
+    Depends on pgwire_server being started.
     """
+    logger.info("pgwire_client: Establishing PGWire connection")
+    start_time = time.perf_counter()
 
-    def run_psql(sql_command: str, timeout: int = 10):
-        """Run psql command and return result"""
-        cmd = [
-            "psql",
-            "-h",
-            "127.0.0.1",
-            "-p",
-            "5432",
-            "-U",
-            "test_user",
-            "-d",
-            "USER",
-            "-c",
-            sql_command,
-            "--no-password",  # Don't prompt for password in P0
-        ]
+    connection = None
+    try:
+        # Connect to PGWire server
+        # Standard port 5434
+        connection = psycopg.connect(
+            host="127.0.0.1",
+            port=5434,
+            dbname=iris_config["namespace"],
+            user=iris_config["username"],
+            password=iris_config["password"],
+            connect_timeout=30,
+        )
 
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "pgwire_client: Connection established",
+            setup_time_ms=f"{elapsed * 1000:.2f}ms",
+            connection_status=connection.info.status.name,
+        )
+
+        # Verify connection is ready
+        if connection.info.status != psycopg.pq.ConnStatus.OK:
+            raise RuntimeError(f"PGWire connection not ready: status={connection.info.status}")
+
+        # Verify connection works by executing simple query
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
+            if result is None or result[0] != 1:
+                raise RuntimeError("PGWire connection verification failed")
+
+        logger.info("pgwire_client: Connection verified")
+
+        # Yield connection to test
+        yield connection
+
+    except ImportError as e:
+        logger.error(
+            "pgwire_client: psycopg not available",
+            error=str(e),
+            hint="Install psycopg: pip install psycopg>=3.1.0",
+        )
+        pytest.skip("psycopg not available - required for PGWire testing")
+
+    except psycopg.OperationalError as e:
+        logger.error(
+            "pgwire_client: PGWire server not available",
+            error=str(e),
+            hint="Start PGWire server on port 5434 before running tests",
+        )
+        pytest.skip(f"PGWire server not available: {e}")
+
+    except Exception as e:
+        logger.error("pgwire_client: Connection failed", error=str(e))
+        pytest.skip(f"PGWire connection failed: {e}")
+
+    finally:
+        # Teardown: Close connection
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env={"PGPASSWORD": ""},  # Empty password for P0
-            )
-            return {
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "success": result.returncode == 0,
-            }
-        except subprocess.TimeoutExpired:
-            return {"returncode": -1, "stdout": "", "stderr": "Command timed out", "success": False}
-        except FileNotFoundError:
-            pytest.skip("psql command not available")
-
-    return run_psql
-
-
-# Pytest markers for organizing tests
-pytestmark = [
-    pytest.mark.asyncio,
-]
+            if "connection" in locals() and connection is not None:
+                connection.close()
+                logger.info("pgwire_client: Connection closed")
+        except Exception as e:
+            logger.warning("pgwire_client: Error closing connection", error=str(e))
 
 
 # ============================================================================
@@ -647,7 +685,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
         f"""
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = '{namespace}'
+        WHERE TABLE_SCHEMA = 'SQLUser'
     """
     )
     existing_tables = {row[0] for row in result}
@@ -668,7 +706,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
             f"""
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = '{namespace}'
+            WHERE TABLE_SCHEMA = 'SQLUser'
         """
         )
         current_tables = {row[0] for row in result}
@@ -677,7 +715,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
         # Drop tables created during test
         for table_name in new_tables:
             try:
-                embedded_iris.sql.exec(f"DROP TABLE {table_name}")
+                embedded_iris.sql.exec(f"DROP TABLE SQLUser.{table_name} CASCADE")
                 logger.debug("iris_clean_namespace: Dropped table", table=table_name)
             except Exception as e:
                 logger.warning(
@@ -706,86 +744,6 @@ def iris_clean_namespace(embedded_iris, iris_config):
     except Exception as e:
         logger.error("iris_clean_namespace: Cleanup failed", error=str(e))
         # Note: rollback not needed with iris.sql.exec() - each statement auto-commits
-
-
-# ============================================================================
-# T017: pgwire_client - Function-scoped PostgreSQL client fixture
-# ============================================================================
-
-
-@pytest.fixture(scope="function")
-def pgwire_client(pgwire_server, iris_config):
-    """
-    Provide PostgreSQL wire protocol client connection.
-    Depends on pgwire_server being started.
-    """
-    logger.info("pgwire_client: Establishing PGWire connection")
-    start_time = time.perf_counter()
-
-    connection = None
-    try:
-        # Connect to PGWire server
-        # Standard port 5432
-        connection = psycopg.connect(
-            host="localhost",
-            port=5432,
-            dbname=iris_config["namespace"],
-            user=iris_config["username"],
-            password=iris_config["password"],
-            connect_timeout=5,
-        )
-
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            "pgwire_client: Connection established",
-            setup_time_ms=f"{elapsed * 1000:.2f}ms",
-            connection_status=connection.info.status.name,
-        )
-
-        # Verify connection is ready
-        if connection.info.status != psycopg.pq.ConnStatus.OK:
-            raise RuntimeError(f"PGWire connection not ready: status={connection.info.status}")
-
-        # Verify connection works by executing simple query
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            result = cursor.fetchone()
-            if result is None or result[0] != 1:
-                raise RuntimeError("PGWire connection verification failed")
-
-        logger.info("pgwire_client: Connection verified")
-
-        # Yield connection to test
-        yield connection
-
-    except ImportError as e:
-        logger.error(
-            "pgwire_client: psycopg not available",
-            error=str(e),
-            hint="Install psycopg: pip install psycopg>=3.1.0",
-        )
-        pytest.skip("psycopg not available - required for PGWire testing")
-
-    except psycopg.OperationalError as e:
-        logger.error(
-            "pgwire_client: PGWire server not available",
-            error=str(e),
-            hint="Start PGWire server on port 5434 before running tests",
-        )
-        pytest.skip(f"PGWire server not available: {e}")
-
-    except Exception as e:
-        logger.error("pgwire_client: Connection failed", error=str(e))
-        pytest.skip(f"PGWire connection failed: {e}")
-
-    finally:
-        # Teardown: Close connection
-        try:
-            if "connection" in locals() and connection is not None:
-                connection.close()
-                logger.info("pgwire_client: Connection closed")
-        except Exception as e:
-            logger.warning("pgwire_client: Error closing connection", error=str(e))
 
 
 # ============================================================================
@@ -886,57 +844,6 @@ def pytest_runtest_makereport(item, call):
                             if health_result.remediation_steps
                             else "Unknown"
                         )
-            except Exception as e:
-                logger.warning("Failed to run iris-devtester diagnostics", error=str(e))
-
-        # Attach diagnostic information to the test item
-        if not hasattr(item, "_diagnostics"):
-            item._diagnostics = []
-
-        diagnostic_entry = {
-            "test_id": item.nodeid,
-            "phase": report.when,
-            "duration_ms": report.duration * 1000 if report.duration else 0,
-            "failure_type": "assertion_error" if call.excinfo else "unknown",
-            "error_message": str(call.excinfo.value) if call.excinfo else "",
-            "iris_state": iris_state,
-            "troubleshooting": troubleshooting_data,
-            "timestamp": time.time(),
-        }
-
-        item._diagnostics.append(diagnostic_entry)
-
-        # Write to test_failures.jsonl
-        try:
-            import json
-
-            failures_file = "test_failures.jsonl"
-
-            with open(failures_file, "a") as f:
-                f.write(json.dumps(diagnostic_entry) + "\n")
-
-            logger.info("Diagnostic information written", test_id=item.nodeid, file=failures_file)
-
-        except Exception as e:
-            logger.error(
-                "Failed to write diagnostic information", test_id=item.nodeid, error=str(e)
-            )
-
-        # Capture IRIS state
-        iris_state = capture_iris_state()
-
-        # Integrate with iris-devtester troubleshooting if available
-        troubleshooting_data = {}
-        if HAS_DEVTESTER:
-            try:
-                from iris_devtester.troubleshooting import diagnose_issue
-
-                # This logic effectively automates the /troubleshooting skill
-                troubleshooting_data = diagnose_issue()
-                logger.info(
-                    "iris-devtester diagnostics captured",
-                    remediation=troubleshooting_data.get("remediation"),
-                )
             except Exception as e:
                 logger.warning("Failed to run iris-devtester diagnostics", error=str(e))
 

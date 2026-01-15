@@ -96,22 +96,7 @@ class VectorQueryOptimizer:
             logger.error(f"optimize_query called with non-string SQL: type={type(sql).__name__}")
             return str(sql), params
 
-        print(f"\n{'='*80}")
-        print("🚀🚀🚀 OPTIMIZER.OPTIMIZE_QUERY CALLED 🚀🚀🚀")
-        print(f"  Enabled: {self.enabled}")
-        print(f"  SQL Preview: {sql[:150]}...")
-        print(f"  Params Count: {len(params) if params else 0}")
-        print(f"{'='*80}\n", flush=True)
-
-        logger.info(
-            "🚀 optimize_query CALLED",
-            enabled=self.enabled,
-            sql_preview=sql[:150],
-            params_count=len(params) if params else 0,
-        )
-
         if not self.enabled:
-            logger.warning("⚠️ Vector optimizer is DISABLED, returning SQL unchanged")
             return sql, params
 
         # STEP 0: Strip trailing semicolons from incoming SQL
@@ -119,7 +104,7 @@ class VectorQueryOptimizer:
         # This is critical since protocol.py bypasses the translator where this was fixed
         # CRITICAL: IRIS rejects semicolons on ALL statements (SELECT, CREATE TABLE, INSERT, etc.)
         sql = sql.rstrip(";").strip()
-        logger.debug("Stripped semicolons from SQL", sql_preview=sql[:150])
+        logger.debug("Stripped semicolons from SQL")
 
         # STEP 1: Convert PostgreSQL LIMIT to IRIS TOP
         # IRIS bug: ORDER BY aliases don't work with LIMIT, only with TOP
@@ -127,16 +112,14 @@ class VectorQueryOptimizer:
 
         # STEP 2: Rewrite pgvector operators to IRIS vector functions
         # This must happen BEFORE other optimizations
-        print("📝 ABOUT TO CALL _rewrite_pgvector_operators", flush=True)
-        logger.info("📝 About to call _rewrite_pgvector_operators")
         sql = self._rewrite_pgvector_operators(sql)
-        print(f"✅ RETURNED FROM _rewrite_pgvector_operators: {sql[:150]}...", flush=True)
-        logger.info("✅ Returned from _rewrite_pgvector_operators", sql_preview=sql[:150])
 
-        # Handle INSERT/UPDATE statements with vectors (TO_VECTOR or raw '[...]' literals)
+        # Handle INSERT/UPDATE statements with vectors (TO_VECTOR or raw '[...]' / '{...}' literals)
         sql_upper = sql.upper()
-        # Check for vector patterns: explicit TO_VECTOR() OR raw pgvector-style '[0.1,0.2,...]'
-        has_vector_pattern = "TO_VECTOR" in sql_upper or re.search(r"'\[[\d.,\s\-eE]+\]'", sql)
+        # Check for vector patterns: explicit TO_VECTOR() OR raw pgvector-style '[...]' or '{...}'
+        has_vector_pattern = "TO_VECTOR" in sql_upper or re.search(
+            r"'[\[\{][\d.,\s\-eE]+[\]\}]'", sql
+        )
         if ("INSERT" in sql_upper or "UPDATE" in sql_upper) and has_vector_pattern:
             # For INSERT/UPDATE, ensure raw vector literals are wrapped with TO_VECTOR()
             optimized_sql = self._optimize_insert_vectors(sql, start_time)
@@ -162,7 +145,7 @@ class VectorQueryOptimizer:
         try:
             order_by_pattern = re.compile(
                 r"(VECTOR_(?:COSINE|DOT_PRODUCT|L2))\s*\(\s*"
-                r"(\w+)\s*,\s*"
+                r"([\w\.]+)\s*,\s*"
                 r"(TO_VECTOR\s*\(\s*([?%]s?)\s*(?:,\s*(\w+))?\s*\))",
                 re.IGNORECASE,
             )
@@ -172,6 +155,9 @@ class VectorQueryOptimizer:
 
         try:
             matches = list(order_by_pattern.finditer(sql))
+            print(f"  🔍 Regex matches found: {len(matches)}", flush=True)
+            if len(matches) == 0:
+                print(f"  ⚠️ No matches for pattern: {order_by_pattern.pattern}", flush=True)
         except Exception as e:
             logger.error(f"Regex matching failed: {str(e)}, sql_length={len(sql)}")
             return sql, params
@@ -221,6 +207,10 @@ class VectorQueryOptimizer:
 
             # Convert to JSON array format
             vector_literal = self._convert_vector_to_literal(vector_param)
+            print(
+                f"  📦 vector_literal length: {len(vector_literal) if vector_literal else 'None'}",
+                flush=True,
+            )
 
             if vector_literal is None:
                 logger.warning(
@@ -234,7 +224,9 @@ class VectorQueryOptimizer:
 
             # CRITICAL: Check if literal is too large for IRIS SQL compilation
             # IRIS cannot compile SQL with string literals >3KB in ORDER BY clauses
-            MAX_LITERAL_SIZE_BYTES = 3000
+            # However, for HNSW optimization to trigger, it MUST be a literal.
+            # We use a 1MB limit which covers most vectors.
+            MAX_LITERAL_SIZE_BYTES = 1048576
             if len(vector_literal) > MAX_LITERAL_SIZE_BYTES:
                 logger.info(
                     f"Vector too large for literal ({len(vector_literal)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
@@ -339,14 +331,7 @@ class VectorQueryOptimizer:
         Raises:
             NotImplementedError: If L2 distance operator (<->) is found in query
         """
-        print("\n🔍🔍🔍 _REWRITE_PGVECTOR_OPERATORS CALLED", flush=True)
-        print(f"  Input SQL: {sql[:200]}...", flush=True)
-
-        logger.info("🔍 _rewrite_pgvector_operators CALLED", input_sql=sql[:200])
-
         if not sql:
-            print("⚠️ Empty SQL, returning as-is", flush=True)
-            logger.info("⚠️ Empty SQL received, returning as-is")
             return sql
 
         # CRITICAL FIX: Skip vector optimization for DDL statements (CREATE/DROP/ALTER TABLE)
@@ -354,61 +339,43 @@ class VectorQueryOptimizer:
         sql_upper = sql.upper()
         ddl_keywords = ["CREATE TABLE", "DROP TABLE", "ALTER TABLE", "CREATE INDEX", "DROP INDEX"]
         if any(keyword in sql_upper for keyword in ddl_keywords):
-            print("✅ DDL detected, skipping vector optimization", flush=True)
-            logger.info("✅ DDL detected, skipping vector operator rewriting")
-            return sql
-
-        if not sql:
-            logger.info("⚠️ Empty SQL received, returning as-is")
             return sql
 
         # Rewrite operators in the entire SQL statement
         # This handles SELECT, ORDER BY, and INSERT/UPDATE clauses consistently
         result = self._rewrite_operators_in_text(sql)
-        logger.info("✅ Operator rewriting complete")
         return result
 
     def _optimize_vector_literal(self, literal: str) -> str:
         """
         Optimize vector literal for IRIS compatibility.
 
-        Strips brackets if present and returns comma-separated format.
-        IRIS accepts both '[1,2,3]' and '1,2,3' but the latter is more compact.
+        IRIS requires vector literals in TO_VECTOR to have brackets.
 
         Args:
             literal: Vector literal like '[1,2,3]' or '1,2,3'
 
         Returns:
-            Optimized literal without brackets
+            Optimized literal WITH brackets
         """
         # Remove quotes if present
         clean = literal.strip("'\"")
-        # Remove brackets if present
-        if clean.startswith("[") and clean.endswith("]"):
-            clean = clean[1:-1]
+        # Ensure brackets are present
+        if not (clean.startswith("[") and clean.endswith("]")):
+            clean = f"[{clean}]"
         return clean
 
     def _rewrite_operators_in_text(self, sql: str) -> str:
         """Helper to rewrite operators in a given text"""
-        print("\n⚙️  _REWRITE_OPERATORS_IN_TEXT CALLED", flush=True)
-        print(f"  Input: {sql[:200]}...", flush=True)
-        operators_found = []
-
         # <=> operator (cosine distance) -> VECTOR_COSINE
         if "<=>" in sql:
-            operators_found.append("<=>")
-            print("  Found <=> operator, rewriting...", flush=True)
             # Match both column AND literal values (quoted strings/arrays) OR parameter placeholders on BOTH sides
             # Handles: column <=> '[vector]', column <=> ?, '[vector]' <=> '[vector]', etc.
             # Parameter placeholders: ?, %s, $1, $2, etc.
-            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<=>\s*('[^']*'|\[[^\]]*\]|\?|%s|\$\d+)"
+            pattern = r"([\w\.]+|'[^']*'|[\[\{][^\]\}]*[\]\}])\s*<=>\s*('[^']*'|[\[\{][^\]\}]*[\]\}]|\?|%s|\$\d+)"
 
             def replace_cosine_distance(match):
                 left, right = match.groups()
-                print(
-                    f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}",
-                    flush=True,
-                )
 
                 # Check if right side is a parameter placeholder (?, %s, $1, etc.)
                 is_param_placeholder = right in ("?", "%s") or right.startswith("$")
@@ -419,7 +386,6 @@ class VectorQueryOptimizer:
                 # If right is a parameter placeholder, wrap it in TO_VECTOR
                 elif is_param_placeholder:
                     result = f"VECTOR_COSINE({left}, TO_VECTOR({right}, DOUBLE))"
-                    print("    ✅ Wrapped parameter placeholder in TO_VECTOR", flush=True)
                 # If left is a literal, wrap it in TO_VECTOR
                 elif left.startswith("'") or left.startswith("["):
                     # Optimize the literal (strip brackets)
@@ -434,28 +400,12 @@ class VectorQueryOptimizer:
                     if "TO_VECTOR" in right.upper():
                         result = f"VECTOR_COSINE({left}, {right})"
                     else:
-                        # Optimize the literal (strip brackets)
+                        # Optimize the literal (preserve brackets)
                         opt_right = self._optimize_vector_literal(right)
-                        # Check if wrapping in TO_VECTOR would exceed IRIS 3KB limit
-                        wrapped = f"TO_VECTOR('{opt_right}', DOUBLE)"
-                        if len(wrapped) > 3000:
-                            # Use direct CSV format without TO_VECTOR wrapper
-                            # IRIS accepts raw CSV: VECTOR_COSINE(col, '0.1,0.2,0.3')
-                            result = f"VECTOR_COSINE({left}, '{opt_right}')"
-                            print(
-                                f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV",
-                                flush=True,
-                            )
-                        else:
-                            result = f"VECTOR_COSINE({left}, {wrapped})"
-                print(
-                    f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}",
-                    flush=True,
-                )
+                        result = f"VECTOR_COSINE({left}, TO_VECTOR('{opt_right}', DOUBLE))"
                 return result
 
             sql = re.sub(pattern, replace_cosine_distance, sql)
-            print(f"  After <=> rewrite: {sql[:200]}...", flush=True)
 
         # <-> operator (L2 distance) - NOT SUPPORTED BY IRIS
         # Constitutional requirement: REJECT with NOT IMPLEMENTED error
@@ -466,22 +416,15 @@ class VectorQueryOptimizer:
                 "Please rewrite your query to use one of these supported distance functions."
             )
             logger.error(f"❌ L2 distance operator rejected: {error_msg}")
-            print(f"  ❌ REJECTING L2 operator: {error_msg}", flush=True)
             raise NotImplementedError(error_msg)
 
         # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
         if "<#>" in sql:
-            operators_found.append("<#>")
-            print("  Found <#> operator, rewriting...", flush=True)
             # Match both column AND literal values OR parameter placeholders on BOTH sides
-            pattern = r"([\w\.]+|'[^']*'|\[[^\]]*\])\s*<#>\s*('[^']*'|\[[^\]]*\]|\?|%s|\$\d+)"
+            pattern = r"([\w\.]+|'[^']*'|[\[\{][^\]\}]*[\]\}])\s*<#>\s*('[^']*'|[\[\{][^\]\}]*[\]\}]|\?|%s|\$\d+)"
 
             def replace_inner_product(match):
                 left, right = match.groups()
-                print(
-                    f"    Matched: left={left[:50]}{'...' if len(left) > 50 else ''}, right={right[:50]}{'...' if len(right) > 50 else ''}",
-                    flush=True,
-                )
 
                 # Check if right side is a parameter placeholder
                 is_param_placeholder = right in ("?", "%s") or right.startswith("$")
@@ -490,7 +433,6 @@ class VectorQueryOptimizer:
                     result = f"(-VECTOR_DOT_PRODUCT({left}, {right}))"
                 elif is_param_placeholder:
                     result = f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, DOUBLE)))"
-                    print("    ✅ Wrapped parameter placeholder in TO_VECTOR", flush=True)
                 elif left.startswith("'") or left.startswith("["):
                     opt_left = self._optimize_vector_literal(left)
                     if "TO_VECTOR" in right.upper():
@@ -503,26 +445,10 @@ class VectorQueryOptimizer:
                         result = f"(-VECTOR_DOT_PRODUCT({left}, {right}))"
                     else:
                         opt_right = self._optimize_vector_literal(right)
-                        wrapped = f"TO_VECTOR('{opt_right}', DOUBLE)"
-                        if len(wrapped) > 3000:
-                            result = f"(-VECTOR_DOT_PRODUCT({left}, '{opt_right}'))"
-                            print(
-                                f"    ⚠️ Vector too large for TO_VECTOR ({len(wrapped)} > 3000), using direct CSV",
-                                flush=True,
-                            )
-                        else:
-                            result = f"(-VECTOR_DOT_PRODUCT({left}, {wrapped}))"
-                print(
-                    f"    Replacement: {result[:100]}{'...' if len(result) > 100 else ''}",
-                    flush=True,
-                )
+                        result = f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR('{opt_right}', DOUBLE)))"
                 return result
 
             sql = re.sub(pattern, replace_inner_product, sql)
-            print(f"  After <#> rewrite: {sql[:200]}...", flush=True)
-
-        if operators_found:
-            logger.info(f"  Rewrote operators: {operators_found}")
 
         return sql
 
@@ -804,19 +730,11 @@ class VectorQueryOptimizer:
 
                 floats = struct.unpack(f"{num_floats}f", binary_data)
 
-                # Convert to comma-separated string (NO brackets for IRIS)
-                result = ",".join(str(float(v)) for v in floats)
-                logger.debug(f"Base64 decoded to {num_floats} floats, CSV length={len(result)}")
+                # Convert to JSON array string (IRIS requires brackets for TO_VECTOR)
+                result = "[" + ",".join(str(float(v)) for v in floats) + "]"
+                logger.debug(f"Base64 decoded to {num_floats} floats, JSON length={len(result)}")
                 return result
 
-            except base64.binascii.Error as e:
-                logger.error(f"Invalid base64 encoding: {str(e)}, prefix: {vector_param[:30]}")
-                return None
-            except struct.error as e:
-                logger.error(
-                    f"Binary unpacking failed: {str(e)}, binary_length={len(binary_data) if 'binary_data' in locals() else 'unknown'}"
-                )
-                return None
             except Exception as e:
                 logger.error(
                     f"Failed to decode base64 vector: {str(e)}, prefix: {vector_param[:30]}"
@@ -825,8 +743,12 @@ class VectorQueryOptimizer:
 
         # Comma-delimited format: "1.0,2.0,3.0,..."
         if "," in vector_param and not vector_param.startswith("["):
-            logger.debug(f"Vector already in comma-delimited format, length={len(vector_param)}")
-            return vector_param  # Already in correct format for IRIS
+            logger.debug(f"Vector in comma-delimited format, wrapping in brackets")
+            return f"[{vector_param}]"
+
+        # Already in bracketed format
+        if vector_param.startswith("[") and vector_param.endswith("]"):
+            return vector_param
 
         # Unknown format
         sample = vector_param[:50] if len(vector_param) > 50 else vector_param
@@ -836,46 +758,34 @@ class VectorQueryOptimizer:
     def _optimize_insert_vectors(self, sql: str, start_time: float) -> str:
         """
         Optimize INSERT/UPDATE statements for IRIS vector compatibility.
-
-        Supports pgvector-style inserts by ensuring bracketed strings are wrapped in TO_VECTOR().
-        IRIS requires TO_VECTOR() for string-to-vector conversion during INSERT.
-
-        Transform:
-            INSERT INTO table VALUES (id, '[0.1,0.2,0.3]')
-        To:
-            INSERT INTO table VALUES (id, TO_VECTOR('[0.1,0.2,0.3]', DOUBLE))
-
-        Note: If TO_VECTOR is already present, it is preserved/normalized.
         """
+        print(f"  📝 _optimize_insert_vectors CALLED", flush=True)
+        print(f"  Input SQL: {sql[:200]}...", flush=True)
         optimized_sql = sql
         transformations = 0
 
-        # Pattern 1: Find raw bracketed strings that look like vectors but aren't wrapped
-        # Matches: '[0.1, 0.2, ...]'
-        # We use a non-greedy match for the content and check if it's already inside TO_VECTOR
-        # Note: Python re lookbehind must be fixed width, so we use a simpler pattern
-        literal_pattern = re.compile(r"'(?<!TO_VECTOR\()(\[[^']+\])'", re.IGNORECASE)
-        
-        # Actually, lookbehind with (?<!TO_VECTOR\() is still variable if it were longer, 
-        # but here it's also not quite right because of whitespace.
-        # Let's use a capture group approach instead to be robust.
+        def replace_literal(m):
+            if m.group(1):
+                return m.group(0)
+
+            literal_content = m.group(2)
+            if literal_content.startswith("{") and literal_content.endswith("}"):
+                literal_content = "[" + literal_content[1:-1] + "]"
+
+            return f"TO_VECTOR('{literal_content}', DOUBLE)"
+
         sql_with_v = re.sub(
-            r"(TO_VECTOR\s*\(\s*)?'(\[[^']+\])'",
-            lambda m: m.group(0) if m.group(1) else f"TO_VECTOR('{m.group(2)}', DOUBLE)",
-            optimized_sql,
-            flags=re.IGNORECASE
+            r"(?i)(TO_VECTOR\s*\(\s*)?'([\[\{][^']+?[\]\}])'", replace_literal, optimized_sql
         )
-        
+
         if sql_with_v != optimized_sql:
-            transformations = 1 # Simplified count for logging
+            transformations = 1  # Simplified count for logging
             optimized_sql = sql_with_v
             logger.info("Wrapped raw vector literal in TO_VECTOR")
 
         # Record metrics
         transformation_time_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            f"INSERT/UPDATE optimization complete: time={transformation_time_ms:.2f}ms"
-        )
+        logger.info(f"INSERT/UPDATE optimization complete: time={transformation_time_ms:.2f}ms")
 
         return optimized_sql
 
@@ -935,20 +845,15 @@ class VectorQueryOptimizer:
             if len(converted) > MAX_LITERAL_SIZE_BYTES:
                 logger.info(
                     f"Large vector detected ({len(converted)} bytes > {MAX_LITERAL_SIZE_BYTES} limit). "
-                    f"Using direct format with TO_VECTOR (no brackets to reduce size)."
+                    f"IRIS may reject this literal."
                 )
-                # For large vectors, strip brackets but KEEP TO_VECTOR wrapper
-                # VECTOR_COSINE(col, TO_VECTOR('0.1,0.2,0.3', FLOAT))
-                # This reduces size by ~2 bytes while maintaining type safety
-                direct_format = converted.strip("[]")
-                new_call = f"TO_VECTOR('{direct_format}', {data_type})"
+                # DO NOT strip brackets, as IRIS now requires them for TO_VECTOR
+                # Even if it exceeds 3KB, we must keep brackets if we use TO_VECTOR
+                new_call = f"TO_VECTOR('{converted}', {data_type})"
                 optimized_sql = (
                     optimized_sql[: match.start()] + new_call + optimized_sql[match.end() :]
                 )
                 transformations += 1
-                logger.debug(
-                    f"Transformed large vector (no brackets): {converted[:30]}... → TO_VECTOR('{direct_format[:30]}...', {data_type})"
-                )
                 continue
 
             # Replace the entire TO_VECTOR call
@@ -1099,16 +1004,16 @@ def get_sla_compliance_report() -> str:
     report = f"""
 Vector Query Optimizer - Constitutional Compliance Report
 =========================================================
-Total Optimizations: {stats['total_optimizations']}
-SLA Violations: {stats['sla_violations']}
-SLA Compliance Rate: {stats['sla_compliance_rate']}%
-Constitutional SLA: {stats['constitutional_sla_ms']}ms
+Total Optimizations: {stats["total_optimizations"]}
+SLA Violations: {stats["sla_violations"]}
+SLA Compliance Rate: {stats["sla_compliance_rate"]}%
+Constitutional SLA: {stats["constitutional_sla_ms"]}ms
 
-Performance Metrics (last {stats.get('recent_sample_size', 0)} operations):
-  Average: {stats.get('avg_transformation_time_ms', 0)}ms
-  Minimum: {stats.get('min_transformation_time_ms', 0)}ms
-  Maximum: {stats.get('max_transformation_time_ms', 0)}ms
+Performance Metrics (last {stats.get("recent_sample_size", 0)} operations):
+  Average: {stats.get("avg_transformation_time_ms", 0)}ms
+  Minimum: {stats.get("min_transformation_time_ms", 0)}ms
+  Maximum: {stats.get("max_transformation_time_ms", 0)}ms
 
-Status: {'✅ COMPLIANT' if stats['sla_compliance_rate'] >= 95 else '⚠️ NON-COMPLIANT'}
+Status: {"✅ COMPLIANT" if stats["sla_compliance_rate"] >= 95 else "⚠️ NON-COMPLIANT"}
 """
     return report.strip()
