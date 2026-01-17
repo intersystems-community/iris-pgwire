@@ -8,6 +8,8 @@ Auto-generated from all feature plans. Last updated: 2026-01-02
 - Python 3.11 + intersystems-irispython, psycopg[binary], iris-devtester (034-issues-that-likely)
 - InterSystems IRIS (via PostgreSQL wire protocol) (034-issues-that-likely)
 - Python 3.11 + intersystems-irispython, psycopg[binary], iris-devtester (035-number-1-short)
+- Python 3.11 + psycopg[binary], intersystems-irispython, iris-devtester (036-address-all-6)
+- InterSystems IRIS (via pgwire) (036-address-all-6)
 
 - Python 3.11+ + `iris-devtester`, `intersystems-irispython`, `psycopg[binary]` (033-devtester-skills)
 
@@ -27,9 +29,9 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11+: Follow standard conventions
 
 ## Recent Changes
+- 036-address-all-6: Added Python 3.11 + psycopg[binary], intersystems-irispython, iris-devtester
 - 035-number-1-short: Added Python 3.11 + intersystems-irispython, psycopg[binary], iris-devtester
 - 034-issues-that-likely: Added Python 3.11 + intersystems-irispython, psycopg[binary], iris-devtester
-- 026-address-gaps-in: Added Python 3.11 + python>=3.11, psycopg[binary], iris-devtester, intersystems-irispython
 
 
 <!-- MANUAL ADDITIONS START -->

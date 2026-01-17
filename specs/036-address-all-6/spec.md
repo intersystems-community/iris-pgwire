@@ -59,12 +59,13 @@ When creating this spec from a user prompt:
 Database engineers run migration scripts containing PostgreSQL‑specific DDL constructs (e.g., `SET (fillfactor)`, generated columns, `USING btree`, casts, enums, `CHECK` constraints). The driver processes these scripts against InterSystems IRIS, automatically handling unsupported constructs according to the configured `strict_ddl` flag, allowing the migration to complete without manual script modifications.
 
 ### Acceptance Scenarios
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-2. **Given** [initial state], **When** [action], **Then** [expected outcome]
+1. **Given** a migration script with `CREATE TABLE ... (col1 INT GENERATED ALWAYS AS ... STORED)`, **When** executed with `strict_ddl=false`, **Then** the table is created without the generated column and a warning is logged.
+2. **Given** a script with `CREATE TYPE ... AS ENUM ('a', 'b')`, **When** executed with `strict_ddl=false`, **Then** the statement is skipped, the type is registered, and subsequent columns using it become `VARCHAR(64)`.
+3. **Given** any unsupported construct, **When** executed with `strict_ddl=true`, **Then** the driver must raise an error and abort the current statement execution.
 
 ### Edge Cases
-- What happens when [boundary condition]?
-- How does system handle [error scenario]?
+- **Nested Constructs**: Handling of cast syntax within a complex `DEFAULT` expression (e.g., `DEFAULT ('val'::text || 'ue'::text)`).
+- **Index Dependencies**: Ensuring a `CREATE INDEX` for a table that failed creation (due to other errors) is skipped gracefully.
 
 ## Requirements *(mandatory)*
 
@@ -80,9 +81,7 @@ Database engineers run migration scripts containing PostgreSQL‑specific DDL co
 - **FR-006**: System MUST skip `ADD CONSTRAINT … CHECK (…)` statements and log a warning.
 - **FR-007**: System MUST maintain a set of table names whose `CREATE TABLE` statements were skipped and automatically skip any `CREATE INDEX` statements that reference those tables, logging a warning.
 
-### Key Entities *(include if feature involves data)*
-- **[Entity 1]**: [What it represents, key attributes without implementation]
-- **[Entity 2]**: [What it represents, relationships to other entities]
+
 
 ---
 
@@ -106,7 +105,7 @@ Database engineers run migration scripts containing PostgreSQL‑specific DDL co
 - [ ] All mandatory sections completed
 
 ### Requirement Completeness
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [ ] Requirements are testable and unambiguous  
 - [ ] Success criteria are measurable
 - [ ] Scope is clearly bounded
