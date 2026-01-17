@@ -1,5 +1,25 @@
 # Development Guide
 
+## Git Remotes and Repository Management
+
+This project is maintained across two primary GitHub remotes to ensure both private development and public community access.
+
+| Remote Name | URL | Purpose |
+| :--- | :--- | :--- |
+| **`community`** | `https://github.com/intersystems-community/iris-pgwire.git` | **Public / Shared Repo**: The source of truth for the community and where releases are published. |
+| **`origin`** | `https://github.com/isc-tdyar/iris-pgwire.git` | **Development Repo**: Primary location for staging features and experimental work. |
+
+### Workflow for Features
+
+1.  Create a feature branch from `main`.
+2.  Implement and verify changes.
+3.  Merge feature branch to `main`.
+4.  **Push to both remotes**:
+    ```bash
+    git push origin main
+    git push community main
+    ```
+
 ## Optional Development Dependencies
 
 ### iris-devtools

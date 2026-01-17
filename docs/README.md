@@ -62,7 +62,8 @@
 - **[Development Setup](DEVELOPMENT.md)** - Local development environment
 
 ### Release & Quality
-- **[PyPI Release Process](PYPI_RELEASE.md)** - Package publishing workflow
+- **[Release Guide](RELEASING.md)** - Workflow for publishing to PyPI and GitHub
+- **[PyPI Release Process](PYPI_RELEASE.md)** - Package publishing checklist
 - **[Pre-Commit Setup](PRE_COMMIT_SETUP.md)** - Code quality hooks
 
 ---
