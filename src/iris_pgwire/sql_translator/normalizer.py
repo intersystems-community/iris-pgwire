@@ -10,16 +10,37 @@ Constitutional Requirements:
 
 Feature 030 Extension:
 - PostgreSQL schema mapping (public → SQLUser)
+
+Feature 035 Extension:
+- ENUM type handling (CREATE TYPE skip, column type translation)
+- RLS statement handling (skip)
+- Boolean default translation (true/false → 1/0)
 """
 
 import time
 import re
+from dataclasses import dataclass
+from typing import Optional
 
 from ..conversions.json_path import JsonPathBuilder
 from ..schema_mapper import translate_input_schema
 from .date_translator import DATETranslator
 from .identifier_normalizer import IdentifierNormalizer
 from .default_values import DefaultValuesTranslator
+from .enum_registry import EnumTypeRegistry
+from .statement_filter import StatementFilter, SkipReason
+from .enum_translator import EnumTranslator
+from .boolean_translator import BooleanTranslator
+
+
+@dataclass
+class TranslationResult:
+    """Result of SQL translation including skip information."""
+
+    sql: str
+    was_skipped: bool = False
+    skip_reason: Optional[SkipReason] = None
+    command_tag: str = ""
 
 
 class SQLTranslator:
@@ -37,22 +58,26 @@ class SQLTranslator:
     """
 
     def __init__(self):
-        """Initialize SQL translator with component normalizers"""
         self.identifier_normalizer = IdentifierNormalizer()
         self.date_translator = DATETranslator()
         self.default_values_translator = DefaultValuesTranslator()
 
-        # Recursive JSON operator pattern
+        self.enum_registry = EnumTypeRegistry()
+        self.statement_filter = StatementFilter(self.enum_registry)
+        self.enum_translator = EnumTranslator(self.enum_registry)
+        self.boolean_translator = BooleanTranslator()
+
         self._json_pattern = re.compile(
             r"(\w+)(?:->>?['\"]\w+['\"]|->>?\d+|\[['\"]\w+['\"]\]|\[\d+\])+", re.IGNORECASE
         )
 
-        # Metrics tracking for last normalization
         self._last_metrics = {
             "normalization_time_ms": 0.0,
             "identifier_count": 0,
             "date_literal_count": 0,
             "json_operator_count": 0,
+            "boolean_translation_count": 0,
+            "enum_translation_count": 0,
             "sla_violated": False,
         }
 
@@ -109,62 +134,87 @@ class SQLTranslator:
                 - "external": External DBAPI connection
 
         Returns:
-            Normalized SQL ready for IRIS execution
+            Normalized SQL ready for IRIS execution (empty string if statement was skipped)
 
         Constitutional Requirements:
         - Normalization MUST complete in < 5ms for 50 identifier references
         - MUST be idempotent (normalizing twice yields same result)
         """
+        result = self.normalize_sql_with_result(sql, execution_path)
+        return result.sql
+
+    def normalize_sql_with_result(
+        self, sql: str, execution_path: str = "direct"
+    ) -> TranslationResult:
+        """
+        Normalize SQL for IRIS compatibility with full result info.
+
+        Returns:
+            TranslationResult with sql, was_skipped flag, and command_tag for skipped statements.
+        """
         start_time = time.perf_counter()
 
-        # Handle empty SQL
         if not sql or not sql.strip():
             self._last_metrics = {
                 "normalization_time_ms": 0.0,
                 "identifier_count": 0,
                 "date_literal_count": 0,
                 "json_operator_count": 0,
+                "boolean_translation_count": 0,
+                "enum_translation_count": 0,
                 "sla_violated": False,
             }
-            return sql
+            return TranslationResult(sql=sql)
 
-        # Step -1: Translate PostgreSQL parameters ($n -> ?) and type casts (::type -> CAST)
-        # This MUST happen before normalization to avoid issues with placeholders
         normalized_sql = self.translate_postgres_parameters(sql)
-
-        # Step 0: Schema mapping (public → SQLUser) - Feature 030
         normalized_sql = translate_input_schema(normalized_sql)
 
-        # Step 1: Normalize identifiers (unquoted → UPPERCASE)
+        filter_result = self.statement_filter.check(normalized_sql)
+        if filter_result.should_skip:
+            if filter_result.extracted_type_name:
+                self.enum_registry.register(filter_result.extracted_type_name)
+
+            end_time = time.perf_counter()
+            self._last_metrics = {
+                "normalization_time_ms": (end_time - start_time) * 1000,
+                "identifier_count": 0,
+                "date_literal_count": 0,
+                "json_operator_count": 0,
+                "boolean_translation_count": 0,
+                "enum_translation_count": 0,
+                "sla_violated": False,
+            }
+            return TranslationResult(
+                sql="",
+                was_skipped=True,
+                skip_reason=filter_result.reason,
+                command_tag=filter_result.command_tag,
+            )
+
+        normalized_sql, enum_count = self.enum_translator.translate(normalized_sql)
+        normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)
+
         normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
-
-        # Step 2: Translate DATE literals ('YYYY-MM-DD' → TO_DATE(...))
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
-
-        # Step 3: Translate JSON operators
         normalized_sql, json_count = self._translate_json_operators(normalized_sql)
-
-        # Step 4: Translate VECTOR types (VECTOR(128) -> VECTOR(DOUBLE, 128))
         normalized_sql = self._translate_vector_types(normalized_sql)
-
-        # Step 5: Rewrite DEFAULT in VALUES
         normalized_sql = self.default_values_translator.translate(normalized_sql)
 
-        # Calculate performance metrics
         end_time = time.perf_counter()
         normalization_time_ms = (end_time - start_time) * 1000
         sla_violated = normalization_time_ms > 5.0
 
-        # Store metrics
         self._last_metrics = {
             "normalization_time_ms": normalization_time_ms,
             "identifier_count": identifier_count,
             "date_literal_count": date_count,
             "json_operator_count": json_count,
+            "boolean_translation_count": bool_count,
+            "enum_translation_count": enum_count,
             "sla_violated": sla_violated,
         }
 
-        return normalized_sql
+        return TranslationResult(sql=normalized_sql)
 
     def _translate_json_operators(self, sql: str) -> tuple[str, int]:
         """Translate PostgreSQL JSON operators to IRIS JSON_VALUE/JSON_QUERY"""

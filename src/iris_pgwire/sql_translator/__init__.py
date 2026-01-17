@@ -23,10 +23,16 @@ from .models import (
 )
 
 # Feature 021: PostgreSQL-Compatible SQL Normalization
-from .normalizer import SQLTranslator
+from .normalizer import SQLTranslator, TranslationResult as NormalizationResult
 
 # Feature 022: PostgreSQL Transaction Verb Compatibility
 from .transaction_translator import TransactionTranslator
+
+# Feature 035: PostgreSQL DDL Compatibility (ENUM, RLS, Boolean Defaults)
+from .enum_registry import EnumTypeRegistry
+from .statement_filter import StatementFilter, SkipReason, FilterResult
+from .enum_translator import EnumTranslator
+from .boolean_translator import BooleanTranslator
 from .translator import IRISSQLTranslator, TranslationContext, get_translator, translate_sql
 from .validator import ValidationContext, ValidationLevel
 
@@ -50,4 +56,12 @@ __all__ = [
     "DATETranslator",
     # PostgreSQL → IRIS transaction verb translation (Feature 022)
     "TransactionTranslator",
+    # PostgreSQL DDL Compatibility (Feature 035)
+    "NormalizationResult",
+    "EnumTypeRegistry",
+    "StatementFilter",
+    "SkipReason",
+    "FilterResult",
+    "EnumTranslator",
+    "BooleanTranslator",
 ]
