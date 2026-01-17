@@ -5,42 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.6] - 2026-01-16
 
 ### Added
-- **Multi-Action ALTER TABLE Splitting**: Automatically decomposes PostgreSQL-style multi-column `ALTER TABLE` statements (e.g., multiple `ADD COLUMN` or `DROP COLUMN` actions) into individual IRIS-compatible statements.
-- **IRIS Bridge Gaps** (Feature 026): Comprehensive performance and functionality enhancements for IRIS integration
-  - **Fast Path Bulk Insert**: Protocol-level batching achieving 3,700+ rows/second (11× improvement)
-  - **HNSW Index Translation**: Support for PostgreSQL `USING hnsw` translated to IRIS `AS HNSW`
-  - **Recursive JSON Pathing**: Support for nested `->` and `->>` operators translated to `JSON_VALUE`
-  - **DDL Idempotency**: Full `IF NOT EXISTS` support for `CREATE TABLE` and `CREATE INDEX`
-  - **Simple Query Translation**: Enabled full SQL translation for the standard PostgreSQL query protocol
-- **P6 COPY Protocol** (Feature 023): PostgreSQL COPY FROM STDIN and COPY TO STDOUT for bulk data operations
-  - Bulk data import/export with CSV processing and streaming
-  - 1000-row batching for memory efficiency (<100MB for 1M rows)
-  - Transaction integration with automatic rollback on errors
-  - Query-based export support (`COPY (SELECT ...) TO STDOUT`)
-  - Performance: 600+ rows/second sustained throughput
+- **Multi-statement DDL with comments**: Updated `DdlSplitter` to be fully comment-aware and strip comments before execution to prevent IRIS parsing errors.
+- **Prepared statement translation ($n → ?)**: Consolidated parameter translation logic into `SQLTranslator` for consistency across all query paths.
+- **Default keyword in VALUES clause**: Implemented `DefaultValuesTranslator` to rewrite `INSERT` statements using `DEFAULT` within `VALUES` lists.
+- **Timestamp binding normalization**: Updated `DATETranslator` and `IRISExecutor` to normalize ISO 8601 timestamps (stripping `T`, `Z`, and offsets) into IRIS-accepted ODBC formats.
+- **ALTER TABLE translation**: Updated `DdlSplitter` to translate PostgreSQL `SET DATA TYPE` and `DROP NOT NULL` syntax to IRIS-compatible `ALTER COLUMN` commands.
 
 ### Fixed
-- Fixed critical bug in translation cache causing `TypeError` with mixed naive/aware datetimes
-- Standardized all internal timestamps to timezone-aware UTC
-- Fixed `CREATE INDEX` idempotency via specialized comment marker `/* IF_NOT_EXISTS */`
-- Dynamic versioning recognition in package metadata validation
-- Python bytecode cleanup (95+ artifacts removed from git)
-- Black code formatting (20 files reformatted to compliance)
-- asyncpg parameter type OID inference from CAST expressions
-- PostgreSQL compatibility documentation improvements
+- Fixed IRIS execution error "Input encountered after end of query" by improving semicolon and comment handling in the DDL splitter.
+- Resolved "LITERAL (1) found" errors during migrations by avoiding no-op SELECT injections for skipped DDL.
+- Enhanced IRIS data type mapping to better handle PostgreSQL OIDs (e.g., `BIGINT`, `TINYINT`).
 
-### Security
-- Upgraded authlib to 1.6.5 (fixes 3 HIGH severity CVEs)
-- Upgraded cryptography to 46.0.3 (fixes 1 HIGH severity CVE)
+## [1.0.5] - 2026-01-15
 
-### Performance
-- High-performance DML Fast Path: Buffering and collapsing `Sync` cycles into bulk IRIS calls
-- IRIS executemany() optimization for 4-10× performance improvement in bulk operations
-- COPY protocol optimized for 600+ rows/second sustained throughput
-- Memory-efficient streaming for large result sets
 
 ## [0.1.0] - 2025-01-05
 

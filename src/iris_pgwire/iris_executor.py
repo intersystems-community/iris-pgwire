@@ -7,6 +7,7 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 
 import asyncio
 import concurrent.futures
+import datetime as dt
 import re
 import threading
 import time
@@ -255,14 +256,7 @@ class IRISExecutor:
     def _split_sql_statements(self, sql: str) -> list[str]:
         """
         Split SQL string into individual statements, handling semicolons properly.
-
-        CRITICAL FIX for issue: "Input (;) encountered after end of query"
-        IRIS cannot execute multiple statements in a single iris.sql.exec() call.
-
-        This function splits by semicolons while respecting:
-        - String literals (single and double quotes)
-        - Comments (-- and /* */)
-        - Semicolons inside string literals are NOT statement separators
+        Uses DdlSplitter for robust comment and quote-aware splitting.
 
         Args:
             sql: SQL string potentially containing multiple statements
@@ -270,84 +264,10 @@ class IRISExecutor:
         Returns:
             List of individual SQL statements (semicolons removed, whitespace stripped)
         """
-        statements = []
-        current_stmt = []
-        in_single_quote = False
-        in_double_quote = False
-        in_line_comment = False
-        in_block_comment = False
-        i = 0
+        # Phase 1: Robust splitting by semicolons
+        statements = self.ddl_splitter.split(sql)
 
-        while i < len(sql):
-            char = sql[i]
-
-            # Handle line comments (-- to end of line)
-            if not in_single_quote and not in_double_quote and not in_block_comment:
-                if i < len(sql) - 1 and sql[i : i + 2] == "--":
-                    in_line_comment = True
-                    current_stmt.append(char)
-                    i += 1
-                    continue
-
-            # End of line comment
-            if in_line_comment:
-                current_stmt.append(char)
-                if char == "\n":
-                    in_line_comment = False
-                i += 1
-                continue
-
-            # Handle block comments (/* ... */)
-            if not in_single_quote and not in_double_quote and not in_line_comment:
-                if i < len(sql) - 1 and sql[i : i + 2] == "/*":
-                    in_block_comment = True
-                    current_stmt.append(char)
-                    i += 1
-                    continue
-                elif i < len(sql) - 1 and sql[i : i + 2] == "*/":
-                    in_block_comment = False
-                    current_stmt.append(char)
-                    i += 1
-                    continue
-
-            if in_block_comment:
-                current_stmt.append(char)
-                i += 1
-                continue
-
-            # Toggle quote states
-            if char == "'" and not in_double_quote:
-                # Handle escaped quotes
-                if i > 0 and sql[i - 1] == "\\":
-                    current_stmt.append(char)
-                else:
-                    in_single_quote = not in_single_quote
-                    current_stmt.append(char)
-            elif char == '"' and not in_single_quote:
-                if i > 0 and sql[i - 1] == "\\":
-                    current_stmt.append(char)
-                else:
-                    in_double_quote = not in_double_quote
-                    current_stmt.append(char)
-            # Statement separator (semicolon outside quotes)
-            elif char == ";" and not in_single_quote and not in_double_quote:
-                # End of statement - save it
-                stmt = "".join(current_stmt).strip()
-                if stmt:  # Skip empty statements
-                    statements.append(stmt)
-                current_stmt = []
-            else:
-                current_stmt.append(char)
-
-            i += 1
-
-        # Add final statement if any
-        stmt = "".join(current_stmt).strip()
-        if stmt:
-            statements.append(stmt)
-
-        # Stage 2: Split multi-action ALTER TABLE statements
-        # IRIS typically requires separate ALTER TABLE statements for each action
+        # Phase 2: Split multi-action ALTER TABLE statements
         final_statements = []
         for stmt in statements:
             if stmt.upper().startswith("ALTER TABLE"):
@@ -488,6 +408,65 @@ class IRISExecutor:
         except Exception as e:
             self.vector_support = False
             logger.info("IRIS vector support test failed", error=str(e))
+
+    def _normalize_parameters(self, params: list | tuple | None) -> list:
+        """
+        Normalize parameters for IRIS compatibility.
+        - Normalize ISO 8601 timestamp strings (strip T/Z/offsets)
+        - Convert PostgreSQL epoch timestamps (int) to IRIS format
+        - Convert Python lists to IRIS vector strings [...]
+        """
+        if not params:
+            return []
+
+        # Constants for timestamp conversion
+        PG_EPOCH = dt.datetime(2000, 1, 1)
+        MIN_TIMESTAMP = 500_000_000_000_000  # ~2015
+        MAX_TIMESTAMP = 1_500_000_000_000_000  # ~2047
+
+        new_params = list(params)
+        for i, param in enumerate(new_params):
+            if isinstance(param, int) and MIN_TIMESTAMP < param < MAX_TIMESTAMP:
+                # PostgreSQL timestamp in microseconds
+                try:
+                    timestamp_obj = PG_EPOCH + dt.timedelta(microseconds=param)
+                    new_params[i] = timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    logger.debug(
+                        "Converted PostgreSQL timestamp to IRIS format",
+                        param_index=i,
+                        original_value=param,
+                        converted_value=new_params[i],
+                    )
+                except (ValueError, OverflowError) as e:
+                    logger.warning(
+                        "Failed to convert timestamp parameter",
+                        param_index=i,
+                        value=param,
+                        error=str(e),
+                    )
+            elif isinstance(param, str):
+                # FR-004: Normalize ISO 8601 timestamp strings for IRIS
+                # Handles: YYYY-MM-DD[T ]HH:MM:SS[.fff][Z|[+-]HH:MM]
+                ts_match = re.match(
+                    r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?(\d{2})?)?$",
+                    param,
+                )
+                if ts_match:
+                    new_params[i] = f"{ts_match.group(1)} {ts_match.group(2)}"
+                    logger.debug(
+                        "Normalized ISO timestamp parameter",
+                        original=param,
+                        normalized=new_params[i],
+                    )
+            elif isinstance(param, list):
+                # Feature 026: Convert Python list to IRIS vector string format [...]
+                new_params[i] = "[" + ",".join(str(float(v)) for v in param) + "]"
+                logger.debug(
+                    "Converted list parameter to IRIS vector format",
+                    param_index=i,
+                    vector_length=len(param),
+                )
+        return new_params
 
     async def execute_query(
         self, sql: str, params: list | None = None, session_id: str | None = None
@@ -913,7 +892,13 @@ class IRISExecutor:
         self, sql: str, params_list: list[list], session_id: str | None = None
     ) -> dict[str, Any]:
         """Fallback to string inlining for batch operations."""
-        return await self._execute_many_embedded_async(sql, params_list, session_id)
+        if self.embedded_mode:
+            return await self._execute_many_embedded_async(sql, params_list, session_id)
+        else:
+            # For external mode, we don't have a robust string inlining fallback yet
+            # that doesn't depend on the 'iris' module.
+            # We should probably implement one or just re-raise the native error.
+            raise RuntimeError("String inlining fallback not supported in external mode")
 
     def _extract_table_name(self, sql: str) -> Optional[str]:
         """Extract table name from INSERT statement."""
@@ -1092,17 +1077,21 @@ class IRISExecutor:
                     transaction_translated_sql, execution_path="batch"
                 )
 
+                # Normalize each parameter set in the batch
+                final_params_list = []
+                for p_set in params_list:
+                    final_params_list.append(self._normalize_parameters(p_set))
+
                 # Strip trailing semicolon
                 if normalized_sql.rstrip().endswith(";"):
                     normalized_sql = normalized_sql.rstrip().rstrip(";")
 
                 # Pre-process parameters to convert lists to IRIS vector strings
                 # This ensures the DBAPI driver doesn't convert them to {...} format
-                final_params_list = params_list
-                if params_list:
+                if final_params_list:
                     # FAST PATH: Check if any processing is needed
                     needs_processing = False
-                    first_batch = params_list[0]
+                    first_batch = final_params_list[0]
                     for p in first_batch:
                         if isinstance(p, list):
                             needs_processing = True
@@ -1110,7 +1099,7 @@ class IRISExecutor:
 
                     if needs_processing:
                         processed_params_list = []
-                        for params_batch in params_list:
+                        for params_batch in final_params_list:
                             processed_params = [
                                 "[" + ",".join(map(str, p)) + "]" if isinstance(p, list) else p
                                 for p in params_batch
@@ -1239,6 +1228,34 @@ class IRISExecutor:
     ) -> Any:
         """Execute SQL with DDL idempotency handling."""
         import iris
+
+        # Skip execution for empty statements or comment-only statements
+        # This avoids sending no-op SQL or comments to the IRIS SQL engine
+        sql_stripped = sql.strip() if sql else ""
+        if (
+            not sql_stripped
+            or (sql_stripped.startswith("--") and "\n" not in sql_stripped)
+            or (sql_stripped.startswith("/*") and sql_stripped.endswith("*/"))
+        ):
+
+            class SkipCursor:
+                def __init__(self):
+                    self.description = None
+                    self.rowcount = 0
+
+                def close(self):
+                    pass
+
+                def fetchall(self):
+                    return []
+
+                def fetchone(self):
+                    return None
+
+                def __iter__(self):
+                    return iter([])
+
+            return SkipCursor()
 
         # CRITICAL FIX: Strip trailing semicolon for ALL execution paths
         # IRIS SQL engine often fails if a semicolon is present at the end of DDL
@@ -2896,51 +2913,11 @@ class IRISExecutor:
 
                 original_sql_for_log = optimized_sql[:80]
 
-                # CRITICAL: Convert PostgreSQL timestamp microseconds to IRIS timestamp strings
-                # Prisma sends timestamps as int64 microseconds since 2000-01-01 (PostgreSQL epoch)
-                # IRIS expects timestamps as ISO 8601 strings
-                if optimized_params and re.search(r"\bINSERT\b", optimized_sql, re.IGNORECASE):
-                    # Check for timestamp-like values (large integers that could be microseconds)
-                    # PostgreSQL epoch is 2000-01-01, so timestamps from 2020-2030 are roughly:
-                    # 20 years * 365 * 24 * 60 * 60 * 1_000_000 = ~630_720_000_000_000
-                    # 30 years = ~946_080_000_000_000
-                    PG_EPOCH = dt.datetime(2000, 1, 1, 0, 0, 0)
-                    MIN_TIMESTAMP = 500_000_000_000_000  # ~2015
-                    MAX_TIMESTAMP = 1_500_000_000_000_000  # ~2047
+                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
+                if optimized_params:
+                    optimized_params = tuple(self._normalize_parameters(optimized_params))
 
-                    new_params = list(optimized_params)
-                    for i, param in enumerate(new_params):
-                        if isinstance(param, int) and MIN_TIMESTAMP < param < MAX_TIMESTAMP:
-                            # This looks like a PostgreSQL timestamp in microseconds
-                            try:
-                                timestamp_obj = PG_EPOCH + dt.timedelta(microseconds=param)
-                                new_params[i] = timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
-                                logger.info(
-                                    "Converted PostgreSQL timestamp to IRIS format",
-                                    param_index=i,
-                                    original_value=param,
-                                    converted_value=new_params[i],
-                                    session_id=session_id,
-                                )
-                            except (ValueError, OverflowError) as e:
-                                logger.warning(
-                                    "Failed to convert timestamp parameter",
-                                    param_index=i,
-                                    value=param,
-                                    error=str(e),
-                                    session_id=session_id,
-                                )
-                        elif isinstance(param, list):
-                            # Feature 026: Convert Python list to IRIS vector string format [...]
-                            # This ensures the DBAPI driver or embedded engine doesn't convert them to {...} format
-                            new_params[i] = "[" + ",".join(str(float(v)) for v in param) + "]"
-                            logger.info(
-                                "Converted list parameter to IRIS vector format",
-                                param_index=i,
-                                vector_length=len(param),
-                                session_id=session_id,
-                            )
-                    optimized_params = tuple(new_params)
+                # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
                 # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
                 optimized_sql = re.sub(
                     r'"public"\s*\.\s*"(\w+)"', r'SQLUser."\1"', optimized_sql, flags=re.IGNORECASE
@@ -3863,6 +3840,9 @@ class IRISExecutor:
                     transaction_translated_sql, execution_path="external"
                 )
 
+                # Feature 034: Normalize parameters for IRIS compatibility
+                optimized_params = self._normalize_parameters(params)
+
                 # Log transaction translation metrics (external mode)
                 txn_metrics = self.transaction_translator.get_translation_metrics()
                 logger.debug(
@@ -3983,21 +3963,16 @@ class IRISExecutor:
                 # CRITICAL FIX: Split SQL by semicolons and handle multi-action ALTER TABLE
                 statements = self._split_sql_statements(optimized_sql)
 
-                if len(statements) > 1:
-                    logger.info(
-                        "Executing multiple statements (external mode)",
-                        statement_count=len(statements),
-                        session_id=session_id,
-                    )
-                    # Execute all statements except the last
-                    for stmt in statements[:-1]:
-                        self._safe_execute(stmt, optimized_params, is_embedded=False)
+                if not statements:
+                    # Should not happen given _split_sql_statements logic, but for safety
+                    return {"success": True, "rows": [], "columns": []}
 
-                    # Execute last statement and capture cursor
-                    cursor = self._safe_execute(statements[-1], optimized_params, is_embedded=False)
-                else:
-                    # Single statement - execute normally
-                    cursor = self._safe_execute(optimized_sql, optimized_params, is_embedded=False)
+                # Execute all statements except the last
+                for stmt in statements[:-1]:
+                    self._safe_execute(stmt, optimized_params, is_embedded=False)
+
+                # Execute last statement and capture cursor
+                cursor = self._safe_execute(statements[-1], optimized_params, is_embedded=False)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -4663,14 +4638,16 @@ class IRISExecutor:
             # - type_code=4 returns Python int (e.g., SELECT 1) → INTEGER
             # - type_code=2 returns Python Decimal (e.g., SELECT 3.14) → NUMERIC
             int_type_mapping = {
-                -7: 16,  # BIT → bool (IRIS type code for BIT columns)
+                -7: 16,  # BIT → bool
+                -6: 21,  # TINYINT → int2
+                -5: 20,  # BIGINT → int8
                 1: 23,  # int4
-                2: 1700,  # numeric (FIXED: was 21/int2, but IRIS returns Decimal for numeric literals)
+                2: 1700,  # numeric
                 3: 20,  # int8
-                4: 23,  # int4 (FIXED: was 700/float4, but IRIS returns int for integer literals)
+                4: 23,  # int4
                 5: 701,  # float8
-                8: 1083,  # time (FIXED: was 1082/date - IRIS type code 8 is TIME)
-                9: 1082,  # date (FIXED: was 1083/time - IRIS type code 9 is DATE)
+                8: 1083,  # time
+                9: 1082,  # date
                 10: 1114,  # timestamp
                 12: 1043,  # varchar
                 16: 16,  # bool

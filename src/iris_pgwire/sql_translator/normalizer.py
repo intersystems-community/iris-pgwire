@@ -19,6 +19,7 @@ from ..conversions.json_path import JsonPathBuilder
 from ..schema_mapper import translate_input_schema
 from .date_translator import DATETranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .default_values import DefaultValuesTranslator
 
 
 class SQLTranslator:
@@ -32,12 +33,14 @@ class SQLTranslator:
     - Identifier case normalization (unquoted → UPPERCASE, quoted → preserve)
     - DATE literal translation ('YYYY-MM-DD' → TO_DATE(...))
     - JSON operator translation (->, ->> → JSON_VALUE/JSON_QUERY)
+    - DEFAULT-in-VALUES rewrite for IRIS compatibility
     """
 
     def __init__(self):
         """Initialize SQL translator with component normalizers"""
         self.identifier_normalizer = IdentifierNormalizer()
         self.date_translator = DATETranslator()
+        self.default_values_translator = DefaultValuesTranslator()
 
         # Recursive JSON operator pattern
         self._json_pattern = re.compile(
@@ -52,6 +55,47 @@ class SQLTranslator:
             "json_operator_count": 0,
             "sla_violated": False,
         }
+
+    def translate_postgres_parameters(self, sql: str) -> str:
+        """
+        Translate PostgreSQL parameter placeholders and type casts to IRIS syntax.
+
+        Args:
+            sql: SQL query with PostgreSQL $1, $2, $3 placeholders and :: type casts
+
+        Returns:
+            SQL query with IRIS ? placeholders and CAST() expressions
+        """
+        if "$" not in sql and "::" not in sql:
+            return sql
+
+        # Step 1: Replace $1, $2, $3, ... with ? for IRIS parameter binding
+        if "$" in sql:
+            sql = re.sub(r"\$\d+", "?", sql)
+
+        # Step 2: Translate PostgreSQL :: type cast to IRIS CAST() function
+        if "::" in sql:
+            type_map = {
+                "int": "INTEGER",
+                "int4": "INTEGER",
+                "int8": "BIGINT",
+                "text": "VARCHAR",
+                "varchar": "VARCHAR",
+                "float": "DOUBLE",
+                "float8": "DOUBLE",
+                "bool": "BIT",
+                "boolean": "BIT",
+            }
+
+            def replace_typecast(match):
+                expr = match.group(1)
+                pg_type = match.group(2).lower()
+                iris_type = type_map.get(pg_type, pg_type.upper())
+                return f"CAST({expr} AS {iris_type})"
+
+            sql = re.sub(r"(\?|'[^']*'|\d+)::([\w]+)", replace_typecast, sql)
+
+        return sql
 
     def normalize_sql(self, sql: str, execution_path: str = "direct") -> str:
         """
@@ -84,8 +128,12 @@ class SQLTranslator:
             }
             return sql
 
+        # Step -1: Translate PostgreSQL parameters ($n -> ?) and type casts (::type -> CAST)
+        # This MUST happen before normalization to avoid issues with placeholders
+        normalized_sql = self.translate_postgres_parameters(sql)
+
         # Step 0: Schema mapping (public → SQLUser) - Feature 030
-        normalized_sql = translate_input_schema(sql)
+        normalized_sql = translate_input_schema(normalized_sql)
 
         # Step 1: Normalize identifiers (unquoted → UPPERCASE)
         normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
@@ -98,6 +146,9 @@ class SQLTranslator:
 
         # Step 4: Translate VECTOR types (VECTOR(128) -> VECTOR(DOUBLE, 128))
         normalized_sql = self._translate_vector_types(normalized_sql)
+
+        # Step 5: Rewrite DEFAULT in VALUES
+        normalized_sql = self.default_values_translator.translate(normalized_sql)
 
         # Calculate performance metrics
         end_time = time.perf_counter()
