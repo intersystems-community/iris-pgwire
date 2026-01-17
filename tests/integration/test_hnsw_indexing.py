@@ -3,8 +3,9 @@ TDD Test Suite for HNSW Indexing DDL Translation.
 Validates translation of 'CREATE INDEX ... USING hnsw' to IRIS-native format.
 """
 
-import pytest
 import psycopg
+import pytest
+
 from iris_pgwire.vector_optimizer import VectorQueryOptimizer
 
 

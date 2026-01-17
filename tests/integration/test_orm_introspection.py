@@ -4,7 +4,7 @@ Validates SQLAlchemy reflection against IRIS via PGWire.
 """
 
 import pytest
-from sqlalchemy import create_engine, inspect, MetaData, Table, Column, Integer, String
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, inspect
 
 
 def test_sqlalchemy_reflection(pgwire_server, iris_connection):

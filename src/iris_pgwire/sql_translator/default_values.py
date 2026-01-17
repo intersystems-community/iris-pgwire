@@ -1,4 +1,5 @@
 import re
+
 import structlog
 
 logger = structlog.get_logger()
@@ -39,7 +40,7 @@ class DefaultValuesTranslator:
         new_vals = []
         has_default = False
 
-        for col, val in zip(cols, vals):
+        for col, val in zip(cols, vals, strict=False):
             if val.upper() == "DEFAULT":
                 has_default = True
                 continue

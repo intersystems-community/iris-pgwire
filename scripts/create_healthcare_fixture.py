@@ -28,10 +28,9 @@ from pathlib import Path
 # Add iris-devtester to path
 sys.path.insert(0, "/Users/tdyar/ws/iris-devtester")
 
-from iris_devtester.connections import get_connection
 from iris_devtester.config import IRISConfig
-from iris_devtester.fixtures.creator import FixtureCreator
-from iris_devtester.fixtures.validator import FixtureValidator
+from iris_devtester.connections import get_connection
+
 
 def drop_existing_tables(cursor):
     """
@@ -237,8 +236,8 @@ def main():
         print("=" * 80)
         print(f"  Patients: {actual_patients} records")
         print(f"  Lab Results: {actual_labs} records")
-        print(f"  Total execution time: <2 seconds")
-        print(f"  Next: Export to DAT fixture for <1s reload capability")
+        print("  Total execution time: <2 seconds")
+        print("  Next: Export to DAT fixture for <1s reload capability")
 
     except Exception as e:
         print(f"\n❌ ERROR: {e}")

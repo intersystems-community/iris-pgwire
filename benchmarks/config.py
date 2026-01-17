@@ -6,7 +6,6 @@ These classes will be properly implemented after contract tests are written (TDD
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 from datetime import datetime
 from enum import Enum
 
@@ -34,11 +33,11 @@ class ConnectionConfig:
     host: str
     port: int
     database: str
-    username: Optional[str] = None
-    password: Optional[str] = None
+    username: str | None = None
+    password: str | None = None
     connection_timeout: float = 10.0
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate configuration parameters.
 
@@ -69,9 +68,9 @@ class BenchmarkConfiguration:
     concurrent_connections: int = 1
     warmup_queries: int = 100
     random_seed: int = 42
-    connection_configs: Optional[Dict[str, ConnectionConfig]] = None
+    connection_configs: dict[str, ConnectionConfig] | None = None
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate configuration per functional requirements.
 
@@ -120,11 +119,11 @@ class PerformanceResult:
     timestamp: datetime
     elapsed_ms: float
     success: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
     row_count: int = 0
-    resource_usage: Optional[Dict] = None
+    resource_usage: dict | None = None
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate result integrity.
 
@@ -165,9 +164,9 @@ class MethodResults:
     latency_p50_ms: float
     latency_p95_ms: float
     latency_p99_ms: float
-    by_category: Dict[str, CategoryMetrics]
+    by_category: dict[str, CategoryMetrics]
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate aggregated results.
 
@@ -205,12 +204,12 @@ class BenchmarkReport:
     start_time: datetime
     end_time: datetime
     total_duration_seconds: float
-    method_results: Dict[str, MethodResults]
-    raw_results: List[PerformanceResult]
-    validation_errors: List[str]
+    method_results: dict[str, MethodResults]
+    raw_results: list[PerformanceResult]
+    validation_errors: list[str]
     state: BenchmarkState = BenchmarkState.INITIALIZING
 
-    def to_json(self) -> Dict:
+    def to_json(self) -> dict:
         """
         Export report as JSON (FR-010).
 
@@ -239,7 +238,7 @@ class BenchmarkReport:
             }
         }
 
-    def to_table_rows(self) -> List[List]:
+    def to_table_rows(self) -> list[list]:
         """
         Export report as table rows for console display (FR-010).
 

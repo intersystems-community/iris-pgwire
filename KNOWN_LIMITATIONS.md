@@ -49,6 +49,30 @@ Based on comprehensive research of 9 major implementations (November 2025):
 
 ---
 
+## 🟢 PostgreSQL DDL Compatibility
+
+**Status**: Enhanced Compatibility ✅
+**Feature**: Automated transformations for PostgreSQL-specific DDL
+
+### Capabilities
+
+IRIS PGWire automatically handles several common PostgreSQL DDL constructs that are natively unsupported by IRIS:
+
+- ✅ **Generated Columns**: `GENERATED ALWAYS AS ... STORED` are automatically stripped.
+- ✅ **Enum Types**: `CREATE TYPE ... ENUM` are registered and columns mapped to `VARCHAR(64)`.
+- ✅ **Storage Parameters**: `WITH (fillfactor = ...)` and `SET (fillfactor)` are stripped/skipped.
+- ✅ **Index Methods**: `USING btree` is automatically removed.
+- ✅ **Casts**: `'value'::text` syntax in defaults is stripped.
+- ✅ **CHECK Constraints**: `ADD CONSTRAINT ... CHECK` are skipped with a warning.
+
+### Configuration
+
+Use the `strict_ddl` flag to control this behavior:
+- `strict_ddl = false` (default): Skip/transform with a warning.
+- `strict_ddl = true`: Raise an error for unsupported DDL.
+
+---
+
 ## 🟡 INFORMATION_SCHEMA Compatibility
 
 **Severity**: Medium

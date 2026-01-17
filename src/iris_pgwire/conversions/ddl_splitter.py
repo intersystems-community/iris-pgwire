@@ -3,6 +3,7 @@ Utilities for splitting complex PostgreSQL DDL into IRIS-compatible statements.
 """
 
 import re
+
 import structlog
 
 logger = structlog.get_logger()

@@ -13,9 +13,9 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Optional, Literal
+from typing import Any, Literal
 
 # Global switch for performance monitoring
 MONITOR_ENABLED = os.getenv("IRIS_PGWIRE_PERF_MONITOR", "false").lower() == "true"
@@ -176,7 +176,7 @@ class PerformanceMonitor:
         self._total_operations = 0
         self._total_violations = 0
         self._consecutive_violations = 0
-        self._start_time = datetime.now(timezone.utc)
+        self._start_time = datetime.now(UTC)
 
         # Alert thresholds
         self.warning_threshold_ms = sla_threshold_ms * 0.8  # 80% of SLA
@@ -208,7 +208,7 @@ class PerformanceMonitor:
         if not MONITOR_ENABLED:
             return None
 
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
 
         with self._lock:
             # Create metric record
@@ -316,7 +316,7 @@ class PerformanceMonitor:
                 p99_time_ms=self._percentile(times, 0.99),
                 sla_violations=violations,
                 sla_compliance_rate=compliance_rate,
-                last_updated=datetime.now(timezone.utc),
+                last_updated=datetime.now(UTC),
             )
 
     def get_constitutional_report(self) -> ConstitutionalReport:
@@ -367,7 +367,7 @@ class PerformanceMonitor:
                     "p95_time_ms": self._percentile(all_times, 0.95),
                     "p99_time_ms": self._percentile(all_times, 0.99),
                     "uptime_seconds": (
-                        datetime.now(timezone.utc) - self._start_time
+                        datetime.now(UTC) - self._start_time
                     ).total_seconds(),
                 }
 
@@ -390,7 +390,7 @@ class PerformanceMonitor:
                 component_compliance=component_compliance,
                 recent_violations=recent_violations,
                 recommendations=recommendations,
-                report_timestamp=datetime.now(timezone.utc),
+                report_timestamp=datetime.now(UTC),
             )
 
     def get_real_time_status(self) -> dict[str, Any]:
@@ -419,7 +419,7 @@ class PerformanceMonitor:
                 sla_status = "warning"
 
             return {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "sla_status": sla_status,
                 "sla_threshold_ms": self.sla_threshold_ms,
                 "current_avg_ms": current_avg,
@@ -463,7 +463,7 @@ class PerformanceMonitor:
                 self._total_operations = 0
                 self._total_violations = 0
                 self._consecutive_violations = 0
-                self._start_time = datetime.now(timezone.utc)
+                self._start_time = datetime.now(UTC)
                 return cleared
 
     def export_metrics(self, format_type: str = "json") -> str:
@@ -489,7 +489,7 @@ class PerformanceMonitor:
                             comp: self.get_component_stats(comp) for comp in self._component_metrics
                         }.items()
                     },
-                    "export_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "export_timestamp": datetime.now(UTC).isoformat(),
                 }
                 return json.dumps(metrics_data, indent=2, default=str)
             elif format_type.lower() == "csv":
@@ -516,7 +516,7 @@ class PerformanceMonitor:
 
     def _calculate_ops_per_second(self) -> float:
         """Calculate operations per second"""
-        uptime = (datetime.now(timezone.utc) - self._start_time).total_seconds()
+        uptime = (datetime.now(UTC) - self._start_time).total_seconds()
         return self._total_operations / uptime if uptime > 0 else 0.0
 
     def _generate_recommendations(

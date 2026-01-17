@@ -11,8 +11,9 @@ Tests cover:
 - Edge cases
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
 
 from iris_pgwire.catalog.catalog_functions import CatalogFunctionHandler
 from iris_pgwire.catalog.oid_generator import OIDGenerator

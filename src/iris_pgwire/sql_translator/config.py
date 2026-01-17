@@ -122,6 +122,7 @@ class ValidationConfig:
     enable_semantic_checks: bool = True
     max_issues_per_query: int = 50
     validation_timeout_ms: float = 2000.0
+    strict_ddl: bool = False  # Feature 036: Strict mode for unsupported PostgreSQL DDL
 
     def __post_init__(self):
         """Validate validation configuration"""
@@ -370,6 +371,7 @@ class ConfigurationManager:
             "IRIS_PGWIRE_THREAD_POOL_SIZE": ("performance", "thread_pool_size", int),
             "IRIS_PGWIRE_VALIDATION_ENABLED": ("validation", "enabled", bool),
             "IRIS_PGWIRE_VALIDATION_LEVEL": ("validation", "default_level", str),
+            "IRIS_PGWIRE_STRICT_DDL": ("validation", "strict_ddl", bool),
             "IRIS_PGWIRE_METRICS_ENABLED": ("metrics", "enabled", bool),
             "IRIS_PGWIRE_OTEL_ENABLED": ("metrics", "enable_otel", bool),
             "IRIS_PGWIRE_OTEL_ENDPOINT": ("metrics", "otel_endpoint", str),

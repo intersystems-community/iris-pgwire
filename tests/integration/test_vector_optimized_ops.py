@@ -3,8 +3,8 @@ Integration Tests for Vector Optimized Operations.
 Validates HNSW indexing and similarity operators.
 """
 
-import pytest
 import numpy as np
+import pytest
 
 
 def test_vector_cosine_operator(pgwire_client, iris_connection):

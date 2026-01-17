@@ -5,7 +5,7 @@ Executes queries via intersystems-irispython DBAPI.
 Pattern from: /Users/tdyar/ws/rag-templates/common/iris_connection_manager.py
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class DbapiExecutor:
@@ -34,7 +34,7 @@ class DbapiExecutor:
         self.namespace = namespace
         self.username = username
         self.password = password
-        self.connection: Optional[Any] = None
+        self.connection: Any | None = None
 
     def connect(self):
         """Establish DBAPI connection to IRIS."""
@@ -73,7 +73,7 @@ class DbapiExecutor:
             results = cursor.fetchall()
             cursor.close()
             return results
-        except Exception as e:
+        except Exception:
             cursor.close()
             # Re-raise without printing (error logging handled by runner if needed)
             raise

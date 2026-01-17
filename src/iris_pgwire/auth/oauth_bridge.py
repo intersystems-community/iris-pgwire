@@ -29,7 +29,7 @@ import os
 
 # Import contract interface
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -59,7 +59,7 @@ class OAuthToken:
     @property
     def is_expired(self) -> bool:
         """Check if token has expired"""
-        return datetime.now(timezone.utc) >= self.expires_at
+        return datetime.now(UTC) >= self.expires_at
 
 
 # Error classes
@@ -216,7 +216,7 @@ class OAuthBridge:
                 refresh_token=token_response.get("refresh_token"),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_in=token_response.get("expires_in", 3600),
-                issued_at=datetime.now(timezone.utc),
+                issued_at=datetime.now(UTC),
                 username=username,
                 scopes=(
                     token_response.get("scope", "").split() if token_response.get("scope") else []
@@ -380,7 +380,7 @@ class OAuthBridge:
                 ),  # May return new refresh token
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_in=token_response.get("expires_in", 3600),
-                issued_at=datetime.now(timezone.utc),
+                issued_at=datetime.now(UTC),
                 username="",  # Username not available in refresh response
                 scopes=(
                     token_response.get("scope", "").split() if token_response.get("scope") else []

@@ -12,12 +12,12 @@ Per Constitution Principle VI: Creates HNSW indexes for production scale.
 
 import sys
 import time
-from typing import Optional
-import numpy as np
-import psycopg
 
 # Add benchmarks to path
 from pathlib import Path
+
+import psycopg
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from benchmarks.test_data.vector_generator import generate_test_vectors, vector_to_text
@@ -331,8 +331,9 @@ class DatabaseSetup:
             True if successful, False otherwise
         """
         try:
-            import iris
             import os
+
+            import iris
 
             # Get connection params from environment if not provided
             if host is None:
@@ -367,7 +368,7 @@ class DatabaseSetup:
                 print(f"   ✅ Found {metadata_count:,} rows in benchmark_metadata", flush=True)
 
                 if vector_count == self.dataset_size and metadata_count == self.dataset_size:
-                    print(f"   ✅ IRIS DBAPI using existing data from PGWire setup", flush=True)
+                    print("   ✅ IRIS DBAPI using existing data from PGWire setup", flush=True)
                 else:
                     raise ValueError(f"Data mismatch: expected {self.dataset_size} rows, found vectors={vector_count}, metadata={metadata_count}")
 

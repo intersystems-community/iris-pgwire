@@ -12,7 +12,6 @@ Constitutional Requirements:
 - Schema qualifiers stripped
 """
 
-import re
 
 
 class EnumTypeRegistry:
@@ -31,22 +30,25 @@ class EnumTypeRegistry:
     def __init__(self):
         """Initialize empty enum type registry."""
         self._type_names: set[str] = set()
+        self._enum_definitions: dict[str, list[str]] = {}
 
-    def register(self, type_name: str) -> None:
+    def register(self, type_name: str, values: list[str] | None = None) -> None:
         """
-        Register an enum type name.
+        Register an enum type name and its values.
 
         Args:
             type_name: The enum type name, possibly schema-qualified and/or quoted.
-                       Examples: "public"."status", "MyEnum", status
-
-        The name is normalized:
-        - Schema qualifier stripped
-        - Quotes removed
-        - Converted to lowercase
+            values: Optional list of enum values.
         """
         normalized = self._normalize_type_name(type_name)
         self._type_names.add(normalized)
+        if values is not None:
+            self._enum_definitions[normalized] = values
+
+    def get_values(self, type_name: str) -> list[str] | None:
+        """Get values for a registered enum."""
+        normalized = self._normalize_type_name(type_name)
+        return self._enum_definitions.get(normalized)
 
     def is_registered(self, type_name: str) -> bool:
         """
@@ -64,6 +66,7 @@ class EnumTypeRegistry:
     def clear(self) -> None:
         """Clear all registered enum types (called on connection close)."""
         self._type_names.clear()
+        self._enum_definitions.clear()
 
     def get_registered_types(self) -> set[str]:
         """
@@ -111,3 +114,12 @@ class EnumTypeRegistry:
     def __contains__(self, type_name: str) -> bool:
         """Support 'in' operator for checking registration."""
         return self.is_registered(type_name)
+
+
+# Global registry instance for tests (per-session instances used in production)
+_default_registry = EnumTypeRegistry()
+
+
+def get_enum_registry() -> EnumTypeRegistry:
+    """Get the default enum registry."""
+    return _default_registry

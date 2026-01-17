@@ -3,8 +3,9 @@ Test Container Management Agentic Skill Integration.
 Validates FR-003, FR-004, FR-005.
 """
 
-import pytest
 import socket
+
+import pytest
 from iris_devtester import IRISContainer
 
 

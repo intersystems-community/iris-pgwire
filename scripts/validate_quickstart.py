@@ -6,15 +6,17 @@ Validates the vector query optimizer against the 5 quickstart criteria from
 specs/013-vector-query-optimizer/quickstart.md
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from iris_pgwire.vector_optimizer import optimize_vector_query
 import base64
-import struct
 import random
+import struct
 import time
+
+from iris_pgwire.vector_optimizer import optimize_vector_query
 
 
 def normalize_vector(vec):
@@ -143,11 +145,11 @@ def main():
         avg_ms = sum(times) / len(times)
         p95_ms = sorted(times)[int(len(times) * 0.95)]
 
-        print(f'   Transformation Performance (1536-dim vector):')
+        print('   Transformation Performance (1536-dim vector):')
         print(f'     Avg: {avg_ms:.2f}ms')
         print(f'     P95: {p95_ms:.2f}ms')
-        print(f'     Constitutional SLA: 5ms')
-        print(f'     Overhead Budget: 10ms')
+        print('     Constitutional SLA: 5ms')
+        print('     Overhead Budget: 10ms')
 
         # Assertions
         assert avg_ms < 10.0, f'Avg must be <10ms, got {avg_ms:.2f}ms'

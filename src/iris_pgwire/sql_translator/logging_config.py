@@ -10,13 +10,16 @@ Constitutional Compliance: Comprehensive audit trail and performance monitoring.
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import structlog
 
 from .performance_monitor import get_monitor
+
+# DDL warning formats
+DDL_SKIP_FORMAT = "[DDL-SKIP] {} ignored"
 
 
 def setup_translation_logging(
@@ -175,7 +178,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record):
         log_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -338,7 +341,7 @@ class TranslationLogger:
         perf_logger = logging.getLogger("iris_pgwire.performance")
 
         perf_data = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "session_id": session_id,
             "correlation_id": correlation_id,
             "event_type": "performance_metrics",

@@ -17,7 +17,7 @@ Key Components:
 """
 
 # Lazy imports - only import when accessed to allow incremental development
-from .oid_generator import OIDGenerator, ObjectIdentity
+from .oid_generator import ObjectIdentity, OIDGenerator
 
 __all__ = [
     # OID Generation
@@ -63,6 +63,6 @@ def __getattr__(name: str):
         from .pg_attrdef import PgAttrdef, PgAttrdefEmulator
         return PgAttrdef if name == "PgAttrdef" else PgAttrdefEmulator
     elif name in ("CatalogRouter", "CatalogQueryResult"):
-        from .catalog_router import CatalogRouter, CatalogQueryResult
+        from .catalog_router import CatalogQueryResult, CatalogRouter
         return CatalogRouter if name == "CatalogRouter" else CatalogQueryResult
     raise AttributeError(f"module 'iris_pgwire.catalog' has no attribute {name!r}")

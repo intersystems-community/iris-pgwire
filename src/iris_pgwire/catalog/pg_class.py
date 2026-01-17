@@ -20,7 +20,6 @@ from typing import Any, Literal
 
 from .oid_generator import OIDGenerator
 
-
 RelKind = Literal["r", "i", "S", "v", "m", "c", "f", "p"]
 
 

@@ -8,10 +8,9 @@ and real-world usage patterns.
 """
 
 import asyncio
-import time
 import statistics
-from typing import List, Dict, Any
-import concurrent.futures
+import time
+
 
 # Demo 1: psycopg (Async) - Modern Python PostgreSQL client
 async def demo_psycopg_async():
@@ -349,7 +348,7 @@ async def demo_connection_pool():
             async with pool.connection() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("SELECT %s as worker_id, RANDOM() as random_val", (worker_id,))
-                    result = await cur.fetchone()
+                    await cur.fetchone()
                     await asyncio.sleep(0.1)  # Simulate work
             return time.time() - start
 

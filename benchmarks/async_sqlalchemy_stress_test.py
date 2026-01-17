@@ -16,12 +16,12 @@ Usage:
     python3 benchmarks/async_sqlalchemy_stress_test.py
 """
 
+import asyncio
 from random import randint, random
 from time import time_ns
-import asyncio
-import psycopg
 
-from sqlalchemy import MetaData, Table, Column, Integer, String, text, bindparam
+import psycopg
+from sqlalchemy import Column, Integer, MetaData, String, Table, bindparam, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Test configuration

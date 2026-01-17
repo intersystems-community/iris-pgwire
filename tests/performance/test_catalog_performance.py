@@ -8,8 +8,9 @@ Validates that catalog functions meet performance requirements:
 These tests use pytest-benchmark for accurate timing measurements.
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
 
 from iris_pgwire.catalog.catalog_functions import CatalogFunctionHandler
 from iris_pgwire.catalog.oid_generator import OIDGenerator

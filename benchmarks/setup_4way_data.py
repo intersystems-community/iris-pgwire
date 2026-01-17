@@ -10,14 +10,14 @@ Creates benchmark_vectors table with identical data across:
 The same IRIS instance (port 1974) is also accessed via PGWire-DBAPI (port 5434).
 """
 
-import sys
 import random
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks.executors.postgres_executor import PostgresExecutor
 from benchmarks.executors.dbapi_executor import DbapiExecutor
+from benchmarks.executors.postgres_executor import PostgresExecutor
 
 
 def generate_test_vectors(count: int, dimensions: int, seed: int = 42):

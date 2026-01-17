@@ -11,10 +11,11 @@ import datetime as dt
 import re
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 import structlog
 
+from .catalog.oid_generator import OIDGenerator  # OID generation for catalog emulation
 from .conversions import (
     BulkInsertJob,
     DdlErrorHandler,
@@ -33,7 +34,6 @@ from .type_mapping import (
     get_type_mapping,
     load_type_mappings_from_file,
 )  # Configurable type mapping
-from .catalog.oid_generator import OIDGenerator  # OID generation for catalog emulation
 
 logger = structlog.get_logger()
 
@@ -900,7 +900,7 @@ class IRISExecutor:
             # We should probably implement one or just re-raise the native error.
             raise RuntimeError("String inlining fallback not supported in external mode")
 
-    def _extract_table_name(self, sql: str) -> Optional[str]:
+    def _extract_table_name(self, sql: str) -> str | None:
         """Extract table name from INSERT statement."""
         match = re.search(r"INSERT\s+INTO\s+(\w+)", sql, re.IGNORECASE)
         if match:
@@ -1224,7 +1224,7 @@ class IRISExecutor:
         return statements
 
     def _safe_execute(
-        self, sql: str, params: Optional[list] = None, is_embedded: bool = True
+        self, sql: str, params: list | None = None, is_embedded: bool = True
     ) -> Any:
         """Execute SQL with DDL idempotency handling."""
         import iris
@@ -2099,7 +2099,7 @@ class IRISExecutor:
 
                     # CRITICAL: Create OIDGenerator for table OIDs
                     # Prisma needs OIDs to JOIN pg_class with pg_attribute for column info
-                    oid_gen = OIDGenerator()
+                    OIDGenerator()
 
                     # Build pg_class-like response based on Prisma's expected columns
                     # NOTE: Only return columns that Prisma's query requests - do NOT add OID
@@ -2909,7 +2909,6 @@ class IRISExecutor:
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
                 # Prisma sends: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
                 import re
-                import datetime as dt
 
                 original_sql_for_log = optimized_sql[:80]
 
@@ -3239,7 +3238,7 @@ class IRISExecutor:
                                 select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE {translated_where}'
 
                                 logger.info(
-                                    f"Fetching UPDATEd row(s) using WHERE clause",
+                                    "Fetching UPDATEd row(s) using WHERE clause",
                                     select_sql=select_sql[:200],
                                     param_count=len(optimized_params) if optimized_params else 0,
                                     session_id=session_id,

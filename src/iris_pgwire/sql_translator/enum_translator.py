@@ -13,7 +13,6 @@ Constitutional Requirements:
 """
 
 import re
-from typing import Tuple
 
 from .enum_registry import EnumTypeRegistry
 
@@ -42,7 +41,7 @@ class EnumTranslator:
         """
         self._enum_registry = enum_registry
 
-    def translate(self, sql: str) -> Tuple[str, int]:
+    def translate(self, sql: str) -> tuple[str, int]:
         """
         Apply all enum translations to SQL statement.
 
@@ -67,7 +66,7 @@ class EnumTranslator:
 
         return sql, total_count
 
-    def translate_column_types(self, sql: str) -> Tuple[str, int]:
+    def translate_column_types(self, sql: str) -> tuple[str, int]:
         """
         Translate enum type references to VARCHAR(64) in column definitions.
 
@@ -124,7 +123,7 @@ class EnumTranslator:
 
         return sql, count
 
-    def strip_enum_casts(self, sql: str) -> Tuple[str, int]:
+    def strip_enum_casts(self, sql: str) -> tuple[str, int]:
         """
         Strip enum type casts from expressions.
 

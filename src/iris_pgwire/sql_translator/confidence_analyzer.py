@@ -10,7 +10,7 @@ Constitutional Compliance: High-confidence translations ensure reliable PostgreS
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -139,7 +139,7 @@ class TranslationConfidenceAnalyzer:
         Returns:
             Detailed confidence report with insights and recommendations
         """
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
 
         # Calculate base confidence metrics
         metrics = self._calculate_confidence_metrics(result)
@@ -619,7 +619,7 @@ class TranslationConfidenceAnalyzer:
             )
 
         # Filter by time period
-        cutoff_time = datetime.now(timezone.utc) - self._parse_time_period(time_period)
+        cutoff_time = datetime.now(UTC) - self._parse_time_period(time_period)
         recent_data = [
             (ts, conf, sql) for ts, conf, sql in self._confidence_history if ts >= cutoff_time
         ]

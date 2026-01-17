@@ -1,11 +1,11 @@
 import pytest
+
 from iris_pgwire.protocol import PGWireProtocol
 
 
 class TestParameterTranslationFixes:
     def test_translate_postgres_parameters_before_normalization(self):
         """FR-002: Translate $n to ? across all paths"""
-        from iris_pgwire.protocol import PGWireProtocol
         from unittest.mock import MagicMock
 
         class MockProtocol(PGWireProtocol):
@@ -24,7 +24,6 @@ class TestParameterTranslationFixes:
 
     def test_translate_type_casts(self):
         """FR-002: Type casts in prepared statements"""
-        from iris_pgwire.protocol import PGWireProtocol
         from unittest.mock import MagicMock
 
         class MockProtocol(PGWireProtocol):

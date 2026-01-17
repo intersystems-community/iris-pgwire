@@ -18,7 +18,6 @@ import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
-
 ObjectType = Literal[
     "namespace", "table", "column", "constraint", "index", "type", "default"
 ]

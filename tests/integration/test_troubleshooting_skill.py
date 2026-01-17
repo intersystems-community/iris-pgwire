@@ -3,9 +3,10 @@ Test Troubleshooting Agentic Skill Integration.
 Validates FR-011, FR-012.
 """
 
-import pytest
-import os
 import json
+import os
+
+import pytest
 
 
 def test_troubleshooting_on_failure(iris_container):
@@ -30,4 +31,4 @@ def test_intentional_failure(iris_connection):
     """
     Intentionally fail to verify test_failures.jsonl generation.
     """
-    assert False, "Intentional failure for troubleshooting verification"
+    raise AssertionError("Intentional failure for troubleshooting verification")

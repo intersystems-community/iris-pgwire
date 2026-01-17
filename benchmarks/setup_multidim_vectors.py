@@ -11,14 +11,14 @@ Creates benchmark_vectors table with multiple vector columns of different dimens
 This allows testing all vector sizes without recreating data.
 """
 
-import sys
 import random
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from benchmarks.executors.postgres_executor import PostgresExecutor
 from benchmarks.executors.dbapi_executor import DbapiExecutor
+from benchmarks.executors.postgres_executor import PostgresExecutor
 
 
 def generate_test_vectors(count: int, dimensions_list: list, seed: int = 42):
@@ -65,7 +65,7 @@ def setup_postgres(executor: PostgresExecutor, vectors_by_dim):
             )
         """
         executor.execute(create_table_sql)
-        print(f"  ✅ Table created with 4 vector columns")
+        print("  ✅ Table created with 4 vector columns")
 
         # Get first vector set to determine row count
         first_dim = list(vectors_by_dim.keys())[0]
@@ -125,7 +125,7 @@ def setup_iris(executor: DbapiExecutor, vectors_by_dim):
             )
         """
         executor.execute(create_table_sql)
-        print(f"  ✅ Table created with 4 vector columns")
+        print("  ✅ Table created with 4 vector columns")
 
         # Get first vector set to determine row count
         first_dim = list(vectors_by_dim.keys())[0]

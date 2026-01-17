@@ -743,7 +743,7 @@ class VectorQueryOptimizer:
 
         # Comma-delimited format: "1.0,2.0,3.0,..."
         if "," in vector_param and not vector_param.startswith("["):
-            logger.debug(f"Vector in comma-delimited format, wrapping in brackets")
+            logger.debug("Vector in comma-delimited format, wrapping in brackets")
             return f"[{vector_param}]"
 
         # Already in bracketed format
@@ -759,10 +759,9 @@ class VectorQueryOptimizer:
         """
         Optimize INSERT/UPDATE statements for IRIS vector compatibility.
         """
-        print(f"  📝 _optimize_insert_vectors CALLED", flush=True)
+        print("  📝 _optimize_insert_vectors CALLED", flush=True)
         print(f"  Input SQL: {sql[:200]}...", flush=True)
         optimized_sql = sql
-        transformations = 0
 
         def replace_literal(m):
             if m.group(1):
@@ -779,7 +778,6 @@ class VectorQueryOptimizer:
         )
 
         if sql_with_v != optimized_sql:
-            transformations = 1  # Simplified count for logging
             optimized_sql = sql_with_v
             logger.info("Wrapped raw vector literal in TO_VECTOR")
 

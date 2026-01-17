@@ -17,20 +17,20 @@ Feature 035 Extension:
 - Boolean default translation (true/false → 1/0)
 """
 
-import time
 import re
+import time
 from dataclasses import dataclass
-from typing import Optional
 
 from ..conversions.json_path import JsonPathBuilder
 from ..schema_mapper import translate_input_schema
+from .boolean_translator import BooleanTranslator
 from .date_translator import DATETranslator
-from .identifier_normalizer import IdentifierNormalizer
 from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
-from .statement_filter import StatementFilter, SkipReason
 from .enum_translator import EnumTranslator
-from .boolean_translator import BooleanTranslator
+from .identifier_normalizer import IdentifierNormalizer
+from .skipped_table_set import SkippedTableSet
+from .statement_filter import SkipReason, StatementFilter
 
 
 @dataclass
@@ -39,7 +39,7 @@ class TranslationResult:
 
     sql: str
     was_skipped: bool = False
-    skip_reason: Optional[SkipReason] = None
+    skip_reason: SkipReason | None = None
     command_tag: str = ""
 
 
@@ -63,7 +63,8 @@ class SQLTranslator:
         self.default_values_translator = DefaultValuesTranslator()
 
         self.enum_registry = EnumTypeRegistry()
-        self.statement_filter = StatementFilter(self.enum_registry)
+        self.skipped_tables = SkippedTableSet()
+        self.statement_filter = StatementFilter(self.enum_registry, self.skipped_tables)
         self.enum_translator = EnumTranslator(self.enum_registry)
         self.boolean_translator = BooleanTranslator()
 

@@ -10,12 +10,12 @@ Test scenarios:
 - Query latency (avg, P95, P99)
 """
 
-import time
-import statistics
-import struct
 import base64
 import random
-from typing import List, Dict, Tuple
+import statistics
+import struct
+import time
+
 import psycopg  # For PGWire and PostgreSQL
 
 # IRIS DBAPI test (if available)
@@ -38,7 +38,7 @@ class BenchmarkResult:
     def add_error(self, error: str):
         self.errors.append(error)
 
-    def stats(self) -> Dict:
+    def stats(self) -> dict:
         if not self.latencies:
             return {"error": "No successful queries"}
         return {
@@ -53,20 +53,20 @@ class BenchmarkResult:
         }
 
 
-def generate_vector(dimensions: int = 1024) -> List[float]:
+def generate_vector(dimensions: int = 1024) -> list[float]:
     """Generate normalized random vector"""
     vec = [random.gauss(0, 1) for _ in range(dimensions)]
     norm = sum(x*x for x in vec) ** 0.5
     return [x/norm for x in vec]
 
 
-def vector_to_base64(vec: List[float]) -> str:
+def vector_to_base64(vec: list[float]) -> str:
     """Convert vector to base64 format for IRIS"""
     vec_bytes = struct.pack(f'{len(vec)}f', *vec)
     return 'base64:' + base64.b64encode(vec_bytes).decode('ascii')
 
 
-def vector_to_string(vec: List[float]) -> str:
+def vector_to_string(vec: list[float]) -> str:
     """Convert vector to comma-separated string"""
     return ','.join(map(str, vec))
 
@@ -85,7 +85,7 @@ def benchmark_pgwire(iterations: int = 100, top_k: int = 5) -> BenchmarkResult:
         )
         cur = conn.cursor()
 
-        for i in range(iterations):
+        for _i in range(iterations):
             vec = generate_vector(1024)
             vec_b64 = vector_to_base64(vec)
 
@@ -96,7 +96,7 @@ def benchmark_pgwire(iterations: int = 100, top_k: int = 5) -> BenchmarkResult:
                     f"SELECT id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s, FLOAT)) LIMIT {top_k}",
                     (vec_b64,)
                 )
-                rows = cur.fetchall()
+                cur.fetchall()
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 result.add_latency(elapsed_ms)
             except Exception as e:
@@ -118,7 +118,7 @@ def benchmark_iris_dbapi(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
         return result
 
     try:
-        for i in range(iterations):
+        for _i in range(iterations):
             vec = generate_vector(1024)
             vec_str = vector_to_string(vec)
 
@@ -127,7 +127,7 @@ def benchmark_iris_dbapi(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
                 # Safe pattern: string interpolation for TOP, single ? for vector
                 sql = f"SELECT TOP {top_k} id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR(?, FLOAT))"
                 res = iris.sql.exec(sql, vec_str)
-                rows = [row for row in res]
+                list(res)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 result.add_latency(elapsed_ms)
             except Exception as e:
@@ -152,7 +152,7 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
         )
         cur = conn.cursor()
 
-        for i in range(iterations):
+        for _i in range(iterations):
             vec = generate_vector(1024)
 
             start = time.perf_counter()
@@ -162,7 +162,7 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
                     "SELECT id FROM test_vectors ORDER BY embedding <-> %s LIMIT %s",
                     (vec, top_k)
                 )
-                rows = cur.fetchall()
+                cur.fetchall()
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 result.add_latency(elapsed_ms)
             except Exception as e:
@@ -175,15 +175,15 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
     return result
 
 
-def print_comparison(results: List[BenchmarkResult]):
+def print_comparison(results: list[BenchmarkResult]):
     """Print comparison table"""
     print("\n" + "="*80)
     print("VECTOR QUERY BENCHMARK COMPARISON")
     print("="*80)
-    print(f"\nTest Configuration:")
-    print(f"  - Vector dimensions: 1024")
-    print(f"  - Iterations per test: 100")
-    print(f"  - Result set sizes: TOP 5, 10, 50")
+    print("\nTest Configuration:")
+    print("  - Vector dimensions: 1024")
+    print("  - Iterations per test: 100")
+    print("  - Result set sizes: TOP 5, 10, 50")
     print("\n" + "-"*80)
 
     for result in results:
@@ -219,16 +219,16 @@ def main():
         print(f"\nTesting with TOP/LIMIT {top_k}...")
 
         # PGWire
-        print(f"  Running PGWire benchmark...")
+        print("  Running PGWire benchmark...")
         results.append(benchmark_pgwire(iterations=100, top_k=top_k))
 
         # IRIS DBAPI
         if IRIS_AVAILABLE:
-            print(f"  Running IRIS DBAPI benchmark...")
+            print("  Running IRIS DBAPI benchmark...")
             results.append(benchmark_iris_dbapi(iterations=100, top_k=top_k))
 
         # PostgreSQL baseline
-        print(f"  Running PostgreSQL baseline...")
+        print("  Running PostgreSQL baseline...")
         results.append(benchmark_postgresql(iterations=100, top_k=top_k))
 
     print_comparison(results)

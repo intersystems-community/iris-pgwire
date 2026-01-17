@@ -4,8 +4,8 @@ Utilities for tracking and monitoring bulk insert operations in iris-pgwire.
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Literal, Optional
+from datetime import UTC, datetime
+from typing import Literal
 
 
 @dataclass
@@ -18,16 +18,16 @@ class BulkInsertJob:
     inserted_rows: int = 0
     failed_rows: int = 0
     status: Literal["pending", "running", "completed", "failed"] = "pending"
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
 
     def mark_started(self) -> None:
         """Mark the job as started."""
         self.status = "running"
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
 
-    def mark_completed(self, rows_inserted: Optional[int] = None) -> None:
+    def mark_completed(self, rows_inserted: int | None = None) -> None:
         """
         Mark the job as completed successfully.
 
@@ -35,7 +35,7 @@ class BulkInsertJob:
             rows_inserted: Optional total rows inserted (defaults to total_rows)
         """
         self.status = "completed"
-        self.completed_at = datetime.now(timezone.utc)
+        self.completed_at = datetime.now(UTC)
         if rows_inserted is not None:
             self.inserted_rows = rows_inserted
         else:
@@ -49,7 +49,7 @@ class BulkInsertJob:
             error: Error message
         """
         self.status = "failed"
-        self.completed_at = datetime.now(timezone.utc)
+        self.completed_at = datetime.now(UTC)
         self.error_message = error
 
     def rows_per_second(self) -> float:
@@ -62,7 +62,7 @@ class BulkInsertJob:
         if not self.started_at:
             return 0.0
 
-        end_time = self.completed_at or datetime.now(timezone.utc)
+        end_time = self.completed_at or datetime.now(UTC)
         duration = (end_time - self.started_at).total_seconds()
 
         if duration <= 0:

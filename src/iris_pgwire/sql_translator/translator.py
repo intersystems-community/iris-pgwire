@@ -13,7 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -134,7 +134,7 @@ class IRISSQLTranslator:
         # Constitutional monitoring
         self._sla_violations = 0
         self._total_translations = 0
-        self._start_time = datetime.now(timezone.utc)
+        self._start_time = datetime.now(UTC)
 
         # Setup logging
         self.logger = logging.getLogger("iris_pgwire.sql_translator")
@@ -644,7 +644,7 @@ class IRISSQLTranslator:
             if session_id:
                 if session_id not in self._sessions:
                     self._sessions[session_id] = TranslationSession(
-                        session_id=session_id, created_at=datetime.now(timezone.utc)
+                        session_id=session_id, created_at=datetime.now(UTC)
                     )
 
                 session = self._sessions[session_id]
@@ -666,7 +666,7 @@ class IRISSQLTranslator:
     def get_translation_stats(self) -> dict[str, Any]:
         """Get comprehensive translation statistics"""
         with self._lock:
-            uptime_seconds = (datetime.now(timezone.utc) - self._start_time).total_seconds()
+            uptime_seconds = (datetime.now(UTC) - self._start_time).total_seconds()
 
             # Calculate rates
             translations_per_second = (

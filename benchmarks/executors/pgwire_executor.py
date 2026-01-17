@@ -4,8 +4,9 @@ IRIS + PGWire query executor (T016).
 Executes queries via psycopg3 to PGWire server.
 """
 
+from typing import Any
+
 import psycopg
-from typing import Any, Optional
 
 
 class PGWireExecutor:
@@ -31,7 +32,7 @@ class PGWireExecutor:
         self.port = port
         self.database = database
         self.timeout_seconds = timeout_seconds
-        self.connection: Optional[psycopg.Connection] = None
+        self.connection: psycopg.Connection | None = None
 
     def connect(self):
         """Establish connection to PGWire server."""
@@ -68,7 +69,7 @@ class PGWireExecutor:
             results = cursor.fetchall()
             cursor.close()
             return results
-        except Exception as e:
+        except Exception:
             cursor.close()
             raise
 

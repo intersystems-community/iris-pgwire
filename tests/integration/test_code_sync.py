@@ -1,5 +1,5 @@
-import pytest
 import psycopg
+import pytest
 
 
 @pytest.mark.integration

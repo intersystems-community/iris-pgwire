@@ -2,7 +2,7 @@
 
 import pytest
 
-from iris_pgwire.sql_translator import SQLTranslator, SkipReason
+from iris_pgwire.sql_translator import SkipReason, SQLTranslator
 
 
 class TestEnumWorkflowE2E:
@@ -37,7 +37,7 @@ class TestEnumWorkflowE2E:
 
         translator.normalize_sql_with_result("CREATE TYPE \"status\" AS ENUM ('pending', 'active')")
 
-        alter_default = '''ALTER TABLE "workspace_invitation" 
+        alter_default = '''ALTER TABLE "workspace_invitation"
             ALTER COLUMN "status" SET DEFAULT 'pending'::"public"."status"'''
         result = translator.normalize_sql_with_result(alter_default)
         assert not result.was_skipped

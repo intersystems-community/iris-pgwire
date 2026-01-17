@@ -28,8 +28,8 @@ def test_explicit_remediation(iris_config):
     """
     Manually trigger remediation logic if possible.
     """
-    from iris_devtester.connections import get_connection
     from iris_devtester.config import IRISConfig
+    from iris_devtester.connections import get_connection
 
     # Use config from fixture
     config = IRISConfig(

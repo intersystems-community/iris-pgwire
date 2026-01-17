@@ -3,7 +3,7 @@
 import pytest
 
 from iris_pgwire.sql_translator.enum_registry import EnumTypeRegistry
-from iris_pgwire.sql_translator.statement_filter import StatementFilter, SkipReason
+from iris_pgwire.sql_translator.statement_filter import SkipReason, StatementFilter
 
 
 class TestRLSEnableSkip:
@@ -71,10 +71,10 @@ class TestCreatePolicySkip:
     def test_create_policy_with_all_clauses(self):
         registry = EnumTypeRegistry()
         filter = StatementFilter(registry)
-        sql = """CREATE POLICY admin_all ON accounts 
-                 FOR ALL 
-                 TO admin_role 
-                 USING (true) 
+        sql = """CREATE POLICY admin_all ON accounts
+                 FOR ALL
+                 TO admin_role
+                 USING (true)
                  WITH CHECK (true)"""
         result = filter.check(sql)
         assert result.should_skip is True

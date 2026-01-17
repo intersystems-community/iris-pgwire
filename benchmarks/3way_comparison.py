@@ -11,32 +11,31 @@ Per FR-010: Outputs results in JSON and console table formats.
 Per FR-006: Aborts on connection failure.
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
-from typing import Dict, List
 
 # Add benchmarks to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from benchmarks.config import BenchmarkConfiguration, ConnectionConfig
-from benchmarks.runner import BenchmarkRunner
+from benchmarks.executors.dbapi_executor import DbapiExecutor
 from benchmarks.executors.pgwire_executor import PGWireExecutor
 from benchmarks.executors.postgres_executor import PostgresExecutor
-from benchmarks.executors.dbapi_executor import DbapiExecutor
-from benchmarks.test_data.query_templates import (
-    SIMPLE_QUERIES,
-    VECTOR_QUERIES,
-    COMPLEX_QUERIES,
-    format_query_for_method
-)
-from benchmarks.test_data.vector_generator import generate_query_vector, vector_to_text
 from benchmarks.output.json_exporter import export_json
 from benchmarks.output.table_exporter import export_table
+from benchmarks.runner import BenchmarkRunner
+from benchmarks.test_data.query_templates import (
+    COMPLEX_QUERIES,
+    SIMPLE_QUERIES,
+    VECTOR_QUERIES,
+    format_query_for_method,
+)
+from benchmarks.test_data.vector_generator import generate_query_vector, vector_to_text
 from benchmarks.validate_connections import validate_all_connections
 
 
-def create_test_queries(method: str, dimensions: int = 1024) -> Dict[str, List[str]]:
+def create_test_queries(method: str, dimensions: int = 1024) -> dict[str, list[str]]:
     """
     Create test queries for a specific database method.
 

@@ -1,8 +1,7 @@
 
-import os
 path = 'docs/articles/developer-community-article.md'
 
-with open(path, 'r') as f:
+with open(path) as f:
     text = f.read()
 
 # 1. Update Quick Demo Section
@@ -26,9 +25,9 @@ This is where it gets interesting. You can use standard `pgvector` distance oper
 
 ```sql
 -- Semantic search using the pgvector <=> (cosine distance) operator
-SELECT id, content 
-FROM medical_notes 
-ORDER BY embedding <=> TO_VECTOR("[0.1, 0.2, 0.3...]", DOUBLE) 
+SELECT id, content
+FROM medical_notes
+ORDER BY embedding <=> TO_VECTOR("[0.1, 0.2, 0.3...]", DOUBLE)
 LIMIT 5;
 ```
 psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
@@ -56,9 +55,9 @@ This is where it gets interesting. You can use standard `pgvector` distance oper
 
 ```sql
 -- Semantic search using the pgvector <=> (cosine distance) operator
-SELECT id, content 
-FROM medical_notes 
-ORDER BY embedding <=> '[0.1, 0.2, 0.3...]' 
+SELECT id, content
+FROM medical_notes
+ORDER BY embedding <=> '[0.1, 0.2, 0.3...]'
 LIMIT 5;
 ```"""
 

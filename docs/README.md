@@ -17,7 +17,8 @@
 ## 📚 User Guides
 
 ### Core Features
-- **[Features Overview](FEATURES_OVERVIEW.md)** - pgvector syntax, ORM compatibility, enterprise authentication
+- **[Features Overview](FEATURES_OVERVIEW.md)** - pgvector syntax, ORM compatibility, DDL transformations, enterprise authentication
+- **[DDL Compatibility](DDL_COMPATIBILITY.md)** - Automatic handling of PostgreSQL-specific DDL (fillfactor, generated columns, enums)
 - **[Vector Operations](VECTOR_PARAMETER_BINDING.md)** - High-dimensional vectors, parameter binding, HNSW indexes
 - **[pg_catalog Support](PG_CATALOG.md)** - 6 catalog tables + 5 functions for ORM introspection
 - **[Client Compatibility](CLIENT_RECOMMENDATIONS.md)** - 171 tests across 8 languages, recommended clients

@@ -57,9 +57,22 @@ with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
 
 ---
 
-## ORM & Schema Compatibility
+## ORM & DDL Compatibility
 
-**Use Case**: Run Prisma, SQLAlchemy, Drizzle, Sequelize, Hibernate, and other ORMs against IRIS without configuration.
+**Use Case**: Run Prisma, SQLAlchemy, Drizzle, Sequelize, Hibernate, and other ORMs against IRIS without configuration, and execute PostgreSQL migration scripts unchanged.
+
+### DDL Compatibility
+
+IRIS PGWire automatically intercepts and transforms PostgreSQL-specific DDL constructs:
+
+- **Generated Columns**: Removes `GENERATED ALWAYS AS ... STORED`.
+- **Enums**: Registers `CREATE TYPE ... ENUM` and maps columns to `VARCHAR(64)`.
+- **Index Methods**: Strips `USING btree`.
+- **Storage**: Strips `WITH (fillfactor = ...)` or `SET (fillfactor)`.
+- **Casts**: Strips PostgreSQL-specific cast syntax (`::type`).
+- **Safety**: Use `strict_ddl=true` to raise errors instead of skipping.
+
+**Learn More**: [DDL Compatibility Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DDL_COMPATIBILITY.md)
 
 ### Schema Mapping
 

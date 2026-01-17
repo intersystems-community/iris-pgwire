@@ -7,11 +7,10 @@ Handles JSON_TABLE, JSON_EXTRACT, JSON_EXISTS and other document operations.
 Constitutional Compliance: Accurate document query translation preserving semantics.
 """
 
-import re
 import logging
+import re
 from typing import Any
 
-from ...conversions.json_path import JsonPathBuilder
 from ..models import ConstructMapping, ConstructType, SourceLocation
 
 logger = logging.getLogger(__name__)

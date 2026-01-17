@@ -27,7 +27,7 @@ Phase: 3.4 (Core Implementation) - Phase 4 integration
 import asyncio
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 
@@ -380,7 +380,7 @@ class WalletCredentials:
                     logger.debug(
                         "wallet_audit_trail_updated",
                         wallet_key=wallet_key,
-                        accessed_at=datetime.now(timezone.utc).isoformat(),
+                        accessed_at=datetime.now(UTC).isoformat(),
                     )
 
                     # If IRIS Wallet supports UpdateAccessedAt(), call it here:

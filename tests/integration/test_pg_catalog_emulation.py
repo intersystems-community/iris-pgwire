@@ -3,8 +3,8 @@ Integration Tests for pg_catalog Emulation.
 Uses iris-devtester infrastructure.
 """
 
-import pytest
 import psycopg
+import pytest
 
 
 def test_pg_type_emulation(pgwire_client):

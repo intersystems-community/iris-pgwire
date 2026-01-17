@@ -1,4 +1,5 @@
 import pytest
+
 from iris_pgwire.sql_translator.normalizer import SQLTranslator
 
 

@@ -27,7 +27,7 @@ Phase: 3.4 (Core Implementation)
 import asyncio
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import structlog
 
@@ -260,8 +260,8 @@ class GSSAPIAuthenticator:
             username=username,
             realm=realm,
             mapped_iris_user=iris_username,
-            authenticated_at=datetime.now(timezone.utc),
-            ticket_expiry=datetime.now(timezone.utc) + timedelta(hours=24),  # Default 24h expiry
+            authenticated_at=datetime.now(UTC),
+            ticket_expiry=datetime.now(UTC) + timedelta(hours=24),  # Default 24h expiry
         )
 
         return principal

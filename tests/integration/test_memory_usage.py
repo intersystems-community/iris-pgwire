@@ -5,9 +5,10 @@ Target: < 50MB memory overhead for 100,000 row batch.
 
 import os
 import random
-import pytest
-import psycopg
+
 import psutil
+import psycopg
+import pytest
 
 # Connection configuration
 PGWIRE_CONN = "host=localhost port=5432 user=test_user password=test dbname=USER"

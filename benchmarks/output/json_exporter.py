@@ -5,8 +5,8 @@ Exports benchmark results as JSON files.
 """
 
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from benchmarks.config import BenchmarkReport
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from iris_pgwire.sql_translator import SQLTranslator, SkipReason
+from iris_pgwire.sql_translator import SkipReason, SQLTranslator
 
 
 class TestRLSMigrationBatchE2E:

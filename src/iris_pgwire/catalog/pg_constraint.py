@@ -18,7 +18,6 @@ from typing import Any, Literal
 
 from .oid_generator import OIDGenerator
 
-
 ConstraintType = Literal["c", "f", "p", "u", "t", "x"]
 
 

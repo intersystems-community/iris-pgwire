@@ -14,7 +14,6 @@ Configuration:
 
 import os
 import re
-import time
 from typing import Any
 
 import structlog

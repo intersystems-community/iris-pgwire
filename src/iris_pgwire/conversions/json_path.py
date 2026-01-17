@@ -4,7 +4,7 @@ Utilities for building IRIS-compatible JSONPath strings from PostgreSQL JSON ope
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Tuple
+from typing import Literal
 
 
 @dataclass
@@ -37,7 +37,7 @@ class JsonPathBuilder:
         return f"{function}({self.base_column}, '{path}')"
 
     @classmethod
-    def parse(cls, sql: str) -> Tuple[str, "JsonPathBuilder"]:
+    def parse(cls, sql: str) -> tuple[str, "JsonPathBuilder"]:
         """
         Parse a PostgreSQL JSON access expression.
 

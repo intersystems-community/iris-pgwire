@@ -2,10 +2,12 @@
 Integration benchmark tests for fast bulk insert path.
 """
 
-import time
 import random
-import pytest
+import time
+
 import psycopg
+import pytest
+
 from iris_pgwire.conversions.bulk_insert import BulkInsertJob
 
 # Connection configuration (matches conftest.py defaults)

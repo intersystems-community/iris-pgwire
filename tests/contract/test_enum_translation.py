@@ -3,8 +3,8 @@
 import pytest
 
 from iris_pgwire.sql_translator.enum_registry import EnumTypeRegistry
-from iris_pgwire.sql_translator.statement_filter import StatementFilter, SkipReason
 from iris_pgwire.sql_translator.enum_translator import EnumTranslator
+from iris_pgwire.sql_translator.statement_filter import SkipReason, StatementFilter
 
 
 class TestEnumRegistry:

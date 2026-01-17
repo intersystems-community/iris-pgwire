@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -64,7 +64,7 @@ class DebugTracer:
         self._lock = threading.Lock()
         self._traces: dict[str, DebugTrace] = {}
         self._events: list[TraceEvent] = []
-        self._session_start = datetime.now(timezone.utc)
+        self._session_start = datetime.now(UTC)
 
         # Setup structured logging
         self._setup_logging()
@@ -98,7 +98,7 @@ class DebugTracer:
             trace = DebugTrace()
             trace.metadata["trace_id"] = trace_id
             trace.metadata["original_sql"] = original_sql
-            trace.metadata["start_time"] = datetime.now(timezone.utc).isoformat()
+            trace.metadata["start_time"] = datetime.now(UTC).isoformat()
             trace.metadata["session_duration_ms"] = 0.0
 
             self._traces[trace_id] = trace
@@ -327,7 +327,7 @@ class DebugTracer:
             trace = self._traces[trace_id]
 
             # Update metadata
-            trace.metadata["end_time"] = datetime.now(timezone.utc).isoformat()
+            trace.metadata["end_time"] = datetime.now(UTC).isoformat()
             trace.metadata["total_duration_ms"] = total_duration_ms
             trace.metadata["success"] = success
             trace.metadata["final_sql"] = final_sql
@@ -520,7 +520,7 @@ class DebugTracer:
             Session statistics
         """
         with self._lock:
-            session_duration = (datetime.now(timezone.utc) - self._session_start).total_seconds()
+            session_duration = (datetime.now(UTC) - self._session_start).total_seconds()
 
             return {
                 "session_start": self._session_start.isoformat(),
@@ -559,7 +559,7 @@ class DebugTracer:
     ):
         """Log a trace event"""
         event = TraceEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             level=level,
             component=component,
             event_type=event_type,

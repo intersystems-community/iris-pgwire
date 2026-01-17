@@ -5,7 +5,6 @@ Utilities for handling DDL idempotency and errors in InterSystems IRIS.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +15,11 @@ class DdlResult:
 
     success: bool
     skipped: bool = False  # True if object already existed
-    object_name: Optional[str] = None  # Name of created/skipped object
-    object_type: Optional[str] = None  # TABLE, INDEX, etc.
-    command: Optional[str] = None  # CREATE, DROP, etc.
-    warning: Optional[str] = None  # Message if skipped
-    error: Optional[Exception] = None  # Original error if failed
+    object_name: str | None = None  # Name of created/skipped object
+    object_type: str | None = None  # TABLE, INDEX, etc.
+    command: str | None = None  # CREATE, DROP, etc.
+    warning: str | None = None  # Message if skipped
+    error: Exception | None = None  # Original error if failed
 
 
 class DdlErrorHandler:
@@ -30,8 +29,8 @@ class DdlErrorHandler:
     # 42P07: duplicate_table
     # 42S01: base_table_or_view_already_exists (IRIS specific mapped to PG)
     # 42710: duplicate_object (often used for indexes)
-    DUPLICATE_TABLE_CODES: Set[str] = {"42P07", "42S01"}
-    DUPLICATE_INDEX_CODES: Set[str] = {"42P07", "42710"}
+    DUPLICATE_TABLE_CODES: set[str] = {"42P07", "42S01"}
+    DUPLICATE_INDEX_CODES: set[str] = {"42P07", "42710"}
 
     def handle(self, sql: str, error: Exception) -> DdlResult:
         """
@@ -72,7 +71,7 @@ class DdlErrorHandler:
         """Check if the SQL statement contains IF NOT EXISTS (or our translation marker)."""
         return bool(re.search(r"IF\s+NOT\s+EXISTS|/\*\s*IF_NOT_EXISTS\s*\*/", sql, re.IGNORECASE))
 
-    def extract_object_name(self, sql: str) -> Optional[str]:
+    def extract_object_name(self, sql: str) -> str | None:
         """Extract the name of the object being created."""
         # Clean up comments for name extraction
         clean_sql = re.sub(r"/\*.*?\*/", "", sql)
@@ -95,7 +94,7 @@ class DdlErrorHandler:
 
         return None
 
-    def _extract_object_type(self, sql: str) -> Optional[str]:
+    def _extract_object_type(self, sql: str) -> str | None:
         """Extract the type of the object being created."""
         if re.search(r"CREATE\s+TABLE", sql, re.IGNORECASE):
             return "TABLE"

@@ -4,7 +4,6 @@ Centralized utilities for converting between IRIS Horolog and PostgreSQL date fo
 
 import datetime
 import logging
-from typing import Union
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ def pg_to_horolog(pg_days: int) -> int:
     return horolog_days
 
 
-def date_to_horolog(date_obj: Union[datetime.date, datetime.datetime]) -> int:
+def date_to_horolog(date_obj: datetime.date | datetime.datetime) -> int:
     """
     Convert a Python date or datetime object to IRIS Horolog days.
 

@@ -8,18 +8,14 @@ showcasing capabilities that were previously impossible with native IRIS drivers
 
 import asyncio
 import time
-from typing import List, Dict, Any
-import json
 
 # Import various PostgreSQL clients
 import asyncpg
-import psycopg
-import sqlalchemy
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, Integer, String, Float, text
 import pandas as pd
-import numpy as np
+import psycopg
+from sqlalchemy import Column, Float, Integer, String, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
 
@@ -96,7 +92,7 @@ async def demo_asyncpg(results: DemoResults):
         start = time.time()
         vector_result = await conn.fetchval("SELECT TO_VECTOR('[1,2,3]')")
         duration = time.time() - start
-        results.add_result(client, "Vector Creation", vector_result is not None, duration, f"Vector created")
+        results.add_result(client, "Vector Creation", vector_result is not None, duration, "Vector created")
 
         # Test vector similarity
         start = time.time()
@@ -315,8 +311,8 @@ async def demo_pandas_integration(results: DemoResults):
                 )
             duration = time.time() - start
             results.add_result(client, "Vector DataFrame", len(vector_df) > 0, duration, f"{len(vector_df)} vectors")
-        except Exception as e:
-            results.add_result(client, "Vector DataFrame", False, 0, f"Vector ops unavailable")
+        except Exception:
+            results.add_result(client, "Vector DataFrame", False, 0, "Vector ops unavailable")
 
         await engine.dispose()
 

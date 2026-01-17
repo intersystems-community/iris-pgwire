@@ -7,12 +7,11 @@ Simulates connections from Tableau, Power BI, QlikView, and other tools.
 """
 
 import asyncio
-import asyncpg
-import pandas as pd
-import json
-from datetime import datetime, timedelta
 import random
-from typing import Dict, List, Any
+from datetime import datetime, timedelta
+
+import asyncpg
+
 
 class BIToolsDemo:
     """Simulate BI tool connections and queries"""

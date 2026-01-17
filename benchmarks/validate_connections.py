@@ -6,11 +6,11 @@ Validates all three database methods before benchmark execution.
 """
 
 import sys
-from typing import Dict, Optional
+
 import psycopg
 
 
-def validate_iris_pgwire(host: str = "localhost", port: int = 5432, database: str = "USER") -> Optional[str]:
+def validate_iris_pgwire(host: str = "localhost", port: int = 5432, database: str = "USER") -> str | None:
     """
     Validate IRIS + PGWire connection.
 
@@ -41,7 +41,7 @@ def validate_postgresql_psycopg3(
     database: str = "benchmark",
     username: str = "postgres",
     password: str = "postgres"
-) -> Optional[str]:
+) -> str | None:
     """
     Validate PostgreSQL + psycopg3 connection.
 
@@ -81,7 +81,7 @@ def validate_iris_dbapi(
     namespace: str = "USER",
     username: str = "_SYSTEM",
     password: str = "SYS"
-) -> Optional[str]:
+) -> str | None:
     """
     Validate IRIS + DBAPI connection using intersystems-irispython package.
 
@@ -97,8 +97,9 @@ def validate_iris_dbapi(
     """
     try:
         # Import IRIS DBAPI from intersystems-irispython package
-        import iris
         import os
+
+        import iris
 
         # Get connection params from environment if not provided
         if host is None:
@@ -143,7 +144,7 @@ def validate_iris_dbapi(
         return f"IRIS + DBAPI connection failed: {e}"
 
 
-def validate_all_connections() -> Dict[str, Optional[str]]:
+def validate_all_connections() -> dict[str, str | None]:
     """
     Validate all three database connections.
 

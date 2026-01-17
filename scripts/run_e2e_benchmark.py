@@ -6,16 +6,16 @@ Starts PGWire server, runs E2E tests with real PostgreSQL client,
 and benchmarks performance vs DBAPI baseline.
 """
 
-import sys
-import os
-import time
-import subprocess
-import socket
-import signal
-import random
-import struct
 import base64
 import math
+import os
+import random
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -231,7 +231,7 @@ def main():
         print("\n" + "="*70)
         print("BENCHMARK RESULTS - PGWire + Optimizer")
         print("="*70)
-        print(f"\n📈 Latency Metrics:")
+        print("\n📈 Latency Metrics:")
         print(f"   Avg:    {avg_ms:6.2f} ms")
         print(f"   Min:    {min_ms:6.2f} ms")
         print(f"   P50:    {p50_ms:6.2f} ms")
@@ -239,18 +239,18 @@ def main():
         print(f"   P99:    {p99_ms:6.2f} ms")
         print(f"   Max:    {max_ms:6.2f} ms")
 
-        print(f"\n🚀 Throughput:")
+        print("\n🚀 Throughput:")
         print(f"   QPS:    {qps:6.1f} queries/second")
 
-        print(f"\n🎯 Target Metrics:")
-        print(f"   Throughput:  335+ qps (concurrent)")
-        print(f"   P95 Latency: <50ms")
+        print("\n🎯 Target Metrics:")
+        print("   Throughput:  335+ qps (concurrent)")
+        print("   P95 Latency: <50ms")
 
-        print(f"\n📊 Status:")
+        print("\n📊 Status:")
         p95_pass = p95_ms < 50
 
         print(f"   P95 Latency: {'✅ PASS' if p95_pass else '❌ FAIL'} ({p95_ms:.2f} ms)")
-        print(f"   Throughput:  ⚠️  Sequential test (concurrent needed for realistic QPS)")
+        print("   Throughput:  ⚠️  Sequential test (concurrent needed for realistic QPS)")
 
         print("\n" + "="*70)
         print("COMPARISON vs DBAPI Baseline (40.61ms P95)")
@@ -260,14 +260,14 @@ def main():
         overhead_ms = p95_ms - dbapi_p95
         overhead_pct = (overhead_ms / dbapi_p95) * 100
 
-        print(f"\nPGWire Overhead:")
+        print("\nPGWire Overhead:")
         print(f"   Absolute: {overhead_ms:+.2f} ms")
         print(f"   Relative: {overhead_pct:+.1f}%")
 
         if overhead_ms < 10:
-            print(f"\n✅ E2E SUCCESS: PGWire overhead acceptable (<10ms)")
+            print("\n✅ E2E SUCCESS: PGWire overhead acceptable (<10ms)")
         else:
-            print(f"\n⚠️  E2E WARNING: PGWire overhead higher than expected")
+            print("\n⚠️  E2E WARNING: PGWire overhead higher than expected")
 
         conn.close()
         return True

@@ -8,10 +8,10 @@ full async/await support in modern Python data applications.
 """
 
 import asyncio
-import time
 import statistics
-from typing import List, Dict, Any
-from datetime import datetime
+import time
+from typing import Any
+
 
 # Async SQLAlchemy - Previously IMPOSSIBLE with IRIS
 async def demo_async_sqlalchemy():
@@ -19,8 +19,8 @@ async def demo_async_sqlalchemy():
     print("=== Async SQLAlchemy 2.0 Demo (Previously IMPOSSIBLE with IRIS) ===")
 
     try:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        from sqlalchemy import text, select, MetaData, Table, Column, Integer, String
+        from sqlalchemy import Column, Integer, MetaData, String, Table, select, text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
         # Create async engine - IMPOSSIBLE with native IRIS drivers!
@@ -33,7 +33,7 @@ async def demo_async_sqlalchemy():
         print("   This was IMPOSSIBLE with native IRIS Python drivers")
 
         # Async session factory
-        AsyncSession = async_sessionmaker(engine)
+        async_sessionmaker(engine)
 
         # Test async operations
         async with engine.begin() as conn:
@@ -113,9 +113,9 @@ async def demo_async_orm():
     print("=== Async ORM Models Demo ===")
 
     try:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy import Integer, String, select
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-        from sqlalchemy import String, Integer, select
 
         # Modern SQLAlchemy 2.0 declarative base
         class Base(DeclarativeBase):
@@ -140,9 +140,9 @@ async def demo_async_orm():
         print("✅ Async ORM models defined")
 
         # Async ORM operations
-        async with AsyncSession() as session:
+        async with AsyncSession():
             # Async query using ORM
-            stmt = select(VectorDocument).limit(1)
+            select(VectorDocument).limit(1)
             # Note: This would work if the table existed
             print("✅ Async ORM query constructed")
 
@@ -170,7 +170,7 @@ async def demo_concurrent_async():
     try:
         import asyncpg
 
-        async def async_worker(worker_id: int, query_count: int = 10) -> Dict[str, Any]:
+        async def async_worker(worker_id: int, query_count: int = 10) -> dict[str, Any]:
             """Async worker that performs multiple queries concurrently"""
             conn = await asyncpg.connect(
                 host="127.0.0.1",
@@ -212,7 +212,7 @@ async def demo_concurrent_async():
         total_queries = sum(r["queries"] for r in results)
         avg_worker_time = statistics.mean(r["duration"] for r in results)
 
-        print(f"✅ Concurrent execution completed!")
+        print("✅ Concurrent execution completed!")
         print(f"   Total time: {total_time:.2f}s")
         print(f"   Total queries: {total_queries}")
         print(f"   Average worker time: {avg_worker_time:.2f}s")
@@ -372,7 +372,7 @@ async def demo_performance_comparison():
         async_improvement = (sync_time - async_time) / sync_time * 100
         concurrent_improvement = (sync_time - concurrent_time) / sync_time * 100
 
-        print(f"\n📊 Performance Analysis:")
+        print("\n📊 Performance Analysis:")
         print(f"   Async improvement: {async_improvement:+.1f}%")
         print(f"   Concurrent improvement: {concurrent_improvement:+.1f}%")
         print(f"   Concurrency factor: {sync_time / concurrent_time:.1f}x faster")

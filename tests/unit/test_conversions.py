@@ -3,13 +3,15 @@ Unit tests for centralized conversion utilities.
 """
 
 import datetime
+
 import pytest
+
 from iris_pgwire.conversions.date_horolog import (
+    EPOCH_OFFSET,
     date_to_horolog,
     horolog_to_date,
     horolog_to_pg,
     pg_to_horolog,
-    EPOCH_OFFSET,
 )
 
 

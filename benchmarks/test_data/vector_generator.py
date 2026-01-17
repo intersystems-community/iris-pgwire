@@ -5,8 +5,8 @@ Generates reproducible normalized random vectors for production-scale testing.
 Per FR-008: All three database methods use identical test data.
 """
 
+
 import numpy as np
-from typing import Optional
 
 
 def generate_test_vectors(
@@ -73,7 +73,7 @@ def vector_to_text(vector: np.ndarray) -> str:
     return f'[{values}]'
 
 
-def generate_query_vector(dimensions: int = 1024, seed: Optional[int] = None) -> np.ndarray:
+def generate_query_vector(dimensions: int = 1024, seed: int | None = None) -> np.ndarray:
     """
     Generate a single query vector for similarity search.
 

@@ -11,10 +11,9 @@ The translation API runs as a standalone microservice for:
 """
 
 import asyncio
-import httpx
-import json
-from typing import Dict, Any
 import time
+
+import httpx
 
 # Translation API base URL (when running standalone)
 API_BASE_URL = "http://localhost:8000"
@@ -70,7 +69,7 @@ async def demo_vector_translation():
 
         print(f"✓ Original SQL:\n{result['original_sql'][:100]}...")
         print(f"✓ Translated SQL:\n{result['translated_sql'][:100]}...")
-        print(f"✓ Vector functions preserved: Yes")
+        print("✓ Vector functions preserved: Yes")
         print(f"✓ Translation time: {result['performance_stats']['total_time_ms']:.2f}ms")
 
         if result['debug_trace']:
@@ -160,7 +159,7 @@ async def demo_cache_management():
         stats_response = await client.get(f"{API_BASE_URL}/cache/stats")
         initial_stats = stats_response.json()
 
-        print(f"✓ Initial cache state:")
+        print("✓ Initial cache state:")
         print(f"  - Entries: {initial_stats['total_entries']}")
         print(f"  - Hit rate: {initial_stats['hit_rate']*100:.1f}%")
         print(f"  - Memory usage: {initial_stats['memory_usage_mb']:.2f}MB")
@@ -175,7 +174,7 @@ async def demo_cache_management():
         stats_response = await client.get(f"{API_BASE_URL}/cache/stats")
         updated_stats = stats_response.json()
 
-        print(f"\n✓ After adding 10 queries:")
+        print("\n✓ After adding 10 queries:")
         print(f"  - Entries: {updated_stats['total_entries']}")
         print(f"  - Memory usage: {updated_stats['memory_usage_mb']:.2f}MB")
 
@@ -191,7 +190,7 @@ async def demo_cache_management():
         )
         invalidate_result = invalidate_response.json()
 
-        print(f"\n✓ Cache invalidation:")
+        print("\n✓ Cache invalidation:")
         print(f"  - Pattern: {invalidate_result['pattern']}")
         print(f"  - Entries invalidated: {invalidate_result['invalidated_count']}")
 
@@ -316,14 +315,14 @@ async def demo_integration_workflow():
 
             print(f"✓ Widget {i}:")
             print(f"  - Original: {sql[:60]}...")
-            print(f"  - Translated successfully")
+            print("  - Translated successfully")
             print(f"  - Time: {result['performance_stats']['total_time_ms']:.2f}ms")
 
         # Step 2: Check cache effectiveness
         stats_response = await client.get(f"{API_BASE_URL}/cache/stats")
         stats = stats_response.json()
 
-        print(f"\n✓ Cache Performance:")
+        print("\n✓ Cache Performance:")
         print(f"  - Hit rate: {stats['hit_rate']*100:.1f}%")
         print(f"  - Average lookup: {stats['average_lookup_ms']:.3f}ms")
 
@@ -342,8 +341,9 @@ async def start_api_server():
     """Start the translation API server in background"""
     try:
         # Import and start the API
-        from iris_pgwire.sql_translator.api import get_translation_api
         import uvicorn
+
+        from iris_pgwire.sql_translator.api import get_translation_api
 
         app = get_translation_api()
 

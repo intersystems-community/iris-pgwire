@@ -10,9 +10,9 @@ Date: 2025-11-08
 Status: Contract Definition (Phase 1 output)
 """
 
-from typing import Dict, Any, Optional
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
 
 class CommandType(Enum):
@@ -36,7 +36,7 @@ class TransactionCommand:
 
     command_text: str  # Original SQL from client
     command_type: CommandType  # Parsed command type
-    modifiers: Optional[str]  # Transaction modifiers (e.g., "ISOLATION LEVEL READ COMMITTED")
+    modifiers: str | None  # Transaction modifiers (e.g., "ISOLATION LEVEL READ COMMITTED")
     translated_text: str  # Translated SQL for IRIS execution
 
 
@@ -151,7 +151,7 @@ class TransactionTranslatorInterface:
         """
         raise NotImplementedError("Contract method - must be implemented")
 
-    def get_translation_metrics(self) -> Dict[str, Any]:
+    def get_translation_metrics(self) -> dict[str, Any]:
         """
         Return performance metrics for constitutional compliance monitoring.
 
@@ -288,11 +288,11 @@ if __name__ == "__main__":
     print("Transaction Translator Contract Interface")
     print("=" * 60)
     print(f"CommandType enum: {list(CommandType)}")
-    print(f"TransactionCommand fields: command_text, command_type, modifiers, translated_text")
-    print(f"TransactionTranslatorInterface methods:")
-    print(f"  - translate_transaction_command(sql) -> str")
-    print(f"  - is_transaction_command(sql) -> bool")
-    print(f"  - parse_transaction_command(sql) -> TransactionCommand")
-    print(f"  - get_translation_metrics() -> Dict[str, Any]")
+    print("TransactionCommand fields: command_text, command_type, modifiers, translated_text")
+    print("TransactionTranslatorInterface methods:")
+    print("  - translate_transaction_command(sql) -> str")
+    print("  - is_transaction_command(sql) -> bool")
+    print("  - parse_transaction_command(sql) -> TransactionCommand")
+    print("  - get_translation_metrics() -> Dict[str, Any]")
     print("\nContract tests will validate implementation against this interface.")
     print("Phase 1 complete - ready for Phase 2 (task generation via /tasks command)")

@@ -17,11 +17,11 @@ __author__ = "IRIS PGWire Team"
 from .type_mapping import (
     configure_type_mapping,
     configure_type_mappings,
-    get_type_mapping,
-    get_all_type_mappings,
-    reset_type_mappings,
-    load_type_mappings_from_file,
     dump_type_mappings_to_json,
+    get_all_type_mappings,
+    get_type_mapping,
+    load_type_mappings_from_file,
+    reset_type_mappings,
 )
 
 __all__ = [

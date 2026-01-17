@@ -6,11 +6,11 @@ Calculates performance metrics per FR-004:
 - Latency percentiles (P50, P95, P99)
 """
 
+
 import numpy as np
-from typing import List, Dict
 
 
-def calculate_metrics(timings: List[float]) -> Dict[str, float]:
+def calculate_metrics(timings: list[float]) -> dict[str, float]:
     """
     Calculate performance metrics from timing measurements.
 
@@ -66,7 +66,7 @@ def calculate_metrics(timings: List[float]) -> Dict[str, float]:
     }
 
 
-def calculate_category_metrics(timings_by_category: Dict[str, List[float]]) -> Dict[str, Dict[str, float]]:
+def calculate_category_metrics(timings_by_category: dict[str, list[float]]) -> dict[str, dict[str, float]]:
     """
     Calculate metrics for each query category.
 
@@ -93,10 +93,10 @@ def calculate_category_metrics(timings_by_category: Dict[str, List[float]]) -> D
 
 
 def validate_constitutional_overhead(
-    pgwire_timings: List[float],
-    iris_dbapi_timings: List[float],
+    pgwire_timings: list[float],
+    iris_dbapi_timings: list[float],
     threshold_ms: float = 5.0
-) -> Dict[str, any]:
+) -> dict[str, any]:
     """
     Validate translation overhead against constitutional requirement.
 

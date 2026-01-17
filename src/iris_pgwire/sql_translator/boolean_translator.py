@@ -16,7 +16,6 @@ Constitutional Requirements:
 """
 
 import re
-from typing import Tuple
 
 
 class BooleanTranslator:
@@ -40,7 +39,7 @@ class BooleanTranslator:
     # Group 1 captures 'true' or 'false'
     _DEFAULT_BOOL_PATTERN = re.compile(r"\bDEFAULT\s+(true|false)\b", re.IGNORECASE)
 
-    def translate(self, sql: str) -> Tuple[str, int]:
+    def translate(self, sql: str) -> tuple[str, int]:
         """
         Translate DEFAULT true/false to DEFAULT 1/0.
 
@@ -88,7 +87,7 @@ class BooleanTranslator:
 
         return "".join(result), count
 
-    def _find_protected_regions(self, sql: str) -> list[Tuple[int, int]]:
+    def _find_protected_regions(self, sql: str) -> list[tuple[int, int]]:
         """
         Find regions that should not be modified (strings and comments).
 
@@ -145,7 +144,7 @@ class BooleanTranslator:
 
         return regions
 
-    def _is_in_protected_region(self, pos: int, regions: list[Tuple[int, int]]) -> bool:
+    def _is_in_protected_region(self, pos: int, regions: list[tuple[int, int]]) -> bool:
         """Check if a position is inside any protected region."""
         for start, end in regions:
             if start <= pos < end:

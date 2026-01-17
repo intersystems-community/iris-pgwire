@@ -95,7 +95,7 @@ def check_iris_reserved_words():
                 print(f"   {keyword}: {error}")
 
         # Summary
-        print(f"\n📊 Summary:")
+        print("\n📊 Summary:")
         print(f"   Total keywords tested: {len(our_keywords)}")
         print(f"   IRIS confirms: {len(iris_confirms)}")
         print(f"   IRIS rejects: {len(iris_rejects)}")

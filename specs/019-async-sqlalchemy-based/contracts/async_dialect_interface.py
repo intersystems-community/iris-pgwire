@@ -14,8 +14,9 @@ Location: /Users/tdyar/ws/iris-pgwire/specs/019-async-sqlalchemy-based/contracts
 Related: /Users/tdyar/ws/sqlalchemy-iris/sqlalchemy_iris/psycopg.py (implementation target)
 """
 
-from typing import Protocol, Callable, Tuple, List, Dict, Type, Any
+from collections.abc import Callable
 from types import ModuleType
+from typing import Any, Protocol
 
 
 class AsyncDialectInterface(Protocol):
@@ -67,7 +68,7 @@ class AsyncDialectInterface(Protocol):
         ...
 
     @classmethod
-    def get_pool_class(cls, url: Any) -> Type:
+    def get_pool_class(cls, url: Any) -> type:
         """
         Return async connection pool class for async engine.
 
@@ -93,7 +94,7 @@ class AsyncDialectInterface(Protocol):
         """
         ...
 
-    def create_connect_args(self, url: Any) -> Tuple[List, Dict]:
+    def create_connect_args(self, url: Any) -> tuple[list, dict]:
         """
         Convert SQLAlchemy URL to psycopg async connection arguments.
 
@@ -152,7 +153,7 @@ class AsyncDialectInterface(Protocol):
         ...
 
     def do_executemany(
-        self, cursor: Any, query: str, params: List[Dict], context: Any = None
+        self, cursor: Any, query: str, params: list[dict], context: Any = None
     ) -> None:
         """
         Execute parameterized query multiple times asynchronously.
@@ -184,7 +185,7 @@ class AsyncDialectInterface(Protocol):
         """
         ...
 
-    def _get_server_version_info(self, connection: Any) -> Tuple[int, int, int]:
+    def _get_server_version_info(self, connection: Any) -> tuple[int, int, int]:
         """
         Return IRIS server version as tuple.
 
@@ -353,7 +354,7 @@ class SyncDialectResolverInterface(Protocol):
     """
 
     @classmethod
-    def get_async_dialect_cls(cls, url: Any) -> Type[AsyncDialectInterface]:
+    def get_async_dialect_cls(cls, url: Any) -> type[AsyncDialectInterface]:
         """
         Return async dialect class for create_async_engine().
 

@@ -2,8 +2,9 @@
 Integration tests for DDL idempotency.
 """
 
-import pytest
 import psycopg
+import pytest
+
 from iris_pgwire.conversions.ddl_idempotency import DdlErrorHandler
 
 # Connection configuration

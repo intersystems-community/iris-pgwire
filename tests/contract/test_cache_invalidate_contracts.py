@@ -61,7 +61,7 @@ class TestCacheInvalidateContract:
 
         # This will fail until invalidate() method is implemented
         initial_stats = populated_cache.get_stats()
-        initial_count = getattr(initial_stats, "total_entries")
+        initial_count = initial_stats.total_entries
         assert initial_count > 0, "Cache should have entries before invalidation"
 
         # Invalidate all entries (no pattern provided)
@@ -70,7 +70,7 @@ class TestCacheInvalidateContract:
         # Verify response structure matches contract
         assert hasattr(result, "invalidated_count"), "Response should include invalidated_count"
 
-        invalidated_count = getattr(result, "invalidated_count")
+        invalidated_count = result.invalidated_count
         assert isinstance(invalidated_count, int), "invalidated_count should be integer"
         assert invalidated_count == initial_count, (
             f"Should invalidate all {initial_count} entries, got {invalidated_count}"
@@ -78,7 +78,7 @@ class TestCacheInvalidateContract:
 
         # Verify cache is now empty
         final_stats = populated_cache.get_stats()
-        final_count = getattr(final_stats, "total_entries")
+        final_count = final_stats.total_entries
         assert final_count == 0, "Cache should be empty after invalidating all entries"
 
     def test_invalidate_with_pattern(self, populated_cache):
@@ -87,20 +87,20 @@ class TestCacheInvalidateContract:
             pytest.skip("Implementation not available yet")
 
         initial_stats = populated_cache.get_stats()
-        initial_count = getattr(initial_stats, "total_entries")
+        initial_count = initial_stats.total_entries
 
         # Invalidate only SELECT queries
         result = populated_cache.invalidate(pattern="SELECT%")
 
         # Verify response structure
-        invalidated_count = getattr(result, "invalidated_count")
+        invalidated_count = result.invalidated_count
         assert isinstance(invalidated_count, int), "invalidated_count should be integer"
         assert invalidated_count >= 3, "Should invalidate at least 3 SELECT queries"
         assert invalidated_count < initial_count, "Should not invalidate all entries"
 
         # Verify remaining entries
         final_stats = populated_cache.get_stats()
-        final_count = getattr(final_stats, "total_entries")
+        final_count = final_stats.total_entries
         expected_remaining = initial_count - invalidated_count
         assert final_count == expected_remaining, (
             f"Should have {expected_remaining} entries remaining, got {final_count}"
@@ -112,18 +112,18 @@ class TestCacheInvalidateContract:
             pytest.skip("Implementation not available yet")
 
         initial_stats = populated_cache.get_stats()
-        initial_count = getattr(initial_stats, "total_entries")
+        initial_count = initial_stats.total_entries
 
         # Use pattern that won't match any cached queries
         result = populated_cache.invalidate(pattern="DELETE%")
 
         # Should return 0 invalidated count
-        invalidated_count = getattr(result, "invalidated_count")
+        invalidated_count = result.invalidated_count
         assert invalidated_count == 0, "Should invalidate 0 entries for non-matching pattern"
 
         # Cache should remain unchanged
         final_stats = populated_cache.get_stats()
-        final_count = getattr(final_stats, "total_entries")
+        final_count = final_stats.total_entries
         assert final_count == initial_count, "Cache size should be unchanged"
 
     def test_invalidate_empty_cache(self, cache):
@@ -133,14 +133,14 @@ class TestCacheInvalidateContract:
 
         # Ensure cache is empty
         stats = cache.get_stats()
-        entry_count = getattr(stats, "total_entries")
+        entry_count = stats.total_entries
         assert entry_count == 0, "Cache should be empty for this test"
 
         # Invalidate empty cache
         result = cache.invalidate()
 
         # Should return 0 invalidated count
-        invalidated_count = getattr(result, "invalidated_count")
+        invalidated_count = result.invalidated_count
         assert invalidated_count == 0, "Should invalidate 0 entries from empty cache"
 
 
@@ -206,6 +206,8 @@ class TestCacheInvalidateIntegration:
 
         from iris_pgwire.sql_translator import (
             IRISSQLTranslator as SQLTranslator,
+        )
+        from iris_pgwire.sql_translator import (
             TranslationContext,
         )
 
@@ -237,6 +239,8 @@ class TestCacheInvalidateIntegration:
 
         from iris_pgwire.sql_translator import (
             IRISSQLTranslator as SQLTranslator,
+        )
+        from iris_pgwire.sql_translator import (
             TranslationContext,
         )
 
@@ -287,7 +291,7 @@ class TestCacheInvalidateIntegration:
         )
 
         # Verify all entries were invalidated
-        invalidated_count = getattr(result, "invalidated_count")
+        invalidated_count = result.invalidated_count
         assert invalidated_count > 0, "Should have invalidated some entries"
 
 

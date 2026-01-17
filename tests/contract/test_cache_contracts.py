@@ -95,10 +95,10 @@ class TestCacheStatsContract:
         stats = cache.get_stats()
 
         # Empty cache expectations
-        total_entries = getattr(stats, "total_entries")
+        total_entries = stats.total_entries
         assert total_entries == 0, "Empty cache should have 0 entries"
 
-        hit_rate = getattr(stats, "hit_rate")
+        hit_rate = stats.hit_rate
         assert hit_rate == 0.0, "Empty cache should have 0% hit rate"
 
     def test_cache_stats_with_entries(self, translator_with_cache):
@@ -124,7 +124,7 @@ class TestCacheStatsContract:
         cache = translator_with_cache.cache  # Assuming translator exposes cache
         stats = cache.get_stats()
 
-        total_entries = getattr(stats, "total_entries")
+        total_entries = stats.total_entries
         assert total_entries >= 3, "Cache should contain at least 3 entries"
 
         # Execute same queries again to test hit rate
@@ -133,7 +133,7 @@ class TestCacheStatsContract:
             translator_with_cache.translate(ctx)
 
         stats = cache.get_stats()
-        hit_rate = getattr(stats, "hit_rate")
+        hit_rate = stats.hit_rate
         assert hit_rate > 0.0, "Cache should have positive hit rate after repeated queries"
 
 
@@ -172,19 +172,19 @@ class TestCacheStatsEndpoint:
         stats = cache.get_stats()
 
         # Validate constraints from OpenAPI schema
-        hit_rate = getattr(stats, "hit_rate")
+        hit_rate = stats.hit_rate
         assert 0.0 <= hit_rate <= 1.0, f"hit_rate {hit_rate} violates constraint [0.0, 1.0]"
 
-        total_entries = getattr(stats, "total_entries")
+        total_entries = stats.total_entries
         assert total_entries >= 0, f"total_entries {total_entries} should be non-negative"
 
-        avg_lookup = getattr(stats, "average_lookup_ms")
+        avg_lookup = stats.average_lookup_ms
         assert avg_lookup >= 0, f"average_lookup_ms {avg_lookup} should be non-negative"
 
-        memory_usage = getattr(stats, "memory_usage_mb")
+        memory_usage = stats.memory_usage_mb
         assert memory_usage >= 0, f"memory_usage_mb {memory_usage} should be non-negative"
 
-        oldest_age = getattr(stats, "oldest_entry_age_minutes")
+        oldest_age = stats.oldest_entry_age_minutes
         assert oldest_age >= 0, f"oldest_entry_age_minutes {oldest_age} should be non-negative"
 
     def test_cache_performance_monitoring(self, translator_with_cache):
@@ -217,7 +217,7 @@ class TestCacheStatsEndpoint:
         cache = translator_with_cache.cache
         stats = cache.get_stats()
 
-        avg_lookup = getattr(stats, "average_lookup_ms")
+        avg_lookup = stats.average_lookup_ms
         # avg_lookup may be 0 if it's too fast, but shouldn't be None
         assert avg_lookup >= 0, "Should track actual lookup times"
 
@@ -259,10 +259,10 @@ class TestCacheStatsIntegration:
         cache = translator_with_cache.cache
         stats = cache.get_stats()
 
-        total_entries = getattr(stats, "total_entries")
+        total_entries = stats.total_entries
         assert total_entries == 5, f"Should cache 5 unique queries, got {total_entries}"
 
-        hit_rate = getattr(stats, "hit_rate")
+        hit_rate = stats.hit_rate
         # With 5 queries executed 5 times each (15 hits + 5 misses) + 2 rare queries (2 misses)
         # Expected pattern: 15 hits out of 22 total = ~68% hit rate
         # Let's adjust expectation based on actual calculation

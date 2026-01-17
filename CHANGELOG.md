@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-01-17
+
+### Added
+- **PostgreSQL DDL Compatibility Enhancement**: Implemented automatic interception and transformation of PostgreSQL-specific DDL constructs to enable seamless migrations.
+- **Generated Column Stripping**: Added support for automatically removing `GENERATED ALWAYS AS ... STORED` column definitions from `CREATE TABLE` statements.
+- **Enum Type Registration**: Added logic to skip `CREATE TYPE ... AS ENUM`, register the type name, and automatically map subsequent columns using that type to `VARCHAR(64)`.
+- **Index Dependency Tracking**: Implemented `SkippedTableSet` to track tables whose creation was skipped, ensuring dependent `CREATE INDEX` statements are also skipped.
+- **Strict DDL Mode**: Added a configurable `strict_ddl` flag (default `false`) to control whether unsupported constructs should be skipped with a warning or raise an error.
+- **Construct Stripping**: Added automatic stripping of `USING btree`, PostgreSQL type casts (`::type`), and `WITH (fillfactor)` from DDL statements.
+
 ## [1.0.6] - 2026-01-16
 
 ### Added

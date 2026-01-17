@@ -6,12 +6,12 @@ Tests the complete flow: SQL + params → optimizer → IRIS execution
 This validates T020 (E2E integration fix) without requiring PGWire server.
 """
 
-import sys
+import base64
+import math
 import os
 import random
 import struct
-import base64
-import math
+import sys
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -71,7 +71,7 @@ def main():
 
     print("\n2. Testing optimizer integration...")
     print(f"   SQL: {sql[:80]}...")
-    print(f"   Params: 1 vector parameter")
+    print("   Params: 1 vector parameter")
 
     # Execute via executor (this will trigger optimizer integration)
     import asyncio
@@ -89,7 +89,7 @@ def main():
         print(f"\n❌ Execution failed: {result['error']}")
         return False
 
-    print(f"\n3. Query execution results:")
+    print("\n3. Query execution results:")
     print(f"   Success: {result.get('success', False)}")
     print(f"   Rows returned: {result.get('row_count', 0)}")
     print(f"   Execution time: {result.get('execution_time_ms', 0):.2f}ms")

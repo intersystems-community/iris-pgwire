@@ -3,6 +3,7 @@ Unit tests for recursive JSON path building.
 """
 
 import pytest
+
 from iris_pgwire.conversions.json_path import JsonPathBuilder
 
 

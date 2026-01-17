@@ -108,7 +108,7 @@ See [Client Compatibility Guide](https://github.com/intersystems-community/iris-
 
 - **pgvector Syntax**: Use familiar `<=>` and `<#>` operators - auto-translated to IRIS VECTOR_COSINE/DOT_PRODUCT. HNSW indexes provide 5× speedup on 100K+ vectors. See [Vector Operations Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)
 
-- **ORM Compatibility**: Automatic `public` ↔ `SQLUser` schema mapping for Prisma, SQLAlchemy, Drizzle, Hibernate introspection. Catalog emulation with 6 pg_catalog tables + 5 functions. See [pg_catalog Documentation](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)
+- **ORM & DDL Compatibility**: Automatic `public` ↔ `SQLUser` schema mapping and PostgreSQL DDL transformations (stripping `fillfactor`, `GENERATED` columns, `USING btree`, etc.) for seamless migrations. See [DDL Compatibility Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DDL_COMPATIBILITY.md)
 
 - **Enterprise Security**: SCRAM-SHA-256, OAuth 2.0, IRIS Wallet authentication. Industry-standard security matching PgBouncer, YugabyteDB. See [Deployment Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)
 
@@ -201,7 +201,8 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
 - **[BI Tools Setup](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/BI_TOOLS.md)** - Superset, Metabase, Grafana integration
 
 ### Features & Capabilities
-- **[Features Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/FEATURES_OVERVIEW.md)** - pgvector, ORM compatibility, authentication
+- **[Features Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/FEATURES_OVERVIEW.md)** - pgvector, ORM compatibility, DDL transformations, authentication
+- **[DDL Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DDL_COMPATIBILITY.md)** - Automatic handling of PostgreSQL-specific DDL (fillfactor, generated columns, enums)
 - **[pg_catalog Support](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)** - 6 catalog tables + 5 functions for ORM introspection
 - **[Vector Operations](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vectors, parameter binding
 - **[Client Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md)** - 171 tests across 8 languages

@@ -155,6 +155,30 @@ class IdentifierNormalizer:
         """
         identifier_count = 0
 
+        # Feature 036: Pre-normalization transformations (before chunking)
+
+        # 1. Strip GENERATED ALWAYS AS ... STORED column definitions
+        # We do this before chunking to handle multiline/nested parens safely
+        if "GENERATED ALWAYS AS" in sql.upper():
+            # This regex matches a comma (optional), then column name and type,
+            # then the GENERATED ALWAYS AS (...) STORED clause.
+            # It's safer to just strip the clause if we can't strip the whole column easily.
+            # But the requirement says "skip column definitions".
+            # Let's try to match the whole column definition.
+            # Pattern: col_name type GENERATED ALWAYS AS (...) STORED
+            sql = re.sub(
+                r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\([^)]+\)\s*STORED",
+                "",
+                sql,
+            )
+            # Log warning
+            import logging
+
+            from .logging_config import DDL_SKIP_FORMAT
+
+            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
+            logger.warning(DDL_SKIP_FORMAT.format("GENERATED column"))
+
         # CRITICAL FIX: Exclude string literals from normalization
         # Split SQL by string literals (single-quoted strings)
         # Pattern: Match string literals with escaped quotes support
@@ -186,6 +210,44 @@ class IdentifierNormalizer:
         normalized_sql += normalized_chunk[0]
         identifier_count = normalized_chunk[1]
 
+        # Feature 036: Post-normalization stripping (safer after identifiers are handled)
+        if "USING" in normalized_sql.upper():
+            normalized_sql = re.sub(r"(?i)\s+USING\s+btree\b", "", normalized_sql)
+            # Log warning
+            import logging
+
+            from .logging_config import DDL_SKIP_FORMAT
+
+            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
+            logger.warning(DDL_SKIP_FORMAT.format("USING btree"))
+
+        if "WITH" in normalized_sql.upper() and "FILLFACTOR" in normalized_sql.upper():
+            normalized_sql = re.sub(
+                r"(?i)\s+WITH\s*\(\s*fillfactor\s*=\s*\d+\s*\)", "", normalized_sql
+            )
+            # Log warning
+            import logging
+
+            from .logging_config import DDL_SKIP_FORMAT
+
+            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
+            logger.warning(DDL_SKIP_FORMAT.format("WITH (fillfactor)"))
+
+        if "::" in normalized_sql:
+            # Strip cast syntax
+            normalized_sql = re.sub(
+                r"(?i)(\?|'(?:[^']|'')*'|\d+)::(?:\"[^\"]+\"|[\w.]+)(?:\s*\([^)]*\))?",
+                r"\1",
+                normalized_sql,
+            )
+            # Log warning
+            import logging
+
+            from .logging_config import DDL_SKIP_FORMAT
+
+            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
+            logger.warning(DDL_SKIP_FORMAT.format("Cast syntax"))
+
         return normalized_sql, identifier_count
 
     def _normalize_chunk(self, chunk: str, current_count: int) -> tuple[str, int]:
@@ -201,7 +263,7 @@ class IdentifierNormalizer:
             r"(CREATE\s+(?:TEMPORARY\s+|TEMP\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?)"
             r"(\S+)"  # Table name (will be uppercased)
             r"(\s*\()"  # Opening paren
-            r"([^)]+)"  # Column definitions (will preserve lowercase)
+            r"(.*)"  # Column definitions (will handle nested parens manually)
             r"(\))",  # Closing paren
             re.IGNORECASE | re.DOTALL,
         )
@@ -215,9 +277,33 @@ class IdentifierNormalizer:
             create_prefix = create_match.group(1).upper()  # CREATE TABLE keywords
             table_name = create_match.group(2).upper()  # Uppercase table name
             opening_paren = create_match.group(3)
-            column_defs = create_match.group(4)  # Preserve case in column definitions
-            closing_paren = create_match.group(5)
-            after_create = chunk[create_match.end() :]
+
+            # CRITICAL FIX: Find the matching closing paren for the table definition
+            # The regex group(4) now has everything until the END of the chunk
+            # because we changed [^)]+ to .*
+            full_content = create_match.group(4)
+            column_defs = ""
+            closing_paren = ")"
+            after_create = ""
+
+            paren_depth = 1  # We already matched the opening paren
+            found_end = False
+            for i, char in enumerate(full_content):
+                if char == "(":
+                    paren_depth += 1
+                elif char == ")":
+                    paren_depth -= 1
+
+                if paren_depth == 0:
+                    column_defs = full_content[:i]
+                    after_create = full_content[i + 1 :]
+                    found_end = True
+                    break
+
+            if not found_end:
+                # Fallback if no closing paren found
+                column_defs = full_content
+                after_create = ""
 
             # Normalize the before/after parts normally
             before_normalized = self._normalize_identifiers_in_chunk(

@@ -4,8 +4,9 @@ PostgreSQL + psycopg3 query executor (T017).
 Executes queries via psycopg3 against native PostgreSQL with pgvector.
 """
 
+from typing import Any
+
 import psycopg
-from typing import Any, Optional
 
 
 class PostgresExecutor:
@@ -34,7 +35,7 @@ class PostgresExecutor:
         self.database = database
         self.username = username
         self.password = password
-        self.connection: Optional[psycopg.Connection] = None
+        self.connection: psycopg.Connection | None = None
 
     def connect(self):
         """Establish connection to PostgreSQL."""
@@ -76,7 +77,7 @@ class PostgresExecutor:
             results = cursor.fetchall()
             cursor.close()
             return results
-        except Exception as e:
+        except Exception:
             cursor.close()
             raise
 

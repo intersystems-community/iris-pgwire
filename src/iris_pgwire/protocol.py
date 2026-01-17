@@ -19,8 +19,6 @@ import re
 import secrets
 import ssl
 import struct
-import datetime
-from datetime import timezone
 from typing import Any
 
 import structlog
@@ -3410,7 +3408,7 @@ class PGWireProtocol:
 
                 # Send synthetic CommandComplete immediately to client
                 # This tricks the client into sending the next row immediately.
-                tag = f"{query_upper.split()[0]} 0 1\x00".encode("utf-8")
+                tag = f"{query_upper.split()[0]} 0 1\x00".encode()
                 msg_len = 4 + len(tag)
                 self.writer.write(struct.pack("!cI", MSG_COMMAND_COMPLETE, msg_len) + tag)
                 await self.writer.drain()

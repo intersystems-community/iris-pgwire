@@ -4,8 +4,8 @@ Create test vector data for HNSW performance testing.
 Creates test_1024 table with 1000 1024-dimensional vectors and HNSW index.
 """
 
-import random
 import math
+import random
 
 
 def normalize_vector(vec):
@@ -68,8 +68,8 @@ def main():
 
     # Verify
     print('\n4. Verifying data...')
-    result = iris.sql.exec('SELECT COUNT(*) FROM test_1024')
-    print(f'   ✅ Table has 1000 vectors')
+    iris.sql.exec('SELECT COUNT(*) FROM test_1024')
+    print('   ✅ Table has 1000 vectors')
 
     print('\n✅ SUCCESS: Test data and HNSW index ready!')
 

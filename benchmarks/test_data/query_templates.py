@@ -9,10 +9,9 @@ Defines SQL query templates for three complexity categories per FR-002:
 Per FR-008: All methods execute identical query patterns.
 """
 
-from enum import Enum
 from dataclasses import dataclass
-from typing import Dict, Any, Callable
-import numpy as np
+from enum import Enum
+from typing import Any
 
 
 class QueryCategory(Enum):
@@ -160,7 +159,7 @@ COMPLEX_QUERIES = [
 ]
 
 
-def get_all_query_templates() -> Dict[QueryCategory, list[QueryTemplate]]:
+def get_all_query_templates() -> dict[QueryCategory, list[QueryTemplate]]:
     """
     Get all query templates organized by category.
 
@@ -174,7 +173,7 @@ def get_all_query_templates() -> Dict[QueryCategory, list[QueryTemplate]]:
     }
 
 
-def format_query_for_method(template: QueryTemplate, method: str, params: Dict[str, Any]) -> str:
+def format_query_for_method(template: QueryTemplate, method: str, params: dict[str, Any]) -> str:
     """
     Format query template for specific database method.
 

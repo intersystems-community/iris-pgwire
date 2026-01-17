@@ -259,7 +259,7 @@ class TestObjectIdentity:
 
     def test_object_identity_with_oid_generator(self):
         """Test using ObjectIdentity with OIDGenerator."""
-        from iris_pgwire.catalog.oid_generator import OIDGenerator, ObjectIdentity
+        from iris_pgwire.catalog.oid_generator import ObjectIdentity, OIDGenerator
 
         gen = OIDGenerator()
         identity = ObjectIdentity(

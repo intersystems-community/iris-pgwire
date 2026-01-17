@@ -4,8 +4,9 @@ Console table export for benchmark results (T022, FR-010).
 Exports benchmark results as formatted console tables using tabulate.
 """
 
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 from tabulate import tabulate
 
 from benchmarks.config import BenchmarkReport

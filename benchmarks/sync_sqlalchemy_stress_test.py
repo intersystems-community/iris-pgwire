@@ -20,9 +20,9 @@ Usage:
 
 from random import randint, random
 from time import time_ns
-import psycopg
 
-from sqlalchemy import MetaData, Table, Column, Integer, String, text, bindparam, create_engine
+import psycopg
+from sqlalchemy import Column, Integer, MetaData, String, Table, bindparam, create_engine, text
 
 # Test configuration
 ITERATIONS = 10000  # Start smaller, increase for full stress test

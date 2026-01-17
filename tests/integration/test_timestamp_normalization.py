@@ -1,6 +1,7 @@
-import pytest
-import psycopg
 from datetime import datetime
+
+import psycopg
+import pytest
 
 
 @pytest.mark.e2e

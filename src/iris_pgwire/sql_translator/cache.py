@@ -11,7 +11,7 @@ import hashlib
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timezone, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .models import (
@@ -79,7 +79,7 @@ class TranslationCache:
 
         # Performance metrics
         self._metrics = CacheMetrics()
-        self._start_time = datetime.now(timezone.utc)
+        self._start_time = datetime.now(UTC)
 
         # Constitutional monitoring
         self._sla_violations = 0
@@ -290,7 +290,7 @@ class TranslationCache:
                     "sla_violations": self._sla_violations,
                     "max_lookup_time_ms": self._max_lookup_time_ms,
                     "uptime_seconds": (
-                        datetime.now(timezone.utc) - self._start_time
+                        datetime.now(UTC) - self._start_time
                     ).total_seconds(),
                 },
                 "sample_keys": list(self._cache.keys())[:10],  # First 10 keys for debugging

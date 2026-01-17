@@ -16,7 +16,6 @@ Feature: 021-postgresql-compatible-sql
 Date: 2025-10-08
 """
 
-from typing import Tuple, Optional
 from abc import ABC, abstractmethod
 
 
@@ -172,7 +171,7 @@ class IdentifierNormalizerInterface(ABC):
     """
 
     @abstractmethod
-    def normalize(self, sql: str) -> Tuple[str, int]:
+    def normalize(self, sql: str) -> tuple[str, int]:
         """
         Normalize identifiers in SQL.
 
@@ -219,7 +218,7 @@ class DATETranslatorInterface(ABC):
     """
 
     @abstractmethod
-    def translate(self, sql: str) -> Tuple[str, int]:
+    def translate(self, sql: str) -> tuple[str, int]:
         """
         Translate DATE literals in SQL.
 
@@ -264,21 +263,18 @@ class DATETranslatorInterface(ABC):
 
 def contract_test_normalize_unquoted_identifier():
     """Contract: Unquoted identifiers MUST be converted to UPPERCASE"""
-    sql = "SELECT FirstName FROM Patients"
     # Expected: "SELECT FIRSTNAME FROM PATIENTS"
     pass
 
 
 def contract_test_preserve_quoted_identifier():
     """Contract: Quoted identifiers MUST preserve exact case"""
-    sql = 'SELECT "FirstName" FROM "Patients"'
     # Expected: 'SELECT "FirstName" FROM "Patients"' (unchanged)
     pass
 
 
 def contract_test_translate_date_literal():
     """Contract: DATE literals MUST be wrapped in TO_DATE()"""
-    sql = "WHERE DateOfBirth = '1985-03-15'"
     # Expected: "WHERE DateOfBirth = TO_DATE('1985-03-15', 'YYYY-MM-DD')"
     pass
 
@@ -293,7 +289,6 @@ def contract_test_performance_sla():
 
 def contract_test_idempotence():
     """Contract: Normalizing twice MUST yield same result as normalizing once"""
-    sql = "SELECT FirstName FROM Patients"
     # normalized_once = normalize(sql)
     # normalized_twice = normalize(normalized_once)
     # Assert: normalized_once == normalized_twice

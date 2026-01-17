@@ -13,8 +13,9 @@ Tests cover:
 Note: These tests require a mock executor that simulates INFORMATION_SCHEMA queries.
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
 
 from iris_pgwire.catalog.catalog_functions import CatalogFunctionHandler
 from iris_pgwire.catalog.oid_generator import OIDGenerator

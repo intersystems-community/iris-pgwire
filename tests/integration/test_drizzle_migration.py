@@ -2,7 +2,7 @@
 
 import pytest
 
-from iris_pgwire.sql_translator import SQLTranslator, SkipReason
+from iris_pgwire.sql_translator import SkipReason, SQLTranslator
 
 
 class TestDrizzleMigrationPatterns:
@@ -78,7 +78,7 @@ class TestDrizzleMigrationPatterns:
             "CREATE TYPE \"public\".\"workspace_invitation_status\" AS ENUM('pending', 'accepted', 'rejected')"
         )
 
-        alter_stmt = '''ALTER TABLE "workspace_invitation" 
+        alter_stmt = '''ALTER TABLE "workspace_invitation"
             ALTER COLUMN "status" SET DEFAULT 'pending'::"public"."workspace_invitation_status"'''
 
         result = translator.normalize_sql_with_result(alter_stmt)

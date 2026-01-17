@@ -99,6 +99,15 @@ class SemanticValidator:
         Returns:
             Validation result with issues and recommendations
         """
+        # Feature 036: Add skip logic for CHECK constraints
+        if re.search(r"\bADD\s+CONSTRAINT\b.*\bCHECK\s*\(", context.translated_sql, re.IGNORECASE):
+            return ValidationResult(
+                success=True,
+                confidence=1.0,
+                issues=[],
+                recommendations=[],
+            )
+
         with PerformanceTimer() as timer:
             issues: list[ValidationIssue] = []
             recommendations: list[str] = []

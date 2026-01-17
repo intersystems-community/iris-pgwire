@@ -8,19 +8,20 @@ Implements:
 """
 
 import time
-from typing import List, Dict, Any, Callable
-from datetime import datetime
 import uuid
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 
 from benchmarks.config import (
     BenchmarkConfiguration,
     BenchmarkReport,
-    PerformanceResult,
-    MethodResults,
     BenchmarkState,
-    CategoryMetrics
+    CategoryMetrics,
+    MethodResults,
+    PerformanceResult,
 )
-from benchmarks.metrics import calculate_metrics, calculate_category_metrics
+from benchmarks.metrics import calculate_category_metrics, calculate_metrics
 
 
 class BenchmarkRunner:
@@ -46,10 +47,10 @@ class BenchmarkRunner:
         """
         errors = config.validate()
         if errors:
-            raise ValueError(f"Invalid configuration:\n" + "\n".join(errors))
+            raise ValueError("Invalid configuration:\n" + "\n".join(errors))
 
         self.config = config
-        self.raw_results: List[PerformanceResult] = []
+        self.raw_results: list[PerformanceResult] = []
 
     def execute_warmup(
         self,
@@ -67,7 +68,7 @@ class BenchmarkRunner:
         """
         count = warmup_count or self.config.warmup_queries
 
-        for i in range(count):
+        for _i in range(count):
             try:
                 executor(query)
             except Exception:
@@ -145,9 +146,9 @@ class BenchmarkRunner:
         self,
         method_name: str,
         executor: Callable[[str], Any],
-        queries: Dict[str, List[str]],
+        queries: dict[str, list[str]],
         iterations: int = None
-    ) -> List[PerformanceResult]:
+    ) -> list[PerformanceResult]:
         """
         Execute all benchmark queries for a single method.
 
@@ -171,7 +172,7 @@ class BenchmarkRunner:
                 self.execute_warmup(executor, query)
 
                 # Execute iterations
-                for iteration in range(iteration_count):
+                for _iteration in range(iteration_count):
                     result = self.measure_query_execution(
                         method_name=method_name,
                         query_id=query_id,
@@ -185,7 +186,7 @@ class BenchmarkRunner:
     def aggregate_results(
         self,
         method_name: str,
-        results: List[PerformanceResult]
+        results: list[PerformanceResult]
     ) -> MethodResults:
         """
         Aggregate performance results for a single method.
@@ -240,8 +241,8 @@ class BenchmarkRunner:
 
     def run(
         self,
-        executors: Dict[str, Callable[[str], Any]],
-        queries: Dict[str, List[str]]
+        executors: dict[str, Callable[[str], Any]],
+        queries: dict[str, list[str]]
     ) -> BenchmarkReport:
         """
         Execute complete benchmark across all methods (T019).
@@ -262,7 +263,7 @@ class BenchmarkRunner:
         print(f"\n{'='*70}")
         print(f"Starting 3-Way Benchmark: {report_id}")
         print(f"{'='*70}")
-        print(f"Configuration:")
+        print("Configuration:")
         print(f"  Vector dimensions:  {self.config.vector_dimensions}")
         print(f"  Dataset size:       {self.config.dataset_size:,}")
         print(f"  Iterations:         {self.config.iterations}")

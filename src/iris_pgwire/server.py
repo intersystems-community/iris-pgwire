@@ -34,9 +34,9 @@ logger = structlog.get_logger()
 
 # Force reload of core modules BEFORE importing to bypass Python module cache
 # This ensures code changes are picked up in development without container rebuilds
+import iris_pgwire.bulk_executor
 import iris_pgwire.iris_executor
 import iris_pgwire.protocol
-import iris_pgwire.bulk_executor
 import iris_pgwire.vector_optimizer
 
 importlib.reload(iris_pgwire.iris_executor)

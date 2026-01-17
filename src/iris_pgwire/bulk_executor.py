@@ -10,12 +10,12 @@ Constitutional Requirements:
 - Principle IV: Use asyncio.to_thread() for non-blocking IRIS operations
 """
 
-import importlib
 import time
-import structlog
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
+
+import structlog
 
 from .conversions import date_to_horolog
 

@@ -3,8 +3,9 @@ Test Fixture Management Agentic Skill Integration.
 Validates FR-009, FR-010.
 """
 
-import pytest
 import os
+
+import pytest
 
 
 @pytest.mark.skip(
@@ -38,8 +39,8 @@ def test_fixture_loading(iris_fixture, iris_connection, iris_container):
 
         # Verify data in target namespace
         # (Need a connection to that namespace)
-        from iris_devtester.connections import get_connection
         from iris_devtester.config import IRISConfig
+        from iris_devtester.connections import get_connection
 
         config = iris_container.get_config()
         config.namespace = target_ns

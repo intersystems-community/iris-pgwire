@@ -3,6 +3,7 @@ Unit tests for HNSW index translation.
 """
 
 import pytest
+
 from iris_pgwire.conversions.vector_syntax import HnswIndexSpec
 
 

@@ -12,16 +12,16 @@ This module implements fixtures from specs/017-correct-testing-framework/:
 """
 
 import asyncio
+import os
 import socket
 import subprocess
-import time
 import sys
-import os
+import time
 from typing import Any, Optional
 
+import psycopg
 import pytest
 import structlog
-import psycopg
 
 # Add iris-devtester to path if it's in the expected sibling directory
 devtester_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../iris-devtester"))
@@ -338,9 +338,9 @@ def iris_fixture(iris_connection, iris_config, iris_container):
         pytest.skip("iris-devtester required for fixture management")
 
     try:
+        from iris_devtester.config import IRISConfig
         from iris_devtester.fixtures.creator import FixtureCreator
         from iris_devtester.fixtures.validator import FixtureValidator
-        from iris_devtester.config import IRISConfig
 
         # Create config from fixture
         config = IRISConfig(
@@ -364,7 +364,7 @@ def iris_fixture(iris_connection, iris_config, iris_container):
             def load(self, fixture_dir: str):
                 self.load_into(fixture_dir)
 
-            def load_into(self, fixture_dir: str, target_namespace: Optional[str] = None):
+            def load_into(self, fixture_dir: str, target_namespace: str | None = None):
                 logger.info("Loading IRIS fixture", dir=fixture_dir, target=target_namespace)
                 # Check if dir exists, if not look in tests/fixtures
                 if not os.path.exists(fixture_dir):
@@ -401,8 +401,9 @@ def pgwire_server(iris_container, iris_config):
     Start PGWire server against real IRIS for testing session in a separate thread.
     This prevents deadlocks when synchronous pgwire_client fixtures block the main thread.
     """
-    from iris_pgwire.server import PGWireServer
     import threading
+
+    from iris_pgwire.server import PGWireServer
 
     # Configure server for testing
     server = PGWireServer(
@@ -680,9 +681,9 @@ def iris_clean_namespace(embedded_iris, iris_config):
     start_time = time.perf_counter()
 
     # Query existing tables before test starts
-    namespace = iris_config["namespace"]
+    iris_config["namespace"]
     result = embedded_iris.sql.exec(
-        f"""
+        """
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = 'SQLUser'
@@ -703,7 +704,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
     try:
         # Find tables created during test
         result = embedded_iris.sql.exec(
-            f"""
+            """
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
             WHERE TABLE_SCHEMA = 'SQLUser'
