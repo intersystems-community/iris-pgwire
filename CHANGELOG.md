@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-01-17
+
+### Fixed
+- **Parameter Passing Bug**: Fixed `iris_executor.py` to correctly pass parameters to `iris.sql.exec(*params)`, enabling parameterized queries in embedded mode.
+- **Schema Case Sensitivity**: Fixed normalizer to preserve `SQLUser` casing (instead of `SQLUSER`), satisfying case-sensitive package requirements in IRIS.
+- **DDL Case Sensitivity**: Fixed `IdentifierNormalizer` to respect quoted identifier casing in `CREATE TABLE` statements, preventing "Class not found" errors during subsequent queries.
+
 ## [1.0.8] - 2026-01-17
 
 ### Added

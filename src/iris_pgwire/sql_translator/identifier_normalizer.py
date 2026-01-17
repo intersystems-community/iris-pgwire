@@ -275,7 +275,12 @@ class IdentifierNormalizer:
             # Process CREATE TABLE specially to preserve column name case
             before_create = chunk[: create_match.start()]
             create_prefix = create_match.group(1).upper()  # CREATE TABLE keywords
-            table_name = create_match.group(2).upper()  # Uppercase table name
+            # Fix: Respect quoted identifier case for table name
+            table_name_raw = create_match.group(2)
+            if table_name_raw.startswith('"') and table_name_raw.endswith('"'):
+                table_name = table_name_raw  # Quoted: preserve exact case
+            else:
+                table_name = table_name_raw.upper()  # Unquoted: uppercase for IRIS
             opening_paren = create_match.group(3)
 
             # CRITICAL FIX: Find the matching closing paren for the table definition
@@ -387,13 +392,18 @@ class IdentifierNormalizer:
                 return f'"{quoted}"'  # Return as-is
             elif unquoted is not None:
                 # Unquoted identifier - check if it's a keyword
-                if unquoted.upper() in self._sql_keywords:
+                upper_unquoted = unquoted.upper()
+                if upper_unquoted in self._sql_keywords:
                     # SQL keyword - uppercase but don't count as user identifier
-                    return unquoted.upper()
+                    return upper_unquoted
+                elif upper_unquoted == "SQLUSER":
+                    # Feature 036 Fix: Preserve SQLUser case (IRIS is case-sensitive for schema names)
+                    identifier_count += 1
+                    return "SQLUser"
                 else:
                     # User identifier - uppercase and count
                     identifier_count += 1
-                    return unquoted.upper()
+                    return upper_unquoted
 
             return match.group(0)  # Shouldn't reach here
 

@@ -1223,9 +1223,7 @@ class IRISExecutor:
 
         return statements
 
-    def _safe_execute(
-        self, sql: str, params: list | None = None, is_embedded: bool = True
-    ) -> Any:
+    def _safe_execute(self, sql: str, params: list | None = None, is_embedded: bool = True) -> Any:
         """Execute SQL with DDL idempotency handling."""
         import iris
 
@@ -1266,7 +1264,10 @@ class IRISExecutor:
         try:
             if is_embedded:
                 # Embedded mode - return cursor-like object
+                if params is not None and len(params) > 0:
+                    return iris.sql.exec(sql, *params)
                 return iris.sql.exec(sql)
+
             else:
                 # External mode - use DBAPI cursor
                 connection = self._get_pooled_connection()
@@ -2917,7 +2918,7 @@ class IRISExecutor:
                     optimized_params = tuple(self._normalize_parameters(optimized_params))
 
                 # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
-                # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
+                # Ensure we use the correct SQLUser casing
                 optimized_sql = re.sub(
                     r'"public"\s*\.\s*"(\w+)"', r'SQLUser."\1"', optimized_sql, flags=re.IGNORECASE
                 )

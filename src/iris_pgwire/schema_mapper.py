@@ -68,20 +68,31 @@ def translate_input_schema(sql: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # Pattern 2: Schema-qualified table names (e.g., public.tablename)
-    # Match public. followed by identifier (word chars) but not inside single quotes
-    # This is a simplified approach - we process the SQL outside of string literals
+    # Pattern 2: Schema-qualified table names (e.g., public.tablename or public."tablename")
+    # Match public. followed by identifier (word chars) or quoted identifier
     result = re.sub(
-        r'\bpublic\.(\w+)',
-        rf'{IRIS_SCHEMA}.\1',
+        r'\bpublic\s*\.\s*"(\w+)"',
+        rf'{IRIS_SCHEMA}."\1"',
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(
+        r"\bpublic\s*\.\s*(\w+)",
+        rf"{IRIS_SCHEMA}.\1",
         result,
         flags=re.IGNORECASE,
     )
 
-    # Pattern 3: Double-quoted schema (e.g., "public".tablename)
+    # Pattern 3: Double-quoted schema (e.g., "public".tablename or "public"."tablename")
     result = re.sub(
-        r'"public"\.(\w+)',
-        rf'{IRIS_SCHEMA}.\1',
+        r'"public"\s*\.\s*"(\w+)"',
+        rf'{IRIS_SCHEMA}."\1"',
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(
+        r'"public"\s*\.\s*(\w+)',
+        rf"{IRIS_SCHEMA}.\1",
         result,
         flags=re.IGNORECASE,
     )
