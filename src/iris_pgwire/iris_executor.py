@@ -3045,8 +3045,8 @@ class IRISExecutor:
                 # Log the actual SQL being sent to IRIS for debugging
                 logger.info(
                     "About to execute iris.sql.exec",
+                    sql=optimized_sql[:1000],  # Log first 1000 chars
                     sql_ends_with_semicolon=optimized_sql.rstrip().endswith(";"),
-                    sql_last_20=optimized_sql.rstrip()[-20:],
                     has_params=optimized_params is not None and len(optimized_params) > 0,
                     session_id=session_id,
                 )

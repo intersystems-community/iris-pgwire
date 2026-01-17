@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-17
+
+### Added
+- **IRIS Technical Reference**: Added definitive guide to `AGENTS.md` covering DBAPI connection patterns, embedded SQL parameter passing, and case-sensitivity rules.
+
+### Fixed
+- **Robust Schema Mapping**: Rewrote `translate_input_schema` to correctly preserve table name quoting and casing (e.g., `public."workflow"` -> `SQLUser."workflow"`). This resolves "Class not found" errors in IRIS when ORMs use quoted identifiers.
+- **Embedded Parameter Passing**: Ensured `iris.sql.exec` receives parameters as positional arguments using the splat operator (`*params`) in all execution paths.
+- **Redundant Translation Cleanup**: Removed conflicting schema translation regexes in `iris_executor.py` that were previously stripping quotes from identifiers.
+
 ## [1.0.9] - 2026-01-17
 
 ### Fixed

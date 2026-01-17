@@ -68,34 +68,19 @@ def translate_input_schema(sql: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # Pattern 2: Schema-qualified table names (e.g., public.tablename or public."tablename")
-    # Match public. followed by identifier (word chars) or quoted identifier
-    result = re.sub(
-        r'\bpublic\s*\.\s*"(\w+)"',
-        rf'{IRIS_SCHEMA}."\1"',
-        result,
-        flags=re.IGNORECASE,
-    )
-    result = re.sub(
-        r"\bpublic\s*\.\s*(\w+)",
-        rf"{IRIS_SCHEMA}.\1",
-        result,
-        flags=re.IGNORECASE,
-    )
+    # Combined robust pattern for public.table, "public".table, public."table", "public"."table"
+    # Matches: (optional quotes)public(optional quotes) . (optional quotes)tablename(optional quotes)
+    # Group 1: opening quote for table, Group 2: table name, Group 3: closing quote for table
+    pattern = r'(?i)\b"?public"?\s*\.\s*(")?(\w+)(")?'
 
-    # Pattern 3: Double-quoted schema (e.g., "public".tablename or "public"."tablename")
-    result = re.sub(
-        r'"public"\s*\.\s*"(\w+)"',
-        rf'{IRIS_SCHEMA}."\1"',
-        result,
-        flags=re.IGNORECASE,
-    )
-    result = re.sub(
-        r'"public"\s*\.\s*(\w+)',
-        rf"{IRIS_SCHEMA}.\1",
-        result,
-        flags=re.IGNORECASE,
-    )
+    def replace_schema(match):
+        quoted_table = match.group(1) or ""
+        table_name = match.group(2)
+        closing_quote = match.group(3) or ""
+        # Always use SQLUser (exact case) and preserve table quoting/casing
+        return f"{IRIS_SCHEMA}.{quoted_table}{table_name}{closing_quote}"
+
+    result = re.sub(pattern, replace_schema, result)
 
     return result
 
