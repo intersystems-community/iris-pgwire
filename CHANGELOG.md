@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-01-18
+
+### Fixed
+- **Vector Cast Support**: Added explicit translation for `CAST(expr AS vector)` and `expr::vector` into IRIS-native `TO_VECTOR(expr, DOUBLE)`, resolving the "'VECTOR' is not a supported CAST target" error.
+- **Function Mapping**: Integrated pgvector function name mapping (e.g., `vector_cosine_distance` → `VECTOR_COSINE`) into the unified translation pipeline.
+- **Robust Placeholder Handling**: Updated translator to convert `%s` placeholders to `?` early, preventing incorrect normalization to `%S`.
+
 ## [1.2.1] - 2026-01-17
 
 ### Fixed

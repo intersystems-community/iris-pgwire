@@ -92,34 +92,60 @@ class SQLTranslator:
         Returns:
             SQL query with IRIS ? placeholders and CAST() expressions
         """
-        if "$" not in sql and "::" not in sql:
+        if not any(marker in sql.upper() for marker in ("$", "::", "CAST", "%S")):
             return sql
 
-        # Step 1: Replace $1, $2, $3, ... with ? for IRIS parameter binding
+        # Step 1: Replace PostgreSQL placeholders ($1, $2, %s) with IRIS ? syntax
+        # This prevents IdentifierNormalizer from uppercasing %s to %S
         if "$" in sql:
             sql = re.sub(r"\$\d+", "?", sql)
+        if "%s" in sql:
+            sql = sql.replace("%s", "?")
 
-        # Step 2: Translate PostgreSQL :: type cast to IRIS CAST() function
+        # Step 2: Translate PostgreSQL type casts to IRIS syntax
+        type_map = {
+            "int": "INTEGER",
+            "int4": "INTEGER",
+            "int8": "BIGINT",
+            "text": "VARCHAR",
+            "varchar": "VARCHAR",
+            "float": "DOUBLE",
+            "float8": "DOUBLE",
+            "bool": "BIT",
+            "boolean": "BIT",
+            "vector": "VECTOR",
+        }
+
+        def replace_typecast(match):
+            expr = match.group(1).strip()
+            pg_type = match.group(2).strip().lower()
+
+            # Special handling for vector casts
+            if pg_type == "vector":
+                # IRIS uses TO_VECTOR instead of CAST(? AS VECTOR)
+                # We convert '::vector' or 'CAST(... AS vector)' to 'TO_VECTOR(..., DOUBLE)'
+                # Strip quotes if it's a literal string being cast
+                if expr.startswith("'") and expr.endswith("'"):
+                    expr_content = expr[1:-1]
+                    return f"TO_VECTOR('{expr_content}', DOUBLE)"
+                return f"TO_VECTOR({expr}, DOUBLE)"
+
+            iris_type = type_map.get(pg_type, pg_type.upper())
+            return f"CAST({expr} AS {iris_type})"
+
+        # Pattern 1: Shorthand ::type (handles ?, %s, 'literal', or 123)
         if "::" in sql:
-            type_map = {
-                "int": "INTEGER",
-                "int4": "INTEGER",
-                "int8": "BIGINT",
-                "text": "VARCHAR",
-                "varchar": "VARCHAR",
-                "float": "DOUBLE",
-                "float8": "DOUBLE",
-                "bool": "BIT",
-                "boolean": "BIT",
-            }
+            sql = re.sub(r"(\?|%s|'[^']*'|\d+)::(\w+)", replace_typecast, sql)
 
-            def replace_typecast(match):
-                expr = match.group(1)
-                pg_type = match.group(2).lower()
-                iris_type = type_map.get(pg_type, pg_type.upper())
-                return f"CAST({expr} AS {iris_type})"
+        # Pattern 2: Explicit CAST(expr AS type)
+        if "CAST" in sql.upper():
+            sql = re.sub(
+                r"(?i)\bCAST\s*\(\s*(\?|%s|'[^']*'|\d+)\s+AS\s+(\w+)\s*\)",
+                replace_typecast,
+                sql,
+            )
 
-            sql = re.sub(r"(\?|'[^']*'|\d+)::([\w]+)", replace_typecast, sql)
+        return sql
 
         return sql
 
@@ -218,6 +244,7 @@ class SQLTranslator:
         normalized_sql = self.sql_refiner.refine(normalized_sql)
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
         normalized_sql, json_count = self._translate_json_operators(normalized_sql)
+        normalized_sql, vector_fn_count = self._translate_vector_functions(normalized_sql)
         normalized_sql = self._translate_vector_types(normalized_sql)
         normalized_sql = self.default_values_translator.translate(normalized_sql)
 
@@ -229,6 +256,7 @@ class SQLTranslator:
             "identifier_count": identifier_count,
             "date_literal_count": date_count,
             "json_operator_count": json_count,
+            "vector_function_count": vector_fn_count,
             "boolean_translation_count": bool_count,
             "enum_translation_count": enum_count,
             "sla_violated": normalization_time_ms > 5.0,
@@ -241,11 +269,13 @@ class SQLTranslator:
             constructs_detected=identifier_count
             + date_count
             + json_count
+            + vector_fn_count
             + enum_count
             + bool_count,
             constructs_translated=identifier_count
             + date_count
             + json_count
+            + vector_fn_count
             + enum_count
             + bool_count,
         )
@@ -276,6 +306,28 @@ class SQLTranslator:
         # SQLTranslator already avoids string literals in other steps, but we should be robust
         result = self._json_pattern.sub(replace_json, sql)
         return result, count
+
+    def _translate_vector_functions(self, sql: str) -> tuple[str, int]:
+        """Translate pgvector function names to IRIS equivalents"""
+        count = 0
+        vector_functions = {
+            "vector_cosine_distance": "VECTOR_COSINE",
+            "cosine_distance": "VECTOR_COSINE",
+            "vector_l2_distance": "VECTOR_L2_DISTANCE",  # Error handled later if not supported
+            "l2_distance": "VECTOR_L2_DISTANCE",
+            "inner_product": "VECTOR_DOT_PRODUCT",
+            "vector_dims": "VECTOR_DIM",
+            "vector_norm": "VECTOR_NORM",
+        }
+
+        # Case-insensitive replacement
+        for pg_func, iris_func in vector_functions.items():
+            pattern = rf"\b{pg_func}\b"
+            if re.search(pattern, sql, re.IGNORECASE):
+                sql = re.sub(pattern, iris_func, sql, flags=re.IGNORECASE)
+                count += 1
+
+        return sql, count
 
     def _translate_vector_types(self, sql: str) -> str:
         """
