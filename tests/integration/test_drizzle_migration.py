@@ -31,10 +31,10 @@ class TestDrizzleMigrationPatterns:
         assert results[0].was_skipped
         assert results[1].was_skipped
         assert not results[2].was_skipped
-        assert "VARCHAR(64)" in results[2].sql
+        assert "VARCHAR(64)" in results[2].translated_sql
         assert not results[3].was_skipped
-        assert "VARCHAR(64)" in results[3].sql
-        assert "DEFAULT 1" in results[3].sql
+        assert "VARCHAR(64)" in results[3].translated_sql
+        assert "DEFAULT 1" in results[3].translated_sql
 
     def test_drizzle_rls_migration(self):
         """Drizzle disables RLS on tables during migrations."""
@@ -66,9 +66,9 @@ class TestDrizzleMigrationPatterns:
         for stmt in drizzle_statements:
             result = translator.normalize_sql_with_result(stmt)
             assert not result.was_skipped
-            assert "DEFAULT true" not in result.sql
-            assert "DEFAULT false" not in result.sql
-            assert "DEFAULT 1" in result.sql or "DEFAULT 0" in result.sql
+            assert "DEFAULT true" not in result.translated_sql
+            assert "DEFAULT false" not in result.translated_sql
+            assert "DEFAULT 1" in result.translated_sql or "DEFAULT 0" in result.translated_sql
 
     def test_drizzle_enum_with_default_cast(self):
         """Drizzle uses enum casts in default values."""
@@ -83,8 +83,8 @@ class TestDrizzleMigrationPatterns:
 
         result = translator.normalize_sql_with_result(alter_stmt)
         assert not result.was_skipped
-        assert "'pending'" in result.sql
-        assert "::" not in result.sql
+        assert "'pending'" in result.translated_sql
+        assert "::" not in result.translated_sql
 
     def test_full_drizzle_migration_sequence(self):
         """Simulate a complete Drizzle migration with all Feature 035 patterns."""
@@ -112,11 +112,11 @@ class TestDrizzleMigrationPatterns:
         assert results[0].skip_reason == SkipReason.CREATE_TYPE_ENUM
 
         assert not results[1].was_skipped
-        assert "VARCHAR(64)" in results[1].sql
-        assert "'active'" in results[1].sql
-        assert "::" not in results[1].sql
-        assert "DEFAULT 0" in results[1].sql
-        assert "DEFAULT 1" in results[1].sql
+        assert "VARCHAR(64)" in results[1].translated_sql
+        assert "'active'" in results[1].translated_sql
+        assert "::" not in results[1].translated_sql
+        assert "DEFAULT 0" in results[1].translated_sql
+        assert "DEFAULT 1" in results[1].translated_sql
 
         assert results[2].was_skipped
         assert results[2].skip_reason == SkipReason.RLS_DISABLE
@@ -169,7 +169,7 @@ class TestDrizzleMigrationCount:
         for pattern in bool_patterns:
             result = translator.normalize_sql_with_result(pattern)
             assert not result.was_skipped
-            assert "DEFAULT true" not in result.sql
-            assert "DEFAULT false" not in result.sql
-            assert "DEFAULT TRUE" not in result.sql
-            assert "DEFAULT FALSE" not in result.sql
+            assert "DEFAULT true" not in result.translated_sql
+            assert "DEFAULT false" not in result.translated_sql
+            assert "DEFAULT TRUE" not in result.translated_sql
+            assert "DEFAULT FALSE" not in result.translated_sql

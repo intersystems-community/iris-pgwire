@@ -25,7 +25,7 @@ class TestEnumWorkflowE2E:
         )"""
         result = translator.normalize_sql_with_result(create_table)
         assert not result.was_skipped
-        assert "VARCHAR(64)" in result.sql
+        assert "VARCHAR(64)" in result.translated_sql
 
         drop_type = 'DROP TYPE "permission_type"'
         result = translator.normalize_sql_with_result(drop_type)
@@ -41,8 +41,8 @@ class TestEnumWorkflowE2E:
             ALTER COLUMN "status" SET DEFAULT 'pending'::"public"."status"'''
         result = translator.normalize_sql_with_result(alter_default)
         assert not result.was_skipped
-        assert "'pending'" in result.sql
-        assert "::" not in result.sql
+        assert "'pending'" in result.translated_sql
+        assert "::" not in result.translated_sql
 
     def test_multiple_enum_types_in_session(self):
         translator = SQLTranslator()
@@ -60,7 +60,7 @@ class TestEnumWorkflowE2E:
             status "status"
         )"""
         result = translator.normalize_sql_with_result(table_sql)
-        assert result.sql.count("VARCHAR(64)") == 2
+        assert result.translated_sql.count("VARCHAR(64)") == 2
 
     def test_schema_qualified_enum_handling(self):
         translator = SQLTranslator()
