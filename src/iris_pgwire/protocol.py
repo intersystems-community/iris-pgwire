@@ -229,10 +229,10 @@ class PGWireProtocol:
                     "skip_reason": result.skip_reason,
                     "command_tag": result.command_tag,
                     "translation_used": True,
-                    "performance_stats": {
-                        "translation_time_ms": tracker.start_time
-                        and (time.perf_counter() - tracker.start_time) * 1000
-                    },
+                    "performance_stats": result.performance_stats,
+                    "construct_mappings": [],
+                    "warnings": [],
+                    "validation_result": None,
                 }
 
         except Exception as e:
@@ -1361,13 +1361,15 @@ class PGWireProtocol:
             if translation_result.get("translation_used") and translation_result.get(
                 "construct_mappings"
             ):
-                perf_stats = translation_result["performance_stats"]
+                perf_stats = translation_result.get("performance_stats", {})
                 logger.info(
                     "IRIS constructs translated",
                     connection_id=self.connection_id,
                     constructs_count=len(translation_result["construct_mappings"]),
-                    translation_time_ms=perf_stats.translation_time_ms if perf_stats else 0,
-                    cache_hit=perf_stats.cache_hit if perf_stats else False,
+                    translation_time_ms=perf_stats.get("normalization_time_ms", 0)
+                    if perf_stats
+                    else 0,
+                    cache_hit=perf_stats.get("cache_hit", False) if perf_stats else False,
                 )
 
             # Execute translated SQL against IRIS
@@ -1375,12 +1377,14 @@ class PGWireProtocol:
 
             # Add translation metadata to result for debugging/monitoring
             if translation_result.get("translation_used"):
-                perf_stats = translation_result["performance_stats"]
+                perf_stats = translation_result.get("performance_stats", {})
                 result["translation_metadata"] = {
                     "original_sql": translation_result["original_sql"],
                     "constructs_translated": len(translation_result.get("construct_mappings", [])),
-                    "translation_time_ms": perf_stats.translation_time_ms if perf_stats else 0,
-                    "cache_hit": perf_stats.cache_hit if perf_stats else False,
+                    "translation_time_ms": perf_stats.get("normalization_time_ms", 0)
+                    if perf_stats
+                    else 0,
+                    "cache_hit": perf_stats.get("cache_hit", False) if perf_stats else False,
                     "warnings": translation_result.get("warnings", []),
                 }
 
@@ -2626,10 +2630,12 @@ class PGWireProtocol:
                 "param_types": param_types,
                 "translation_metadata": {
                     "constructs_translated": len(translation_result.get("construct_mappings", [])),
-                    "translation_time_ms": translation_result[
-                        "performance_stats"
-                    ].translation_time_ms,
-                    "cache_hit": translation_result["performance_stats"].cache_hit,
+                    "translation_time_ms": translation_result.get("performance_stats", {}).get(
+                        "normalization_time_ms", 0
+                    ),
+                    "cache_hit": translation_result.get("performance_stats", {}).get(
+                        "cache_hit", False
+                    ),
                     "warnings": translation_result.get("warnings", []),
                 },
             }
@@ -2652,13 +2658,15 @@ class PGWireProtocol:
             if translation_result.get("translation_used") and translation_result.get(
                 "construct_mappings"
             ):
-                perf_stats = translation_result["performance_stats"]
+                perf_stats = translation_result.get("performance_stats", {})
                 logger.info(
                     "IRIS constructs translated in prepared statement",
                     connection_id=self.connection_id,
                     statement_name=statement_name,
                     constructs_count=len(translation_result["construct_mappings"]),
-                    translation_time_ms=perf_stats.translation_time_ms if perf_stats else 0,
+                    translation_time_ms=perf_stats.get("normalization_time_ms", 0)
+                    if perf_stats
+                    else 0,
                 )
 
             # Send ParseComplete response

@@ -19,7 +19,8 @@ Feature 035 Extension:
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from ..conversions.json_path import JsonPathBuilder
 from ..schema_mapper import translate_input_schema
@@ -42,6 +43,7 @@ class TranslationResult:
     was_skipped: bool = False
     skip_reason: SkipReason | None = None
     command_tag: str = ""
+    performance_stats: dict[str, Any] = field(default_factory=dict)
 
 
 class SQLTranslator:
@@ -192,6 +194,7 @@ class SQLTranslator:
                 was_skipped=True,
                 skip_reason=filter_result.reason,
                 command_tag=filter_result.command_tag,
+                performance_stats=self._last_metrics.copy(),
             )
 
         normalized_sql, enum_count = self.enum_translator.translate(normalized_sql)
@@ -216,9 +219,10 @@ class SQLTranslator:
             "boolean_translation_count": bool_count,
             "enum_translation_count": enum_count,
             "sla_violated": sla_violated,
+            "cache_hit": False,
         }
 
-        return TranslationResult(sql=normalized_sql)
+        return TranslationResult(sql=normalized_sql, performance_stats=self._last_metrics.copy())
 
     def _translate_json_operators(self, sql: str) -> tuple[str, int]:
         """Translate PostgreSQL JSON operators to IRIS JSON_VALUE/JSON_QUERY"""

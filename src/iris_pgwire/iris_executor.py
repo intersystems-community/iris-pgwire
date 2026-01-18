@@ -1049,23 +1049,17 @@ class IRISExecutor:
     async def _execute_embedded_async(
         self, sql: str, params: list | None = None, session_id: str | None = None
     ) -> dict[str, Any]:
-        """
-        Execute SQL using IRIS embedded Python with proper async threading
-
-        This method runs the blocking IRIS operations in a thread pool to avoid
-        blocking the event loop, following constitutional async requirements.
-        """
+        """Execute query in IRIS embedded Python environment (async wrapper)"""
 
         def _sync_execute():
             """Synchronous IRIS execution in thread pool"""
             import iris
 
-            # CRITICAL: Ensure correct namespace context in background thread (Feature 036 Fix)
-            # Embedded Python process context is thread-local or needs explicit refresh
             if hasattr(iris, "system") and hasattr(iris.system, "Process"):
                 iris.system.Process.SetNamespace(self.iris_config.get("namespace", "USER"))
 
             # Log entry to embedded execution path
+
             logger.info(
                 "🔍 EXECUTING IN EMBEDDED MODE",
                 sql_preview=sql[:100],

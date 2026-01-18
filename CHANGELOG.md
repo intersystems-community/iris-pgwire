@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] - 2026-01-17
+
+### Fixed
+- **AttributeError in Protocol**: Fixed `PGWireProtocol` to use dictionary access instead of dot notation for `performance_stats` returned by the new `SQLPipeline`.
+- **KeyError in Protocol**: Added missing `cache_hit` key to the `performance_stats` dictionary in `SQLTranslator` to prevent crashes during statement parsing.
+- **Embedded Namespace Context**: Strengthened the `SetNamespace` logic in background execution threads to ensure consistent IRIS namespace context and prevent intermittent "Class not found" errors.
+- **Redundant SQL Mapping**: Removed legacy schema translation code in `iris_executor.py` that was conflicting with the centralized `SQLPipeline`.
+
 ## [1.1.6] - 2026-01-17
 
 ### Changed
