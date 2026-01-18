@@ -57,32 +57,51 @@ def translate_input_schema(sql: str) -> str:
     if not sql:
         return sql
 
-    result = sql
+    # 1. Protect string literals to avoid replacing 'public' inside data
+    string_literal_pattern = re.compile(r"'(?:[^']|'')*'")
+    literals = []
 
-    # Pattern 1: Schema name in string literals (e.g., table_schema = 'public')
-    # Case-insensitive match for 'public', 'PUBLIC', 'Public', etc.
-    result = re.sub(
-        r"=\s*'public'",
-        f"= '{IRIS_SCHEMA}'",
-        result,
-        flags=re.IGNORECASE,
-    )
+    def store_literal(m):
+        placeholder = f"__LITERAL_{len(literals)}__"
+        literals.append(m.group(0))
+        return placeholder
 
-    # Combined robust pattern for public.table, "public".table, public."table", "public"."table"
-    # Matches: (optional quotes)public(optional quotes) . (optional quotes)tablename(optional quotes)
-    # Group 1: opening quote for table, Group 2: table name, Group 3: closing quote for table
-    pattern = r'(?i)\b"?public"?\s*\.\s*(")?(\w+)(")?'
+    protected_sql = string_literal_pattern.sub(store_literal, sql)
+
+    # 2. Replace schema references in the protected SQL
+    # Handle: public.table, "public".table, public."table", "public"."table"
+    # Group 1: table name if it was quoted, Group 2: table name if it was unquoted
+    pattern = r'(?i)(?:"public"|\bpublic\b)\s*\.\s*(?:"(\w+)"|(\w+))'
 
     def replace_schema(match):
-        quoted_table = match.group(1) or ""
-        table_name = match.group(2)
-        closing_quote = match.group(3) or ""
-        # Always use SQLUser (exact case) and preserve table quoting/casing
-        return f"{IRIS_SCHEMA}.{quoted_table}{table_name}{closing_quote}"
+        quoted_name = match.group(1)
+        unquoted_name = match.group(2)
 
-    result = re.sub(pattern, replace_schema, result)
+        if quoted_name:
+            # Table name was quoted: preserve casing and quotes
+            final_table = f'"{quoted_name}"'
+        else:
+            # Table name was unquoted: convert to uppercase and add quotes to be safe
+            final_table = f'"{unquoted_name.upper()}"'
 
-    return result
+        return f"{IRIS_SCHEMA}.{final_table}"
+
+    processed_sql = re.sub(pattern, replace_schema, protected_sql)
+
+    # 3. Handle table_schema = 'public' inside the literals we protected
+    # Actually, it's easier to just do it on the final result after restoring or specifically
+    # But wait, Pattern 1 in original code handled this.
+
+    # 4. Restore literals
+    final_sql = processed_sql
+    for i, literal in enumerate(literals):
+        placeholder = f"__LITERAL_{i}__"
+        # If the literal was 'public', translate it to IRIS_SCHEMA
+        if literal.lower() == "'public'":
+            literal = f"'{IRIS_SCHEMA}'"
+        final_sql = final_sql.replace(placeholder, literal)
+
+    return final_sql
 
 
 def translate_output_schema(

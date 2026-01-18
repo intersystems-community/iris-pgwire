@@ -46,7 +46,11 @@ PostgreSQL enum definitions are intercepted:
 If a `CREATE TABLE` statement is skipped or failed, any subsequent `CREATE INDEX` statement referencing that table will also be automatically skipped.
 - **Warning**: `[DDL-SKIP] Index on skipped table ignored`.
 
-## Implementation Details
+### 8. Identifier Case Sensitivity
+InterSystems IRIS is case-sensitive for package (schema) names and class (table) names. `iris-pgwire` ensures compatibility by:
+- Always using `SQLUser` (exact case) for the target schema.
+- Preserving the exact casing and quoting of identifiers (e.g., `public."workflow"` is correctly translated to `SQLUser."workflow"`).
+- Ensuring that tables created with quoted lowercase names can be correctly queried by ORMs using the same quotes.
 
 The DDL processor is part of the `SQLTranslator` pipeline and operates in two phases:
 1. **Pre-normalization**: Stripping complex constructs like `GENERATED ALWAYS AS`.

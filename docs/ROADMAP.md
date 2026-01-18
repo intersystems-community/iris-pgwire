@@ -1,6 +1,6 @@
 # Roadmap: IRIS PGWire Development
 
-**Last Updated**: 2025-12-27
+**Last Updated**: 2026-01-17
 **Related**: [Known Limitations](https://github.com/intersystems-community/iris-pgwire/blob/main/KNOWN_LIMITATIONS.md), [Contributing](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/developer_guide.md)
 
 ---
@@ -11,6 +11,7 @@
 - **Authentication**: SCRAM-SHA-256, OAuth 2.0, IRIS Wallet
 - **Vector Operations**: pgvector syntax (`<=>`, `<#>`), HNSW indexes
 - **COPY Protocol**: Bulk import/export with CSV format (600+ rows/sec)
+- **DDL Compatibility**: Automated transformation/skipping of PostgreSQL-specific syntax (Generated columns, Enums, Fillfactor, etc.)
 - **Transactions**: BEGIN/COMMIT/ROLLBACK with savepoints
 - **Async SQLAlchemy**: FastAPI integration, connection pooling
 - **Dual Backend Architecture**: DBAPI + Embedded Python execution paths

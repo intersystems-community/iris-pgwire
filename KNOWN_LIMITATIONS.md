@@ -501,7 +501,7 @@ Help us improve! If you find workarounds or solutions:
 5. Update this document
 
 **Priority Contributions Welcome**:
-- `pg_catalog` emulation for better tool compatibility
-- Bulk insert optimization (executemany() integration)
-- SSL/TLS wire protocol support
-- Performance improvements for large result sets
+- `pg_catalog` emulation: Add more tables/functions for additional ORMs (e.g., TypeORM, MikrORM)
+- Bulk insert optimization: True batching for COPY protocol
+- SSL/TLS wire protocol support: Native server-side TLS
+- Performance improvements for very large result sets (>1M rows)

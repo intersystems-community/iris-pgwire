@@ -1,16 +1,21 @@
 # PostgreSQL Compatibility Guide for IRIS PGWire
 
 **Version**: 1.1.0
-**Date**: 2025-11-11
-**Status**: Production-Ready with Known Limitations
+**Date**: 2026-01-17
+**Status**: Production-Ready with Enhanced DDL Compatibility
 
 ---
 
 ## Overview
 
-IRIS PGWire implements the PostgreSQL wire protocol v3.0 to enable standard PostgreSQL clients to connect to InterSystems IRIS databases. While the protocol implementation is complete, there are important differences between PostgreSQL and IRIS SQL that application developers should be aware of.
+IRIS PGWire implements the PostgreSQL wire protocol v3.0 to enable standard PostgreSQL clients to connect to InterSystems IRIS databases. While the protocol implementation is complete, there are important differences between PostgreSQL and IRIS SQL. To address this, the driver includes an automatic DDL transformation layer.
 
-**✅ What Works**: Full PostgreSQL wire protocol support (P0-P6 complete), prepared statements, transactions, COPY protocol, vector operations
+**✅ What Works**: 
+- Full PostgreSQL wire protocol support (P0-P6 complete)
+- Prepared statements and Transactions
+- COPY protocol for bulk operations
+- **Enhanced DDL Compatibility**: Automatic transformation/skipping of PostgreSQL-specific syntax (Generated columns, Enums, Fillfactor, etc.)
+- **Vector Operations**: Support for pgvector syntax mapped to IRIS Vector types.
 
 **⚠️ What's Different**: SQL syntax, column naming, available functions, metadata conventions
 
@@ -157,13 +162,15 @@ SELECT CAST('42' AS INTEGER), CAST(? AS VARCHAR)
 ```
 
 **Supported Type Mappings**:
-| PostgreSQL Type | IRIS Type |
-|----------------|-----------|
-| `int`, `int4` | `INTEGER` |
-| `int8` | `BIGINT` |
-| `text`, `varchar` | `VARCHAR` |
-| `float`, `float8` | `DOUBLE` |
-| `bool`, `boolean` | `BIT` |
+| PostgreSQL Type | IRIS Type | Note |
+|----------------|-----------|------|
+| `int`, `int4` | `INTEGER` | |
+| `int8` | `BIGINT` | |
+| `text`, `varchar` | `VARCHAR` | |
+| `float`, `float8` | `DOUBLE` | |
+| `bool`, `boolean` | `BIT` | `true`/`false` mapped to `1`/`0` |
+| `enum` | `VARCHAR(64)` | Registered during `CREATE TYPE` skip |
+| `vector(d)` | `VECTOR(FLOAT, d)` | |
 
 **Result**: Type casts work seamlessly - no client code changes needed.
 

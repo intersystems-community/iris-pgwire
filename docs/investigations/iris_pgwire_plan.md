@@ -1,8 +1,17 @@
-
 # Implementing a PostgreSQL (pgwire) Server for InterSystems IRIS  
-**Date:** 2025-09-24
+**Status:** ✅ COMPLETED (v1.1.0)
+**Last Updated:** 2026-01-17
 
-This document lays out two pragmatic implementation tracks for a PostgreSQL wire‑protocol (pgwire) server for **InterSystems IRIS**:
+## Project Status
+
+This plan has been fully executed. The **Embedded Python track** was chosen as the primary implementation path, delivering a production-ready PostgreSQL wire-protocol server for InterSystems IRIS.
+
+### Key Milestones Achieved:
+- **P0-P6 Protocol**: Full support for handshake, simple/extended query, and COPY protocol.
+- **Authentication**: SCRAM-SHA-256 and OAuth 2.0.
+- **Vector Search**: pgvector compatibility with IRIS Vector types.
+- **ORM Compatibility**: Robust schema mapping (`public` ↔ `SQLUser`) and `pg_catalog` emulation.
+- **DDL Compatibility**: Automated transformation of PostgreSQL-specific DDL (v1.1.0).
 
 1. **Embedded Python track** — protocol in Python (`asyncio`), with optional native acceleration for hot paths.  
 2. **Rust‑only track** — end‑to‑end Rust server (Tokio + `pgwire` crate), calling IRIS via your internal **rzf** ObjectScript↔Rust bridge.

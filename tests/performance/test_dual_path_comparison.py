@@ -17,6 +17,8 @@ import random
 import struct
 import time
 
+has_embedded = False
+
 
 def gen_vec(d=1024):
     """Generate normalized random vector"""

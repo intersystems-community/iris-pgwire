@@ -160,14 +160,12 @@ class IdentifierNormalizer:
         # 1. Strip GENERATED ALWAYS AS ... STORED column definitions
         # We do this before chunking to handle multiline/nested parens safely
         if "GENERATED ALWAYS AS" in sql.upper():
-            # This regex matches a comma (optional), then column name and type,
-            # then the GENERATED ALWAYS AS (...) STORED clause.
-            # It's safer to just strip the clause if we can't strip the whole column easily.
-            # But the requirement says "skip column definitions".
-            # Let's try to match the whole column definition.
+            # Robust extraction of columns to strip
             # Pattern: col_name type GENERATED ALWAYS AS (...) STORED
+            # We use a non-greedy match for the column name/type part
+            # and handled nested parens by matching until 'STORED'
             sql = re.sub(
-                r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\([^)]+\)\s*STORED",
+                r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\(.*?\)\s*STORED",
                 "",
                 sql,
             )
@@ -306,9 +304,9 @@ class IdentifierNormalizer:
                     break
 
             if not found_end:
-                # Fallback if no closing paren found
-                column_defs = full_content
-                after_create = ""
+                # Fallback: This is a partial CREATE TABLE (split by literal or incomplete)
+                # Just do normal identifier normalization on the whole chunk to avoid discarding data.
+                return self._normalize_identifiers_in_chunk(chunk, current_count)
 
             # Normalize the before/after parts normally
             before_normalized = self._normalize_identifiers_in_chunk(

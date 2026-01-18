@@ -7,8 +7,8 @@ All PyPI hygiene checks have been completed and the package is ready for publica
 ## Package Metadata
 
 - **Package Name**: `iris-pgwire`
-- **Version**: `0.1.0`
-- **Status**: Beta (Development Status :: 4 - Beta)
+- **Version**: `1.1.0`
+- **Status**: Production (Development Status :: 5 - Production/Stable)
 - **License**: MIT
 - **Python Versions**: 3.11, 3.12+
 
