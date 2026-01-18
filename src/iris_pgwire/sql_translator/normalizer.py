@@ -30,20 +30,16 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .models import (
+    ConstructMapping,
+    ConstructType,
+    PerformanceStats,
+    SourceLocation,
+    TranslationResult,
+)
 from .refiner import SQLRefiner
 from .skipped_table_set import SkippedTableSet
 from .statement_filter import SkipReason, StatementFilter
-
-
-@dataclass
-class TranslationResult:
-    """Result of SQL translation including skip information."""
-
-    sql: str
-    was_skipped: bool = False
-    skip_reason: SkipReason | None = None
-    command_tag: str = ""
-    performance_stats: dict[str, Any] = field(default_factory=dict)
 
 
 class SQLTranslator:
@@ -132,21 +128,14 @@ class SQLTranslator:
         Normalize SQL for IRIS compatibility.
 
         Args:
-            sql: Original SQL from PostgreSQL client
-            execution_path: Execution context - one of:
-                - "direct": Direct IRIS execution via iris.sql.exec()
-                - "vector": Vector-optimized execution path
-                - "external": External DBAPI connection
+            sql: SQL query string
+            execution_path: Path context (direct, prepared, etc.)
 
         Returns:
-            Normalized SQL ready for IRIS execution (empty string if statement was skipped)
-
-        Constitutional Requirements:
-        - Normalization MUST complete in < 5ms for 50 identifier references
-        - MUST be idempotent (normalizing twice yields same result)
+            Normalized SQL
         """
         result = self.normalize_sql_with_result(sql, execution_path)
-        return result.sql
+        return result.translated_sql
 
     def normalize_sql_with_result(
         self, sql: str, execution_path: str = "direct"
@@ -160,16 +149,17 @@ class SQLTranslator:
         start_time = time.perf_counter()
 
         if not sql or not sql.strip():
-            self._last_metrics = {
-                "normalization_time_ms": 0.0,
-                "identifier_count": 0,
-                "date_literal_count": 0,
-                "json_operator_count": 0,
-                "boolean_translation_count": 0,
-                "enum_translation_count": 0,
-                "sla_violated": False,
-            }
-            return TranslationResult(sql=sql)
+            perf_stats = PerformanceStats(
+                translation_time_ms=0.0,
+                cache_hit=False,
+                constructs_detected=0,
+                constructs_translated=0,
+            )
+            return TranslationResult(
+                translated_sql=sql or "",
+                construct_mappings=[],
+                performance_stats=perf_stats,
+            )
 
         normalized_sql = self.translate_postgres_parameters(sql)
         normalized_sql = translate_input_schema(normalized_sql)
@@ -180,22 +170,57 @@ class SQLTranslator:
                 self.enum_registry.register(filter_result.extracted_type_name)
 
             end_time = time.perf_counter()
-            self._last_metrics = {
-                "normalization_time_ms": (end_time - start_time) * 1000,
-                "identifier_count": 0,
-                "date_literal_count": 0,
-                "json_operator_count": 0,
-                "boolean_translation_count": 0,
-                "enum_translation_count": 0,
-                "sla_violated": False,
-            }
+            perf_stats = PerformanceStats(
+                translation_time_ms=(end_time - start_time) * 1000,
+                cache_hit=False,
+                constructs_detected=0,
+                constructs_translated=0,
+            )
             return TranslationResult(
-                sql="",
+                translated_sql="",
+                construct_mappings=[],
+                performance_stats=perf_stats,
                 was_skipped=True,
                 skip_reason=filter_result.reason,
                 command_tag=filter_result.command_tag,
-                performance_stats=self._last_metrics.copy(),
             )
+
+        normalized_sql, enum_count = self.enum_translator.translate(normalized_sql)
+        normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)
+
+        normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
+        normalized_sql = self.sql_refiner.refine(normalized_sql)
+        normalized_sql, date_count = self.date_translator.translate(normalized_sql)
+        normalized_sql, json_count = self._translate_json_operators(normalized_sql)
+        normalized_sql = self._translate_vector_types(normalized_sql)
+        normalized_sql = self.default_values_translator.translate(normalized_sql)
+
+        end_time = time.perf_counter()
+        normalization_time_ms = (end_time - start_time) * 1000
+
+        perf_stats = PerformanceStats(
+            translation_time_ms=normalization_time_ms,
+            cache_hit=False,
+            constructs_detected=identifier_count
+            + date_count
+            + json_count
+            + enum_count
+            + bool_count,
+            constructs_translated=identifier_count
+            + date_count
+            + json_count
+            + enum_count
+            + bool_count,
+        )
+
+        return TranslationResult(
+            translated_sql=normalized_sql,
+            construct_mappings=[],
+            performance_stats=perf_stats,
+            was_skipped=False,
+            skip_reason=None,
+            command_tag="",
+        )
 
         normalized_sql, enum_count = self.enum_translator.translate(normalized_sql)
         normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)

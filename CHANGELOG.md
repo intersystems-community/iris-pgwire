@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.9] - 2026-01-17
+
+### Fixed
+- **Unification of Translation Models**: Merged conflicting `TranslationResult` models. The centralized model in `models.py` is now used throughout the pipeline, ensuring consistent performance statistics and skip tracking.
+- **Protocol Stability**: Restored object attribute access for `performance_stats` in `protocol.py` after standardizing on the `PerformanceStats` model. This resolves `KeyError` and `AttributeError` crashes in the Parse message handler.
+- **Robust Skip Tracking**: Standardized `was_skipped`, `skip_reason`, and `command_tag` fields across all translation paths.
+
 ## [1.1.8] - 2026-01-17
 
 ### Fixed

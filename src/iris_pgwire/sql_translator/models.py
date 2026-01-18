@@ -337,6 +337,9 @@ class TranslationResult:
     translated_sql: str
     construct_mappings: list[ConstructMapping]
     performance_stats: PerformanceStats
+    was_skipped: bool = False
+    skip_reason: Any | None = None
+    command_tag: str = ""
     warnings: list[str] = field(default_factory=list)
     debug_trace: DebugTrace | None = None
     validation_result: ValidationResult | None = None
