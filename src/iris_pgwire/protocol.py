@@ -19,6 +19,7 @@ import re
 import secrets
 import ssl
 import struct
+import time
 from typing import Any
 
 import structlog
@@ -34,92 +35,9 @@ from .sql_translator.performance_monitor import MetricType, PerformanceTracker, 
 logger = structlog.get_logger()
 
 
-def _fix_order_by_aliases(sql: str) -> str:
-    """
-    Fix ORDER BY clauses that reference SELECT clause aliases.
-
-    IRIS doesn't support: SELECT expr AS distance ORDER BY distance
-    Must be: SELECT expr AS distance ORDER BY expr
-
-    This is critical for vector similarity queries where the SQL translator
-    may have parameterized the TO_VECTOR arguments AFTER the vector optimizer
-    already rewritten the operators.
-
-    Args:
-        sql: SQL query string potentially containing ORDER BY with aliases
-
-    Returns:
-        SQL with ORDER BY aliases replaced with actual expressions
-    """
-    logger.info("🔧 Fixing ORDER BY aliases for IRIS compatibility")
-
-    # Extract SELECT clause aliases and their expressions
-    # Pattern matches: expression AS alias_name
-    # NOTE: IRIS SQL translator adds spaces around parentheses!
-    # Example: "VECTOR_COSINE ( embedding , TO_VECTOR ( ... ) )"
-    # We need to handle nested parentheses, so we match everything from
-    # a function name up to " AS alias_name"
-    #
-    # Strategy: Find "AS alias" first, then work backwards to find the expression start
-    # Pattern: capture everything before "AS alias" in the SELECT clause
-
-    # First, split SQL to isolate the SELECT clause
-    select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql, re.IGNORECASE | re.DOTALL)
-    if not select_match:
-        logger.warning("  No SELECT...FROM clause found")
-        return sql
-
-    select_clause = select_match.group(1)
-    aliases = {}
-
-    # Find all "expression AS alias" patterns in the SELECT clause
-    # This handles nested parentheses by being greedy up to " AS "
-    alias_pattern = r"(.+?)\s+AS\s+(\w+)"
-
-    for match in re.finditer(alias_pattern, select_clause, re.IGNORECASE):
-        expression = match.group(1).strip()
-        alias = match.group(2)
-
-        # Clean up the expression - it might have leading commas or other SELECT items
-        # We want the LAST complete expression before AS
-        # Split by comma and take the last item
-        if "," in expression:
-            expression = expression.split(",")[-1].strip()
-
-        aliases[alias.lower()] = expression
-        logger.info(f"  Found alias: {alias} -> {expression[:60]}...")
-
-    if not aliases:
-        logger.warning("  No SELECT aliases found in SQL - pattern may need adjustment")
-        logger.info(f"  SQL preview: {sql[:200]}...")
-        return sql
-
-    # Replace "ORDER BY alias" with "ORDER BY expression"
-    order_by_pattern = r"ORDER\s+BY\s+(\w+)(\s+(?:ASC|DESC))?"
-
-    def replace_order_by(match):
-        alias = match.group(1).lower()
-        sort_dir = match.group(2) or ""
-
-        if alias in aliases:
-            expression = aliases[alias]
-            logger.info(f"  Replacing ORDER BY {alias} with ORDER BY {expression[:60]}...")
-            return f"ORDER BY {expression}{sort_dir}"
-        else:
-            return match.group(0)
-
-    result = re.sub(order_by_pattern, replace_order_by, sql, flags=re.IGNORECASE)
-
-    if result != sql:
-        logger.info("✅ ORDER BY aliases fixed for IRIS compatibility")
-    else:
-        logger.warning("ℹ️ No ORDER BY alias replacements made - check regex patterns")
-
-    return result
-
-
 # PostgreSQL protocol constants
 SSL_REQUEST_CODE = 80877103
+
 GSSENC_REQUEST_CODE = 80877104  # GSSAPI encryption request (0x04d21630)
 CANCEL_REQUEST_CODE = 80877102
 PROTOCOL_VERSION = 0x00030000  # PostgreSQL protocol version 3.0
@@ -281,17 +199,9 @@ class PGWireProtocol:
         self, original_sql: str, session_id: str | None = None
     ) -> dict[str, Any]:
         """
-        Translate IRIS SQL constructs to PostgreSQL equivalents
-
-        Args:
-            original_sql: Original IRIS SQL query
-            session_id: Optional session identifier for tracking
-
-        Returns:
-            Translation result with translated SQL and metadata
+        Translate PostgreSQL SQL constructs to IRIS equivalents using centralized pipeline.
         """
         if not self.enable_translation:
-            # Translation disabled - pass through original SQL
             return {
                 "success": True,
                 "original_sql": original_sql,
@@ -307,74 +217,22 @@ class PGWireProtocol:
                 session_id=session_id,
                 trace_id=f"conn_{self.connection_id}",
             ) as tracker:
-                # Create translation context
-                context = TranslationContext(
-                    original_sql=original_sql,
-                    session_id=session_id or f"conn_{self.connection_id}",
-                    enable_caching=True,
-                    enable_validation=True,
-                    enable_debug=self.translation_debug,
-                    validation_level=ValidationLevel.SEMANTIC,
+                final_sql, _, result = self.iris_executor.sql_pipeline.process(
+                    original_sql, session_id=session_id
                 )
-
-                # Perform translation
-                translation_result = self.sql_translator.translate(context)
-
-                # Log translation results
-                logger.info(
-                    "SQL translation completed",
-                    connection_id=self.connection_id,
-                    original_length=len(original_sql),
-                    translated_length=len(translation_result.translated_sql),
-                    constructs_translated=len(translation_result.construct_mappings),
-                    translation_time_ms=translation_result.performance_stats.translation_time_ms,
-                    cache_hit=translation_result.performance_stats.cache_hit,
-                )
-
-                # Check for warnings or validation issues
-                if translation_result.warnings:
-                    logger.warning(
-                        "Translation warnings",
-                        connection_id=self.connection_id,
-                        warnings=translation_result.warnings,
-                    )
-
-                if (
-                    translation_result.validation_result
-                    and not translation_result.validation_result.success
-                ):
-                    logger.warning(
-                        "Translation validation issues",
-                        connection_id=self.connection_id,
-                        validation_issues=len(translation_result.validation_result.issues),
-                    )
-
-                # Check for SLA violations
-                if tracker.violation:
-                    logger.warning(
-                        "Translation SLA violation",
-                        connection_id=self.connection_id,
-                        actual_time_ms=tracker.violation.actual_value_ms,
-                        sla_threshold_ms=tracker.violation.sla_threshold_ms,
-                    )
-
-                # CRITICAL: Fix ORDER BY aliases AFTER translation
-                # The SQL translator may have parameterized TO_VECTOR arguments,
-                # so we need to fix ORDER BY aliases on the FINAL translated SQL
-                final_sql = _fix_order_by_aliases(translation_result.translated_sql)
 
                 return {
                     "success": True,
                     "original_sql": original_sql,
                     "translated_sql": final_sql,
+                    "was_skipped": result.was_skipped,
+                    "skip_reason": result.skip_reason,
+                    "command_tag": result.command_tag,
                     "translation_used": True,
-                    "construct_mappings": translation_result.construct_mappings,
-                    "performance_stats": translation_result.performance_stats,
-                    "warnings": translation_result.warnings,
-                    "validation_result": translation_result.validation_result,
-                    "debug_trace": (
-                        translation_result.debug_trace if self.translation_debug else None
-                    ),
+                    "performance_stats": {
+                        "translation_time_ms": tracker.start_time
+                        and (time.perf_counter() - tracker.start_time) * 1000
+                    },
                 }
 
         except Exception as e:

@@ -29,6 +29,7 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .refiner import SQLRefiner
 from .skipped_table_set import SkippedTableSet
 from .statement_filter import SkipReason, StatementFilter
 
@@ -67,6 +68,7 @@ class SQLTranslator:
         self.statement_filter = StatementFilter(self.enum_registry, self.skipped_tables)
         self.enum_translator = EnumTranslator(self.enum_registry)
         self.boolean_translator = BooleanTranslator()
+        self.sql_refiner = SQLRefiner()
 
         self._json_pattern = re.compile(
             r"(\w+)(?:->>?['\"]\w+['\"]|->>?\d+|\[['\"]\w+['\"]\]|\[\d+\])+", re.IGNORECASE
@@ -196,6 +198,7 @@ class SQLTranslator:
         normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)
 
         normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
+        normalized_sql = self.sql_refiner.refine(normalized_sql)
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
         normalized_sql, json_count = self._translate_json_operators(normalized_sql)
         normalized_sql = self._translate_vector_types(normalized_sql)

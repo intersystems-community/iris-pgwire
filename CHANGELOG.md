@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2026-01-17
+
+### Changed
+- **Structural Simplification**: Decoupled 350+ lines of query interception logic from `IRISExecutor` into a dedicated `SQLInterceptor` registry.
+- **Centralized SQL Pipeline**: Implemented `SQLPipeline` to orchestrate all SQL transformations (filtering, normalization, refinement, optimization) in a single pass, ensuring consistency and preventing redundant processing.
+- **Unified SQL Refinement**: Created `SQLRefiner` to host ad-hoc IRIS-specific fixes (like the `ORDER BY` alias fix), removing redundant and inconsistent regex logic from `protocol.py` and `vector_optimizer.py`.
+
 ## [1.1.5] - 2026-01-17
 
 ### Fixed

@@ -25,6 +25,8 @@ from .conversions import (
 )
 from .schema_mapper import translate_output_schema  # Feature 030: PostgreSQL schema mapping
 from .sql_translator import (
+    SQLInterceptor,
+    SQLPipeline,
     SQLTranslator,  # Feature 021: PostgreSQL→IRIS normalization
     TransactionTranslator,
 )  # Feature 022: PostgreSQL transaction verb translation
@@ -69,8 +71,9 @@ class IRISExecutor:
         self.ddl_handler = DdlErrorHandler()
         self.ddl_splitter = DdlSplitter()
 
-        # Reusable translators to reduce overhead in hot paths
-        self.sql_translator = SQLTranslator()
+        self.sql_pipeline = SQLPipeline()
+        self.sql_interceptor = SQLInterceptor(self)
+        self.sql_translator = self.sql_pipeline.translator
         self.transaction_translator = TransactionTranslator()
 
         # Connection pool management
@@ -473,274 +476,14 @@ class IRISExecutor:
     ) -> dict[str, Any]:
         """
         Execute SQL query against IRIS with proper async threading
-
-        Args:
-            sql: SQL query string (should already be translated by protocol layer)
-            params: Optional query parameters
-            session_id: Optional session identifier for performance tracking
-
-        Returns:
-            Dictionary with query results and metadata
         """
         try:
             # Feature 022: Apply PostgreSQL→IRIS transaction verb translation FIRST
-            # This must happen before any other processing
             sql = self.transaction_translator.translate_transaction_command(sql)
 
-            # Intercept PostgreSQL system function calls and return stub results
-            sql_upper = sql.upper().strip().rstrip(";")
-
-            # DEBUG: Log sql_upper for DISCARD ALL debugging
-            if "DISCARD" in sql_upper:
-                logger.warning(
-                    f"🔍 DEBUG sql_upper check: sql_upper='{sql_upper}' | startswith('DISCARD ALL')={sql_upper.startswith('DISCARD ALL')} | equals='DISCARD ALL'={sql_upper == 'DISCARD ALL'}"
-                )
-
-            # SHOW command - Return PostgreSQL configuration values
-            if sql_upper.startswith("SHOW "):
-                param_name = sql_upper[5:].strip()  # Extract parameter name
-                logger.info("Intercepting SHOW command", param=param_name, session_id=session_id)
-                # Common PostgreSQL parameters
-                show_values = {
-                    "SERVER_VERSION": "16.0 (InterSystems IRIS)",
-                    "SERVER_VERSION_NUM": "160000",
-                    "CLIENT_ENCODING": "UTF8",
-                    "DATESTYLE": "ISO, MDY",
-                    "TIMEZONE": "UTC",
-                    "STANDARD_CONFORMING_STRINGS": "on",
-                    "INTEGER_DATETIMES": "on",
-                    "INTERVALSTYLE": "postgres",
-                }
-                value = show_values.get(param_name, "unknown")
-                return {
-                    "success": True,
-                    "rows": [[value]],
-                    "columns": [
-                        {
-                            "name": param_name.lower(),
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    ],
-                    "row_count": 1,
-                }
-
-            # Handle Prisma schema existence check query:
-            # SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = ?), version(), current_setting('server_version_num')::integer
-            # Prisma sends this to check if the target schema exists before introspection
-            # CRITICAL: Must be checked BEFORE generic CURRENT_SETTING handler
-            # CRITICAL: The ::integer cast means current_setting must return INTEGER type_oid (23), not TEXT (25)
-            if "EXISTS" in sql_upper and "PG_NAMESPACE" in sql_upper and "VERSION" in sql_upper:
-                logger.info(
-                    "Intercepting Prisma schema existence check query",
-                    sql=sql[:150],
-                    session_id=session_id,
-                )
-                # Determine which schema Prisma is checking
-                # params[0] should be the schema name (e.g., 'public')
-                # CRITICAL FIX: During Describe phase, params may be None or contain dummy values
-                # Default to True for 'public' schema which Prisma always expects to exist
-                schema_exists = True  # Default: 'public' exists
-                schema_name = "public"  # Default schema
-
-                if params and len(params) > 0 and params[0] is not None:
-                    # Actual parameter provided - validate it
-                    schema_name = params[0] if isinstance(params[0], str) else str(params[0])
-                    # Handle 'None' string that might come from str(None)
-                    if schema_name.lower() != "none":
-                        schema_exists = schema_name.lower() in [
-                            "public",
-                            "sqluser",
-                            "pg_catalog",
-                            "information_schema",
-                        ]
-                    else:
-                        # 'None' string means no param provided - default to public exists
-                        schema_name = "public"
-                        schema_exists = True
-
-                logger.info(f"Prisma checking schema '{schema_name}', exists={schema_exists}")
-
-                return {
-                    "success": True,
-                    "rows": [
-                        [
-                            schema_exists,  # EXISTS result (boolean)
-                            "PostgreSQL 16.0 (InterSystems IRIS)",  # version()
-                            160000,  # current_setting('server_version_num')::integer - MUST be int, not string!
-                        ]
-                    ],
-                    "columns": [
-                        {
-                            "name": "exists",
-                            "type_oid": 16,  # bool
-                            "type_size": 1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        },
-                        {
-                            "name": "version",
-                            "type_oid": 25,  # text
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        },
-                        {
-                            "name": "numeric_version",  # Match Prisma's expected column name
-                            "type_oid": 23,  # int4 - CRITICAL: Prisma casts to ::integer
-                            "type_size": 4,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        },
-                    ],
-                    "row_count": 1,
-                }
-
-            # Handle asyncpg type introspection query: SELECT CURRENT_SETTING('jit') AS CUR, SET_CONFIG('jit', 'off', FALSE) AS NEW
-            if "CURRENT_SETTING" in sql_upper and "SET_CONFIG" in sql_upper:
-                logger.info(
-                    "Intercepting asyncpg type introspection query",
-                    sql=sql[:150],
-                    session_id=session_id,
-                )
-                return {
-                    "success": True,
-                    "rows": [["off", "off"]],  # Two columns: CUR and NEW
-                    "columns": [
-                        {
-                            "name": "cur",
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        },
-                        {
-                            "name": "new",
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        },
-                    ],
-                    "row_count": 1,
-                }
-
-            # CURRENT_SETTING(name) - Return configuration parameter value (single call)
-            if "CURRENT_SETTING" in sql_upper:
-                logger.info(
-                    "Intercepting CURRENT_SETTING function call",
-                    sql=sql[:100],
-                    session_id=session_id,
-                )
-                return {
-                    "success": True,
-                    "rows": [["off"]],  # Return 'off' for JIT and other settings
-                    "columns": [
-                        {
-                            "name": "current_setting",
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    ],
-                    "row_count": 1,
-                }
-
-            # SET_CONFIG(name, value, is_local) - Set configuration parameter (single call)
-            if "SET_CONFIG" in sql_upper:
-                logger.info(
-                    "Intercepting SET_CONFIG function call", sql=sql[:100], session_id=session_id
-                )
-                return {
-                    "success": True,
-                    "rows": [["off"]],  # Return the value that was set
-                    "columns": [
-                        {
-                            "name": "set_config",
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    ],
-                    "row_count": 1,
-                }
-
-            # PG_ADVISORY_UNLOCK_ALL() - Release all advisory locks
-            if "PG_ADVISORY_UNLOCK_ALL" in sql_upper:
-                logger.info(
-                    "Intercepting PG_ADVISORY_UNLOCK_ALL function call",
-                    sql=sql[:100],
-                    session_id=session_id,
-                )
-                return {"success": True, "rows": [], "columns": [], "row_count": 0}
-
-            # CURRENT_DATABASE() - Return current database name
-            if "CURRENT_DATABASE" in sql_upper:
-                logger.info(
-                    "Intercepting CURRENT_DATABASE function call",
-                    sql=sql[:100],
-                    session_id=session_id,
-                )
-                # Get namespace from connection config (external mode) or embedded mode
-                namespace_name = getattr(
-                    self, "iris_namespace", "USER"
-                )  # Default to USER if not set
-                return {
-                    "success": True,
-                    "rows": [[namespace_name]],
-                    "columns": [
-                        {
-                            "name": "current_database",
-                            "type_oid": 19,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    ],
-                    "row_count": 1,
-                }
-
-            # VERSION() - Return PostgreSQL version string
-            if "VERSION()" in sql_upper or sql_upper.startswith("SELECT VERSION"):
-                logger.info(
-                    "Intercepting VERSION() function call", sql=sql[:100], session_id=session_id
-                )
-                version_string = "PostgreSQL 16.0 (InterSystems IRIS PGWire Protocol)"
-                return {
-                    "success": True,
-                    "rows": [[version_string]],
-                    "columns": [
-                        {
-                            "name": "version",
-                            "type_oid": 25,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    ],
-                    "row_count": 1,
-                }
-
-            # DISCARD ALL - PostgreSQL session reset/cleanup command
-            # Sent by Npgsql during connection teardown - IRIS doesn't support this
-            if sql_upper.startswith("DISCARD ALL") or sql_upper == "DISCARD ALL":
-                logger.info(
-                    "Intercepting DISCARD ALL command (Npgsql cleanup)",
-                    sql=sql[:100],
-                    session_id=session_id,
-                )
-                return {
-                    "success": True,
-                    "rows": [],
-                    "columns": [],
-                    "row_count": 0,
-                    "command": "DISCARD",
-                    "command_tag": "DISCARD ALL",
-                }
+            intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
+            if intercept_result.intercepted:
+                return intercept_result.result
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(

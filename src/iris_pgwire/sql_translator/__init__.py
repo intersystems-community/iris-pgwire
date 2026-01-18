@@ -19,6 +19,7 @@ from .date_translator import DATETranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .interceptor import SQLInterceptor
 from .models import (
     ConstructMapping,
     PerformanceStats,
@@ -30,6 +31,7 @@ from .models import (
 # Feature 021: PostgreSQL-Compatible SQL Normalization
 from .normalizer import SQLTranslator
 from .normalizer import TranslationResult as NormalizationResult
+from .pipeline import SQLPipeline
 from .statement_filter import FilterResult, SkipReason, StatementFilter
 
 # Feature 022: PostgreSQL Transaction Verb Compatibility
@@ -53,6 +55,8 @@ __all__ = [
     "ValidationContext",
     # PostgreSQL → IRIS normalization (Feature 021)
     "SQLTranslator",
+    "SQLPipeline",
+    "SQLInterceptor",
     "IdentifierNormalizer",
     "DATETranslator",
     # PostgreSQL → IRIS transaction verb translation (Feature 022)
