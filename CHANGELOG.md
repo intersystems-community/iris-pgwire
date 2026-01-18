@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.8] - 2026-01-17
+
+### Fixed
+- **Protocol Data Model Alignment**: Switched from object attribute to dictionary access for `performance_stats` in `protocol.py`. This fixes the `AttributeError` when processing queries.
+- **Cache Hit Metric**: Ensured `cache_hit` is always present in the performance dictionary returned by the SQL pipeline, resolving `KeyError` crashes.
+- **Authorship & License**: Updated LICENSE and documentation to correctly reflect Thomas Dyar as the author and owner.
+
 ## [1.1.7] - 2026-01-17
 
 ### Fixed
