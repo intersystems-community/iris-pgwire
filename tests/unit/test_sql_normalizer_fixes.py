@@ -13,7 +13,7 @@ class TestSQLNormalizerFixes:
         sql = "-- comment\nCREATE TABLE test (id INT);"
         # The goal is to ensure it doesn't corrupt or mis-parse
         normalized = translator.normalize_sql(sql)
-        assert "CREATE TABLE TEST" in normalized.upper()
+        assert 'CREATE TABLE SQLUser."TEST"' in normalized
 
     def test_normalize_sql_avoids_no_op_injection(self, translator):
         """Ensure no-op SELECT 1 is not injected for skipped DDL during normalization"""

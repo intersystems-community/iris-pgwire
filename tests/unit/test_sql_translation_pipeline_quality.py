@@ -53,6 +53,41 @@ async def test_protocol_translation_dictionary_mapping():
     assert hasattr(perf_stats, "cache_hit")
 
 
+@pytest.mark.asyncio
+async def test_translate_sql_exception_fallback():
+    mock_executor = MagicMock()
+    mock_executor.sql_pipeline.process.side_effect = Exception("Translation crash")
+
+    mock_reader = MagicMock()
+    mock_writer = MagicMock()
+
+    protocol = PGWireProtocol(mock_reader, mock_writer, mock_executor, "test_conn")
+
+    result = await protocol.translate_sql("SELECT 1")
+
+    assert result["success"] is False
+    assert isinstance(result["performance_stats"], PerformanceStats)
+    assert result["performance_stats"].cache_hit is False
+
+
+@pytest.mark.asyncio
+async def test_translate_sql_disabled_fallback():
+    mock_executor = MagicMock()
+
+    mock_reader = MagicMock()
+    mock_writer = MagicMock()
+
+    protocol = PGWireProtocol(mock_reader, mock_writer, mock_executor, "test_conn")
+    protocol.enable_translation = False
+
+    result = await protocol.translate_sql("SELECT 1")
+
+    assert result["success"] is True
+    assert result["translation_used"] is False
+    assert isinstance(result["performance_stats"], PerformanceStats)
+    assert result["performance_stats"].cache_hit is False
+
+
 def test_performance_stats_defaults():
     stats = PerformanceStats(
         translation_time_ms=1.5, cache_hit=True, constructs_detected=5, constructs_translated=5

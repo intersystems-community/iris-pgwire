@@ -28,7 +28,7 @@ from .bulk_executor import BulkExecutor
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
 from .iris_executor import IRISExecutor
-from .sql_translator import TranslationContext, ValidationLevel, get_translator
+from .sql_translator import PerformanceStats, TranslationContext, ValidationLevel, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 
@@ -207,7 +207,7 @@ class PGWireProtocol:
                 "original_sql": original_sql,
                 "translated_sql": original_sql,
                 "translation_used": False,
-                "performance_stats": {"translation_time_ms": 0.0},
+                "performance_stats": PerformanceStats(0.0, False, 0, 0),
             }
 
         try:
@@ -245,14 +245,13 @@ class PGWireProtocol:
                 ),
             )
 
-            # Fallback to original SQL on translation failure
             return {
                 "success": False,
                 "original_sql": original_sql,
                 "translated_sql": original_sql,  # Fallback to original
                 "translation_used": False,
                 "error": str(e),
-                "performance_stats": {"translation_time_ms": 0.0},
+                "performance_stats": PerformanceStats(0.0, False, 0, 0),
             }
 
     def translate_postgres_parameters(self, sql: str) -> str:

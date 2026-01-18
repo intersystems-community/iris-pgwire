@@ -161,7 +161,22 @@ class SQLTranslator:
                 performance_stats=perf_stats,
             )
 
-        normalized_sql = self.translate_postgres_parameters(sql)
+        # FR-001: Strip leading/trailing comments and whitespace
+        normalized_sql = sql.strip()
+        while normalized_sql.startswith("--"):
+            newline_pos = normalized_sql.find("\n")
+            if newline_pos == -1:
+                normalized_sql = ""
+                break
+            normalized_sql = normalized_sql[newline_pos + 1 :].strip()
+
+        if not normalized_sql:
+            perf_stats = PerformanceStats(0.0, False, 0, 0)
+            return TranslationResult(
+                translated_sql="", construct_mappings=[], performance_stats=perf_stats
+            )
+
+        normalized_sql = self.translate_postgres_parameters(normalized_sql)
         normalized_sql = translate_input_schema(normalized_sql)
 
         filter_result = self.statement_filter.check(normalized_sql)
@@ -170,8 +185,19 @@ class SQLTranslator:
                 self.enum_registry.register(filter_result.extracted_type_name)
 
             end_time = time.perf_counter()
+            normalization_time_ms = (end_time - start_time) * 1000
+            self._last_metrics = {
+                "normalization_time_ms": normalization_time_ms,
+                "identifier_count": 0,
+                "date_literal_count": 0,
+                "json_operator_count": 0,
+                "boolean_translation_count": 0,
+                "enum_translation_count": 0,
+                "sla_violated": normalization_time_ms > 5.0,
+                "cache_hit": False,
+            }
             perf_stats = PerformanceStats(
-                translation_time_ms=(end_time - start_time) * 1000,
+                translation_time_ms=normalization_time_ms,
                 cache_hit=False,
                 constructs_detected=0,
                 constructs_translated=0,
@@ -198,6 +224,17 @@ class SQLTranslator:
         end_time = time.perf_counter()
         normalization_time_ms = (end_time - start_time) * 1000
 
+        self._last_metrics = {
+            "normalization_time_ms": normalization_time_ms,
+            "identifier_count": identifier_count,
+            "date_literal_count": date_count,
+            "json_operator_count": json_count,
+            "boolean_translation_count": bool_count,
+            "enum_translation_count": enum_count,
+            "sla_violated": normalization_time_ms > 5.0,
+            "cache_hit": False,
+        }
+
         perf_stats = PerformanceStats(
             translation_time_ms=normalization_time_ms,
             cache_hit=False,
@@ -221,33 +258,6 @@ class SQLTranslator:
             skip_reason=None,
             command_tag="",
         )
-
-        normalized_sql, enum_count = self.enum_translator.translate(normalized_sql)
-        normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)
-
-        normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
-        normalized_sql = self.sql_refiner.refine(normalized_sql)
-        normalized_sql, date_count = self.date_translator.translate(normalized_sql)
-        normalized_sql, json_count = self._translate_json_operators(normalized_sql)
-        normalized_sql = self._translate_vector_types(normalized_sql)
-        normalized_sql = self.default_values_translator.translate(normalized_sql)
-
-        end_time = time.perf_counter()
-        normalization_time_ms = (end_time - start_time) * 1000
-        sla_violated = normalization_time_ms > 5.0
-
-        self._last_metrics = {
-            "normalization_time_ms": normalization_time_ms,
-            "identifier_count": identifier_count,
-            "date_literal_count": date_count,
-            "json_operator_count": json_count,
-            "boolean_translation_count": bool_count,
-            "enum_translation_count": enum_count,
-            "sla_violated": sla_violated,
-            "cache_hit": False,
-        }
-
-        return TranslationResult(sql=normalized_sql, performance_stats=self._last_metrics.copy())
 
     def _translate_json_operators(self, sql: str) -> tuple[str, int]:
         """Translate PostgreSQL JSON operators to IRIS JSON_VALUE/JSON_QUERY"""

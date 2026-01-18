@@ -5,7 +5,7 @@ Tests the confidence analysis system that evaluates translation quality,
 reliability, and provides actionable insights for IRIS SQL translations.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -321,7 +321,7 @@ class TestTranslationConfidenceAnalyzer:
     def test_confidence_trends_analysis(self):
         """Test confidence trends over time"""
         # Record some confidence data
-        base_time = datetime.utcnow()
+        base_time = datetime.now(UTC)
 
         # Simulate improving trend - ensure all timestamps are within the last 24 hours
         confidence_values = [0.6, 0.65, 0.7, 0.75, 0.8, 0.85]
@@ -348,7 +348,7 @@ class TestTranslationConfidenceAnalyzer:
         confidence_values = [0.9, 0.8, 0.7, 0.6, 0.3, 0.95, 0.85]
         for i, confidence in enumerate(confidence_values):
             self.analyzer._record_confidence_data(
-                datetime.utcnow() - timedelta(minutes=i), confidence, f"query_{i}"
+                datetime.now(UTC) - timedelta(minutes=i), confidence, f"query_{i}"
             )
 
         stats = self.analyzer.get_confidence_statistics()
@@ -404,7 +404,8 @@ class TestTranslationConfidenceAnalyzer:
         """Test integration with constitutional compliance requirements"""
         # Test translation that meets constitutional requirements
         compliant_result = self._create_test_result(
-            translation_time=2.0, high_confidence=True  # Under 5ms SLA
+            translation_time=2.0,
+            high_confidence=True,  # Under 5ms SLA
         )
 
         report = self.analyzer.analyze_translation_confidence(compliant_result)
@@ -413,7 +414,8 @@ class TestTranslationConfidenceAnalyzer:
 
         # Test translation that violates constitutional requirements
         non_compliant_result = self._create_test_result(
-            translation_time=8.0, high_confidence=False  # Over 5ms SLA
+            translation_time=8.0,
+            high_confidence=False,  # Over 5ms SLA
         )
 
         report_nc = self.analyzer.analyze_translation_confidence(non_compliant_result)
