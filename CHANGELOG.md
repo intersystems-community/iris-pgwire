@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-01-17
+
+### Fixed
+- **Redundant SQL Transformation**: Removed a redundant call to `translate_input_schema` in `IRISExecutor`. This prevented "double patching" where identifiers could be incorrectly nested (e.g., `SQLUser."SQLUser."TABLE""`).
+- **Namespace Context in Embedded Python**: Added explicit `SetNamespace` calls in the background threads used by `iris.sql.exec`. This ensures reliable class resolution and prevents "Class not found" errors in embedded mode.
+- **Qualified Identifier Normalization**: Updated the identifier normalizer regex and replacement logic to handle dots properly. Schema-qualified names (like `SQLUser."USER"`) are now handled as single units, ensuring consistent casing and quoting across the entire identifier.
+- **Improved CREATE TABLE Parsing**: Fixed a bug where qualified table names in `CREATE TABLE` statements (e.g., `SQLUser."workflow"`) were being incorrectly uppercased to `SQLUSER`.
+
 ## [1.1.2] - 2026-01-17
 
 ### Fixed

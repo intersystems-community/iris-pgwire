@@ -23,16 +23,13 @@ class IdentifierNormalizer:
 
     def __init__(self):
         """Initialize the identifier normalizer with compiled regex patterns"""
-        # Pattern to match identifiers (both quoted and unquoted)
-        # Matches: table names, column names, aliases, schema-qualified identifiers
-        # Handles: "QuotedIdentifier", UnquotedIdentifier, schema.table, schema.table.column
-
-        # Pattern explanation:
-        # 1. Quoted identifier: "([^"]+)" - anything between double quotes
-        # 2. Unquoted identifier: \b[a-zA-Z_][a-zA-Z0-9_]*\b - valid SQL identifier
-        # This pattern captures identifiers but needs context awareness to avoid keywords
-
-        self._identifier_pattern = re.compile(r'"([^"]+)"|(\b[a-zA-Z_][a-zA-Z0-9_]*\b)')
+        # Pattern to match identifiers (both quoted and unquoted), including schema dots
+        # Matches: "QuotedIdentifier", UnquotedIdentifier, schema.table, schema.table.column
+        # We match sequences of identifiers joined by dots as a single unit
+        # to ensure consistency in qualified name normalization.
+        self._identifier_pattern = re.compile(
+            r'((?:"[^"]+"|\b[a-zA-Z_][a-zA-Z0-9_]*\b)(?:\s*\.\s*(?:"[^"]+"|\b[a-zA-Z_][a-zA-Z0-9_]*\b))*)'
+        )
 
         # SQL keywords that should NOT be uppercased in context
         # (They're already uppercase in normalized form, but this helps with selective normalization)
@@ -81,23 +78,6 @@ class IdentifierNormalizer:
             "DEFAULT",
             "AUTO_INCREMENT",
             "SERIAL",
-            "VARCHAR",
-            "INT",
-            "INTEGER",
-            "BIGINT",
-            "SMALLINT",
-            "DECIMAL",
-            "NUMERIC",
-            "FLOAT",
-            "DOUBLE",
-            "DATE",
-            "TIME",
-            "TIMESTAMP",
-            "BOOLEAN",
-            "BOOL",
-            "TEXT",
-            "CHAR",
-            "VECTOR",
             "CASCADE",
             "RESTRICT",
             "NO",
@@ -135,6 +115,32 @@ class IdentifierNormalizer:
             "NULLIF",
             "GREATEST",
             "LEAST",
+        }
+
+        self._data_types = {
+            "INT",
+            "INTEGER",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "VARCHAR",
+            "CHAR",
+            "TEXT",
+            "LONGVARCHAR",
+            "DOUBLE",
+            "FLOAT",
+            "NUMERIC",
+            "DECIMAL",
+            "DATE",
+            "TIME",
+            "TIMESTAMP",
+            "BIT",
+            "BOOLEAN",
+            "BOOL",
+            "VARBINARY",
+            "BINARY",
+            "LONGVARBINARY",
+            "VECTOR",
         }
 
     def normalize(self, sql: str) -> tuple[str, int]:
@@ -269,9 +275,20 @@ class IdentifierNormalizer:
             # Process CREATE TABLE specially to preserve column name case
             before_create = chunk[: create_match.start()]
             create_prefix = create_match.group(1).upper()  # CREATE TABLE keywords
-            # Fix: Respect quoted identifier case for table name
             table_name_raw = create_match.group(2)
-            if table_name_raw.startswith('"') and table_name_raw.endswith('"'):
+            # Handle qualified names (schema.table) or quoted names
+            if "." in table_name_raw:
+                parts = []
+                for part in table_name_raw.split("."):
+                    part = part.strip()
+                    if part.startswith('"') and part.endswith('"'):
+                        parts.append(part)  # Quoted: preserve case
+                    elif part.upper() == "SQLUSER":
+                        parts.append("SQLUser")  # Fix casing for IRIS
+                    else:
+                        parts.append(part.upper())  # Unquoted: uppercase
+                table_name = ".".join(parts)
+            elif table_name_raw.startswith('"') and table_name_raw.endswith('"'):
                 table_name = table_name_raw  # Quoted: preserve exact case
             else:
                 table_name = table_name_raw.upper()  # Unquoted: uppercase for IRIS
@@ -360,46 +377,49 @@ class IdentifierNormalizer:
             match_start = match.start()
             match_end = match.end()
 
+            full_id = match.group(1)
+
             for sp_start, sp_end in savepoint_ranges:
                 # If this identifier overlaps with a savepoint identifier range
                 if match_start >= sp_start and match_end <= sp_end:
                     # Preserve original case for SAVEPOINT identifiers
-                    quoted = match.group(1)
-                    unquoted = match.group(2)
+                    identifier_count += 1
+                    return full_id
 
-                    if quoted is not None:
+            # Not a SAVEPOINT identifier - normalize parts
+            if "." in full_id:
+                parts = []
+                for part in full_id.split("."):
+                    part = part.strip()
+                    if part.startswith('"') and part.endswith('"'):
                         identifier_count += 1
-                        return f'"{quoted}"'  # Preserve quoted
-                    elif unquoted is not None:
-                        identifier_count += 1
-                        return unquoted  # Preserve original case!
+                        parts.append(part)
+                    else:
+                        upper = part.upper()
+                        if upper in self._sql_keywords:
+                            parts.append(upper)
+                        elif upper == "SQLUSER":
+                            identifier_count += 1
+                            parts.append("SQLUser")
+                        else:
+                            identifier_count += 1
+                            parts.append(upper)
+                return ".".join(parts)
 
-                    return match.group(0)
-
-            # Not a SAVEPOINT identifier - use original logic
-            quoted = match.group(1)
-            unquoted = match.group(2)
-
-            if quoted is not None:
-                # Quoted identifier - preserve exact case
+            # Simple identifier
+            if full_id.startswith('"') and full_id.endswith('"'):
                 identifier_count += 1
-                return f'"{quoted}"'  # Return as-is
-            elif unquoted is not None:
-                # Unquoted identifier - check if it's a keyword
-                upper_unquoted = unquoted.upper()
-                if upper_unquoted in self._sql_keywords:
-                    # SQL keyword - uppercase but don't count as user identifier
-                    return upper_unquoted
-                elif upper_unquoted == "SQLUSER":
-                    # Feature 036 Fix: Preserve SQLUser case (IRIS is case-sensitive for schema names)
-                    identifier_count += 1
-                    return "SQLUser"
-                else:
-                    # User identifier - uppercase and count
-                    identifier_count += 1
-                    return upper_unquoted
+                return full_id
 
-            return match.group(0)  # Shouldn't reach here
+            upper = full_id.upper()
+            if upper in self._sql_keywords:
+                return upper
+            elif upper == "SQLUSER":
+                identifier_count += 1
+                return "SQLUser"
+            else:
+                identifier_count += 1
+                return upper
 
         normalized_chunk = self._identifier_pattern.sub(replace_identifier, chunk)
 
@@ -418,59 +438,43 @@ class IdentifierNormalizer:
         def replace_in_column_def(match):
             nonlocal identifier_count
 
-            quoted = match.group(1)
-            unquoted = match.group(2)
+            full_id = match.group(1)
 
-            if quoted is not None:
+            # Handle qualified types/defaults
+            if "." in full_id:
+                parts = []
+                for part in full_id.split("."):
+                    part = part.strip()
+                    if part.startswith('"') and part.endswith('"'):
+                        identifier_count += 1
+                        parts.append(part)
+                    else:
+                        upper = part.upper()
+                        if upper in self._sql_keywords or upper in self._data_types:
+                            parts.append(upper)
+                        else:
+                            # Preservation of lowercase column names happens at level above
+                            # But here we are in a part of a qualified name.
+                            # Usually schemas and tables in qualified names are uppercased for IRIS
+                            # unless quoted.
+                            identifier_count += 1
+                            parts.append(upper)
+                return ".".join(parts)
+
+            if full_id.startswith('"') and full_id.endswith('"'):
                 # Quoted identifier - preserve exact case
                 identifier_count += 1
-                return f'"{quoted}"'
-            elif unquoted is not None:
-                # Check if it's a SQL keyword or data type
-                upper = unquoted.upper()
-                if upper in self._sql_keywords or upper in {
-                    "INT",
-                    "INTEGER",
-                    "BIGINT",
-                    "SMALLINT",
-                    "TINYINT",
-                    "VARCHAR",
-                    "CHAR",
-                    "TEXT",
-                    "LONGVARCHAR",
-                    "DOUBLE",
-                    "FLOAT",
-                    "NUMERIC",
-                    "DECIMAL",
-                    "DATE",
-                    "TIME",
-                    "TIMESTAMP",
-                    "BIT",
-                    "BOOLEAN",
-                    "BOOL",
-                    "VARBINARY",
-                    "BINARY",
-                    "LONGVARBINARY",
-                    "PRIMARY",
-                    "KEY",
-                    "FOREIGN",
-                    "REFERENCES",
-                    "NOT",
-                    "NULL",
-                    "DEFAULT",
-                    "AUTO_INCREMENT",
-                    "UNIQUE",
-                    "CHECK",
-                    "CONSTRAINT",
-                }:
-                    # SQL keyword or data type - uppercase
-                    return upper
-                else:
-                    # Column name - preserve lowercase, count as identifier
-                    identifier_count += 1
-                    return unquoted.lower()
+                return full_id
 
-            return match.group(0)
+            # Check if it's a SQL keyword or data type
+            upper = full_id.upper()
+            if upper in self._sql_keywords or upper in self._data_types:
+                # SQL keyword or data type - uppercase
+                return upper
+            else:
+                # Column name - preserve lowercase, count as identifier
+                identifier_count += 1
+                return full_id.lower()
 
         normalized = self._identifier_pattern.sub(replace_in_column_def, column_defs)
         return normalized, identifier_count

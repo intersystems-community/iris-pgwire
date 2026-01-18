@@ -1317,6 +1317,11 @@ class IRISExecutor:
             """Synchronous IRIS execution in thread pool"""
             import iris
 
+            # CRITICAL: Ensure correct namespace context in background thread (Feature 036 Fix)
+            # Embedded Python process context is thread-local or needs explicit refresh
+            if hasattr(iris, "system") and hasattr(iris.system, "Process"):
+                iris.system.Process.SetNamespace(self.iris_config.get("namespace", "USER"))
+
             # Log entry to embedded execution path
             logger.info(
                 "🔍 EXECUTING IN EMBEDDED MODE",
@@ -2912,9 +2917,6 @@ class IRISExecutor:
                 from .schema_mapper import translate_input_schema
 
                 original_sql_for_log = optimized_sql[:80]
-
-                # Use centralized schema mapper for robust translation (Feature 036 Fix)
-                optimized_sql = translate_input_schema(optimized_sql)
 
                 # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
                 if optimized_params:
