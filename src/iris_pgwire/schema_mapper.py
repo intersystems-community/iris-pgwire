@@ -41,23 +41,19 @@ SCHEMA_COLUMNS = frozenset({"table_schema", "schema_name", "nspname"})
 
 def translate_input_schema(sql: str) -> str:
     """
-    Replace 'public' with configured IRIS schema in incoming queries.
-
-    Handles:
-    - WHERE table_schema = 'public' (case-insensitive)
-    - FROM public.tablename
-    - public. prefix in identifiers
+    Replace mapped schemas (like 'public' or 'drizzle') with configured IRIS schema.
+    Also ensures table names are correctly formatted for IRIS.
 
     Args:
         sql: SQL query string
 
     Returns:
-        SQL with 'public' schema references replaced with IRIS_SCHEMA
+        SQL with schema references replaced and table names normalized
     """
     if not sql:
         return sql
 
-    # 1. Protect string literals to avoid replacing 'public' inside data
+    # 1. Protect string literals
     string_literal_pattern = re.compile(r"'(?:[^']|'')*'")
     literals = []
 
@@ -68,36 +64,47 @@ def translate_input_schema(sql: str) -> str:
 
     protected_sql = string_literal_pattern.sub(store_literal, sql)
 
-    # 2. Replace schema references in the protected SQL
-    # Handle: public.table, "public".table, public."table", "public"."table"
-    # Group 1: opening quote for schema
-    # Group 2: opening quote for table, Group 3: table name
-    pattern = r'(?i)(?:"public"|\bpublic\b)\s*\.\s*(?:"(\w+)"|(\w+))'
+    # 2. Replace mapped schemas (e.g., public.table -> SQLUser."TABLE")
+    schemas = "|".join(re.escape(s) for s in SCHEMA_MAP.keys())
+    # Match schema.table with various quoting combinations
+    schema_pattern = rf'(?i)(?<![\w"])(?:"({schemas})"|({schemas}))\s*\.\s*(?:"(\w+)"|(\w+))'
 
     def replace_schema(match):
-        quoted_name = match.group(1)
-        unquoted_name = match.group(2)
+        table_name = match.group(3) or match.group(4)
+        return f'{IRIS_SCHEMA}."{table_name.upper()}"'
 
-        if quoted_name:
-            # Table name was quoted: preserve casing and quotes
-            final_table = f'"{quoted_name}"'
-        else:
-            # Table name was unquoted: convert to uppercase and add quotes to be safe
-            final_table = f'"{unquoted_name.upper()}"'
+    processed_sql = re.sub(schema_pattern, replace_schema, protected_sql)
 
-        return f"{IRIS_SCHEMA}.{final_table}"
+    # 3. Handle bare table names (e.g., FROM table -> FROM SQLUser."TABLE")
+    table_keywords = r"FROM|JOIN|UPDATE|INTO|TABLE|DELETE\s+FROM"
+    # Match keyword followed by table name, but NOT if it has a schema prefix or suffix
+    bare_table_pattern = rf'(?i)\b({table_keywords})\s+(?<!\.)(?!(?:"?{IRIS_SCHEMA}"?)\b)(?:"(\w+)"|(\b\w+\b))(?!\s*\.)'
 
-    processed_sql = re.sub(pattern, replace_schema, protected_sql)
+    def replace_bare_table(match):
+        keyword = match.group(1)
+        table_name = match.group(2) or match.group(3)
+        # Skip if it's a known SQL keyword
+        if table_name.upper() in {
+            "SELECT",
+            "VALUES",
+            "SET",
+            "WHERE",
+            "GROUP",
+            "ORDER",
+            "LIMIT",
+            "AND",
+            "OR",
+            "ON",
+        }:
+            return match.group(0)
+        return f'{keyword} {IRIS_SCHEMA}."{table_name.upper()}"'
 
-    # 3. Handle table_schema = 'public' inside the literals we protected
-    # Actually, it's easier to just do it on the final result after restoring or specifically
-    # But wait, Pattern 1 in original code handled this.
+    processed_sql = re.sub(bare_table_pattern, replace_bare_table, processed_sql)
 
     # 4. Restore literals
     final_sql = processed_sql
     for i, literal in enumerate(literals):
         placeholder = f"__LITERAL_{i}__"
-        # If the literal was 'public', translate it to IRIS_SCHEMA
         if literal.lower() == "'public'":
             literal = f"'{IRIS_SCHEMA}'"
         final_sql = final_sql.replace(placeholder, literal)
