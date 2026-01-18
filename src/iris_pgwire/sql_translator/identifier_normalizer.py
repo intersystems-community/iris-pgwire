@@ -25,10 +25,9 @@ class IdentifierNormalizer:
         """Initialize the identifier normalizer with compiled regex patterns"""
         # Pattern to match identifiers (both quoted and unquoted), including schema dots
         # Matches: "QuotedIdentifier", UnquotedIdentifier, schema.table, schema.table.column
-        # We match sequences of identifiers joined by dots as a single unit
-        # to ensure consistency in qualified name normalization.
+        # Improved version: handles whitespace around dots and ensures single-unit matching
         self._identifier_pattern = re.compile(
-            r'((?:"[^"]+"|\b[a-zA-Z_][a-zA-Z0-9_]*\b)(?:\s*\.\s*(?:"[^"]+"|\b[a-zA-Z_][a-zA-Z0-9_]*\b))*)'
+            r'((?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))*)'
         )
 
         # SQL keywords that should NOT be uppercased in context

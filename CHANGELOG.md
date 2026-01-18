@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-01-17
+
+### Fixed
+- **Robust Identifier Normalization**: Removed word boundaries from the `IdentifierNormalizer` regex to ensure qualified names (e.g., `SQLUser."WORKFLOW"`) are always matched as a single unit, even with complex quoting or whitespace around dots.
+- **Idempotent Bare Table Mapping**: Added a look-back check in `schema_mapper.py` to prevent double-prefixing of tables (e.g., `SQLUser.SQLUser."TABLE"`) when the schema is already present but separated by whitespace.
+- **Improved SAVEPOINT Handling**: Ensured savepoint identifiers are matched correctly within the new unified identifier pattern.
+
+## [1.1.4] - 2026-01-17
+
+### Changed
+- **Author Update**: Formally updated `__author__` to Thomas Dyar.
+- **Status Update**: Promoted package to "Stable/Production" status.
+
 ## [1.1.3] - 2026-01-17
 
 ### Fixed

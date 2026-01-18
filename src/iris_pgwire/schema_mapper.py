@@ -77,12 +77,22 @@ def translate_input_schema(sql: str) -> str:
 
     # 3. Handle bare table names (e.g., FROM table -> FROM SQLUser."TABLE")
     table_keywords = r"FROM|JOIN|UPDATE|INTO|TABLE|DELETE\s+FROM"
-    # Match keyword followed by table name, but NOT if it has a schema prefix or suffix
-    bare_table_pattern = rf'(?i)\b({table_keywords})\s+(?<!\.)(?!(?:"?{IRIS_SCHEMA}"?)\b)(?:"(\w+)"|(\b\w+\b))(?!\s*\.)'
+    # Improved pattern: keyword followed by identifier, ensuring it's not already prefixed
+    # even if there's whitespace around the dot.
+    bare_table_pattern = rf'(?i)\b({table_keywords})\s+(?:"(\w+)"|(\b\w+\b))(?!\s*\.)'
 
     def replace_bare_table(match):
         keyword = match.group(1)
         table_name = match.group(2) or match.group(3)
+
+        # IDEMPOTENCY CHECK: Look back in the full string to see if this table is already prefixed
+        # We check the part of the string immediately before the current match
+        full_match_start = match.start()
+        prefix_candidate = processed_sql[max(0, full_match_start - 20) : full_match_start].rstrip()
+
+        if prefix_candidate.endswith(".") or prefix_candidate.upper().endswith(IRIS_SCHEMA.upper()):
+            return match.group(0)
+
         # Skip if it's a known SQL keyword
         if table_name.upper() in {
             "SELECT",
@@ -97,6 +107,11 @@ def translate_input_schema(sql: str) -> str:
             "ON",
         }:
             return match.group(0)
+
+        # Also skip if it's already the IRIS_SCHEMA itself (unquoted)
+        if table_name.upper() == IRIS_SCHEMA.upper():
+            return match.group(0)
+
         return f'{keyword} {IRIS_SCHEMA}."{table_name.upper()}"'
 
     processed_sql = re.sub(bare_table_pattern, replace_bare_table, processed_sql)
