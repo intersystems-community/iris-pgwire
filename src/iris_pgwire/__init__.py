@@ -6,8 +6,8 @@ Based on the specification from docs/iris_pgwire_plan.md and proven patterns fro
 caretdev/sqlalchemy-iris.
 """
 
-__version__ = "1.1.3"
-__author__ = "IRIS PGWire Team"
+__version__ = "1.1.4"
+__author__ = "Thomas Dyar <thomas.dyar@intersystems.com>"
 
 # Don't import server/protocol in __init__ to avoid sys.modules conflicts
 # when running with python -m iris_pgwire.server
