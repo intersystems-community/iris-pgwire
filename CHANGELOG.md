@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-01-17
+
+### Fixed
+- **Robust Schema Mapping**: Rewrote `translate_input_schema` to correctly handle double-quoted schema names (e.g., `"public"."table"`). Previously, word boundaries caused a dangling quote issue (e.g., `"SQLUser."table"`).
+- **Reserved Word Conflict Protection**: Added automatic quoting and uppercasing for unquoted table names during schema mapping. This ensures that tables like `user` (an IRIS reserved word) are correctly translated to `SQLUser."USER"`.
+- **Centralized Mapping in Executor**: Integrated the centralized `translate_input_schema` into `iris_executor.py`, ensuring consistent behavior between embedded and DBAPI modes.
+- **Robust Generated Column Stripping**: Updated regex to handle multiline column definitions and nested parentheses more reliably.
+
 ## [1.1.0] - 2026-01-17
 
 ### Added

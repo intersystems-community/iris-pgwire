@@ -2908,24 +2908,18 @@ class IRISExecutor:
                     )
 
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma sends: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
-                import re
+                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
+                from .schema_mapper import translate_input_schema
 
                 original_sql_for_log = optimized_sql[:80]
+
+                # Use centralized schema mapper for robust translation (Feature 036 Fix)
+                optimized_sql = translate_input_schema(optimized_sql)
 
                 # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
                 if optimized_params:
                     optimized_params = tuple(self._normalize_parameters(optimized_params))
 
-                # Replace "public"."tablename" with SQLUser."tablename" (preserve quotes on tablename)
-                # Ensure we use the correct SQLUser casing
-                optimized_sql = re.sub(
-                    r'"public"\s*\.\s*"(\w+)"', r'SQLUser."\1"', optimized_sql, flags=re.IGNORECASE
-                )
-                # Also handle public."tablename" without quotes on public
-                optimized_sql = re.sub(
-                    r'\bpublic\s*\.\s*"(\w+)"', r'SQLUser."\1"', optimized_sql, flags=re.IGNORECASE
-                )
                 if original_sql_for_log != optimized_sql[:80]:
                     logger.info(
                         "Schema translation applied: public -> SQLUser",

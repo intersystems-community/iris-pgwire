@@ -70,7 +70,8 @@ def translate_input_schema(sql: str) -> str:
 
     # 2. Replace schema references in the protected SQL
     # Handle: public.table, "public".table, public."table", "public"."table"
-    # Group 1: table name if it was quoted, Group 2: table name if it was unquoted
+    # Group 1: opening quote for schema
+    # Group 2: opening quote for table, Group 3: table name
     pattern = r'(?i)(?:"public"|\bpublic\b)\s*\.\s*(?:"(\w+)"|(\w+))'
 
     def replace_schema(match):

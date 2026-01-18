@@ -158,16 +158,12 @@ class IdentifierNormalizer:
         # Feature 036: Pre-normalization transformations (before chunking)
 
         # 1. Strip GENERATED ALWAYS AS ... STORED column definitions
-        # We do this before chunking to handle multiline/nested parens safely
         if "GENERATED ALWAYS AS" in sql.upper():
-            # Robust extraction of columns to strip
-            # Pattern: col_name type GENERATED ALWAYS AS (...) STORED
-            # We use a non-greedy match for the column name/type part
-            # and handled nested parens by matching until 'STORED'
             sql = re.sub(
                 r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\(.*?\)\s*STORED",
                 "",
                 sql,
+                flags=re.DOTALL,
             )
             # Log warning
             import logging
