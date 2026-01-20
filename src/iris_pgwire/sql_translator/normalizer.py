@@ -120,14 +120,18 @@ class SQLTranslator:
             expr = match.group(1).strip()
             pg_type = match.group(2).strip().lower()
 
+            # Strip quotes from placeholders if they were quoted (e.g. '?'::int)
+            if expr.startswith("'") and expr.endswith("'"):
+                expr_content = expr[1:-1]
+                if expr_content in ("?", "%s") or (
+                    expr_content.startswith("$") and expr_content[1:].isdigit()
+                ):
+                    expr = expr_content
+
             # Special handling for vector casts
             if pg_type == "vector":
                 # IRIS uses TO_VECTOR instead of CAST(? AS VECTOR)
                 # We convert '::vector' or 'CAST(... AS vector)' to 'TO_VECTOR(..., DOUBLE)'
-                # Strip quotes if it's a literal string being cast
-                if expr.startswith("'") and expr.endswith("'"):
-                    expr_content = expr[1:-1]
-                    return f"TO_VECTOR('{expr_content}', DOUBLE)"
                 return f"TO_VECTOR({expr}, DOUBLE)"
 
             iris_type = type_map.get(pg_type, pg_type.upper())

@@ -16,7 +16,7 @@ logger = logging.getLogger("iris_pgwire.sql_translator.refiner")
 class RefinerConfig:
     """Configuration for SQL refiner"""
 
-    fix_order_by_aliases: bool = True
+    fix_order_by_aliases: bool = False
     preserve_case_for_quoted: bool = True
 
 
@@ -85,81 +85,6 @@ class SQLRefiner:
         order_by_clause = order_by_match.group(1)
         modified_order_by = order_by_clause
 
-        changed = False
-        for alias, expression in aliases.items():
-            pattern = rf"\b{re.escape(alias)}\b"
-            if re.search(pattern, modified_order_by, re.IGNORECASE):
-                modified_order_by = re.sub(
-                    pattern, expression, modified_order_by, flags=re.IGNORECASE
-                )
-                changed = True
-
-        if changed:
-            logger.info("🔧 Fixed ORDER BY aliases for IRIS compatibility")
-            return sql[: order_by_match.start(1)] + modified_order_by
-
-        return sql
-
-        if self.config.fix_order_by_aliases:
-            sql = self._fix_order_by_aliases(sql)
-
-        return sql
-
-    def _fix_order_by_aliases(self, sql: str) -> str:
-        """
-        Fix ORDER BY clauses that reference SELECT clause aliases.
-
-        IRIS (sometimes) doesn't support: SELECT expr AS distance ORDER BY distance
-        Must be: SELECT expr AS distance ORDER BY expr
-
-        NOTE: This is controversial. Some versions of IRIS require aliases with LIMIT.
-        Default is True for safety in similarity search.
-        """
-        # Isolate the SELECT clause
-        select_match = self._select_from_pattern.search(sql)
-        if not select_match:
-            return sql
-
-        select_clause = select_match.group(1)
-        aliases = {}
-
-        # Extract "expression AS alias" patterns
-        for match in self._alias_pattern.finditer(select_clause):
-            expression = match.group(1).strip()
-            # Clean up expression (last item if comma-separated)
-            if "," in expression:
-                # Robust split by comma (ignoring commas inside parens)
-                parts = []
-                current = []
-                depth = 0
-                for char in expression:
-                    if char == "(":
-                        depth += 1
-                    elif char == ")":
-                        depth -= 1
-                    if char == "," and depth == 0:
-                        parts.append("".join(current))
-                        current = []
-                    else:
-                        current.append(char)
-                parts.append("".join(current))
-                expression = parts[-1].strip()
-
-            alias = match.group(2)
-            aliases[alias.lower()] = expression
-
-        if not aliases:
-            return sql
-
-        # Isolate the ORDER BY clause
-        order_by_match = self._order_by_pattern.search(sql)
-        if not order_by_match:
-            return sql
-
-        order_by_clause = order_by_match.group(1)
-        modified_order_by = order_by_clause
-
-        # Replace aliases with actual expressions
         changed = False
         for alias, expression in aliases.items():
             pattern = rf"\b{re.escape(alias)}\b"

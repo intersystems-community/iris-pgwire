@@ -146,7 +146,7 @@ class VectorQueryOptimizer:
             order_by_pattern = re.compile(
                 r"(VECTOR_(?:COSINE|DOT_PRODUCT|L2))\s*\(\s*"
                 r"([\w\.]+)\s*,\s*"
-                r"(TO_VECTOR\s*\(\s*([?%]s?)\s*(?:,\s*(\w+))?\s*\))",
+                r"(TO_VECTOR\s*\(\s*['\"]?([?%]s?|\$\d+)['\"]?\s*(?:,\s*(\w+))?\s*\))",
                 re.IGNORECASE,
             )
         except re.error as e:
@@ -155,14 +155,10 @@ class VectorQueryOptimizer:
 
         try:
             matches = list(order_by_pattern.finditer(sql))
-            print(f"  🔍 Regex matches found: {len(matches)}", flush=True)
-            if len(matches) == 0:
-                print(f"  ⚠️ No matches for pattern: {order_by_pattern.pattern}", flush=True)
+            if not matches:
+                return sql, params
         except Exception as e:
             logger.error(f"Regex matching failed: {str(e)}, sql_length={len(sql)}")
-            return sql, params
-
-        if not matches:
             return sql, params
 
         logger.info(
@@ -187,7 +183,7 @@ class VectorQueryOptimizer:
 
             # Find which parameter this corresponds to
             # Count how many parameters appear before this position
-            param_index = sql[: match.start()].count("?") + sql[: match.start()].count("%s")
+            param_index = len(re.findall(r"\?|%s|\$\d+", sql[: match.start()]))
 
             logger.debug(
                 f"Processing match: func={vector_func}, column={column_name}, param_index={param_index}"
@@ -207,10 +203,6 @@ class VectorQueryOptimizer:
 
             # Convert to JSON array format
             vector_literal = self._convert_vector_to_literal(vector_param)
-            print(
-                f"  📦 vector_literal length: {len(vector_literal) if vector_literal else 'None'}",
-                flush=True,
-            )
 
             if vector_literal is None:
                 logger.warning(
@@ -367,43 +359,42 @@ class VectorQueryOptimizer:
 
     def _rewrite_operators_in_text(self, sql: str) -> str:
         """Helper to rewrite operators in a given text"""
-        # <=> operator (cosine distance) -> VECTOR_COSINE
+        # Improved operand pattern to handle more cases robustly (placeholders, literals, functions)
+        operand = r"(?:[\w\.]+(?:\([^)]*\))?|'[^']*'|\[[^\]]+\]|\?|%s|\$\d+)"
+
+        # <=> operator (cosine distance) -> 1 - VECTOR_COSINE
         if "<=>" in sql:
-            # Match both column AND literal values (quoted strings/arrays) OR parameter placeholders on BOTH sides
-            # Handles: column <=> '[vector]', column <=> ?, '[vector]' <=> '[vector]', etc.
-            # Parameter placeholders: ?, %s, $1, $2, etc.
-            pattern = r"([\w\.]+|'[^']*'|[\[\{][^\]\}]*[\]\}])\s*<=>\s*('[^']*'|[\[\{][^\]\}]*[\]\}]|\?|%s|\$\d+)"
+            pattern = rf"({operand})\s*<=>\s*({operand})(?:::\w+)?"
 
             def replace_cosine_distance(match):
                 left, right = match.groups()
 
-                # Check if right side is a parameter placeholder (?, %s, $1, etc.)
-                is_param_placeholder = right in ("?", "%s") or right.startswith("$")
+                # Check if either side is a parameter placeholder
+                left_is_param = left in ("?", "%s") or left.startswith("$")
+                right_is_param = right in ("?", "%s") or right.startswith("$")
 
                 # If either side already has TO_VECTOR, use as-is
                 if "TO_VECTOR" in left.upper() or "TO_VECTOR" in right.upper():
-                    result = f"VECTOR_COSINE({left}, {right})"
-                # If right is a parameter placeholder, wrap it in TO_VECTOR
-                elif is_param_placeholder:
-                    result = f"VECTOR_COSINE({left}, TO_VECTOR({right}, DOUBLE))"
-                # If left is a literal, wrap it in TO_VECTOR
-                elif left.startswith("'") or left.startswith("["):
-                    # Optimize the literal (strip brackets)
+                    return f"(1 - VECTOR_COSINE({left}, {right}))"
+
+                # Handle placeholders
+                if left_is_param and right_is_param:
+                    return f"(1 - VECTOR_COSINE(TO_VECTOR({left}, DOUBLE), TO_VECTOR({right}, DOUBLE)))"
+                if left_is_param:
+                    opt_right = self._optimize_vector_literal(right)
+                    return f"(1 - VECTOR_COSINE(TO_VECTOR({left}, DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
+                if right_is_param:
+                    return f"(1 - VECTOR_COSINE({left}, TO_VECTOR({right}, DOUBLE)))"
+
+                # Handle literals on both sides
+                if left.startswith("'") or left.startswith("["):
                     opt_left = self._optimize_vector_literal(left)
-                    if "TO_VECTOR" in right.upper():
-                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', DOUBLE), {right})"
-                    else:
-                        opt_right = self._optimize_vector_literal(right)
-                        result = f"VECTOR_COSINE(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE))"
-                # Left is a column name
-                else:
-                    if "TO_VECTOR" in right.upper():
-                        result = f"VECTOR_COSINE({left}, {right})"
-                    else:
-                        # Optimize the literal (preserve brackets)
-                        opt_right = self._optimize_vector_literal(right)
-                        result = f"VECTOR_COSINE({left}, TO_VECTOR('{opt_right}', DOUBLE))"
-                return result
+                    opt_right = self._optimize_vector_literal(right)
+                    return f"(1 - VECTOR_COSINE(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
+
+                # Left is likely a column name
+                opt_right = self._optimize_vector_literal(right)
+                return f"(1 - VECTOR_COSINE({left}, TO_VECTOR('{opt_right}', DOUBLE)))"
 
             sql = re.sub(pattern, replace_cosine_distance, sql)
 
@@ -420,33 +411,33 @@ class VectorQueryOptimizer:
 
         # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
         if "<#>" in sql:
-            # Match both column AND literal values OR parameter placeholders on BOTH sides
-            pattern = r"([\w\.]+|'[^']*'|[\[\{][^\]\}]*[\]\}])\s*<#>\s*('[^']*'|[\[\{][^\]\}]*[\]\}]|\?|%s|\$\d+)"
+            pattern = rf"({operand})\s*<#>\s*({operand})(?:::\w+)?"
 
             def replace_inner_product(match):
                 left, right = match.groups()
 
-                # Check if right side is a parameter placeholder
-                is_param_placeholder = right in ("?", "%s") or right.startswith("$")
+                # Check if either side is a parameter placeholder
+                left_is_param = left in ("?", "%s") or left.startswith("$")
+                right_is_param = right in ("?", "%s") or right.startswith("$")
 
                 if "TO_VECTOR" in left.upper() or "TO_VECTOR" in right.upper():
-                    result = f"(-VECTOR_DOT_PRODUCT({left}, {right}))"
-                elif is_param_placeholder:
-                    result = f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, DOUBLE)))"
-                elif left.startswith("'") or left.startswith("["):
+                    return f"(-VECTOR_DOT_PRODUCT({left}, {right}))"
+
+                if left_is_param and right_is_param:
+                    return f"(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, DOUBLE), TO_VECTOR({right}, DOUBLE)))"
+                if left_is_param:
+                    opt_right = self._optimize_vector_literal(right)
+                    return f"(-VECTOR_DOT_PRODUCT(TO_VECTOR({left}, DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
+                if right_is_param:
+                    return f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR({right}, DOUBLE)))"
+
+                if left.startswith("'") or left.startswith("["):
                     opt_left = self._optimize_vector_literal(left)
-                    if "TO_VECTOR" in right.upper():
-                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', DOUBLE), {right}))"
-                    else:
-                        opt_right = self._optimize_vector_literal(right)
-                        result = f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
-                else:
-                    if "TO_VECTOR" in right.upper():
-                        result = f"(-VECTOR_DOT_PRODUCT({left}, {right}))"
-                    else:
-                        opt_right = self._optimize_vector_literal(right)
-                        result = f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR('{opt_right}', DOUBLE)))"
-                return result
+                    opt_right = self._optimize_vector_literal(right)
+                    return f"(-VECTOR_DOT_PRODUCT(TO_VECTOR('{opt_left}', DOUBLE), TO_VECTOR('{opt_right}', DOUBLE)))"
+
+                opt_right = self._optimize_vector_literal(right)
+                return f"(-VECTOR_DOT_PRODUCT({left}, TO_VECTOR('{opt_right}', DOUBLE)))"
 
             sql = re.sub(pattern, replace_inner_product, sql)
 
@@ -504,110 +495,15 @@ class VectorQueryOptimizer:
         result = select_pattern.sub(add_top, sql_without_limit, count=1)
 
         logger.info(f"Converted LIMIT {limit_value} to TOP {limit_value}")
-        print(f"🔄 LIMIT→TOP: {sql[:80]}... → {result[:80]}...", flush=True)
 
         return result
 
     def _fix_order_by_aliases(self, sql: str) -> str:
         """
-        DISABLED: IRIS actually REQUIRES aliases in ORDER BY!
-
-        Contrary to initial assumptions, IRIS cannot handle complex expressions
-        in ORDER BY when combined with LIMIT. The SQL compiler crashes with:
-        SQLCODE -400: Fatal error occurred - Error compiling cached query class
-
-        IRIS behavior:
-        ✅ WORKS: SELECT ... AS distance ORDER BY distance LIMIT 5
-        ❌ FAILS: SELECT ... AS distance ORDER BY VECTOR_COSINE(...) LIMIT 5
-
-        Therefore, this function is disabled and just returns SQL unchanged.
+        IRIS requires aliases in ORDER BY when combined with LIMIT/TOP.
+        This function is kept as a pass-through to avoid breaking existing logic.
         """
-        print("\n🔧 _FIX_ORDER_BY_ALIASES BYPASSED (IRIS requires aliases)", flush=True)
-
-        # Return SQL unchanged - IRIS needs the aliases!
         return sql
-
-        # OLD CODE (disabled):
-        print("\n🔧🔧🔧 _FIX_ORDER_BY_ALIASES CALLED", flush=True)
-        print(f"  Input SQL: {sql[:200]}...", flush=True)
-
-        logger.info("🔧 Fixing ORDER BY aliases for IRIS compatibility")
-        logger.info(f"  Input SQL: {sql[:200]}...")
-
-        # Extract SELECT clause and find aliases
-        # FROM clause is optional (queries may not have FROM)
-        select_match = re.search(
-            r"SELECT\s+(.+?)(?:\s+FROM|\s+ORDER\s+BY|$)", sql, re.IGNORECASE | re.DOTALL
-        )
-        if not select_match:
-            logger.info("  No SELECT clause found")
-            return sql
-
-        select_clause = select_match.group(1)
-        logger.info(f"  SELECT clause: {select_clause[:100]}...")
-
-        aliases = {}
-
-        # Find all "expression AS alias" patterns
-        # Use greedy pattern up to " AS " to capture full expressions with nested parentheses
-        alias_pattern = r"(.+?)\s+AS\s+(\w+)"
-
-        for match in re.finditer(alias_pattern, select_clause, re.IGNORECASE):
-            full_match = match.group(1).strip()
-            alias = match.group(2)
-
-            # Clean up: remove everything before the last comma (to get the actual expression for this alias)
-            # Example: "id, VECTOR_COSINE(...)" → "VECTOR_COSINE(...)"
-            # But we need to handle nested function calls with commas inside!
-
-            # Strategy: work backwards from the match to find where the expression for THIS alias starts
-            # The expression starts after the last comma that's NOT inside parentheses
-            paren_depth = 0
-            expression_start = 0
-
-            for i in range(len(full_match) - 1, -1, -1):
-                char = full_match[i]
-                if char == ")":
-                    paren_depth += 1
-                elif char == "(":
-                    paren_depth -= 1
-                elif char == "," and paren_depth == 0:
-                    expression_start = i + 1
-                    break
-
-            expression = full_match[expression_start:].strip()
-            aliases[alias.lower()] = expression
-            logger.info(f"  Found alias: {alias} -> {expression[:60]}...")
-
-        if not aliases:
-            logger.info("  No SELECT aliases found")
-            return sql
-
-        # Replace "ORDER BY alias" with "ORDER BY expression"
-        order_by_pattern = r"ORDER\s+BY\s+(\w+)(\s+(?:ASC|DESC))?"
-
-        def replace_order_by(match):
-            alias = match.group(1).lower()
-            sort_dir = match.group(2) or ""
-
-            if alias in aliases:
-                expression = aliases[alias]
-                logger.info(f"  Replacing ORDER BY {alias} with ORDER BY {expression[:50]}...")
-                return f"ORDER BY {expression}{sort_dir}"
-            else:
-                return match.group(0)
-
-        result = re.sub(order_by_pattern, replace_order_by, sql, flags=re.IGNORECASE)
-
-        if result != sql:
-            logger.info("✅ ORDER BY aliases fixed")
-            logger.info(
-                f"   FINAL SQL AFTER ALIAS FIX (len={len(result)}): {result[:500]}...{result[-200:] if len(result) > 700 else ''}"
-            )
-        else:
-            logger.info("ℹ️ No ORDER BY alias replacements needed")
-
-        return result
 
     def bind_vector_parameter(self, vector: list[float], data_type: str = "DECIMAL") -> str:
         """
@@ -759,8 +655,6 @@ class VectorQueryOptimizer:
         """
         Optimize INSERT/UPDATE statements for IRIS vector compatibility.
         """
-        print("  📝 _optimize_insert_vectors CALLED", flush=True)
-        print(f"  Input SQL: {sql[:200]}...", flush=True)
         optimized_sql = sql
 
         def replace_literal(m):

@@ -404,9 +404,29 @@ class IRISExecutor:
                     logger.info("IRIS vector support not available (license or feature disabled)")
 
             else:
-                # For external connections, assume no vector support in P0
-                self.vector_support = False
-                logger.info("Vector support detection skipped for external connection")
+                # For external connections, test using DBAPI
+                def _sync_vector_test_external():
+                    connection = None
+                    try:
+                        connection = self._get_pooled_connection()
+                        cursor = connection.cursor()
+                        cursor.execute("select vector_cosine(to_vector('1'), to_vector('1'))")
+                        cursor.fetchone()
+                        cursor.close()
+                        return True
+                    except Exception as e:
+                        logger.debug("Vector test query failed (external)", error=str(e))
+                        return False
+                    finally:
+                        if connection:
+                            self._return_connection(connection)
+
+                result = await asyncio.to_thread(_sync_vector_test_external)
+                self.vector_support = result
+                if result:
+                    logger.info("IRIS vector support detected (external)")
+                else:
+                    logger.info("IRIS vector support not available (external)")
 
         except Exception as e:
             self.vector_support = False
@@ -4379,7 +4399,7 @@ class IRISExecutor:
                 3: 20,  # int8
                 4: 23,  # int4
                 5: 701,  # float8
-                8: 1083,  # time
+                8: 701,  # float8 (IRIS DOUBLE)
                 9: 1082,  # date
                 10: 1114,  # timestamp
                 12: 1043,  # varchar

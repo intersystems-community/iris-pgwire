@@ -39,3 +39,33 @@ class TestParameterTranslationFixes:
         translated = proto.translate_postgres_parameters(sql)
         assert "CAST('123' AS INTEGER)" in translated
         assert "CAST(? AS VARCHAR)" in translated
+
+    def test_translate_quoted_placeholders_to_vector(self):
+        """Handle '$1'::vector and '?'::vector translation"""
+        from unittest.mock import MagicMock
+
+        class MockProtocol(PGWireProtocol):
+            def __init__(self):
+                self.connection_id = 1
+                self.iris_executor = MagicMock()
+                from iris_pgwire.sql_translator.normalizer import SQLTranslator
+
+                self.iris_executor.sql_translator = SQLTranslator()
+
+        proto = MockProtocol()
+
+        # Test '$1'::vector
+        sql = "SELECT '$1'::vector"
+        translated = proto.translate_postgres_parameters(sql)
+        # '$1' becomes '?' in step 1, then '?'::vector becomes TO_VECTOR(?, DOUBLE)
+        assert "TO_VECTOR(?, DOUBLE)" in translated
+
+        # Test '?'::vector
+        sql = "SELECT '?'::vector"
+        translated = proto.translate_postgres_parameters(sql)
+        assert "TO_VECTOR(?, DOUBLE)" in translated
+
+        # Test CAST('$1' AS vector)
+        sql = "SELECT CAST('$1' AS vector)"
+        translated = proto.translate_postgres_parameters(sql)
+        assert "TO_VECTOR(?, DOUBLE)" in translated
