@@ -30,6 +30,7 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .mappings import translate_document_filters, translate_sql_constructs
 from .models import (
     ConstructMapping,
     ConstructType,
@@ -151,8 +152,6 @@ class SQLTranslator:
 
         return sql
 
-        return sql
-
     def normalize_sql(self, sql: str, execution_path: str = "direct") -> str:
         """
         Normalize SQL for IRIS compatibility.
@@ -252,6 +251,13 @@ class SQLTranslator:
         normalized_sql = self._translate_vector_types(normalized_sql)
         normalized_sql = self.default_values_translator.translate(normalized_sql)
 
+        # Call comprehensive mapping registries for HNSW and complex filters
+        normalized_sql, construct_mappings = translate_sql_constructs(normalized_sql)
+        construct_count = len(construct_mappings)
+
+        normalized_sql, doc_filter_mappings = translate_document_filters(normalized_sql)
+        doc_filter_count = len(doc_filter_mappings)
+
         end_time = time.perf_counter()
         normalization_time_ms = (end_time - start_time) * 1000
 
@@ -263,6 +269,8 @@ class SQLTranslator:
             "vector_function_count": vector_fn_count,
             "boolean_translation_count": bool_count,
             "enum_translation_count": enum_count,
+            "construct_count": construct_count,
+            "doc_filter_count": doc_filter_count,
             "sla_violated": normalization_time_ms > 5.0,
             "cache_hit": False,
         }
@@ -275,13 +283,17 @@ class SQLTranslator:
             + json_count
             + vector_fn_count
             + enum_count
-            + bool_count,
+            + bool_count
+            + construct_count
+            + doc_filter_count,
             constructs_translated=identifier_count
             + date_count
             + json_count
             + vector_fn_count
             + enum_count
-            + bool_count,
+            + bool_count
+            + construct_count
+            + doc_filter_count,
         )
 
         return TranslationResult(

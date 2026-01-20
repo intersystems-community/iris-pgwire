@@ -74,6 +74,7 @@ class CatalogRouter:
         "pg_stat_user_tables",
         "pg_trigger",
         "pg_views",
+        "pg_indexes",
     }
 
     # information_schema tables
@@ -97,21 +98,11 @@ class CatalogRouter:
         self.oid_gen = oid_generator or OIDGenerator()
 
         # Patterns for query detection
-        self._pg_catalog_pattern = re.compile(
-            r"\bpg_catalog\.(\w+)\b", re.IGNORECASE
-        )
-        self._pg_table_pattern = re.compile(
-            r"\bpg_(\w+)\b", re.IGNORECASE
-        )
-        self._info_schema_pattern = re.compile(
-            r"\binformation_schema\.(\w+)\b", re.IGNORECASE
-        )
-        self._any_param_pattern = re.compile(
-            r"=\s*ANY\s*\(\s*\$(\d+)\s*\)", re.IGNORECASE
-        )
-        self._regclass_pattern = re.compile(
-            r"'([^']+)'::regclass", re.IGNORECASE
-        )
+        self._pg_catalog_pattern = re.compile(r"\bpg_catalog\.(\w+)\b", re.IGNORECASE)
+        self._pg_table_pattern = re.compile(r"\bpg_(\w+)\b", re.IGNORECASE)
+        self._info_schema_pattern = re.compile(r"\binformation_schema\.(\w+)\b", re.IGNORECASE)
+        self._any_param_pattern = re.compile(r"=\s*ANY\s*\(\s*\$(\d+)\s*\)", re.IGNORECASE)
+        self._regclass_pattern = re.compile(r"'([^']+)'::regclass", re.IGNORECASE)
 
     def can_handle(self, query: str) -> bool:
         """
@@ -181,9 +172,7 @@ class CatalogRouter:
         """
         return bool(self._any_param_pattern.search(query))
 
-    def translate_array_param(
-        self, query: str, values: list[Any], param_index: int = 1
-    ) -> str:
+    def translate_array_param(self, query: str, values: list[Any], param_index: int = 1) -> str:
         """
         Translate ANY($n) to IN (value1, value2, ...).
 
@@ -237,9 +226,7 @@ class CatalogRouter:
         """
         return bool(self._regclass_pattern.search(query))
 
-    def resolve_regclass(
-        self, table_name: str, schema: str = "SQLUser"
-    ) -> int:
+    def resolve_regclass(self, table_name: str, schema: str = "SQLUser") -> int:
         """
         Resolve table name to OID (like ::regclass).
 
@@ -261,9 +248,7 @@ class CatalogRouter:
 
         return self.oid_gen.get_table_oid(schema, table_name)
 
-    def translate_regclass_casts(
-        self, query: str, schema: str = "SQLUser"
-    ) -> str:
+    def translate_regclass_casts(self, query: str, schema: str = "SQLUser") -> str:
         """
         Replace 'tablename'::regclass with resolved OID.
 
@@ -274,6 +259,7 @@ class CatalogRouter:
         Returns:
             Query with OIDs instead of regclass casts
         """
+
         def replace_regclass(match: re.Match) -> str:
             table_name = match.group(1)
             oid = self.resolve_regclass(table_name, schema)
