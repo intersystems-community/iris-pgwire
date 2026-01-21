@@ -235,7 +235,7 @@ class IdentifierNormalizer:
         if "::" in normalized_sql:
             # Strip cast syntax
             normalized_sql = re.sub(
-                r"(?i)(\?|'(?:[^']|'')*'|\d+)::(?:\"[^\"]+\"|[\w.]+)(?:\s*\([^)]*\))?",
+                r"(?i)(\?|(?:\$\d+)|'(?:[^']|'')*'|\d+|[\w\.]+)::(?:\"[^\"]+\"|[\w.]+)(?:\s*\([^)]*\))?",
                 r"\1",
                 normalized_sql,
             )

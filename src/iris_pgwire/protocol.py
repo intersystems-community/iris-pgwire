@@ -1211,6 +1211,9 @@ class PGWireProtocol:
             await self.send_error_response(
                 "FATAL", "08006", "connection_failure", f"Protocol error: {e}"
             )
+        finally:
+            # Ensure pinned session connection is returned to pool
+            self.iris_executor.close_session(self.connection_id)
 
     async def handle_query_message(self, body: bytes):
         """

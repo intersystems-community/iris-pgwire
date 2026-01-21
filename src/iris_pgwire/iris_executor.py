@@ -84,6 +84,8 @@ class IRISExecutor:
         self.iris_config = iris_config
         self.server = server  # Reference to server for P4 cancellation
         self.connection = None
+        self.session_connections = {}
+        self.session_executors = {}  # Thread affinity: one executor per session
         self.embedded_mode = False
         self.vector_support = False
 
@@ -152,6 +154,21 @@ class IRISExecutor:
             print("❌ IRIS Python driver not available", flush=True)
             logger.info("IRIS Python driver not available")
             return False
+
+    def _get_executor(self, session_id: str | None = None) -> concurrent.futures.Executor:
+        """
+        Get the appropriate executor for the given session.
+        Ensures thread affinity for sessions by using a dedicated single-threaded executor.
+        """
+        if not session_id:
+            return self.thread_pool
+
+        with self._connection_lock:
+            if session_id not in self.session_executors:
+                self.session_executors[session_id] = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"iris_session_{session_id}"
+                )
+            return self.session_executors[session_id]
 
     def _normalize_iris_null(self, value):
         """
@@ -829,7 +846,8 @@ class IRISExecutor:
                 raise
 
         # Execute in thread pool to avoid blocking event loop
-        return await asyncio.to_thread(_sync_execute_many)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute_many)
 
     async def _execute_many_external_async(
         self, sql: str, params_list: list[list], session_id: str | None = None
@@ -966,7 +984,8 @@ class IRISExecutor:
                         pass
 
         # Execute in thread pool to avoid blocking event loop
-        return await asyncio.to_thread(_sync_execute_many)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute_many)
 
     def _split_multi_row_insert(self, sql: str) -> list[str]:
         """
@@ -1054,8 +1073,8 @@ class IRISExecutor:
         # CRITICAL FIX: Strip trailing semicolon for ALL execution paths
         # IRIS SQL engine often fails if a semicolon is present at the end of DDL
         # or parameterized queries when sent via driver or iris.sql.exec().
-        if sql and sql.rstrip().endswith(";"):
-            sql = sql.rstrip().rstrip(";")
+        if sql:
+            sql = sql.strip().rstrip(";")
 
         try:
             if is_embedded:
@@ -1104,7 +1123,7 @@ class IRISExecutor:
 
     def _parse_returning_clause(
         self, sql: str
-    ) -> tuple[str | None, str | None, list[str] | None, str | None, str]:
+    ) -> tuple[str | None, str | None, Any, str | None, str]:
         """
         Parse RETURNING clause from SQL and return metadata.
         Returns: (operation, table, columns, where_clause, stripped_sql)
@@ -1128,15 +1147,25 @@ class IRISExecutor:
         returning_clause = returning_match.group(1).strip()
 
         # Parse column names from RETURNING clause
-        # Format: "schema"."table"."col1", "schema"."table"."col2", ...
-        # Or just: col1, col2, ...
-        raw_cols = [c.strip() for c in returning_clause.split(",")]
-        returning_columns = []
-        for col in raw_cols:
-            # Extract just the column name (last part after dots)
-            col_match = re.search(r'"?(\w+)"?\s*$', col)
-            if col_match:
-                returning_columns.append(col_match.group(1))
+        if returning_clause == "*":
+            # Special case for RETURNING * - we'll handle this in _emulate_returning
+            returning_columns = "*"
+        else:
+            # Parse column names from RETURNING clause
+            # Format: "schema"."table"."col1", "schema"."table"."col2", ...
+            # Or just: col1, col2, ...
+            raw_cols = [c.strip() for c in returning_clause.split(",")]
+            returning_columns = []
+            for col in raw_cols:
+                # Extract just the column name (last part after dots)
+                # Handle aliased columns like "col AS alias"
+                if " AS " in col.upper():
+                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+                else:
+                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+
+                if col_match:
+                    returning_columns.append(col_match.group(1))
 
         # Determine operation type and extract table/where clause
         sql_upper = sql.upper().strip()
@@ -1187,7 +1216,7 @@ class IRISExecutor:
         # Strip RETURNING clause from SQL using the same improved regex
         stripped_sql = re.sub(
             returning_pattern,
-            r"\2",  # Keep the terminator (semicolon or empty)
+            "",  # Strip both RETURNING and the terminator (semicolon)
             sql,
             flags=re.IGNORECASE | re.DOTALL,
         )
@@ -1204,7 +1233,7 @@ class IRISExecutor:
         self,
         operation: str,
         table: str,
-        columns: list[str],
+        columns: list[str] | str,
         where_clause: str | None,
         params: list | None,
         is_embedded: bool,
@@ -1217,7 +1246,12 @@ class IRISExecutor:
         """
         import re
 
-        col_list = ", ".join([f'"{col}"' for col in columns])
+        # Handle columns as list or '*'
+        if columns == "*":
+            col_list = "*"
+        else:
+            col_list = ", ".join([f'"{col}"' for col in columns])
+
         rows = []
         meta = None
 
@@ -1250,7 +1284,7 @@ class IRISExecutor:
                     rows, meta = _fetch_results(
                         f'SELECT {col_list} FROM SQLUser."{table}" WHERE %ID = ?', [last_id]
                     )
-                    if not rows:
+                    if not rows and columns != "*":
                         id_cols = [
                             c
                             for c in columns
@@ -1263,6 +1297,12 @@ class IRISExecutor:
                             )
                             if rows:
                                 break
+
+                    # LAST RESORT: Try %ID lookup using hardcoded query if other lookups failed
+                    if not rows:
+                        rows, meta = _fetch_results(
+                            f'SELECT {col_list} FROM SQLUser."{table}" WHERE %ID = (SELECT LAST_IDENTITY())'
+                        )
 
                 if not rows:
                     rows, meta = _fetch_results(
@@ -2771,19 +2811,18 @@ class IRISExecutor:
                 # Get or create connection
                 self._get_iris_connection()
 
-                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
-                # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
+                # 1. Transaction Translation
                 transaction_translator = TransactionTranslator()
                 transaction_translated_sql = transaction_translator.translate_transaction_command(
                     sql
                 )
 
-                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
-                # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
+                # 2. SQL Normalization
                 translator = SQLTranslator()
                 normalized_sql = translator.normalize_sql(
                     transaction_translated_sql, execution_path="direct"
                 )
+                optimized_sql = normalized_sql
 
                 # Log transaction translation metrics
                 txn_metrics = transaction_translator.get_translation_metrics()
@@ -2817,13 +2856,13 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
-                # Apply vector query optimization (convert parameterized vectors to literals)
-                # Use normalized_sql as input instead of original sql
-                optimized_sql = normalized_sql
-                optimized_params = params
-                optimization_applied = False
+                # 3. Parameter Normalization
+                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
+                optimized_params = self._normalize_parameters(params)
 
-                # PROFILING: Optimization timing
+                # 4. Vector Optimization
+                # Apply vector query optimization (convert parameterized vectors to literals)
+                optimization_applied = False
                 t_opt_start = time.perf_counter()
 
                 try:
@@ -2831,28 +2870,30 @@ class IRISExecutor:
 
                     logger.debug(
                         "Vector optimizer: checking query",
-                        sql_preview=normalized_sql[:200],
-                        param_count=len(params) if params else 0,
+                        sql_preview=optimized_sql[:200],
+                        param_count=len(optimized_params) if optimized_params else 0,
                         session_id=session_id,
                     )
 
-                    # CRITICAL: Pass normalized_sql (not original sql) per FR-012
-                    optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
+                    # CRITICAL: Pass currently optimized_sql and optimized_params
+                    new_sql, new_params = optimize_vector_query(optimized_sql, optimized_params)
 
-                    optimization_applied = (optimized_sql != normalized_sql) or (
-                        optimized_params != params
+                    optimization_applied = (new_sql != optimized_sql) or (
+                        new_params != optimized_params
                     )
 
                     if optimization_applied:
                         logger.info(
                             "Vector optimization applied",
-                            sql_changed=(optimized_sql != normalized_sql),
-                            params_changed=(optimized_params != params),
-                            params_before=len(params) if params else 0,
-                            params_after=len(optimized_params) if optimized_params else 0,
-                            optimized_sql_preview=optimized_sql[:200],
+                            sql_changed=(new_sql != optimized_sql),
+                            params_changed=(new_params != optimized_params),
+                            params_before=len(optimized_params) if optimized_params else 0,
+                            params_after=len(new_params) if new_params else 0,
+                            optimized_sql_preview=new_sql[:200],
                             session_id=session_id,
                         )
+                        optimized_sql = new_sql
+                        optimized_params = new_params
                     else:
                         logger.debug(
                             "Vector optimization not applicable",
@@ -2870,10 +2911,48 @@ class IRISExecutor:
                         error=str(opt_error),
                         session_id=session_id,
                     )
-                    optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
+                # 5. RETURNING Parsing/Stripping (IRIS doesn't support it natively)
+                (
+                    returning_operation,
+                    returning_table,
+                    returning_columns,
+                    returning_where_clause,
+                    optimized_sql,
+                ) = self._parse_returning_clause(optimized_sql)
+
+                if returning_operation:
+                    logger.info(
+                        "RETURNING clause detected - will emulate",
+                        operation=returning_operation,
+                        table=returning_table,
+                        columns=returning_columns,
+                        session_id=session_id,
+                    )
+
+                # 6. Semicolon Stripping
+                # CRITICAL: Strip trailing semicolon
+                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
+                optimized_sql = optimized_sql.strip().rstrip(";")
+
+                # 7. Schema Translation
+                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
+                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
+                from .schema_mapper import translate_input_schema
+
+                original_sql_before_schema = optimized_sql
+                optimized_sql = translate_input_schema(optimized_sql)
+
+                if original_sql_before_schema != optimized_sql:
+                    logger.info(
+                        "Schema translation applied: public -> SQLUser",
+                        original_preview=original_sql_before_schema[:80],
+                        translated_preview=optimized_sql[:80],
+                        session_id=session_id,
+                    )
 
                 # POSTGRESQL COMPATIBILITY: Handle SHOW commands that IRIS doesn't support
                 # Intercept and return fake results for PostgreSQL compatibility
@@ -2886,50 +2965,12 @@ class IRISExecutor:
                     )
                     return self._handle_show_command(optimized_sql, session_id)
 
+                # Final parameter conversion for IRIS
+                if optimized_params:
+                    optimized_params = tuple(optimized_params)
+
                 # Execute query with performance tracking
                 start_time = time.perf_counter()
-
-                # CRITICAL: Strip trailing semicolon when using parameters
-                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
-                # but works fine with "SELECT ... WHERE id = ?" (no semicolon)
-                if optimized_params and optimized_sql.rstrip().endswith(";"):
-                    original_len = len(optimized_sql)
-                    optimized_sql = optimized_sql.rstrip().rstrip(";")
-                    logger.info(
-                        "Removed trailing semicolon for parameterized query",
-                        original_sql_len=original_len,
-                        new_sql_len=len(optimized_sql),
-                        sql_preview=optimized_sql[:80],
-                        param_count=len(optimized_params),
-                        session_id=session_id,
-                    )
-
-                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
-                from .schema_mapper import translate_input_schema
-
-                original_sql_for_log = optimized_sql[:80]
-
-                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
-                if optimized_params:
-                    optimized_params = tuple(self._normalize_parameters(optimized_params))
-
-                if original_sql_for_log != optimized_sql[:80]:
-                    logger.info(
-                        "Schema translation applied: public -> SQLUser",
-                        original_preview=original_sql_for_log,
-                        translated_preview=optimized_sql[:80],
-                        session_id=session_id,
-                    )
-
-                # Handle RETURNING clause (IRIS doesn't support it natively)
-                (
-                    returning_operation,
-                    returning_table,
-                    returning_columns,
-                    returning_where_clause,
-                    optimized_sql,
-                ) = self._parse_returning_clause(optimized_sql)
 
                 if returning_operation:
                     logger.info(
@@ -3273,7 +3314,7 @@ class IRISExecutor:
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.thread_pool, _sync_execute)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute)
 
     def _discover_metadata(
         self,
@@ -3405,20 +3446,16 @@ class IRISExecutor:
 
                 # Use intersystems-irispython driver
 
-                # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
-                # CRITICAL: Transaction translation MUST occur BEFORE Feature 021 normalization (FR-010)
+                # 1. Transaction Translation
                 transaction_translated_sql = (
                     self.transaction_translator.translate_transaction_command(sql)
                 )
 
-                # Feature 021: Apply PostgreSQL→IRIS SQL normalization
-                # CRITICAL: Normalization MUST occur BEFORE vector optimization (FR-012)
+                # 2. SQL Normalization
                 normalized_sql = self.sql_translator.normalize_sql(
                     transaction_translated_sql, execution_path="external"
                 )
-
-                # Feature 034: Normalize parameters for IRIS compatibility
-                optimized_params = self._normalize_parameters(params)
+                optimized_sql = normalized_sql
 
                 # Log transaction translation metrics (external mode)
                 txn_metrics = self.transaction_translator.get_translation_metrics()
@@ -3452,31 +3489,13 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
-                # Handle RETURNING clause
-                (
-                    returning_operation,
-                    returning_table,
-                    returning_columns,
-                    returning_where_clause,
-                    normalized_sql,
-                ) = self._parse_returning_clause(normalized_sql)
+                # 3. Parameter Normalization
+                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
+                optimized_params = self._normalize_parameters(params)
 
-                if returning_operation:
-                    logger.info(
-                        "RETURNING clause detected - will emulate (external mode)",
-                        operation=returning_operation,
-                        table=returning_table,
-                        columns=returning_columns,
-                        session_id=session_id,
-                    )
-
+                # 4. Vector Optimization
                 # Apply vector query optimization (convert parameterized vectors to literals)
-                # Use normalized_sql as input instead of original sql
-                optimized_sql = normalized_sql
-                optimized_params = params
                 optimization_applied = False
-
-                # PROFILING: Optimization timing
                 t_opt_start = time.perf_counter()
 
                 try:
@@ -3484,28 +3503,30 @@ class IRISExecutor:
 
                     logger.debug(
                         "Vector optimizer: checking query (external mode)",
-                        sql_preview=normalized_sql[:200],
-                        param_count=len(params) if params else 0,
+                        sql_preview=optimized_sql[:200],
+                        param_count=len(optimized_params) if optimized_params else 0,
                         session_id=session_id,
                     )
 
-                    # CRITICAL: Pass normalized_sql (not original sql) per FR-012
-                    optimized_sql, optimized_params = optimize_vector_query(normalized_sql, params)
+                    # CRITICAL: Pass currently optimized_sql and optimized_params
+                    new_sql, new_params = optimize_vector_query(optimized_sql, optimized_params)
 
-                    optimization_applied = (optimized_sql != normalized_sql) or (
-                        optimized_params != params
+                    optimization_applied = (new_sql != optimized_sql) or (
+                        new_params != optimized_params
                     )
 
                     if optimization_applied:
                         logger.debug(
                             "Vector optimization applied (external mode)",
-                            sql_changed=(optimized_sql != normalized_sql),
-                            params_changed=(optimized_params != params),
-                            params_before=len(params) if params else 0,
-                            params_after=len(optimized_params) if optimized_params else 0,
-                            optimized_sql_preview=optimized_sql[:200],
+                            sql_changed=(new_sql != optimized_sql),
+                            params_changed=(new_params != optimized_params),
+                            params_before=len(optimized_params) if optimized_params else 0,
+                            params_after=len(new_params) if new_params else 0,
+                            optimized_sql_preview=new_sql[:200],
                             session_id=session_id,
                         )
+                        optimized_sql = new_sql
+                        optimized_params = new_params
                     else:
                         logger.debug(
                             "Vector optimization not applicable (external mode)",
@@ -3525,10 +3546,48 @@ class IRISExecutor:
                         error=str(opt_error),
                         session_id=session_id,
                     )
-                    optimized_sql, optimized_params = normalized_sql, params
 
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
+                # 5. RETURNING Parsing/Stripping (IRIS doesn't support it natively)
+                (
+                    returning_operation,
+                    returning_table,
+                    returning_columns,
+                    returning_where_clause,
+                    optimized_sql,
+                ) = self._parse_returning_clause(optimized_sql)
+
+                if returning_operation:
+                    logger.info(
+                        "RETURNING clause detected - will emulate (external mode)",
+                        operation=returning_operation,
+                        table=returning_table,
+                        columns=returning_columns,
+                        session_id=session_id,
+                    )
+
+                # 6. Semicolon Stripping
+                # CRITICAL: Strip trailing semicolon
+                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
+                optimized_sql = optimized_sql.strip().rstrip(";")
+
+                # 7. Schema Translation
+                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
+                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
+                from .schema_mapper import translate_input_schema
+
+                original_sql_before_schema = optimized_sql
+                optimized_sql = translate_input_schema(optimized_sql)
+
+                if original_sql_before_schema != optimized_sql:
+                    logger.info(
+                        "Schema translation applied (external): public -> SQLUser",
+                        original_preview=original_sql_before_schema[:80],
+                        translated_preview=optimized_sql[:80],
+                        session_id=session_id,
+                    )
 
                 # Pre-process parameters to convert lists to IRIS vector strings
                 # This ensures the DBAPI driver doesn't convert them to {...} format
@@ -3548,7 +3607,7 @@ class IRISExecutor:
                 t_conn_start = time.perf_counter()
 
                 # Get connection from pool (or create new one)
-                conn = self._get_pooled_connection()
+                conn = self._get_pooled_connection(session_id=session_id)
 
                 t_conn_elapsed = (time.perf_counter() - t_conn_start) * 1000
 
@@ -3714,7 +3773,7 @@ class IRISExecutor:
 
                 cursor.close()
                 # Return connection to pool instead of closing
-                self._return_connection(conn)
+                self._return_connection(conn, session_id=session_id)
 
                 # PROFILING: Fetch complete
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
@@ -3841,7 +3900,7 @@ class IRISExecutor:
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.thread_pool, _sync_external_execute)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_external_execute)
 
     def _get_iris_connection(self):
         """
@@ -3859,41 +3918,55 @@ class IRISExecutor:
         # The _execute_many_embedded_async() method will use iris.sql.exec() in a loop
         return None
 
-    def _get_pooled_connection(self):
-        """
-        Get a connection from the pool or create a new one.
-        Optimized to reuse active connection for this process.
-        """
-        # OPTIMIZATION: Check if we already have an active connection for this process
-        # This saves the 1-2ms overhead of checking the pool lock and SELECT 1 test
-        if self.connection is not None:
-            return self.connection
+    def _get_pooled_connection(self, session_id: str | None = None):
+        if session_id and session_id in self.session_connections:
+            return self.session_connections[session_id]
 
         import iris
 
         with self._connection_lock:
-            # Try to get a connection from the pool
             if self._connection_pool:
                 conn = self._connection_pool.pop()
-                self.connection = conn
-                return conn
+            else:
+                conn = iris.connect(
+                    hostname=self.iris_config["host"],
+                    port=self.iris_config["port"],
+                    namespace=self.iris_config["namespace"],
+                    username=self.iris_config["username"],
+                    password=self.iris_config["password"],
+                )
 
-            # No connections available - create new one
-            conn = iris.connect(
-                hostname=self.iris_config["host"],
-                port=self.iris_config["port"],
-                namespace=self.iris_config["namespace"],
-                username=self.iris_config["username"],
-                password=self.iris_config["password"],
-            )
-            self.connection = conn
+            if session_id:
+                self.session_connections[session_id] = conn
+
             return conn
 
-    def _return_connection(self, conn):
-        """Return a connection to the pool for reuse."""
-        # OPTIMIZATION: Keep connection pinned to this process instead of returning to shared pool
-        # This prevents other processes from stealing it and avoids the lock overhead
-        pass
+    def _return_connection(self, conn, session_id: str | None = None):
+        if session_id:
+            return
+
+        with self._connection_lock:
+            if len(self._connection_pool) < self._max_connections:
+                self._connection_pool.append(conn)
+            else:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def close_session(self, session_id: str):
+        with self._connection_lock:
+            # Shutdown and remove session executor for thread affinity
+            executor = self.session_executors.pop(session_id, None)
+            if executor:
+                executor.shutdown(wait=False)
+
+            conn = self.session_connections.pop(session_id, None)
+            if conn:
+                logger.info(
+                    "Closing session and returning connection to pool", session_id=session_id
+                )
+                self._return_connection(conn)
 
     def _expand_select_star(
         self, sql: str, expected_columns: int, session_id: str | None = None
@@ -4499,7 +4572,7 @@ class IRISExecutor:
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.thread_pool, _sync_begin)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_begin)
 
     async def commit_transaction(self, session_id: str | None = None):
         """Commit transaction with async threading"""
@@ -4512,7 +4585,7 @@ class IRISExecutor:
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.thread_pool, _sync_commit)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_commit)
 
     async def rollback_transaction(self, session_id: str | None = None):
         """Rollback transaction with async threading"""
@@ -4525,7 +4598,7 @@ class IRISExecutor:
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.thread_pool, _sync_rollback)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_rollback)
 
     async def cancel_query(self, backend_pid: int, backend_secret: int):
         """
