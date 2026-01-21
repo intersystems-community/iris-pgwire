@@ -1454,7 +1454,7 @@ class PGWireProtocol:
                     row_count=len(rows),
                     result_formats=result_formats,
                 )
-                await self.send_row_description(columns, result_formats=result_formats)
+                await self.send_row_description(columns, result_formats=result_formats, rows=rows)
                 logger.info("🔵 STEP 2: RowDescription sent", connection_id=self.connection_id)
             elif columns and not send_row_description:
                 logger.info(
@@ -1519,7 +1519,10 @@ class PGWireProtocol:
             raise
 
     async def send_row_description(
-        self, columns: list[dict[str, Any]], result_formats: list[int] = None
+        self,
+        columns: list[dict[str, Any]],
+        result_formats: list[int] = None,
+        rows: list[list[Any]] = None,
     ):
         """Send RowDescription message for query columns
 
@@ -1528,8 +1531,21 @@ class PGWireProtocol:
             result_formats: Optional list of format codes from Bind message
                            0 = text format, 1 = binary format
                            If None or empty, defaults to text format (0) for all columns
+            rows: Optional sample data rows to ensure field count consistency
         """
         field_count = len(columns)
+
+        if rows and len(rows) > 0:
+            actual_count = len(rows[0])
+            if field_count != actual_count:
+                logger.warning(
+                    "🔴 Column count mismatch in RowDescription",
+                    description_count=field_count,
+                    actual_data_count=actual_count,
+                    connection_id=self.connection_id,
+                )
+                field_count = actual_count
+
         logger.info(
             "🔴 SEND_ROW_DESCRIPTION CALLED",
             field_count=field_count,
@@ -1552,7 +1568,18 @@ class PGWireProtocol:
         if result_formats is None:
             result_formats = []
 
-        for i, col in enumerate(columns):
+        for i in range(field_count):
+            if i < len(columns):
+                col = columns[i]
+            else:
+                # Padding for mismatch - ensure protocol consistency even if metadata is missing
+                col = {
+                    "name": f"column{i + 1}",
+                    "type_oid": 25,
+                    "type_size": -1,
+                    "type_modifier": -1,
+                }
+
             name = col.get("name", "unknown")
             # CRITICAL: Lowercase column names for PostgreSQL compatibility
             # PostgreSQL clients expect lowercase unless explicitly quoted

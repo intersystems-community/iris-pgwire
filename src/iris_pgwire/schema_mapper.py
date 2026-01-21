@@ -105,6 +105,8 @@ def translate_input_schema(sql: str) -> str:
             "AND",
             "OR",
             "ON",
+            "IF",
+            "EXISTS",
         }:
             return match.group(0)
 

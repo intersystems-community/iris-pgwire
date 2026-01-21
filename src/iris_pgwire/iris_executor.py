@@ -3124,294 +3124,14 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
-                # If we have rows but no column metadata, discover column info using hybrid approach
-                # Implements 3-layer strategy from Perplexity research (2025-11-11):
-                # Layer 1: LIMIT 0 metadata discovery (protocol-native)
-                # Layer 2: SQL parsing with correlation validation
-                # Layer 3: Generic fallback
-
-                logger.info(
-                    "🔍 METADATA DISCOVERY CHECK",
-                    has_rows=len(rows) > 0,
-                    has_columns=len(columns) > 0,
-                    will_attempt_discovery=len(rows) > 0 and len(columns) == 0,
-                    session_id=session_id,
-                )
-
-                if rows and not columns:
-                    first_row = rows[0] if rows else []
-                    num_columns = len(first_row)
-
-                    # Layer 1: Try LIMIT 0 metadata discovery (BEST - database-native)
-                    discovered_aliases = self._discover_metadata_with_limit_zero(sql, session_id)
-
-                    if discovered_aliases and len(discovered_aliases) == num_columns:
-                        logger.info(
-                            "✅ Layer 1 SUCCESS: LIMIT 0 metadata discovery",
-                            aliases=discovered_aliases,
-                            column_count=num_columns,
-                            session_id=session_id,
+                # Layer 1-3: Column metadata discovery if missing
+                if not columns:
+                    if rows:
+                        columns = self._discover_metadata(
+                            sql, session_id, expected_count=len(rows[0]), rows=rows
                         )
-                        # Infer types from first row data
-                        for i, alias in enumerate(discovered_aliases):
-                            inferred_type = (
-                                self._infer_type_from_value(first_row[i])
-                                if i < len(first_row)
-                                else 25
-                            )
-                            # CRITICAL: Lowercase column names for PostgreSQL compatibility
-                            col_name = alias.lower() if isinstance(alias, str) else alias
-                            # Apply same normalization as result._meta path
-                            col_name = self._normalize_iris_column_name(
-                                col_name, sql, inferred_type
-                            )
-                            columns.append(
-                                {
-                                    "name": col_name,
-                                    "type_oid": inferred_type,
-                                    "type_size": -1,
-                                    "type_modifier": -1,
-                                    "format_code": 0,
-                                }
-                            )
-                    else:
-                        # Layer 1.5: Try table metadata expansion for SELECT * queries (NEW)
-                        if discovered_aliases:
-                            logger.warning(
-                                "Layer 1 count mismatch",
-                                discovered=len(discovered_aliases),
-                                actual=num_columns,
-                                session_id=session_id,
-                            )
-
-                        # Check if this is a SELECT * FROM table query
-                        table_columns = self._expand_select_star(sql, num_columns, session_id)
-
-                        if table_columns and len(table_columns) == num_columns:
-                            logger.info(
-                                "✅ Layer 1.5 SUCCESS: Table metadata expansion for SELECT *",
-                                aliases=table_columns,
-                                column_count=num_columns,
-                                session_id=session_id,
-                            )
-                            # Infer types from first row data
-                            for i, col_name in enumerate(table_columns):
-                                inferred_type = (
-                                    self._infer_type_from_value(first_row[i])
-                                    if i < len(first_row)
-                                    else 25
-                                )
-                                # Column names from INFORMATION_SCHEMA are already in correct case
-                                columns.append(
-                                    {
-                                        "name": col_name,
-                                        "type_oid": inferred_type,
-                                        "type_size": -1,
-                                        "type_modifier": -1,
-                                        "format_code": 0,
-                                    }
-                                )
-                        else:
-                            # Layer 2: Try SQL parsing with correlation (FALLBACK)
-                            if table_columns:
-                                logger.warning(
-                                    "Layer 1.5 count mismatch",
-                                    discovered=len(table_columns),
-                                    actual=num_columns,
-                                    session_id=session_id,
-                                )
-
-                            # CRITICAL: Use original SQL to preserve case sensitivity for PostgreSQL clients
-                            # psycopg and other PostgreSQL clients expect lowercase column names
-                            extracted_aliases = self.alias_extractor.extract_column_aliases(sql)
-
-                            if extracted_aliases and len(extracted_aliases) == num_columns:
-                                logger.info(
-                                    "✅ Layer 2 SUCCESS: SQL parsing with correlation",
-                                    aliases=extracted_aliases,
-                                    column_count=num_columns,
-                                    session_id=session_id,
-                                )
-                                # Infer types from first row data
-                                for i, alias in enumerate(extracted_aliases):
-                                    # CRITICAL: Lowercase column names for PostgreSQL compatibility
-                                    col_name = alias.lower() if isinstance(alias, str) else alias
-                                    # Apply same normalization as result._meta path
-                                    inferred_type = (
-                                        self._infer_type_from_value(first_row[i])
-                                        if i < len(first_row)
-                                        else 25
-                                    )
-
-                                    # CRITICAL FIX (2025-11-14): Check for CAST expressions in SQL
-                                    # IRIS returns integer 1 for boolean values, but we need OID 16 (bool)
-                                    cast_type_oid = self._detect_cast_type_oid(sql, col_name)
-                                    if cast_type_oid:
-                                        logger.info(
-                                            "✅ Detected CAST type override",
-                                            column=col_name,
-                                            inferred_oid=inferred_type,
-                                            cast_oid=cast_type_oid,
-                                            session_id=session_id,
-                                        )
-                                        inferred_type = cast_type_oid
-
-                                    # CRITICAL FIX: CURRENT_TIMESTAMP returns type 25 (TEXT) in IRIS
-                                    # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                                    if "CURRENT_TIMESTAMP" in sql.upper() and inferred_type == 25:
-                                        logger.info(
-                                            "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 25 (TEXT) → 1114 (TIMESTAMP)",
-                                            column_name=col_name,
-                                            original_oid=inferred_type,
-                                            reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
-                                        )
-                                        inferred_type = 1114  # TIMESTAMP
-
-                                    col_name = self._normalize_iris_column_name(
-                                        col_name, sql, inferred_type
-                                    )
-                                    columns.append(
-                                        {
-                                            "name": col_name,
-                                            "type_oid": inferred_type,
-                                            "type_size": -1,
-                                            "type_modifier": -1,
-                                            "format_code": 0,
-                                        }
-                                    )
-                            else:
-                                # Layer 3: Generic fallback (LAST RESORT)
-                                if extracted_aliases:
-                                    logger.warning(
-                                        "Layer 2 count mismatch - falling back to generic",
-                                        extracted=len(extracted_aliases),
-                                        actual=num_columns,
-                                        session_id=session_id,
-                                    )
-                                logger.info(
-                                    "⚠️ Layer 3: Using generic column names",
-                                    column_count=num_columns,
-                                    session_id=session_id,
-                                )
-                                # Infer types from first row data even with generic names
-                                # CRITICAL: For SELECT without FROM (literals), use ?column? for PostgreSQL compatibility
-                                sql_upper = sql.upper()
-                                use_qcolumn = "SELECT" in sql_upper and "FROM" not in sql_upper
-
-                                for i in range(num_columns):
-                                    inferred_type = (
-                                        self._infer_type_from_value(first_row[i])
-                                        if i < len(first_row)
-                                        else 25
-                                    )
-                                    # Use ?column? for literal queries (SELECT 1, SELECT 'hello')
-                                    # Otherwise use generic column1, column2, etc.
-                                    col_name = "?column?" if use_qcolumn else f"column{i + 1}"
-                                    columns.append(
-                                        {
-                                            "name": col_name,
-                                            "type_oid": inferred_type,
-                                            "type_size": -1,
-                                            "type_modifier": -1,
-                                            "format_code": 0,
-                                        }
-                                    )
-
-                # CRITICAL: For SELECT queries with 0 rows, we MUST generate column metadata
-                # PostgreSQL protocol requires RowDescription for ALL SELECT queries
-                # JDBC executeQuery() will fail with "No results were returned" without it
-                sql_upper = sql.strip().upper()
-                if not rows and not columns and sql_upper.startswith("SELECT"):
-                    logger.info(
-                        "Empty SELECT result - generating column metadata from table structure",
-                        sql=sql[:100],
-                        session_id=session_id,
-                    )
-
-                    # Extract table name from SELECT query (simple parsing)
-                    table_name = self._extract_table_name_from_select(sql)
-
-                    if table_name:
-                        # Query INFORMATION_SCHEMA for column metadata
-                        try:
-                            metadata_sql = f"""
-                                SELECT column_name, data_type
-                                FROM INFORMATION_SCHEMA.COLUMNS
-                                WHERE LOWER(table_name) = LOWER('{table_name}')
-                                ORDER BY ordinal_position
-                            """
-
-                            # Execute metadata query (recursion-safe - won't trigger this path again)
-                            metadata_result = iris.sql.exec(metadata_sql)
-                            metadata_rows = list(metadata_result)
-
-                            if metadata_rows:
-                                for col_name, col_type in metadata_rows:
-                                    # Map IRIS types to PostgreSQL OIDs
-                                    type_oid = self._map_iris_type_to_oid(col_type)
-                                    columns.append(
-                                        {
-                                            "name": col_name,
-                                            "type_oid": type_oid,
-                                            "type_size": -1,
-                                            "type_modifier": -1,
-                                            "format_code": 0,
-                                        }
-                                    )
-                                logger.info(
-                                    f"✅ Generated {len(columns)} column metadata from table structure",
-                                    table=table_name,
-                                    columns=[c["name"] for c in columns],
-                                    session_id=session_id,
-                                )
-                            else:
-                                # No metadata found - fall back to generic
-                                logger.warning(
-                                    f"No column metadata found for table {table_name}, using generic",
-                                    session_id=session_id,
-                                )
-                                columns.append(
-                                    {
-                                        "name": "column1",
-                                        "type_oid": 25,  # TEXT
-                                        "type_size": -1,
-                                        "type_modifier": -1,
-                                        "format_code": 0,
-                                    }
-                                )
-                        except Exception as metadata_error:
-                            logger.warning(
-                                "Failed to query column metadata",
-                                error=str(metadata_error),
-                                table=table_name,
-                                session_id=session_id,
-                            )
-                            # Fall back to generic column
-                            columns.append(
-                                {
-                                    "name": "column1",
-                                    "type_oid": 25,  # TEXT
-                                    "type_size": -1,
-                                    "type_modifier": -1,
-                                    "format_code": 0,
-                                }
-                            )
-                    else:
-                        # Couldn't parse table name - use generic column
-                        logger.warning(
-                            "Could not extract table name from SELECT, using generic column",
-                            sql=sql[:100],
-                            session_id=session_id,
-                        )
-                        columns.append(
-                            {
-                                "name": "column1",
-                                "type_oid": 25,  # TEXT
-                                "type_size": -1,
-                                "type_modifier": -1,
-                                "format_code": 0,
-                            }
-                        )
+                    elif sql_upper.startswith("SELECT"):
+                        columns = self._discover_metadata(sql, session_id)
 
                 # PROFILING: Fetch complete
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
@@ -3565,6 +3285,121 @@ class IRISExecutor:
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self.thread_pool, _sync_execute)
+
+    def _discover_metadata(
+        self,
+        sql: str,
+        session_id: str | None = None,
+        expected_count: int | None = None,
+        rows: list[list[Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Unified multi-layer metadata discovery for IRIS queries.
+        Supports discovery even when rows are empty (Describe phase).
+
+        Layers:
+        1. LIMIT 0 check (Database-native approach)
+        1.5. SELECT * expansion using INFORMATION_SCHEMA
+        2. SQL Parsing (Explicit column extraction)
+        3. Generic fallback
+        """
+        columns = []
+        sql_upper = sql.strip().upper()
+
+        # Layer 1: LIMIT 0 pattern
+        limit_zero_names = self._discover_metadata_with_limit_zero(sql, session_id)
+        if limit_zero_names and (expected_count is None or len(limit_zero_names) == expected_count):
+            logger.info("✅ Layer 1 SUCCESS: LIMIT 0 metadata discovery")
+            for i, name in enumerate(limit_zero_names):
+                inferred_type = (
+                    self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                )
+                columns.append(
+                    {
+                        "name": name,
+                        "type_oid": inferred_type,
+                        "type_size": -1,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    }
+                )
+            return columns
+
+        # Layer 1.5: SELECT * expansion
+        if "*" in sql_upper and "SELECT" in sql_upper:
+            expanded_names = self._expand_select_star(
+                sql, expected_count or 0, session_id=session_id
+            )
+            if expanded_names and (expected_count is None or len(expanded_names) == expected_count):
+                logger.info("✅ Layer 1.5 SUCCESS: Table metadata expansion")
+                for i, name in enumerate(expanded_names):
+                    inferred_type = (
+                        self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                    )
+                    columns.append(
+                        {
+                            "name": name,
+                            "type_oid": inferred_type,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    )
+                return columns
+
+        # Layer 2: SQL Parsing (Explicit columns)
+        extracted_aliases = self.alias_extractor.extract_column_aliases(sql)
+        if extracted_aliases and (
+            expected_count is None or len(extracted_aliases) == expected_count
+        ):
+            logger.info("✅ Layer 2 SUCCESS: SQL parsing column extraction")
+            for i, alias in enumerate(extracted_aliases):
+                col_name = alias.lower() if isinstance(alias, str) else alias
+                inferred_type = (
+                    self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                )
+
+                # Check for CAST overrides
+                cast_oid = self._detect_cast_type_oid(sql, col_name)
+                if cast_oid:
+                    inferred_type = cast_oid
+
+                # Handle CURRENT_TIMESTAMP
+                if "CURRENT_TIMESTAMP" in sql_upper and inferred_type == 25:
+                    inferred_type = 1114
+
+                col_name = self._normalize_iris_column_name(col_name, sql, inferred_type)
+                columns.append(
+                    {
+                        "name": col_name,
+                        "type_oid": inferred_type,
+                        "type_size": -1,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    }
+                )
+            return columns
+
+        # Layer 3: Last resort fallback
+        actual_count = expected_count if expected_count is not None else 1
+        logger.info(f"⚠️ Layer 3: Using generic fallback for {actual_count} columns")
+        use_qcolumn = "SELECT" in sql_upper and "FROM" not in sql_upper
+
+        for i in range(actual_count):
+            inferred_type = (
+                self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+            )
+            col_name = "?column?" if use_qcolumn else f"column{i + 1}"
+            columns.append(
+                {
+                    "name": col_name,
+                    "type_oid": inferred_type,
+                    "type_size": -1,
+                    "type_modifier": -1,
+                    "format_code": 0,
+                }
+            )
+        return columns
 
     async def _execute_external_async(
         self, sql: str, params: list | None = None, session_id: str | None = None
@@ -4019,9 +3854,8 @@ class IRISExecutor:
         """
         Layer 1.5: Expand SELECT * queries using INFORMATION_SCHEMA (2025-11-14 fix).
 
-        When a query contains "SELECT * FROM table", IRIS doesn't provide column metadata
-        in the result object. This method queries INFORMATION_SCHEMA to get the actual
-        column names from the table definition.
+        Updated to handle multiple tables in JOINs by extracting all table names
+        and combining their column definitions in order.
 
         Args:
             sql: Original SQL query
@@ -4030,62 +3864,50 @@ class IRISExecutor:
 
         Returns:
             List of column names if successful, None if method fails
-
-        References:
-            - asyncpg test failure: KeyError 'id' in test_fetch_all_rows (2025-11-14)
         """
         try:
-            import re
-
             import iris
 
-            # Extract table name from SELECT * FROM table_name pattern
-            # Handle variations: SELECT *, SELECT * FROM, with ORDER BY, WHERE, etc.
-            select_star_pattern = r"SELECT\s+\*\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
-            match = re.search(select_star_pattern, sql, re.IGNORECASE)
-
-            if not match:
-                logger.debug(
-                    "Not a SELECT * FROM table query - pattern did not match",
-                    sql=sql[:100],
-                    session_id=session_id,
-                )
+            if not re.search(r"SELECT\s+\*\s+FROM", sql, re.IGNORECASE):
                 return None
 
-            table_name = match.group(1)
+            table_names = self._extract_table_names_from_select(sql)
+            if not table_names:
+                return None
 
             logger.debug(
-                "Detected SELECT * query - expanding via INFORMATION_SCHEMA",
-                table_name=table_name,
-                sql=sql[:100],
+                "Detected SELECT * query with tables",
+                tables=table_names,
                 session_id=session_id,
             )
 
-            # Query INFORMATION_SCHEMA for column names
-            metadata_sql = f"""
-                SELECT column_name
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE LOWER(table_name) = LOWER('{table_name}')
-                ORDER BY ordinal_position
-            """
+            all_column_names = []
+            for table_name in table_names:
+                metadata_sql = f"""
+                    SELECT column_name
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE LOWER(table_name) = LOWER('{table_name}')
+                    ORDER BY ordinal_position
+                """
 
-            result = iris.sql.exec(metadata_sql)
-            column_names = [row[0] for row in result]
+                result = iris.sql.exec(metadata_sql)
+                table_columns = [row[0] for row in result]
+                all_column_names.extend(table_columns)
 
-            if column_names:
+            if all_column_names:
                 logger.info(
                     "✅ SELECT * expansion successful",
-                    table=table_name,
-                    columns=column_names,
+                    tables=table_names,
+                    columns=all_column_names,
                     expected=expected_columns,
-                    actual=len(column_names),
+                    actual=len(all_column_names),
                     session_id=session_id,
                 )
-                return column_names
+                return all_column_names
             else:
                 logger.warning(
-                    "No columns found in INFORMATION_SCHEMA",
-                    table=table_name,
+                    "No columns found in INFORMATION_SCHEMA for tables",
+                    tables=table_names,
                     session_id=session_id,
                 )
                 return None
@@ -4430,42 +4252,43 @@ class IRISExecutor:
         }
         return type_mapping.get(str(iris_type).upper(), 25)  # Default to text
 
-    def _extract_table_name_from_select(self, sql: str) -> str | None:
+    def _extract_table_names_from_select(self, sql: str) -> list[str]:
         """
-        Extract table name from SELECT query (simple parsing).
+        Extract all table names from SELECT query (multi-table aware).
 
         Handles:
         - SELECT * FROM table_name
-        - SELECT col1, col2 FROM table_name
-        - SELECT * FROM "table_name"
-        - SELECT * FROM "schema"."table_name" (Prisma format)
-        - SELECT * FROM schema."table_name"
-        - SELECT * FROM table_name WHERE ...
+        - SELECT * FROM table_a JOIN table_b
+        - SELECT * FROM "schema"."table_name"
 
         Returns:
-            Table name or None if cannot parse
+            List of table names
         """
         import re
 
-        # CRITICAL FIX: Handle Prisma-style quoted identifiers
-        # Prisma sends: FROM "public"."test_users"
-        # We need to extract "test_users" (the table name, not schema)
+        from_match = re.search(r"FROM\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.IGNORECASE)
+        if not from_match:
+            # Try quoted identifier fallback
+            match = re.search(r'\bFROM\s+(?:"?\w+"?\s*\.\s*)*"?(\w+)"?', sql, re.IGNORECASE)
+            if match:
+                return [match.group(1)]
+            return []
 
-        # Pattern 1: FROM "schema"."table_name" - extract last quoted identifier
-        match = re.search(r'\bFROM\s+(?:"?\w+"?\s*\.\s*)*"?(\w+)"?', sql, re.IGNORECASE)
-        if match:
-            table_name = match.group(1)
-            logger.debug(f"Extracted table name: {table_name}", sql=sql[:100])
-            return table_name
+        table_names = [from_match.group(1)]
 
-        # Fallback: Simple unquoted table name
-        match = re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE)
-        if match:
-            table_name = match.group(1)
-            logger.debug(f"Extracted table name (simple): {table_name}", sql=sql[:100])
-            return table_name
+        # Extract JOINs
+        join_matches = re.findall(r"JOIN\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.IGNORECASE)
+        table_names.extend(join_matches)
 
-        return None
+        # Handle quoted JOINs
+        quoted_join_matches = re.findall(
+            r'\bJOIN\s+(?:"?\w+"?\s*\.\s*)*"?(\w+)"?', sql, re.IGNORECASE
+        )
+        for t in quoted_join_matches:
+            if t not in table_names:
+                table_names.append(t)
+
+        return table_names
 
     def _map_iris_type_to_oid(self, iris_type: str) -> int:
         """
