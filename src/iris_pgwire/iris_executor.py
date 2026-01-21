@@ -40,6 +40,36 @@ from .type_mapping import (
 logger = structlog.get_logger()
 
 
+class MockResult:
+    """Mock result object for RETURNING emulation"""
+
+    def __init__(self, rows, meta=None):
+        self._rows = rows if rows is not None else []
+        self._meta = meta
+        self.description = meta
+        self.rowcount = len(self._rows)
+        self._index = 0
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        if self._index < len(self._rows):
+            row = self._rows[self._index]
+            self._index += 1
+            return row
+        return None
+
+    def fetch(self):
+        return self._rows
+
+    def close(self):
+        pass
+
+
 class IRISExecutor:
     """
     IRIS SQL Execution Handler
@@ -732,6 +762,7 @@ class IRISExecutor:
 
                 rows_affected = 0
                 for params in params_list:
+                    inline_sql = "N/A"
                     try:
                         # Build inline SQL by replacing ? placeholders with actual values
                         inline_sql = normalized_sql
@@ -1063,8 +1094,210 @@ class IRISExecutor:
                     def fetchone(self):
                         return None
 
+                    def __iter__(self):
+                        return iter([])
+
                 return DummyCursor()
             raise e
+
+    def _parse_returning_clause(
+        self, sql: str
+    ) -> tuple[str | None, str | None, list[str] | None, str | None, str]:
+        """
+        Parse RETURNING clause from SQL and return metadata.
+        Returns: (operation, table, columns, where_clause, stripped_sql)
+        """
+        import re
+
+        returning_operation = None
+        returning_table = None
+        returning_columns = None
+        returning_where_clause = None
+        stripped_sql = sql
+
+        # Use improved regex to handle trailing semicolons and greedy matching
+        # Pattern: look for RETURNING followed by anything until semicolon or end of string
+        returning_pattern = r"\s+RETURNING\s+(.*?)($|;)"
+        returning_match = re.search(returning_pattern, sql, re.IGNORECASE | re.DOTALL)
+
+        if not returning_match:
+            return None, None, None, None, sql
+
+        returning_clause = returning_match.group(1).strip()
+
+        # Parse column names from RETURNING clause
+        # Format: "schema"."table"."col1", "schema"."table"."col2", ...
+        # Or just: col1, col2, ...
+        raw_cols = [c.strip() for c in returning_clause.split(",")]
+        returning_columns = []
+        for col in raw_cols:
+            # Extract just the column name (last part after dots)
+            col_match = re.search(r'"?(\w+)"?\s*$', col)
+            if col_match:
+                returning_columns.append(col_match.group(1))
+
+        # Determine operation type and extract table/where clause
+        sql_upper = sql.upper().strip()
+        if sql_upper.startswith("INSERT"):
+            returning_operation = "INSERT"
+            table_match = re.search(
+                r'INSERT\s+INTO\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                sql,
+                re.IGNORECASE,
+            )
+            if table_match:
+                returning_table = table_match.group(1)
+        elif sql_upper.startswith("UPDATE"):
+            returning_operation = "UPDATE"
+            table_match = re.search(
+                r'UPDATE\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                sql,
+                re.IGNORECASE,
+            )
+            if table_match:
+                returning_table = table_match.group(1)
+            # Extract WHERE clause (everything between WHERE and RETURNING)
+            where_match = re.search(
+                r"\bWHERE\s+(.+?)\s+RETURNING\b",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if where_match:
+                returning_where_clause = where_match.group(1).strip()
+        elif sql_upper.startswith("DELETE"):
+            returning_operation = "DELETE"
+            table_match = re.search(
+                r'DELETE\s+FROM\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                sql,
+                re.IGNORECASE,
+            )
+            if table_match:
+                returning_table = table_match.group(1)
+            # Extract WHERE clause
+            where_match = re.search(
+                r"\bWHERE\s+(.+?)\s+RETURNING\b",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if where_match:
+                returning_where_clause = where_match.group(1).strip()
+
+        # Strip RETURNING clause from SQL using the same improved regex
+        stripped_sql = re.sub(
+            returning_pattern,
+            r"\2",  # Keep the terminator (semicolon or empty)
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+        return (
+            returning_operation,
+            returning_table,
+            returning_columns,
+            returning_where_clause,
+            stripped_sql,
+        )
+
+    def _emulate_returning(
+        self,
+        operation: str,
+        table: str,
+        columns: list[str],
+        where_clause: str | None,
+        params: list | None,
+        is_embedded: bool,
+        connection: Any = None,
+    ) -> tuple[list[Any], Any]:
+        """
+        Emulate PostgreSQL RETURNING clause for IRIS.
+
+        Returns: (rows, metadata)
+        """
+        import re
+
+        col_list = ", ".join([f'"{col}"' for col in columns])
+        rows = []
+        meta = None
+
+        # Helper to execute and materialize results
+        def _fetch_results(sql, select_params=None):
+            if is_embedded:
+                import iris
+
+                res = iris.sql.exec(sql, *select_params) if select_params else iris.sql.exec(sql)
+                return list(res), getattr(res, "_meta", None)
+            else:
+                cursor = connection.cursor()
+                if select_params:
+                    cursor.execute(sql, select_params)
+                else:
+                    cursor.execute(sql)
+                r = cursor.fetchall()
+                m = cursor.description
+                cursor.close()
+                return r, m
+
+        try:
+            if operation == "INSERT":
+                # Try to get the last inserted ID
+                id_rows, _ = _fetch_results("SELECT LAST_IDENTITY()")
+                last_id = id_rows[0][0] if id_rows and id_rows[0] else None
+
+                if last_id is not None and last_id != "" and last_id != 0:
+                    # Try lookup by %ID first
+                    rows, meta = _fetch_results(
+                        f'SELECT {col_list} FROM SQLUser."{table}" WHERE %ID = ?', [last_id]
+                    )
+                    if not rows:
+                        id_cols = [
+                            c
+                            for c in columns
+                            if c.lower() in ("id", "identity", "pk", table.lower() + "id")
+                        ]
+                        for id_col in id_cols:
+                            rows, meta = _fetch_results(
+                                f'SELECT {col_list} FROM SQLUser."{table}" WHERE "{id_col}" = ?',
+                                [last_id],
+                            )
+                            if rows:
+                                break
+
+                if not rows:
+                    rows, meta = _fetch_results(
+                        f'SELECT TOP 1 {col_list} FROM SQLUser."{table}" ORDER BY %ID DESC'
+                    )
+
+            elif operation in ("UPDATE", "DELETE"):
+                if where_clause:
+                    # Translate schema references in WHERE clause
+                    translated_where = re.sub(
+                        r'"public"\s*\.\s*"(\w+)"',
+                        r'SQLUser."\1"',
+                        where_clause,
+                        flags=re.IGNORECASE,
+                    )
+                    translated_where = re.sub(
+                        r'\bpublic\s*\.\s*"(\w+)"',
+                        r'SQLUser."\1"',
+                        translated_where,
+                        flags=re.IGNORECASE,
+                    )
+
+                    select_sql = (
+                        f'SELECT {col_list} FROM SQLUser."{table}" WHERE {translated_where}'
+                    )
+
+                    # Extract WHERE clause parameters (they are the last N parameters)
+                    where_param_count = len(re.findall(r"\?", where_clause))
+                    where_params = (
+                        params[-where_param_count:] if params and where_param_count > 0 else None
+                    )
+                    rows, meta = _fetch_results(select_sql, where_params)
+
+        except Exception as e:
+            logger.error(f"RETURNING emulation failed for {operation}", error=str(e))
+
+        return rows, meta
 
     async def _execute_embedded_async(
         self, sql: str, params: list | None = None, session_id: str | None = None
@@ -2687,105 +2920,23 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
-                # CRITICAL: Handle INSERT/UPDATE/DELETE...RETURNING (IRIS doesn't support RETURNING)
-                # Prisma sends: INSERT INTO table (cols) VALUES (vals) RETURNING col1, col2, ...
-                #           or: UPDATE table SET ... WHERE ... RETURNING col1, col2, ...
-                #           or: DELETE FROM table WHERE ... RETURNING col1, col2, ...
-                # We need to: 1) Strip RETURNING, 2) Execute statement, 3) Return the affected row(s)
-                returning_columns = None
-                returning_table = None
-                returning_where_clause = None  # For UPDATE/DELETE
-                returning_operation = None  # 'INSERT', 'UPDATE', or 'DELETE'
-                if re.search(r"\bRETURNING\b", optimized_sql, re.IGNORECASE):
-                    # Extract RETURNING columns
-                    returning_match = re.search(
-                        r"\bRETURNING\s+(.+)$", optimized_sql, re.IGNORECASE | re.DOTALL
+                # Handle RETURNING clause (IRIS doesn't support it natively)
+                (
+                    returning_operation,
+                    returning_table,
+                    returning_columns,
+                    returning_where_clause,
+                    optimized_sql,
+                ) = self._parse_returning_clause(optimized_sql)
+
+                if returning_operation:
+                    logger.info(
+                        "RETURNING clause detected - will emulate",
+                        operation=returning_operation,
+                        table=returning_table,
+                        columns=returning_columns,
+                        session_id=session_id,
                     )
-                    if returning_match:
-                        returning_clause = returning_match.group(1).strip()
-                        # Parse column names from RETURNING clause
-                        # Format: "schema"."table"."col1", "schema"."table"."col2", ...
-                        # Or just: col1, col2, ...
-                        raw_cols = [c.strip() for c in returning_clause.split(",")]
-                        returning_columns = []
-                        for col in raw_cols:
-                            # Extract just the column name (last part after dots)
-                            col_match = re.search(r'"?(\w+)"?\s*$', col)
-                            if col_match:
-                                returning_columns.append(col_match.group(1))
-
-                        # Determine operation type and extract table/where clause
-                        sql_upper = optimized_sql.upper()
-                        if sql_upper.strip().startswith("INSERT"):
-                            returning_operation = "INSERT"
-                            # Extract table name from INSERT INTO clause
-                            table_match = re.search(
-                                r'INSERT\s+INTO\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
-                                optimized_sql,
-                                re.IGNORECASE,
-                            )
-                            if table_match:
-                                returning_table = table_match.group(1)
-                        elif sql_upper.strip().startswith("UPDATE"):
-                            returning_operation = "UPDATE"
-                            # Extract table name from UPDATE clause
-                            table_match = re.search(
-                                r'UPDATE\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
-                                optimized_sql,
-                                re.IGNORECASE,
-                            )
-                            if table_match:
-                                returning_table = table_match.group(1)
-                            # Extract WHERE clause (everything between WHERE and RETURNING)
-                            where_match = re.search(
-                                r"\bWHERE\s+(.+?)\s+RETURNING\b",
-                                optimized_sql,
-                                re.IGNORECASE | re.DOTALL,
-                            )
-                            if where_match:
-                                returning_where_clause = where_match.group(1).strip()
-                        elif sql_upper.strip().startswith("DELETE"):
-                            returning_operation = "DELETE"
-                            # Extract table name from DELETE FROM clause
-                            table_match = re.search(
-                                r'DELETE\s+FROM\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
-                                optimized_sql,
-                                re.IGNORECASE,
-                            )
-                            if table_match:
-                                returning_table = table_match.group(1)
-                            # Extract WHERE clause
-                            where_match = re.search(
-                                r"\bWHERE\s+(.+?)\s+RETURNING\b",
-                                optimized_sql,
-                                re.IGNORECASE | re.DOTALL,
-                            )
-                            if where_match:
-                                returning_where_clause = where_match.group(1).strip()
-
-                        logger.info(
-                            "RETURNING clause detected - will emulate",
-                            returning_operation=returning_operation,
-                            returning_columns=returning_columns,
-                            returning_table=returning_table,
-                            returning_where_clause=returning_where_clause[:100]
-                            if returning_where_clause
-                            else None,
-                            session_id=session_id,
-                        )
-
-                        # Strip RETURNING clause from SQL
-                        optimized_sql = re.sub(
-                            r"\s+RETURNING\s+.+$",
-                            "",
-                            optimized_sql,
-                            flags=re.IGNORECASE | re.DOTALL,
-                        )
-                        logger.info(
-                            "Stripped RETURNING clause",
-                            sql_preview=optimized_sql[:100],
-                            session_id=session_id,
-                        )
 
                 logger.debug(
                     "Executing IRIS query",
@@ -2807,61 +2958,24 @@ class IRISExecutor:
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
 
-                # SPECIAL CASE: DELETE with RETURNING - we need to SELECT BEFORE deleting
-                # because after DELETE the row won't exist anymore
-                delete_returning_result = None
-                if (
-                    returning_operation == "DELETE"
-                    and returning_columns
-                    and returning_table
-                    and returning_where_clause
-                ):
-                    try:
-                        col_list = ", ".join([f'"{col}"' for col in returning_columns])
-                        # Translate the WHERE clause schema references
-                        translated_where = re.sub(
-                            r'"public"\s*\.\s*"(\w+)"',
-                            r'SQLUser."\1"',
-                            returning_where_clause,
-                            flags=re.IGNORECASE,
-                        )
-                        translated_where = re.sub(
-                            r'\bpublic\s*\.\s*"(\w+)"',
-                            r'SQLUser."\1"',
-                            translated_where,
-                            flags=re.IGNORECASE,
-                        )
-                        select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE {translated_where}'
-
-                        # Count ? placeholders to get params
-                        where_param_count = len(re.findall(r"\?", returning_where_clause))
-                        if optimized_params and where_param_count > 0:
-                            # For DELETE, all params are for WHERE clause
-                            where_params = optimized_params[-where_param_count:]
-                            logger.info(
-                                "Pre-DELETE: Fetching row before deletion",
-                                select_sql=select_sql[:200],
-                                where_params=where_params,
-                                session_id=session_id,
-                            )
-                            delete_returning_result = iris.sql.exec(select_sql, *where_params)
-                        else:
-                            delete_returning_result = iris.sql.exec(select_sql)
-
-                        # Materialize the result before DELETE (iterator would be invalid after)
-                        delete_returning_rows = list(delete_returning_result)
+                # Pre-fetch rows for DELETE RETURNING (must happen before deletion)
+                delete_returning_rows = []
+                delete_returning_meta = None
+                if returning_operation == "DELETE" and returning_columns:
+                    delete_returning_rows, delete_returning_meta = self._emulate_returning(
+                        returning_operation,
+                        returning_table,
+                        returning_columns,
+                        returning_where_clause,
+                        optimized_params,
+                        is_embedded=True,
+                    )
+                    if delete_returning_rows:
                         logger.info(
-                            "Pre-DELETE: Row captured for RETURNING",
+                            "Pre-DELETE: Row(s) captured for RETURNING",
                             row_count=len(delete_returning_rows),
                             session_id=session_id,
                         )
-                    except Exception as e:
-                        logger.error(
-                            "Pre-DELETE SELECT failed",
-                            error=str(e),
-                            session_id=session_id,
-                        )
-                        delete_returning_rows = []
 
                 # CRITICAL FIX: Split SQL by semicolons to handle multiple statements
                 # IRIS iris.sql.exec() cannot handle "STMT1; STMT2" in a single call
@@ -2893,143 +3007,21 @@ class IRISExecutor:
                     result = self._safe_execute(optimized_sql, optimized_params, is_embedded=True)
 
                 # RETURNING emulation: After INSERT/UPDATE/DELETE, fetch the affected row(s)
-                if returning_columns and returning_table and returning_operation:
-                    logger.info(
-                        f"Emulating RETURNING for {returning_operation}",
-                        table=returning_table,
-                        columns=returning_columns,
-                        operation=returning_operation,
-                        session_id=session_id,
-                    )
-                    try:
-                        col_list = ", ".join([f'"{col}"' for col in returning_columns])
-
-                        if returning_operation == "INSERT":
-                            # Get the last inserted ID using LAST_IDENTITY()
-                            id_result = iris.sql.exec("SELECT LAST_IDENTITY()")
-                            last_id = None
-                            for row in id_result:
-                                last_id = row[0]
-                                break
-
-                            # Handle empty string (LAST_IDENTITY() returns '' for non-IDENTITY tables)
-                            if last_id is None or last_id == "" or last_id == 0:
-                                # Fallback: use MAX(id) - not ideal for concurrent inserts but works
-                                logger.info(
-                                    "LAST_IDENTITY() returned empty, falling back to MAX(id)",
-                                    last_id_value=repr(last_id),
-                                    session_id=session_id,
-                                )
-                                max_result = iris.sql.exec(
-                                    f'SELECT MAX("id") FROM SQLUser."{returning_table}"'
-                                )
-                                for row in max_result:
-                                    last_id = row[0]
-                                    break
-
-                            if last_id is not None and last_id != "" and last_id != 0:
-                                # Build SELECT to fetch the inserted row
-                                select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE "id" = ?'
-                                logger.info(
-                                    "Fetching inserted row",
-                                    select_sql=select_sql,
-                                    last_id=last_id,
-                                    session_id=session_id,
-                                )
-                                result = iris.sql.exec(select_sql, last_id)
-                            else:
-                                logger.warning(
-                                    "Could not determine last inserted ID - RETURNING emulation may fail",
-                                    last_id_value=repr(last_id),
-                                    session_id=session_id,
-                                )
-
-                        elif returning_operation == "DELETE":
-                            # For DELETE, we already captured the row BEFORE deletion
-                            # Use the pre-captured delete_returning_rows
-                            if delete_returning_rows:
-                                logger.info(
-                                    "Using pre-captured DELETE RETURNING rows",
-                                    row_count=len(delete_returning_rows),
-                                    session_id=session_id,
-                                )
-
-                                # Create a mock result object that yields the pre-captured rows
-                                class MockResult:
-                                    def __init__(self, rows):
-                                        self._rows = rows
-                                        self._meta = None  # No metadata available
-
-                                    def __iter__(self):
-                                        return iter(self._rows)
-
-                                result = MockResult(delete_returning_rows)
-                            else:
-                                logger.warning(
-                                    "DELETE RETURNING: No pre-captured rows available",
-                                    session_id=session_id,
-                                )
-
-                        elif returning_operation == "UPDATE":
-                            # For UPDATE, use the WHERE clause to fetch the affected row(s)
-                            if returning_where_clause:
-                                # Translate the WHERE clause schema references
-                                translated_where = re.sub(
-                                    r'"public"\s*\.\s*"(\w+)"',
-                                    r'SQLUser."\1"',
-                                    returning_where_clause,
-                                    flags=re.IGNORECASE,
-                                )
-                                # Also handle unquoted public references
-                                translated_where = re.sub(
-                                    r'\bpublic\s*\.\s*"(\w+)"',
-                                    r'SQLUser."\1"',
-                                    translated_where,
-                                    flags=re.IGNORECASE,
-                                )
-
-                                # Build SELECT with the same WHERE clause
-                                select_sql = f'SELECT {col_list} FROM SQLUser."{returning_table}" WHERE {translated_where}'
-
-                                logger.info(
-                                    "Fetching UPDATEd row(s) using WHERE clause",
-                                    select_sql=select_sql[:200],
-                                    param_count=len(optimized_params) if optimized_params else 0,
-                                    session_id=session_id,
-                                )
-
-                                # For UPDATE, the WHERE clause params are the LAST params
-                                # Prisma UPDATE format: UPDATE SET col=$1 WHERE id=$2
-                                # Note: By this point, $N placeholders have been converted to ?
-                                where_param_count = len(re.findall(r"\?", returning_where_clause))
-
-                                if optimized_params and where_param_count > 0:
-                                    # Take the last N params for the WHERE clause
-                                    where_params = optimized_params[-where_param_count:]
-                                    logger.info(
-                                        "Using WHERE clause parameters",
-                                        where_param_count=where_param_count,
-                                        where_params=where_params,
-                                        session_id=session_id,
-                                    )
-
-                                    # The SELECT already uses ? placeholders
-                                    result = iris.sql.exec(select_sql, *where_params)
-                                else:
-                                    # No params needed
-                                    result = iris.sql.exec(select_sql)
-                            else:
-                                logger.warning(
-                                    "UPDATE without WHERE clause - RETURNING emulation may fail",
-                                    session_id=session_id,
-                                )
-                    except Exception as e:
-                        logger.error(
-                            "RETURNING emulation failed",
-                            error=str(e),
-                            operation=returning_operation,
-                            session_id=session_id,
+                if returning_operation and returning_columns:
+                    if returning_operation == "DELETE":
+                        # Use pre-captured rows for DELETE
+                        result = MockResult(delete_returning_rows, delete_returning_meta)
+                    else:
+                        # Emulate for INSERT/UPDATE
+                        rows, meta = self._emulate_returning(
+                            returning_operation,
+                            returning_table,
+                            returning_columns,
+                            returning_where_clause,
+                            optimized_params,
+                            is_embedded=True,
                         )
+                        result = MockResult(rows, meta)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -3200,7 +3192,10 @@ class IRISExecutor:
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
                 # Determine command tag based on SQL type
-                command_tag = self._determine_command_tag(sql, len(rows))
+                affected_count = len(rows)
+                if affected_count == 0 and hasattr(result, "rowcount") and result.rowcount > 0:
+                    affected_count = result.rowcount
+                command_tag = self._determine_command_tag(sql, affected_count)
 
                 # PROFILING: Log detailed breakdown
                 logger.info(
@@ -3463,6 +3458,24 @@ class IRISExecutor:
                         session_id=session_id,
                     )
 
+                # Handle RETURNING clause
+                (
+                    returning_operation,
+                    returning_table,
+                    returning_columns,
+                    returning_where_clause,
+                    normalized_sql,
+                ) = self._parse_returning_clause(normalized_sql)
+
+                if returning_operation:
+                    logger.info(
+                        "RETURNING clause detected - will emulate (external mode)",
+                        operation=returning_operation,
+                        table=returning_table,
+                        columns=returning_columns,
+                        session_id=session_id,
+                    )
+
                 # Apply vector query optimization (convert parameterized vectors to literals)
                 # Use normalized_sql as input instead of original sql
                 optimized_sql = normalized_sql
@@ -3545,6 +3558,26 @@ class IRISExecutor:
 
                 t_conn_elapsed = (time.perf_counter() - t_conn_start) * 1000
 
+                # Pre-fetch rows for DELETE RETURNING
+                delete_returning_rows = []
+                delete_returning_meta = None
+                if returning_operation == "DELETE" and returning_columns:
+                    delete_returning_rows, delete_returning_meta = self._emulate_returning(
+                        returning_operation,
+                        returning_table,
+                        returning_columns,
+                        returning_where_clause,
+                        optimized_params,
+                        is_embedded=False,
+                        connection=conn,
+                    )
+                    if delete_returning_rows:
+                        logger.info(
+                            "Pre-DELETE: Row(s) captured for RETURNING (external)",
+                            row_count=len(delete_returning_rows),
+                            session_id=session_id,
+                        )
+
                 # PROFILING: IRIS execution timing
                 t_iris_start = time.perf_counter()
 
@@ -3561,6 +3594,24 @@ class IRISExecutor:
 
                 # Execute last statement and capture cursor
                 cursor = self._safe_execute(statements[-1], optimized_params, is_embedded=False)
+
+                # RETURNING emulation
+                if returning_operation and returning_columns:
+                    if returning_operation == "DELETE":
+                        # Use pre-captured rows
+                        cursor = MockResult(delete_returning_rows, delete_returning_meta)
+                    else:
+                        # Emulate for INSERT/UPDATE
+                        rows, meta = self._emulate_returning(
+                            returning_operation,
+                            returning_table,
+                            returning_columns,
+                            returning_where_clause,
+                            optimized_params,
+                            is_embedded=False,
+                            connection=conn,
+                        )
+                        cursor = MockResult(rows, meta)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -3635,8 +3686,7 @@ class IRISExecutor:
                             }
                         )
 
-                # Fetch all rows for SELECT queries
-                if sql.upper().strip().startswith("SELECT") and columns:
+                if (sql.upper().strip().startswith("SELECT") or returning_operation) and columns:
                     try:
                         results = cursor.fetchall()
 
@@ -3737,7 +3787,10 @@ class IRISExecutor:
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
                 # Determine command tag
-                command_tag = self._determine_command_tag(sql, len(rows))
+                affected_count = len(rows)
+                if affected_count == 0 and hasattr(cursor, "rowcount") and cursor.rowcount > 0:
+                    affected_count = cursor.rowcount
+                command_tag = self._determine_command_tag(sql, affected_count)
 
                 # PROFILING: Log detailed breakdown
                 logger.info(

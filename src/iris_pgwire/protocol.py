@@ -3304,6 +3304,10 @@ class PGWireProtocol:
                 return
 
             # Execute via IRIS with parameters (vector optimizer will transform if needed)
+            # Ensure any buffered DML is flushed before executing a non-batch query
+            # This ensures visibility of previous buffered inserts for the current query
+            await self.flush_batch()
+
             result = await self.iris_executor.execute_query(
                 query, params=params if params else None
             )
@@ -3339,21 +3343,15 @@ class PGWireProtocol:
         Sync message has no body.
         """
         try:
-            # Fast Path: Defer batch flush until buffer size reaches 500.
-            # This allows multiple Sync cycles to be aggregated into one IRIS call.
-            if len(self.batch_params) >= 500:
+            # CRITICAL: Always flush batch on Sync if not empty.
+            # PostgreSQL protocol expects visibility after Sync.
+            if self.batch_params:
                 logger.info(
-                    "🔄 Sync: Buffer limit reached, flushing batch",
+                    "🔄 Sync: Flushing batch for visibility",
                     connection_id=self.connection_id,
                     size=len(self.batch_params),
                 )
                 await self.flush_batch()
-            else:
-                logger.debug(
-                    "🔄 Sync: Deferring flush",
-                    connection_id=self.connection_id,
-                    buffer_size=len(self.batch_params),
-                )
 
             # ALWAYS send ReadyForQuery to keep the client pipeline moving.
             await self.send_ready_for_query()
