@@ -16,6 +16,7 @@ contype values:
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 ConstraintType = Literal["c", "f", "p", "u", "t", "x"]
@@ -81,31 +82,31 @@ class PgConstraintEmulator:
 
     def from_iris_constraint(
         self,
-        schema: str,
         table_name: str,
         constraint_name: str,
         constraint_type: str,
         column_positions: list[int],
         ref_table_name: str | None = None,
         ref_column_positions: list[int] | None = None,
+        schema: str = IRIS_SCHEMA,
     ) -> PgConstraint:
         """
         Convert IRIS constraint metadata to pg_constraint row.
 
         Args:
-            schema: IRIS schema name (e.g., 'SQLUser')
             table_name: Table name
             constraint_name: Constraint name
             constraint_type: 'PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE', 'CHECK'
             column_positions: Column positions (attnum values)
             ref_table_name: Referenced table (FK only)
             ref_column_positions: Referenced column positions (FK only)
+            schema: IRIS schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             PgConstraint instance
         """
-        constraint_oid = self.oid_gen.get_constraint_oid(schema, constraint_name)
-        table_oid = self.oid_gen.get_table_oid(schema, table_name)
+        constraint_oid = self.oid_gen.get_constraint_oid(constraint_name, schema)
+        table_oid = self.oid_gen.get_table_oid(table_name, schema)
         namespace_oid = self.oid_gen.get_namespace_oid("public")
 
         # Map constraint type
@@ -121,7 +122,7 @@ class PgConstraintEmulator:
         confrelid = 0
         confkey: list[int] = []
         if contype == "f" and ref_table_name:
-            confrelid = self.oid_gen.get_table_oid(schema, ref_table_name)
+            confrelid = self.oid_gen.get_table_oid(ref_table_name, schema)
             confkey = ref_column_positions or []
 
         return PgConstraint(

@@ -6,6 +6,8 @@ Tests for deterministic OID generation per oid_generator_contract.md.
 
 import pytest
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 
 class TestOIDGeneratorBasic:
     """TC-1: Basic OID generation behavior."""
@@ -19,7 +21,7 @@ class TestOIDGeneratorBasic:
         from iris_pgwire.catalog.oid_generator import OIDGenerator
 
         gen = OIDGenerator()
-        oid = gen.get_oid("SQLUser", "table", "users")
+        oid = gen.get_oid("table", "users", IRIS_SCHEMA)
 
         assert isinstance(oid, int)
         assert 16384 <= oid <= 4294967295
@@ -30,9 +32,9 @@ class TestOIDGeneratorBasic:
 
         gen = OIDGenerator()
 
-        table_oid = gen.get_oid("SQLUser", "table", "users")
-        column_oid = gen.get_oid("SQLUser", "column", "users.id")
-        constraint_oid = gen.get_oid("SQLUser", "constraint", "users_pkey")
+        table_oid = gen.get_oid("table", "users", IRIS_SCHEMA)
+        column_oid = gen.get_oid("column", "users.id", IRIS_SCHEMA)
+        constraint_oid = gen.get_oid("constraint", "users_pkey", IRIS_SCHEMA)
 
         # All should be valid OIDs
         for oid in [table_oid, column_oid, constraint_oid]:
@@ -53,8 +55,8 @@ class TestOIDDeterminism:
 
         gen = OIDGenerator()
 
-        oid1 = gen.get_oid("SQLUser", "table", "users")
-        oid2 = gen.get_oid("SQLUser", "table", "users")
+        oid1 = gen.get_oid("table", "users", IRIS_SCHEMA)
+        oid2 = gen.get_oid("table", "users", IRIS_SCHEMA)
 
         assert oid1 == oid2
 
@@ -69,8 +71,8 @@ class TestOIDDeterminism:
         gen1 = OIDGenerator()
         gen2 = OIDGenerator()  # Fresh instance
 
-        oid1 = gen1.get_oid("SQLUser", "table", "users")
-        oid2 = gen2.get_oid("SQLUser", "table", "users")
+        oid1 = gen1.get_oid("table", "users", IRIS_SCHEMA)
+        oid2 = gen2.get_oid("table", "users", IRIS_SCHEMA)
 
         assert oid1 == oid2
 
@@ -89,9 +91,9 @@ class TestOIDUniqueness:
         gen = OIDGenerator()
 
         oids = [
-            gen.get_oid("SQLUser", "table", "users"),
-            gen.get_oid("SQLUser", "table", "orders"),
-            gen.get_oid("SQLUser", "table", "products"),
+            gen.get_oid("table", "users", IRIS_SCHEMA),
+            gen.get_oid("table", "orders", IRIS_SCHEMA),
+            gen.get_oid("table", "products", IRIS_SCHEMA),
         ]
 
         assert len(oids) == len(set(oids))  # All unique
@@ -107,10 +109,10 @@ class TestOIDUniqueness:
         gen = OIDGenerator()
 
         oids = [
-            gen.get_oid("SQLUser", "table", "users"),
-            gen.get_oid("SQLUser", "column", "users.id"),
-            gen.get_oid("SQLUser", "column", "users.name"),
-            gen.get_oid("SQLUser", "constraint", "users_pkey"),
+            gen.get_oid("table", "users", IRIS_SCHEMA),
+            gen.get_oid("column", "users.id", IRIS_SCHEMA),
+            gen.get_oid("column", "users.name", IRIS_SCHEMA),
+            gen.get_oid("constraint", "users_pkey", IRIS_SCHEMA),
         ]
 
         assert len(oids) == len(set(oids))  # All unique
@@ -122,7 +124,7 @@ class TestOIDUniqueness:
         gen = OIDGenerator()
 
         # Generate OIDs for 100 tables
-        oids = [gen.get_oid("SQLUser", "table", f"table_{i}") for i in range(100)]
+        oids = [gen.get_oid("table", f"table_{i}", IRIS_SCHEMA) for i in range(100)]
 
         assert len(oids) == len(set(oids))  # All unique
 
@@ -175,13 +177,13 @@ class TestOIDCache:
         gen = OIDGenerator()
 
         # First call generates and caches
-        oid1 = gen.get_oid("SQLUser", "table", "users")
+        oid1 = gen.get_oid("table", "users", IRIS_SCHEMA)
 
         # Verify cache contains the key
         assert len(gen._cache) > 0
 
         # Second call returns cached
-        oid2 = gen.get_oid("SQLUser", "table", "users")
+        oid2 = gen.get_oid("table", "users", IRIS_SCHEMA)
 
         assert oid1 == oid2
 
@@ -200,9 +202,9 @@ class TestCaseHandling:
         gen = OIDGenerator()
 
         # PostgreSQL is case-insensitive for unquoted identifiers
-        oid_lower = gen.get_oid("SQLUser", "table", "users")
-        oid_upper = gen.get_oid("SQLUser", "table", "USERS")
-        oid_mixed = gen.get_oid("SQLUser", "table", "Users")
+        oid_lower = gen.get_oid("table", "users", IRIS_SCHEMA)
+        oid_upper = gen.get_oid("table", "USERS", IRIS_SCHEMA)
+        oid_mixed = gen.get_oid("table", "Users", IRIS_SCHEMA)
 
         # All should be same (normalized)
         assert oid_lower == oid_upper == oid_mixed
@@ -221,9 +223,9 @@ class TestColumnOIDFormat:
 
         gen = OIDGenerator()
 
-        oid_id = gen.get_oid("SQLUser", "column", "users.id")
-        oid_name = gen.get_oid("SQLUser", "column", "users.name")
-        oid_other = gen.get_oid("SQLUser", "column", "orders.id")
+        oid_id = gen.get_oid("column", "users.id", IRIS_SCHEMA)
+        oid_name = gen.get_oid("column", "users.name", IRIS_SCHEMA)
+        oid_other = gen.get_oid("column", "orders.id", IRIS_SCHEMA)
 
         # Different columns same table
         assert oid_id != oid_name
@@ -239,11 +241,10 @@ class TestObjectIdentity:
         """Test ObjectIdentity dataclass creation."""
         from iris_pgwire.catalog.oid_generator import ObjectIdentity
 
-        identity = ObjectIdentity(
-            namespace="SQLUser", object_type="table", object_name="users"
-        )
+        identity = ObjectIdentity(namespace=IRIS_SCHEMA, object_type="table", object_name="users")
 
-        assert identity.namespace == "SQLUser"
+        assert identity.namespace == IRIS_SCHEMA
+
         assert identity.object_type == "table"
         assert identity.object_name == "users"
 
@@ -251,20 +252,16 @@ class TestObjectIdentity:
         """Test identity_string property."""
         from iris_pgwire.catalog.oid_generator import ObjectIdentity
 
-        identity = ObjectIdentity(
-            namespace="SQLUser", object_type="table", object_name="users"
-        )
+        identity = ObjectIdentity(namespace=IRIS_SCHEMA, object_type="table", object_name="users")
 
-        assert identity.identity_string == "SQLUser:table:users"
+        assert identity.identity_string == f"{IRIS_SCHEMA}:table:users"
 
     def test_object_identity_with_oid_generator(self):
         """Test using ObjectIdentity with OIDGenerator."""
         from iris_pgwire.catalog.oid_generator import ObjectIdentity, OIDGenerator
 
         gen = OIDGenerator()
-        identity = ObjectIdentity(
-            namespace="SQLUser", object_type="table", object_name="users"
-        )
+        identity = ObjectIdentity(namespace=IRIS_SCHEMA, object_type="table", object_name="users")
 
         oid = gen.get_oid_from_identity(identity)
 
@@ -281,8 +278,8 @@ class TestTableOIDShortcut:
 
         gen = OIDGenerator()
 
-        table_oid = gen.get_table_oid("SQLUser", "users")
-        direct_oid = gen.get_oid("SQLUser", "table", "users")
+        table_oid = gen.get_table_oid("users", IRIS_SCHEMA)
+        direct_oid = gen.get_oid("table", "users", IRIS_SCHEMA)
 
         assert table_oid == direct_oid
 
@@ -291,6 +288,6 @@ class TestTableOIDShortcut:
         from iris_pgwire.catalog.oid_generator import OIDGenerator
 
         gen = OIDGenerator()
-        oid = gen.get_table_oid("SQLUser", "users")
+        oid = gen.get_table_oid("users", IRIS_SCHEMA)
 
         assert oid >= 16384

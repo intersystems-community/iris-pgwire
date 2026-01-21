@@ -7,6 +7,8 @@ Validates end-to-end catalog function behavior.
 
 import pytest
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 
 class TestCatalogFunctionsIntegration:
     """Test catalog functions integration with real executor."""
@@ -27,9 +29,9 @@ class TestCatalogFunctionsIntegration:
                 return {
                     "success": True,
                     "rows": [
-                        ("SQLUser", "users_pkey", "PRIMARY KEY", "users"),
-                        ("SQLUser", "posts_author_fkey", "FOREIGN KEY", "posts"),
-                    ]
+                        (IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users"),
+                        (IRIS_SCHEMA, "posts_author_fkey", "FOREIGN KEY", "posts"),
+                    ],
                 }
 
             # Mock for column queries (for constraints)
@@ -46,7 +48,7 @@ class TestCatalogFunctionsIntegration:
             if "REFERENTIAL_CONSTRAINTS" in query_upper:
                 return {
                     "success": True,
-                    "rows": [("SQLUser", "users_pkey", "NO ACTION", "CASCADE")]
+                    "rows": [(IRIS_SCHEMA, "users_pkey", "NO ACTION", "CASCADE")],
                 }
 
             # Mock for IDENTITY column queries
@@ -84,7 +86,7 @@ class TestCatalogFunctionsIntegration:
         from iris_pgwire.catalog.oid_generator import OIDGenerator
 
         oid_gen = OIDGenerator()
-        constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_pkey")
+        constraint_oid = oid_gen.get_constraint_oid("users_pkey", IRIS_SCHEMA)
 
         result = catalog_handler.pg_get_constraintdef(constraint_oid)
         assert result == "PRIMARY KEY (id)"

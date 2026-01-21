@@ -22,7 +22,8 @@ logger = structlog.get_logger()
 
 # Runtime-configurable IRIS schema name
 # Default to 'SQLUser' which is the standard IRIS schema for user tables
-IRIS_SCHEMA = os.environ.get("PGWIRE_IRIS_SCHEMA", "SQLUser")
+DEFAULT_IRIS_SCHEMA = "SQLUser"
+IRIS_SCHEMA = os.environ.get("PGWIRE_IRIS_SCHEMA", DEFAULT_IRIS_SCHEMA)
 
 # Log the configured schema at module load
 logger.info(
@@ -225,7 +226,7 @@ def configure_schema(iris_schema: str | None = None, mapping: dict[str, str] | N
         SCHEMA_MAP = mapping.copy()
         REVERSE_MAP = {v: k for k, v in mapping.items()}
         # Set IRIS_SCHEMA to the first mapping's target for backwards compat
-        IRIS_SCHEMA = next(iter(mapping.values()), "SQLUser")
+        IRIS_SCHEMA = next(iter(mapping.values()), DEFAULT_IRIS_SCHEMA)
     elif iris_schema is not None:
         # Simple case - just set the IRIS schema
         IRIS_SCHEMA = iris_schema

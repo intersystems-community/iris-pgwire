@@ -19,6 +19,7 @@ import pytest
 
 from iris_pgwire.catalog.catalog_functions import CatalogFunctionHandler
 from iris_pgwire.catalog.oid_generator import OIDGenerator
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class MockExecutor:
@@ -39,7 +40,9 @@ class MockExecutor:
         }
         self.columns[(schema, name)] = columns
 
-    def add_fk_reference(self, schema, name, ref_table, ref_columns, update_rule="NO ACTION", delete_rule="NO ACTION"):
+    def add_fk_reference(
+        self, schema, name, ref_table, ref_columns, update_rule="NO ACTION", delete_rule="NO ACTION"
+    ):
         """Add FK reference information."""
         self.fk_references[(schema, name)] = {
             "ref_table": ref_table,
@@ -57,14 +60,16 @@ class MockExecutor:
             # Check if query selects only TABLE_NAME (for FK reference lookup)
             if "SELECT TABLE_NAME" in query_upper and "CONSTRAINT_NAME" in query_upper:
                 # Return only table_name column for matching constraints
-                rows = [
-                    (info["table_name"],)
-                    for info in self.constraints.values()
-                ]
+                rows = [(info["table_name"],) for info in self.constraints.values()]
             else:
                 # Return full constraint info
                 rows = [
-                    (info["constraint_schema"], info["constraint_name"], info["constraint_type"], info["table_name"])
+                    (
+                        info["constraint_schema"],
+                        info["constraint_name"],
+                        info["constraint_type"],
+                        info["table_name"],
+                    )
                     for info in self.constraints.values()
                 ]
             return {"success": True, "rows": rows}
@@ -82,7 +87,14 @@ class MockExecutor:
         if "REFERENTIAL_CONSTRAINTS" in query_upper:
             for (schema, name), ref_info in self.fk_references.items():
                 if name.upper() in query_upper:
-                    rows = [(schema, f"{ref_info['ref_table']}_pkey", ref_info["update_rule"], ref_info["delete_rule"])]
+                    rows = [
+                        (
+                            schema,
+                            f"{ref_info['ref_table']}_pkey",
+                            ref_info["update_rule"],
+                            ref_info["delete_rule"],
+                        )
+                    ]
                     return {"success": True, "rows": rows}
             return {"success": True, "rows": []}
 
@@ -113,10 +125,10 @@ def test_pk_single_column(catalog_handler):
     handler, oid_gen, executor = catalog_handler
 
     # Setup: users table with PK on id
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])
+    executor.add_constraint(IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"])
 
     # Get OID
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_pkey")
+    constraint_oid = oid_gen.get_constraint_oid("users_pkey", IRIS_SCHEMA)
 
     # Test
     result = handler.pg_get_constraintdef(constraint_oid)
@@ -128,9 +140,11 @@ def test_pk_multi_column(catalog_handler):
     handler, oid_gen, executor = catalog_handler
 
     # Setup: composite PK
-    executor.add_constraint("SQLUser", "orders_pkey", "PRIMARY KEY", "orders", ["tenant_id", "order_id"])
+    executor.add_constraint(
+        IRIS_SCHEMA, "orders_pkey", "PRIMARY KEY", "orders", ["tenant_id", "order_id"]
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "orders_pkey")
+    constraint_oid = oid_gen.get_constraint_oid("orders_pkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert result == "PRIMARY KEY (tenant_id, order_id)"
@@ -145,9 +159,9 @@ def test_unique_single_column(catalog_handler):
     """Test UNIQUE constraint with single column."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_email_key", "UNIQUE", "users", ["email"])
+    executor.add_constraint(IRIS_SCHEMA, "users_email_key", "UNIQUE", "users", ["email"])
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_email_key")
+    constraint_oid = oid_gen.get_constraint_oid("users_email_key", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert result == "UNIQUE (email)"
@@ -157,9 +171,11 @@ def test_unique_multi_column(catalog_handler):
     """Test UNIQUE constraint with multiple columns."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_tenant_email_key", "UNIQUE", "users", ["tenant_id", "email"])
+    executor.add_constraint(
+        IRIS_SCHEMA, "users_tenant_email_key", "UNIQUE", "users", ["tenant_id", "email"]
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_tenant_email_key")
+    constraint_oid = oid_gen.get_constraint_oid("users_tenant_email_key", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert result == "UNIQUE (tenant_id, email)"
@@ -175,11 +191,17 @@ def test_fk_basic(catalog_handler):
     handler, oid_gen, executor = catalog_handler
 
     # Setup: posts.author_id references users.id
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])  # Referenced PK
-    executor.add_constraint("SQLUser", "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"])
-    executor.add_fk_reference("SQLUser", "posts_author_id_fkey", "users", ["id"], "NO ACTION", "NO ACTION")
+    executor.add_constraint(
+        IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"]
+    )  # Referenced PK
+    executor.add_constraint(
+        IRIS_SCHEMA, "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"]
+    )
+    executor.add_fk_reference(
+        IRIS_SCHEMA, "posts_author_id_fkey", "users", ["id"], "NO ACTION", "NO ACTION"
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "posts_author_id_fkey")
+    constraint_oid = oid_gen.get_constraint_oid("posts_author_id_fkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert result == "FOREIGN KEY (author_id) REFERENCES users(id)"
@@ -190,11 +212,17 @@ def test_fk_multi_column(catalog_handler):
     handler, oid_gen, executor = catalog_handler
 
     # Setup: orders(tenant_id, user_id) references accounts(tenant_id, user_id)
-    executor.add_constraint("SQLUser", "accounts_pkey", "PRIMARY KEY", "accounts", ["tenant_id", "user_id"])  # Referenced PK
-    executor.add_constraint("SQLUser", "orders_tenant_user_fkey", "FOREIGN KEY", "orders", ["tenant_id", "user_id"])
-    executor.add_fk_reference("SQLUser", "orders_tenant_user_fkey", "accounts", ["tenant_id", "user_id"])
+    executor.add_constraint(
+        IRIS_SCHEMA, "accounts_pkey", "PRIMARY KEY", "accounts", ["tenant_id", "user_id"]
+    )  # Referenced PK
+    executor.add_constraint(
+        IRIS_SCHEMA, "orders_tenant_user_fkey", "FOREIGN KEY", "orders", ["tenant_id", "user_id"]
+    )
+    executor.add_fk_reference(
+        IRIS_SCHEMA, "orders_tenant_user_fkey", "accounts", ["tenant_id", "user_id"]
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "orders_tenant_user_fkey")
+    constraint_oid = oid_gen.get_constraint_oid("orders_tenant_user_fkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert result == "FOREIGN KEY (tenant_id, user_id) REFERENCES accounts(tenant_id, user_id)"
@@ -204,11 +232,17 @@ def test_fk_with_cascade(catalog_handler):
     """Test FOREIGN KEY with ON DELETE CASCADE."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])  # Referenced PK
-    executor.add_constraint("SQLUser", "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"])
-    executor.add_fk_reference("SQLUser", "posts_author_id_fkey", "users", ["id"], "NO ACTION", "CASCADE")
+    executor.add_constraint(
+        IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"]
+    )  # Referenced PK
+    executor.add_constraint(
+        IRIS_SCHEMA, "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"]
+    )
+    executor.add_fk_reference(
+        IRIS_SCHEMA, "posts_author_id_fkey", "users", ["id"], "NO ACTION", "CASCADE"
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "posts_author_id_fkey")
+    constraint_oid = oid_gen.get_constraint_oid("posts_author_id_fkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert "ON DELETE CASCADE" in result
@@ -219,11 +253,17 @@ def test_fk_with_update_and_delete(catalog_handler):
     """Test FOREIGN KEY with both ON UPDATE and ON DELETE actions."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])  # Referenced PK
-    executor.add_constraint("SQLUser", "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"])
-    executor.add_fk_reference("SQLUser", "posts_author_id_fkey", "users", ["id"], "CASCADE", "SET NULL")
+    executor.add_constraint(
+        IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"]
+    )  # Referenced PK
+    executor.add_constraint(
+        IRIS_SCHEMA, "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"]
+    )
+    executor.add_fk_reference(
+        IRIS_SCHEMA, "posts_author_id_fkey", "users", ["id"], "CASCADE", "SET NULL"
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "posts_author_id_fkey")
+    constraint_oid = oid_gen.get_constraint_oid("posts_author_id_fkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     assert "ON UPDATE CASCADE" in result
@@ -236,11 +276,17 @@ def test_fk_no_action_omitted(catalog_handler):
     """Test that NO ACTION clauses are omitted from output."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])  # Referenced PK
-    executor.add_constraint("SQLUser", "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"])
-    executor.add_fk_reference("SQLUser", "posts_author_id_fkey", "users", ["id"], "NO ACTION", "NO ACTION")
+    executor.add_constraint(
+        IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"]
+    )  # Referenced PK
+    executor.add_constraint(
+        IRIS_SCHEMA, "posts_author_id_fkey", "FOREIGN KEY", "posts", ["author_id"]
+    )
+    executor.add_fk_reference(
+        IRIS_SCHEMA, "posts_author_id_fkey", "users", ["id"], "NO ACTION", "NO ACTION"
+    )
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "posts_author_id_fkey")
+    constraint_oid = oid_gen.get_constraint_oid("posts_author_id_fkey", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     # Should not contain ON UPDATE or ON DELETE
@@ -287,8 +333,8 @@ def test_pg_get_constraintdef_via_handler(catalog_handler):
     """Test pg_get_constraintdef through handler interface."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_pkey")
+    executor.add_constraint(IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"])
+    constraint_oid = oid_gen.get_constraint_oid("users_pkey", IRIS_SCHEMA)
 
     result = handler.handle("pg_get_constraintdef", (str(constraint_oid),))
     assert result.function_name == "pg_get_constraintdef"
@@ -300,8 +346,8 @@ def test_pg_get_constraintdef_with_pretty_false(catalog_handler):
     """Test pg_get_constraintdef with pretty=false."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_pkey")
+    executor.add_constraint(IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"])
+    constraint_oid = oid_gen.get_constraint_oid("users_pkey", IRIS_SCHEMA)
 
     result = handler.handle("pg_get_constraintdef", (str(constraint_oid), "false"))
     assert result.result == "PRIMARY KEY (id)"
@@ -311,8 +357,8 @@ def test_pg_get_constraintdef_with_pretty_true(catalog_handler):
     """Test pg_get_constraintdef with pretty=true (currently ignored)."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "users_pkey", "PRIMARY KEY", "users", ["id"])
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "users_pkey")
+    executor.add_constraint(IRIS_SCHEMA, "users_pkey", "PRIMARY KEY", "users", ["id"])
+    constraint_oid = oid_gen.get_constraint_oid("users_pkey", IRIS_SCHEMA)
 
     # Pretty formatting is not yet implemented, so result should be same
     result = handler.handle("pg_get_constraintdef", (str(constraint_oid), "true"))
@@ -328,9 +374,9 @@ def test_check_constraint_placeholder(catalog_handler):
     """Test CHECK constraint returns placeholder format."""
     handler, oid_gen, executor = catalog_handler
 
-    executor.add_constraint("SQLUser", "age_check", "CHECK", "users", [])
+    executor.add_constraint(IRIS_SCHEMA, "age_check", "CHECK", "users", [])
 
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "age_check")
+    constraint_oid = oid_gen.get_constraint_oid("age_check", IRIS_SCHEMA)
 
     result = handler.pg_get_constraintdef(constraint_oid)
     # Check constraints return placeholder per implementation

@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_attribute catalog emulation per pg_attribute_contract.md
 """
 
 import pytest
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class TestPgAttributeColumnEnumeration:
@@ -23,13 +24,13 @@ class TestPgAttributeColumnEnumeration:
         emulator = PgAttributeEmulator(oid_gen)
 
         attr = emulator.from_iris_column(
-            schema="SQLUser",
             table_name="users",
             column_name="id",
             data_type="INTEGER",
             ordinal_position=1,
             is_nullable="NO",
             column_default=None,
+            schema=IRIS_SCHEMA,
         )
 
         assert attr.attname == "id"
@@ -54,7 +55,7 @@ class TestPgAttributeColumnEnumeration:
 
         for col_name, data_type, pos, nullable, default in columns:
             attr = emulator.from_iris_column(
-                "SQLUser", "users", col_name, data_type, pos, nullable, default
+                "users", col_name, data_type, pos, nullable, default, IRIS_SCHEMA
             )
             emulator.add_attribute(attr)
 
@@ -71,9 +72,7 @@ class TestPgAttributeNotNull:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "NO", None
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "NO", None, IRIS_SCHEMA)
 
         assert attr.attnotnull is True
 
@@ -83,9 +82,7 @@ class TestPgAttributeNotNull:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.attnotnull is False
 
@@ -99,9 +96,7 @@ class TestPgAttributeTypeModifier:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "VARCHAR(255)", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "VARCHAR(255)", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.atttypmod == 259  # 255 + 4
 
@@ -111,9 +106,7 @@ class TestPgAttributeTypeModifier:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "VARCHAR(100)", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "VARCHAR(100)", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.atttypmod == 104  # 100 + 4
 
@@ -123,9 +116,7 @@ class TestPgAttributeTypeModifier:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "CHAR(10)", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "CHAR(10)", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.atttypmod == 14  # 10 + 4
 
@@ -135,9 +126,7 @@ class TestPgAttributeTypeModifier:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.atttypmod == -1
 
@@ -151,9 +140,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 23
 
     def test_type_mapping_bigint(self):
@@ -162,9 +149,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "BIGINT", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "BIGINT", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 20
 
     def test_type_mapping_varchar(self):
@@ -173,9 +158,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "VARCHAR(255)", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "VARCHAR(255)", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 1043
 
     def test_type_mapping_timestamp(self):
@@ -184,9 +167,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "TIMESTAMP", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "TIMESTAMP", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 1114
 
     def test_type_mapping_decimal(self):
@@ -195,9 +176,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "DECIMAL(10,2)", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "DECIMAL(10,2)", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 1700
 
     def test_type_mapping_bit(self):
@@ -206,9 +185,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "BIT", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "BIT", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 16
 
     def test_type_mapping_text(self):
@@ -217,9 +194,7 @@ class TestPgAttributeTypeMapping:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "LONGVARCHAR", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "LONGVARCHAR", 1, "YES", None, IRIS_SCHEMA)
         assert attr.atttypid == 25
 
 
@@ -232,9 +207,7 @@ class TestPgAttributeDefault:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "YES", "0"
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "YES", "0", IRIS_SCHEMA)
 
         assert attr.atthasdef is True
 
@@ -244,9 +217,7 @@ class TestPgAttributeDefault:
         from iris_pgwire.catalog.pg_attribute import PgAttributeEmulator
 
         emulator = PgAttributeEmulator(OIDGenerator())
-        attr = emulator.from_iris_column(
-            "SQLUser", "t", "c", "INTEGER", 1, "YES", None
-        )
+        attr = emulator.from_iris_column("t", "c", "INTEGER", 1, "YES", None, IRIS_SCHEMA)
 
         assert attr.atthasdef is False
 
@@ -265,18 +236,16 @@ class TestPgAttributeLookup:
         # Add attributes for users table
         for col_name, pos in [("id", 1), ("name", 2)]:
             attr = emulator.from_iris_column(
-                "SQLUser", "users", col_name, "INTEGER", pos, "YES", None
+                "users", col_name, "INTEGER", pos, "YES", None, IRIS_SCHEMA
             )
             emulator.add_attribute(attr)
 
         # Add attribute for different table
-        attr = emulator.from_iris_column(
-            "SQLUser", "orders", "id", "INTEGER", 1, "NO", None
-        )
+        attr = emulator.from_iris_column("orders", "id", "INTEGER", 1, "NO", None, IRIS_SCHEMA)
         emulator.add_attribute(attr)
 
         # Get users table OID
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         attrs = emulator.get_by_table_oid(table_oid)
 
         assert len(attrs) == 2

@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 
@@ -226,7 +227,7 @@ class CatalogRouter:
         """
         return bool(self._regclass_pattern.search(query))
 
-    def resolve_regclass(self, table_name: str, schema: str = "SQLUser") -> int:
+    def resolve_regclass(self, table_name: str, schema: str = IRIS_SCHEMA) -> int:
         """
         Resolve table name to OID (like ::regclass).
 
@@ -246,9 +247,9 @@ class CatalogRouter:
         # Handle quoted identifiers
         table_name = table_name.strip('"')
 
-        return self.oid_gen.get_table_oid(schema, table_name)
+        return self.oid_gen.get_table_oid(table_name, schema)
 
-    def translate_regclass_casts(self, query: str, schema: str = "SQLUser") -> str:
+    def translate_regclass_casts(self, query: str, schema: str = IRIS_SCHEMA) -> str:
         """
         Replace 'tablename'::regclass with resolved OID.
 

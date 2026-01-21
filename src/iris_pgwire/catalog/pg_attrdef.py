@@ -11,6 +11,7 @@ https://www.postgresql.org/docs/current/catalog-pg-attrdef.html
 from dataclasses import dataclass
 from typing import Any
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 
@@ -49,34 +50,32 @@ class PgAttrdefEmulator:
 
     def from_iris_default(
         self,
-        schema: str,
         table_name: str,
         column_name: str,
         column_position: int,
         default_value: str,
+        schema: str = IRIS_SCHEMA,
     ) -> PgAttrdef:
         """
         Convert IRIS column default to pg_attrdef row.
 
         Args:
-            schema: IRIS schema name (e.g., 'SQLUser')
             table_name: Table name
             column_name: Column name
             column_position: Column position (attnum, 1-based)
             default_value: Default value expression from IRIS
+            schema: IRIS schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             PgAttrdef instance
         """
-        table_oid = self.oid_gen.get_table_oid(schema, table_name)
+        table_oid = self.oid_gen.get_table_oid(table_name, schema)
         # Generate unique OID for this default
         default_key = f"{schema}:{table_name}:{column_name}:default"
-        default_oid = self.oid_gen.get_oid(schema, "default", default_key)
+        default_oid = self.oid_gen.get_oid("default", default_key, schema)
 
         # Translate IRIS default to PostgreSQL expression
-        adbin = self._translate_default(
-            default_value, schema, table_name, column_name
-        )
+        adbin = self._translate_default(default_value, schema, table_name, column_name)
 
         return PgAttrdef(
             oid=default_oid,
@@ -117,8 +116,7 @@ class PgAttrdefEmulator:
 
         # Handle timestamp defaults
         if any(
-            ts in upper_default
-            for ts in ["CURRENT_TIMESTAMP", "NOW()", "GETDATE()", "SYSDATE"]
+            ts in upper_default for ts in ["CURRENT_TIMESTAMP", "NOW()", "GETDATE()", "SYSDATE"]
         ):
             return "CURRENT_TIMESTAMP"
 

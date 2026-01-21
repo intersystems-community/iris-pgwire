@@ -14,6 +14,7 @@ import pytest
 
 from iris_pgwire.catalog.catalog_functions import CatalogFunctionHandler
 from iris_pgwire.catalog.oid_generator import OIDGenerator
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class MockExecutorPerf:
@@ -28,7 +29,7 @@ class MockExecutorPerf:
         for i in range(10):
             table = f"table_{i}"
             pk_name = f"{table}_pkey"
-            self.constraints.append(("SQLUser", pk_name, "PRIMARY KEY", table))
+            self.constraints.append((IRIS_SCHEMA, pk_name, "PRIMARY KEY", table))
             self.constraint_columns[pk_name] = ["id"]
 
         self.columns = {
@@ -45,10 +46,10 @@ class MockExecutorPerf:
             # Half the tables have FK relationships
             table = f"table_{i}"
             fk_name = f"{table}_author_fkey"
-            self.constraints.append(("SQLUser", fk_name, "FOREIGN KEY", table))
+            self.constraints.append((IRIS_SCHEMA, fk_name, "FOREIGN KEY", table))
             self.constraint_columns[fk_name] = ["author_id"]
             self.fk_refs[fk_name] = {
-                "ref_table": f"table_{i+5}",
+                "ref_table": f"table_{i + 5}",
                 "ref_columns": ["id"],
                 "update_rule": "NO ACTION",
                 "delete_rule": "CASCADE",
@@ -80,12 +81,14 @@ class MockExecutorPerf:
         if "REFERENTIAL_CONSTRAINTS" in query_upper:
             for fk_name, ref_info in self.fk_refs.items():
                 if fk_name.upper() in query_upper:
-                    rows = [(
-                        "SQLUser",
-                        f"{ref_info['ref_table']}_pkey",
-                        ref_info["update_rule"],
-                        ref_info["delete_rule"]
-                    )]
+                    rows = [
+                        (
+                            IRIS_SCHEMA,
+                            f"{ref_info['ref_table']}_pkey",
+                            ref_info["update_rule"],
+                            ref_info["delete_rule"],
+                        )
+                    ]
                     return {"success": True, "rows": rows}
             return {"success": True, "rows": []}
 
@@ -132,7 +135,7 @@ def test_format_type_performance(benchmark, catalog_handler):
 def test_pg_get_constraintdef_performance(benchmark, catalog_handler, oid_gen):
     """NFR-001: pg_get_constraintdef completes in <100ms."""
     # Setup test constraint
-    constraint_oid = oid_gen.get_constraint_oid("SQLUser", "table_0_pkey")
+    constraint_oid = oid_gen.get_constraint_oid("table_0_pkey", IRIS_SCHEMA)
 
     result = benchmark(catalog_handler.pg_get_constraintdef, constraint_oid)
 
@@ -170,16 +173,16 @@ def test_pg_get_viewdef_performance(benchmark, catalog_handler):
 def test_batch_introspection_format_type(benchmark, catalog_handler):
     """NFR-002: Batch format_type for common types."""
     type_oids = [
-        (23, -1),      # integer
-        (1043, 259),   # varchar(255)
+        (23, -1),  # integer
+        (1043, 259),  # varchar(255)
         (1700, 655366),  # numeric(10,2)
-        (1114, 7),     # timestamp(3)
-        (25, -1),      # text
-        (16, -1),      # boolean
-        (20, -1),      # bigint
-        (1082, -1),    # date
-        (2950, -1),    # uuid
-        (114, -1),     # json
+        (1114, 7),  # timestamp(3)
+        (25, -1),  # text
+        (16, -1),  # boolean
+        (20, -1),  # bigint
+        (1082, -1),  # date
+        (2950, -1),  # uuid
+        (114, -1),  # json
     ]
 
     def batch_format():
@@ -195,15 +198,11 @@ def test_batch_introspection_format_type(benchmark, catalog_handler):
 def test_batch_introspection_constraints(benchmark, catalog_handler, oid_gen):
     """NFR-002: Batch constraint definition retrieval."""
     constraint_oids = [
-        oid_gen.get_constraint_oid("SQLUser", f"table_{i}_pkey")
-        for i in range(10)
+        oid_gen.get_constraint_oid(f"table_{i}_pkey", IRIS_SCHEMA) for i in range(10)
     ]
 
     def batch_constraints():
-        return [
-            catalog_handler.pg_get_constraintdef(oid)
-            for oid in constraint_oids
-        ]
+        return [catalog_handler.pg_get_constraintdef(oid) for oid in constraint_oids]
 
     results = benchmark(batch_constraints)
 
@@ -216,10 +215,7 @@ def test_batch_introspection_serial_sequences(benchmark, catalog_handler):
     tables = [f"table_{i}" for i in range(10)]
 
     def batch_serial():
-        return [
-            catalog_handler.pg_get_serial_sequence(table, "id")
-            for table in tables
-        ]
+        return [catalog_handler.pg_get_serial_sequence(table, "id") for table in tables]
 
     results = benchmark(batch_serial)
 
@@ -236,7 +232,7 @@ def test_full_schema_introspection_simulation(benchmark, catalog_handler, oid_ge
         # Step 1: Get all table constraints (like Prisma does)
         for i in range(10):
             table = f"table_{i}"
-            constraint_oid = oid_gen.get_constraint_oid("SQLUser", f"{table}_pkey")
+            constraint_oid = oid_gen.get_constraint_oid(f"{table}_pkey", IRIS_SCHEMA)
 
             # Get constraint definition
             constraint_def = catalog_handler.pg_get_constraintdef(constraint_oid)
@@ -246,9 +242,9 @@ def test_full_schema_introspection_simulation(benchmark, catalog_handler, oid_ge
 
             # Format common types (simulate column introspection)
             types = [
-                catalog_handler.format_type(23, -1),      # id: integer
-                catalog_handler.format_type(1043, 259),   # name: varchar(255)
-                catalog_handler.format_type(1114, 7),     # created_at: timestamp(3)
+                catalog_handler.format_type(23, -1),  # id: integer
+                catalog_handler.format_type(1043, 259),  # name: varchar(255)
+                catalog_handler.format_type(1114, 7),  # created_at: timestamp(3)
             ]
 
             results[table] = {
@@ -292,10 +288,7 @@ def test_handler_batch_calls(benchmark, catalog_handler):
     ]
 
     def batch_handler():
-        return [
-            catalog_handler.handle(func, args)
-            for func, args in function_calls
-        ]
+        return [catalog_handler.handle(func, args) for func, args in function_calls]
 
     results = benchmark(batch_handler)
 

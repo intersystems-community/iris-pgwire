@@ -18,6 +18,7 @@ relkind values:
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 RelKind = Literal["r", "i", "S", "v", "m", "c", "f", "p"]
@@ -73,7 +74,7 @@ class PgClassEmulator:
     Query source:
     SELECT TABLE_NAME, TABLE_TYPE
     FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_SCHEMA = 'SQLUser'
+    WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
     """
 
     def __init__(self, oid_generator: OIDGenerator):
@@ -89,15 +90,15 @@ class PgClassEmulator:
         self._by_oid: dict[int, PgClass] = {}
 
     def from_iris_table(
-        self, schema: str, table_name: str, table_type: str
+        self, table_name: str, table_type: str, schema: str = IRIS_SCHEMA
     ) -> PgClass:
         """
         Convert IRIS table metadata to pg_class row.
 
         Args:
-            schema: IRIS schema name (e.g., 'SQLUser')
             table_name: Table name
             table_type: IRIS table type ('BASE TABLE', 'VIEW')
+            schema: IRIS schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             PgClass instance
@@ -105,7 +106,7 @@ class PgClassEmulator:
         # Determine relkind from TABLE_TYPE
         relkind: RelKind = "r" if table_type == "BASE TABLE" else "v"
 
-        table_oid = self.oid_gen.get_table_oid(schema, table_name)
+        table_oid = self.oid_gen.get_table_oid(table_name, schema)
 
         namespace_oid = self.oid_gen.get_namespace_oid("public")
 
@@ -146,24 +147,24 @@ class PgClassEmulator:
 
     def create_index_entry(
         self,
-        schema: str,
         table_name: str,
         index_name: str,
         num_columns: int,
+        schema: str = IRIS_SCHEMA,
     ) -> PgClass:
         """
         Create pg_class entry for an index.
 
         Args:
-            schema: Schema name
             table_name: Parent table name
             index_name: Index name
             num_columns: Number of columns in index
+            schema: Schema name
 
         Returns:
             PgClass for index
         """
-        index_oid = self.oid_gen.get_index_oid(schema, f"{table_name}_{index_name}_idx")
+        index_oid = self.oid_gen.get_index_oid(index_name, schema)
 
         namespace_oid = self.oid_gen.get_namespace_oid("public")
 

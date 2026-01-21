@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_attrdef catalog emulation (column defaults).
 """
 
 import pytest
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class TestPgAttrdefBasic:
@@ -23,11 +24,11 @@ class TestPgAttrdefBasic:
         emulator = PgAttrdefEmulator(oid_gen)
 
         attrdef = emulator.from_iris_default(
-            schema="SQLUser",
             table_name="users",
             column_name="status",
             column_position=4,
             default_value="'active'",
+            schema=IRIS_SCHEMA,
         )
 
         assert attrdef.adnum == 4
@@ -42,11 +43,11 @@ class TestPgAttrdefBasic:
         emulator = PgAttrdefEmulator(oid_gen)
 
         attrdef = emulator.from_iris_default(
-            schema="SQLUser",
             table_name="products",
             column_name="quantity",
             column_position=3,
             default_value="0",
+            schema=IRIS_SCHEMA,
         )
 
         assert attrdef.adnum == 3
@@ -61,19 +62,16 @@ class TestPgAttrdefBasic:
         emulator = PgAttrdefEmulator(oid_gen)
 
         attrdef = emulator.from_iris_default(
-            schema="SQLUser",
             table_name="events",
             column_name="created_at",
             column_position=5,
             default_value="CURRENT_TIMESTAMP",
+            schema=IRIS_SCHEMA,
         )
 
         assert attrdef.adnum == 5
         # Should contain timestamp-related default
-        assert any(
-            x in attrdef.adbin.upper()
-            for x in ["NOW", "CURRENT_TIMESTAMP", "TIMESTAMP"]
-        )
+        assert any(x in attrdef.adbin.upper() for x in ["NOW", "CURRENT_TIMESTAMP", "TIMESTAMP"])
 
 
 class TestPgAttrdefOIDConsistency:
@@ -88,14 +86,14 @@ class TestPgAttrdefOIDConsistency:
         emulator = PgAttrdefEmulator(oid_gen)
 
         attrdef = emulator.from_iris_default(
-            schema="SQLUser",
             table_name="users",
             column_name="status",
             column_position=4,
             default_value="'active'",
+            schema=IRIS_SCHEMA,
         )
 
-        expected_table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        expected_table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         assert attrdef.adrelid == expected_table_oid
 
 
@@ -131,23 +129,17 @@ class TestPgAttrdefLookup:
         emulator = PgAttrdefEmulator(oid_gen)
 
         # Add defaults for users table
-        d1 = emulator.from_iris_default(
-            "SQLUser", "users", "status", 4, "'active'"
-        )
-        d2 = emulator.from_iris_default(
-            "SQLUser", "users", "created_at", 5, "CURRENT_TIMESTAMP"
-        )
+        d1 = emulator.from_iris_default("users", "status", 4, "'active'", IRIS_SCHEMA)
+        d2 = emulator.from_iris_default("users", "created_at", 5, "CURRENT_TIMESTAMP", IRIS_SCHEMA)
         emulator.add_default(d1)
         emulator.add_default(d2)
 
         # Add default for different table
-        d3 = emulator.from_iris_default(
-            "SQLUser", "products", "quantity", 3, "0"
-        )
+        d3 = emulator.from_iris_default("products", "quantity", 3, "0", IRIS_SCHEMA)
         emulator.add_default(d3)
 
         # Get users defaults
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         defaults = emulator.get_by_table_oid(table_oid)
 
         assert len(defaults) == 2
@@ -160,12 +152,10 @@ class TestPgAttrdefLookup:
         oid_gen = OIDGenerator()
         emulator = PgAttrdefEmulator(oid_gen)
 
-        d1 = emulator.from_iris_default(
-            "SQLUser", "users", "status", 4, "'active'"
-        )
+        d1 = emulator.from_iris_default("users", "status", 4, "'active'", IRIS_SCHEMA)
         emulator.add_default(d1)
 
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         attrdef = emulator.get_by_column(table_oid, 4)
 
         assert attrdef is not None
@@ -185,11 +175,11 @@ class TestPgAttrdefSequenceDefault:
 
         # IRIS auto-increment is translated to nextval()
         attrdef = emulator.from_iris_default(
-            schema="SQLUser",
             table_name="users",
             column_name="id",
             column_position=1,
             default_value="$IDENTITY",  # IRIS auto-increment marker
+            schema=IRIS_SCHEMA,
         )
 
         assert attrdef.adnum == 1

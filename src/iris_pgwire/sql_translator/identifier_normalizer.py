@@ -12,6 +12,8 @@ Constitutional Requirements:
 
 import re
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 
 class IdentifierNormalizer:
     """
@@ -257,8 +259,6 @@ class IdentifierNormalizer:
         # CRITICAL FIX: Detect CREATE TABLE context to preserve lowercase column names
         # PostgreSQL clients expect lowercase column names, but IRIS needs uppercase table names
         # Pattern: CREATE TABLE table_name (column_definitions)
-        import re
-
         create_table_pattern = re.compile(
             r"(CREATE\s+(?:TEMPORARY\s+|TEMP\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?)"
             r"(\S+)"  # Table name (will be uppercased)
@@ -283,8 +283,8 @@ class IdentifierNormalizer:
                     part = part.strip()
                     if part.startswith('"') and part.endswith('"'):
                         parts.append(part)  # Quoted: preserve case
-                    elif part.upper() == "SQLUSER":
-                        parts.append("SQLUser")  # Fix casing for IRIS
+                    elif part.upper() == IRIS_SCHEMA.upper():
+                        parts.append(IRIS_SCHEMA)  # Fix casing for IRIS
                     else:
                         parts.append(part.upper())  # Unquoted: uppercase
                 table_name = ".".join(parts)
@@ -401,9 +401,9 @@ class IdentifierNormalizer:
                         upper = part.upper()
                         if upper in self._sql_keywords:
                             parts.append(upper)
-                        elif upper == "SQLUSER":
+                        elif upper == IRIS_SCHEMA.upper():
                             identifier_count += 1
-                            parts.append("SQLUser")
+                            parts.append(IRIS_SCHEMA)
                         else:
                             identifier_count += 1
                             parts.append(upper)
@@ -417,9 +417,9 @@ class IdentifierNormalizer:
             upper = full_id.upper()
             if upper in self._sql_keywords:
                 return upper
-            elif upper == "SQLUSER":
+            elif upper == IRIS_SCHEMA.upper():
                 identifier_count += 1
-                return "SQLUser"
+                return IRIS_SCHEMA
             else:
                 identifier_count += 1
                 return upper

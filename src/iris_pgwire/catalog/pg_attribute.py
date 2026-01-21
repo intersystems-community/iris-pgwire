@@ -17,6 +17,7 @@ Key fields:
 from dataclasses import dataclass
 from typing import Any
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 
@@ -63,7 +64,7 @@ class PgAttributeEmulator:
     Query source:
     SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION, IS_NULLABLE, COLUMN_DEFAULT
     FROM INFORMATION_SCHEMA.COLUMNS
-    WHERE TABLE_SCHEMA = 'SQLUser' AND TABLE_NAME = ?
+    WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}' AND TABLE_NAME = ?
     ORDER BY ORDINAL_POSITION
     """
 
@@ -122,30 +123,30 @@ class PgAttributeEmulator:
 
     def from_iris_column(
         self,
-        schema: str,
         table_name: str,
         column_name: str,
         data_type: str,
         ordinal_position: int,
         is_nullable: str,
         column_default: str | None,
+        schema: str = IRIS_SCHEMA,
     ) -> PgAttribute:
         """
         Convert IRIS column metadata to pg_attribute row.
 
         Args:
-            schema: IRIS schema name (e.g., 'SQLUser')
             table_name: Table name
             column_name: Column name
             data_type: IRIS data type (e.g., 'VARCHAR(255)')
             ordinal_position: Column position (1-indexed)
             is_nullable: 'YES' or 'NO'
             column_default: Default value expression or None
+            schema: IRIS schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             PgAttribute instance
         """
-        table_oid = self.oid_gen.get_table_oid(schema, table_name)
+        table_oid = self.oid_gen.get_table_oid(table_name, schema)
 
         # Parse data type (handle VARCHAR(255) etc.)
         base_type = data_type.split("(")[0].upper()

@@ -202,6 +202,10 @@ ignore = [
     "B023",  # function definition does not bind loop variable - common in regex replacement functions
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["iris_pgwire"]
+src = ["src"]
+
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "src/iris_pgwire/conversions/**/*.py" = [
@@ -229,6 +233,7 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.11"
+mypy_path = "src"
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_incomplete_defs = true
@@ -258,6 +263,7 @@ generate-badge = "."
 badge-format = "svg"
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]

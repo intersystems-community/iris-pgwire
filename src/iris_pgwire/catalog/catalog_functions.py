@@ -26,6 +26,7 @@ from typing import Any
 import structlog
 
 from ..type_mapping import TypeModifier, get_type_by_oid
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 
 logger = structlog.get_logger()
@@ -134,9 +135,7 @@ class CatalogFunctionHandler:
     # T008: pg_get_constraintdef(constraint_oid, pretty?)
     # ========================================================================
 
-    def pg_get_constraintdef(
-        self, constraint_oid: int, pretty: bool = False
-    ) -> str | None:
+    def pg_get_constraintdef(self, constraint_oid: int, pretty: bool = False) -> str | None:
         """
         Get constraint definition as SQL text.
 
@@ -238,7 +237,7 @@ class CatalogFunctionHandler:
         if "." in table:
             schema, table_name = table.split(".", 1)
         else:
-            schema = "SQLUser"  # Default IRIS schema
+            schema = IRIS_SCHEMA  # Default IRIS schema
             table_name = table
 
         # Query IRIS INFORMATION_SCHEMA.COLUMNS for auto-increment
@@ -260,7 +259,9 @@ class CatalogFunctionHandler:
             is_identity = row[1] if len(row) > 1 else None
 
             # Check for auto-increment indicators
-            if is_identity == "YES" or (column_default and "IDENTITY" in str(column_default).upper()):
+            if is_identity == "YES" or (
+                column_default and "IDENTITY" in str(column_default).upper()
+            ):
                 # PostgreSQL convention: table_column_seq
                 sequence_name = f"{table_name}_{column}_seq"
                 return f"public.{sequence_name}"
@@ -268,16 +269,16 @@ class CatalogFunctionHandler:
             return None
 
         except Exception as e:
-            logger.warning("Error checking serial sequence", table=table, column=column, error=str(e))
+            logger.warning(
+                "Error checking serial sequence", table=table, column=column, error=str(e)
+            )
             return None
 
     # ========================================================================
     # T010: pg_get_indexdef(index_oid, column?, pretty?)
     # ========================================================================
 
-    def pg_get_indexdef(
-        self, index_oid: int, column: int = 0, pretty: bool = False
-    ) -> str | None:
+    def pg_get_indexdef(self, index_oid: int, column: int = 0, pretty: bool = False) -> str | None:
         """
         Get CREATE INDEX statement for an index.
 
@@ -357,10 +358,10 @@ class CatalogFunctionHandler:
         """
         # Reverse lookup constraint name from OID (requires OID cache)
         # For now, query all constraints and match OID
-        query = """
+        query = f"""
             SELECT CONSTRAINT_SCHEMA, CONSTRAINT_NAME, CONSTRAINT_TYPE, TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
-            WHERE CONSTRAINT_SCHEMA = 'SQLUser'
+            WHERE CONSTRAINT_SCHEMA = '{IRIS_SCHEMA}'
         """
 
         try:
@@ -371,7 +372,7 @@ class CatalogFunctionHandler:
             # Find matching OID
             for row in result["rows"]:
                 schema, name, ctype, table = row[:4]
-                computed_oid = self.oid_gen.get_constraint_oid(schema, name)
+                computed_oid = self.oid_gen.get_constraint_oid(name, schema)
                 if computed_oid == constraint_oid:
                     return {
                         "constraint_schema": schema,
@@ -383,7 +384,9 @@ class CatalogFunctionHandler:
             return None
 
         except Exception as e:
-            logger.error("Error querying constraint metadata", constraint_oid=constraint_oid, error=str(e))
+            logger.error(
+                "Error querying constraint metadata", constraint_oid=constraint_oid, error=str(e)
+            )
             return None
 
     def _get_constraint_columns(self, schema: str, constraint_name: str) -> list[str]:
@@ -413,7 +416,9 @@ class CatalogFunctionHandler:
             return [row[0].lower() for row in result["rows"]]
 
         except Exception as e:
-            logger.error("Error querying constraint columns", constraint_name=constraint_name, error=str(e))
+            logger.error(
+                "Error querying constraint columns", constraint_name=constraint_name, error=str(e)
+            )
             return []
 
     def _get_fk_references(self, schema: str, constraint_name: str) -> dict[str, Any] | None:
@@ -468,7 +473,9 @@ class CatalogFunctionHandler:
             }
 
         except Exception as e:
-            logger.error("Error querying FK references", constraint_name=constraint_name, error=str(e))
+            logger.error(
+                "Error querying FK references", constraint_name=constraint_name, error=str(e)
+            )
             return None
 
     def _get_index_metadata(self, index_oid: int) -> dict[str, Any] | None:

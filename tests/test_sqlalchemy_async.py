@@ -22,6 +22,8 @@ from sqlalchemy import Column, Integer, MetaData, String, Table, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 
 @pytest.mark.asyncio
 async def test_async_engine_creation():
@@ -179,10 +181,10 @@ async def test_information_schema_queries():
         # This should trigger INFORMATION_SCHEMA queries, not pg_catalog
         result = await conn.execute(
             text(
-                """
+                f"""
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = 'SQLUser'
+            WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
             LIMIT 5
         """
             )

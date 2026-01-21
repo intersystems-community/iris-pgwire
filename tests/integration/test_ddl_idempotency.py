@@ -6,6 +6,7 @@ import psycopg
 import pytest
 
 from iris_pgwire.conversions.ddl_idempotency import DdlErrorHandler
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 # Connection configuration
 PGWIRE_CONN = "host=localhost port=5432 user=test_user password=test dbname=USER"
@@ -62,7 +63,7 @@ def test_ddl_error_handler_logic():
     # Test handle with mock error
     sql = "CREATE TABLE IF NOT EXISTS existing_table (id INT)"
     error = Exception(
-        "[SQLCODE: <-201>] [Location: <Server>] %msg <Table 'SQLUser.existing_table' already exists>"
+        f"[SQLCODE: <-201>] [Location: <Server>] %msg <Table '{IRIS_SCHEMA}.existing_table' already exists>"
     )
 
     result = handler.handle(sql, error)

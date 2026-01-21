@@ -6,6 +6,8 @@ Tests for routing pg_catalog queries to appropriate emulators.
 
 import pytest
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 
 class TestCatalogRouterDetection:
     """Test pg_catalog query detection."""
@@ -158,10 +160,10 @@ class TestCatalogRouterRegclass:
         router = CatalogRouter(oid_generator=oid_gen)
 
         # Register a table first
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
 
         # Resolve the regclass
-        resolved_oid = router.resolve_regclass("users", schema="SQLUser")
+        resolved_oid = router.resolve_regclass("users", schema=IRIS_SCHEMA)
 
         assert resolved_oid == table_oid
 

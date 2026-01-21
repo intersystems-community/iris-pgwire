@@ -27,7 +27,10 @@ from .conversions import (
     horolog_to_pg,
     pg_to_horolog,
 )
-from .schema_mapper import translate_output_schema  # Feature 030: PostgreSQL schema mapping
+from .schema_mapper import (
+    IRIS_SCHEMA,
+    translate_output_schema,
+)  # Feature 030: PostgreSQL schema mapping
 from .sql_translator import (
     SQLInterceptor,
     SQLPipeline,
@@ -321,6 +324,41 @@ class IRISExecutor:
             return False
         return bool(re.search(r"\bRETURNING\b", query, re.IGNORECASE | re.DOTALL))
 
+    def _get_table_columns_from_schema(
+        self, table: str, session_id: str | None = None
+    ) -> list[str]:
+        """
+        Query INFORMATION_SCHEMA.COLUMNS for the given table.
+        Returns the list of column names in order.
+        """
+        try:
+            table_clean = table.strip('"').strip("'")
+            metadata_sql = f"""
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE LOWER(TABLE_NAME) = LOWER('{table_clean}')
+                AND LOWER(TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
+                ORDER BY ORDINAL_POSITION
+            """
+            if self.embedded_mode:
+                import iris
+
+                result = iris.sql.exec(metadata_sql)
+                return [row[0] for row in result]
+            else:
+                conn = self._get_pooled_connection(session_id=session_id)
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(metadata_sql)
+                    rows = cursor.fetchall()
+                    return [row[0] for row in rows]
+                finally:
+                    cursor.close()
+                    self._return_connection(conn, session_id=session_id)
+        except Exception as e:
+            logger.debug(f"Failed to get columns from schema for {table}: {e}")
+        return []
+
     def _get_column_type_from_schema(
         self, table: str, column: str, session_id: str | None = None
     ) -> int | None:
@@ -329,12 +367,14 @@ class IRISExecutor:
         Returns the PostgreSQL type OID.
         """
         try:
+            table_clean = table.strip('"').strip("'")
+            column_clean = column.strip('"').strip("'")
             metadata_sql = f"""
                 SELECT DATA_TYPE
                 FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE LOWER(TABLE_NAME) = LOWER('{table}')
-                AND LOWER(COLUMN_NAME) = LOWER('{column}')
-                AND TABLE_SCHEMA = 'SQLUser'
+                WHERE LOWER(TABLE_NAME) = LOWER('{table_clean}')
+                AND LOWER(COLUMN_NAME) = LOWER('{column_clean}')
+                AND LOWER(TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
             """
             if self.embedded_mode:
                 import iris
@@ -397,7 +437,11 @@ class IRISExecutor:
         elif isinstance(value, Decimal):
             return 1700  # NUMERIC/DECIMAL
         elif isinstance(value, bytes):
-            return 17  # BYTEA
+            return 17
+        elif isinstance(value, dt.datetime):
+            return 1114
+        elif isinstance(value, dt.date):
+            return 1082
         elif isinstance(value, str):
             # Check for UUID pattern
             uuid_pattern = (
@@ -405,6 +449,9 @@ class IRISExecutor:
             )
             if re.match(uuid_pattern, value):
                 return 2950  # UUID
+
+            # Explicitly return VARCHAR (1043) for all other strings
+            # Feature 036 fix: Avoid mapping to INT4 or other types even if numeric
             return 1043  # VARCHAR
         else:
             return 1043  # Default to VARCHAR
@@ -1234,7 +1281,8 @@ class IRISExecutor:
                 cursor = connection.cursor()
                 try:
                     if params is not None:
-                        cursor.execute(sql, params)
+                        dbapi_params = tuple(params) if isinstance(params, list) else params
+                        cursor.execute(sql, dbapi_params)
                     else:
                         cursor.execute(sql)
                     return cursor
@@ -1293,11 +1341,9 @@ class IRISExecutor:
 
         # Parse column names from RETURNING clause
         if returning_clause == "*":
-            # Special case for RETURNING * - we'll handle this in _emulate_returning
             returning_columns = "*"
         else:
             # Parse column names from RETURNING clause
-            # Format: "schema"."table"."col1", "schema"."table"."col2", ...
             # Or just: col1, col2, ...
             raw_cols = [c.strip() for c in returning_clause.split(",")]
             returning_columns = []
@@ -1310,14 +1356,14 @@ class IRISExecutor:
                     col_match = re.search(r'"?(\w+)"?\s*$', col)
 
                 if col_match:
-                    returning_columns.append(col_match.group(1))
+                    returning_columns.append(col_match.group(1).lower())
 
         # Determine operation type and extract table/where clause
         sql_upper = sql.upper().strip()
         if sql_upper.startswith("INSERT"):
             returning_operation = "INSERT"
             table_match = re.search(
-                r'INSERT\s+INTO\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                rf'INSERT\s+INTO\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
                 sql,
                 re.IGNORECASE,
             )
@@ -1326,7 +1372,7 @@ class IRISExecutor:
         elif sql_upper.startswith("UPDATE"):
             returning_operation = "UPDATE"
             table_match = re.search(
-                r'UPDATE\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                rf'UPDATE\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
                 sql,
                 re.IGNORECASE,
             )
@@ -1343,7 +1389,7 @@ class IRISExecutor:
         elif sql_upper.startswith("DELETE"):
             returning_operation = "DELETE"
             table_match = re.search(
-                r'DELETE\s+FROM\s+(?:SQLUser\s*\.\s*)?"?(\w+)"?',
+                rf'DELETE\s+FROM\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
                 sql,
                 re.IGNORECASE,
             )
@@ -1358,12 +1404,12 @@ class IRISExecutor:
             if where_match:
                 returning_where_clause = where_match.group(1).strip()
 
-        # Strip RETURNING clause from SQL using the same improved regex
         stripped_sql = re.sub(
-            returning_pattern,
-            "",  # Strip both RETURNING and the terminator (semicolon)
+            r"\s+RETURNING\s+.*?(?=$|;)",
+            "",
             sql,
             flags=re.IGNORECASE | re.DOTALL,
+            count=1,
         )
 
         return (
@@ -1411,7 +1457,10 @@ class IRISExecutor:
             else:
                 cursor = connection.cursor()
                 if select_params:
-                    cursor.execute(sql, select_params)
+                    fetch_params = (
+                        tuple(select_params) if isinstance(select_params, list) else select_params
+                    )
+                    cursor.execute(sql, fetch_params)
                 else:
                     cursor.execute(sql)
                 r = cursor.fetchall()
@@ -1428,7 +1477,7 @@ class IRISExecutor:
                 if last_id is not None and last_id != "" and last_id != 0:
                     # Try lookup by %ID first
                     rows, meta = _fetch_results(
-                        f'SELECT {col_list} FROM SQLUser."{table}" WHERE %ID = ?', [last_id]
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE %ID = ?', [last_id]
                     )
                     if not rows and columns != "*":
                         id_cols = [
@@ -1438,7 +1487,7 @@ class IRISExecutor:
                         ]
                         for id_col in id_cols:
                             rows, meta = _fetch_results(
-                                f'SELECT {col_list} FROM SQLUser."{table}" WHERE "{id_col}" = ?',
+                                f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE "{id_col}" = ?',
                                 [last_id],
                             )
                             if rows:
@@ -1447,12 +1496,12 @@ class IRISExecutor:
                     # LAST RESORT: Try %ID lookup using hardcoded query if other lookups failed
                     if not rows:
                         rows, meta = _fetch_results(
-                            f'SELECT {col_list} FROM SQLUser."{table}" WHERE %ID = (SELECT LAST_IDENTITY())'
+                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE %ID = (SELECT LAST_IDENTITY())'
                         )
 
                 if not rows:
                     rows, meta = _fetch_results(
-                        f'SELECT TOP 1 {col_list} FROM SQLUser."{table}" ORDER BY %ID DESC'
+                        f'SELECT TOP 1 {col_list} FROM {IRIS_SCHEMA}."{table}" ORDER BY %ID DESC'
                     )
 
             elif operation in ("UPDATE", "DELETE"):
@@ -1460,19 +1509,19 @@ class IRISExecutor:
                     # Translate schema references in WHERE clause
                     translated_where = re.sub(
                         r'"public"\s*\.\s*"(\w+)"',
-                        r'SQLUser."\1"',
+                        rf'{IRIS_SCHEMA}."\1"',
                         where_clause,
                         flags=re.IGNORECASE,
                     )
                     translated_where = re.sub(
                         r'\bpublic\s*\.\s*"(\w+)"',
-                        r'SQLUser."\1"',
+                        rf'{IRIS_SCHEMA}."\1"',
                         translated_where,
                         flags=re.IGNORECASE,
                     )
 
                     select_sql = (
-                        f'SELECT {col_list} FROM SQLUser."{table}" WHERE {translated_where}'
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE {translated_where}'
                     )
 
                     # Extract WHERE clause parameters (they are the last N parameters)
@@ -1487,7 +1536,7 @@ class IRISExecutor:
                 if columns == "*":
                     # For SELECT *, expand from schema
                     col_names = self._expand_select_star(
-                        f"RETURNING * FROM SQLUser.{table}", 0, session_id=session_id
+                        f"RETURNING * FROM {IRIS_SCHEMA}.{table}", 0, session_id=session_id
                     )
                     if col_names:
                         new_meta = []
@@ -1675,7 +1724,7 @@ class IRISExecutor:
                     ("public", 2200),
                     ("pg_catalog", 11),
                     ("information_schema", 11323),
-                    ("sqluser", 16384),  # IRIS default schema mapped to custom OID
+                    (IRIS_SCHEMA.lower(), 16384),  # IRIS default schema mapped to custom OID
                 ]
 
                 # Check if query filters by specific namespaces (ANY clause)
@@ -1888,7 +1937,7 @@ class IRISExecutor:
                             CONSTRAINT_NAME,
                             CONSTRAINT_TYPE
                         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
-                        WHERE TABLE_SCHEMA = 'SQLUser'
+                        WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
                         ORDER BY TABLE_NAME, CONSTRAINT_NAME
                     """
                     result = iris.sql.exec(constraints_sql)
@@ -2317,10 +2366,10 @@ class IRISExecutor:
                     logger.info(f"Found {len(iris_tables)} tables in IRIS", tables=iris_tables[:10])
 
                     # Map IRIS schemas to PostgreSQL namespaces
-                    # SQLUser -> public (Prisma expects 'public')
+                    # {IRIS_SCHEMA} -> public (Prisma expects 'public')
                     schema_mapping = {
-                        "sqluser": "public",
-                        "SQLUser": "public",
+                        IRIS_SCHEMA.lower(): "public",
+                        IRIS_SCHEMA: "public",
                         "%Library": "pg_catalog",
                         "INFORMATION_SCHEMA": "information_schema",
                     }
@@ -2468,7 +2517,7 @@ class IRISExecutor:
                     import iris
 
                     # Query INFORMATION_SCHEMA.COLUMNS for column metadata
-                    # Filter by SQLUser schema (maps to public)
+                    # Filter by {IRIS_SCHEMA} schema (maps to public)
                     columns_sql = """
                         SELECT
                             'public' AS namespace,
@@ -2482,7 +2531,7 @@ class IRISExecutor:
                             COLUMN_DEFAULT,
                             ORDINAL_POSITION
                         FROM INFORMATION_SCHEMA.COLUMNS
-                        WHERE TABLE_SCHEMA = 'SQLUser'
+                        WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
                         ORDER BY TABLE_NAME, ORDINAL_POSITION
                     """
                     result = iris.sql.exec(columns_sql)
@@ -3128,18 +3177,16 @@ class IRISExecutor:
 
                 # 7. Schema Translation
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
-                from .schema_mapper import translate_input_schema
-
-                original_sql_before_schema = optimized_sql
-                optimized_sql = translate_input_schema(optimized_sql)
-
-                if original_sql_before_schema != optimized_sql:
+                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
+                if (
+                    '"public"' in sql_upper_check
+                    and not sql_upper_check.startswith("CREATE")
+                    and not sql_upper_check.startswith("ALTER")
+                ):
+                    sql = self._get_normalized_sql(sql, execution_path="embedded")
                     logger.info(
-                        "Schema translation applied: public -> SQLUser",
-                        original_preview=original_sql_before_schema[:80],
-                        translated_preview=optimized_sql[:80],
-                        session_id=session_id,
+                        f"Schema translation applied: public -> {IRIS_SCHEMA}",
+                        original_sql=sql[:100],
                     )
 
                 # POSTGRESQL COMPATIBILITY: Handle SHOW commands that IRIS doesn't support
@@ -3278,7 +3325,9 @@ class IRISExecutor:
                         # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
                         # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
                         # PostgreSQL uses ?column?, type names (int4), or function names (count)
-                        col_name = self._normalize_iris_column_name(iris_col_name, sql, iris_type)
+                        col_name = self._normalize_iris_column_name(
+                            iris_col_name, optimized_sql, iris_type
+                        )
 
                         # DEBUG: Log IRIS type for arithmetic expressions
                         logger.info(
@@ -3393,6 +3442,12 @@ class IRISExecutor:
                             if col_idx < len(column_type_oids):
                                 type_oid = column_type_oids[col_idx]
 
+                                if type_oid in (20, 23) and isinstance(value, int):
+                                    if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
+                                        type_oid = 1114
+                                        if row_idx == 0:
+                                            columns[col_idx]["type_oid"] = 1114
+
                                 # Robust serialization (TIMESTAMP, etc.)
                                 rows[row_idx][col_idx] = self._serialize_value(
                                     rows[row_idx][col_idx], type_oid
@@ -3460,7 +3515,7 @@ class IRISExecutor:
                     session_id=session_id,
                 )
 
-                # Feature 030: Schema output translation (SQLUser → public)
+                # Feature 030: Schema output translation ({IRIS_SCHEMA} → public)
                 # Only apply to information_schema queries that return schema columns
                 if rows and columns:
                     column_names = [col.get("name", "") for col in columns]
@@ -3546,7 +3601,7 @@ class IRISExecutor:
         sql_upper = sql.strip().upper()
 
         # Layer 0.5: Explicit RETURNING columns (Feature 034 fix)
-        if "RETURNING" in sql_upper and "*" not in sql_upper:
+        if "RETURNING" in sql_upper:
             (
                 returning_operation,
                 returning_table,
@@ -3555,33 +3610,61 @@ class IRISExecutor:
                 stripped_sql,
             ) = self._parse_returning_clause(sql)
 
-            if returning_operation and isinstance(returning_columns, list) and returning_columns:
-                logger.info("✅ Layer 0.5 SUCCESS: RETURNING metadata discovery")
-                for i, name in enumerate(returning_columns):
-                    # Try to get type from schema for accuracy
-                    col_oid = self._get_column_type_from_schema(
-                        returning_table, name, session_id=session_id
+            if returning_operation:
+                if returning_columns == "*":
+                    # For RETURNING *, expand columns using Layer 1.5 logic immediately
+                    expanded_names = self._expand_select_star(
+                        sql, expected_count or 0, session_id=session_id
                     )
-
-                    if col_oid is None:
-                        # Fallback to inference from value
-                        col_oid = (
-                            self._infer_type_from_value(rows[0][i], name)
-                            if rows and i < len(rows[0])
-                            else 1043
+                    if expanded_names:
+                        logger.info("✅ Layer 0.5 SUCCESS: RETURNING * metadata discovery")
+                        for i, name in enumerate(expanded_names):
+                            col_oid = self._get_column_type_from_schema(
+                                returning_table, name, session_id=session_id
+                            )
+                            if col_oid is None:
+                                col_oid = (
+                                    self._infer_type_from_value(rows[0][i], name)
+                                    if rows and i < len(rows[0])
+                                    else 1043
+                                )
+                            columns.append(
+                                {
+                                    "name": name,
+                                    "type_oid": col_oid,
+                                    "type_size": -1,
+                                    "type_modifier": -1,
+                                    "format_code": 0,
+                                }
+                            )
+                        return columns
+                elif isinstance(returning_columns, list) and returning_columns:
+                    logger.info("✅ Layer 0.5 SUCCESS: RETURNING metadata discovery")
+                    for i, name in enumerate(returning_columns):
+                        # Try to get type from schema for accuracy
+                        col_oid = self._get_column_type_from_schema(
+                            returning_table, name, session_id=session_id
                         )
 
-                    columns.append(
-                        {
-                            "name": name,
-                            "type_oid": col_oid,
-                            "type_size": -1,
-                            "type_modifier": -1,
-                            "format_code": 0,
-                        }
-                    )
-                if expected_count is None or len(columns) == expected_count:
-                    return columns
+                        if col_oid is None:
+                            # Fallback to inference from value
+                            col_oid = (
+                                self._infer_type_from_value(rows[0][i], name)
+                                if rows and i < len(rows[0])
+                                else 1043
+                            )
+
+                        columns.append(
+                            {
+                                "name": name,
+                                "type_oid": col_oid,
+                                "type_size": -1,
+                                "type_modifier": -1,
+                                "format_code": 0,
+                            }
+                        )
+                    if expected_count is None or len(columns) == expected_count:
+                        return columns
 
         # Layer 1: LIMIT 0 pattern
         limit_zero_names = self._discover_metadata_with_limit_zero(sql, session_id)
@@ -3830,18 +3913,16 @@ class IRISExecutor:
 
                 # 7. Schema Translation
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: SQLUser.TABLENAME
-                from .schema_mapper import translate_input_schema
-
-                original_sql_before_schema = optimized_sql
-                optimized_sql = translate_input_schema(optimized_sql)
-
-                if original_sql_before_schema != optimized_sql:
+                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
+                if (
+                    '"public"' in sql_upper_check
+                    and not sql_upper_check.startswith("CREATE")
+                    and not sql_upper_check.startswith("ALTER")
+                ):
+                    sql = self._get_normalized_sql(sql, execution_path="external")
                     logger.info(
-                        "Schema translation applied (external): public -> SQLUser",
-                        original_preview=original_sql_before_schema[:80],
-                        translated_preview=optimized_sql[:80],
-                        session_id=session_id,
+                        f"Schema translation applied (external): public -> {IRIS_SCHEMA}",
+                        original_sql=sql[:100],
                     )
 
                 # Pre-process parameters to convert lists to IRIS vector strings
@@ -3941,13 +4022,21 @@ class IRISExecutor:
                 if cursor.description:
                     for desc in cursor.description:
                         # Get original IRIS column name and type
-                        iris_col_name = desc[0]
-                        iris_type = desc[1] if len(desc) > 1 else "VARCHAR"
+                        if isinstance(desc, dict):
+                            iris_col_name = desc.get("name", "")
+                            iris_type = desc.get("iris_type", "VARCHAR")
+                            precomputed_oid = desc.get("type_oid")
+                        else:
+                            iris_col_name = desc[0]
+                            iris_type = desc[1] if len(desc) > 1 else "VARCHAR"
+                            precomputed_oid = None
 
                         # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
                         # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
                         # PostgreSQL uses ?column?, type names (int4), or function names (count)
-                        col_name = self._normalize_iris_column_name(iris_col_name, sql, iris_type)
+                        col_name = self._normalize_iris_column_name(
+                            iris_col_name, optimized_sql, iris_type
+                        )
 
                         # DEBUG: Log IRIS type for arithmetic expressions (external mode)
                         logger.info(
@@ -3959,53 +4048,58 @@ class IRISExecutor:
                             sql_preview=optimized_sql[:200],
                         )
 
-                        # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
-                        # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
-                        # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
-                        type_oid = self._iris_type_to_pg_oid(iris_type)
+                        if precomputed_oid is not None:
+                            type_oid = precomputed_oid
+                        else:
+                            # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
+                            # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
+                            # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
+                            type_oid = self._iris_type_to_pg_oid(iris_type)
 
-                        sql_upper_check = optimized_sql.upper()
+                            sql_upper_check = optimized_sql.upper()
 
-                        if iris_type == 2:
-                            # Check for explicit casts
-                            if "AS INTEGER" in sql_upper_check or "AS INT" in sql_upper_check:
-                                # CAST(? AS INTEGER) - override to INT4
+                            if iris_type == 2:
+                                # Check for explicit casts
+                                if "AS INTEGER" in sql_upper_check or "AS INT" in sql_upper_check:
+                                    # CAST(? AS INTEGER) - override to INT4
+                                    logger.info(
+                                        "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 23 (INT4)",
+                                        column_name=col_name,
+                                        original_oid=type_oid,
+                                        reason="SQL contains CAST to INTEGER",
+                                    )
+                                    type_oid = 23  # INT4
+                                elif (
+                                    "AS NUMERIC" not in sql_upper_check
+                                    and "AS DECIMAL" not in sql_upper_check
+                                ):
+                                    # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
+                                    logger.info(
+                                        "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
+                                        column_name=col_name,
+                                        original_oid=type_oid,
+                                        reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
+                                    )
+                                    type_oid = 701  # FLOAT8
+
+                            # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
+                            # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
+                            if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
                                 logger.info(
-                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 23 (INT4)",
+                                    "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
                                     column_name=col_name,
                                     original_oid=type_oid,
-                                    reason="SQL contains CAST to INTEGER",
+                                    reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
                                 )
-                                type_oid = 23  # INT4
-                            elif (
-                                "AS NUMERIC" not in sql_upper_check
-                                and "AS DECIMAL" not in sql_upper_check
-                            ):
-                                # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
-                                logger.info(
-                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
-                                    column_name=col_name,
-                                    original_oid=type_oid,
-                                    reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
-                                )
-                                type_oid = 701  # FLOAT8
-
-                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
-                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                        if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
-                            logger.info(
-                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
-                                column_name=col_name,
-                                original_oid=type_oid,
-                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
-                            )
-                            type_oid = 1114  # TIMESTAMP
+                                type_oid = 1114  # TIMESTAMP
 
                         columns.append(
                             {
                                 "name": col_name,
                                 "type_oid": type_oid,
-                                "type_size": desc[2] if len(desc) > 2 else -1,
+                                "type_size": desc[2]
+                                if not isinstance(desc, dict) and len(desc) > 2
+                                else -1,
                                 "type_modifier": -1,
                                 "format_code": 0,  # Text format
                             }
@@ -4066,6 +4160,12 @@ class IRISExecutor:
                         for col_idx, value in enumerate(row):
                             if col_idx < len(column_type_oids):
                                 type_oid = column_type_oids[col_idx]
+
+                                if type_oid in (20, 23) and isinstance(value, int):
+                                    if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
+                                        type_oid = 1114
+                                        if row_idx == 0:
+                                            columns[col_idx]["type_oid"] = 1114
 
                                 # Robust serialization (TIMESTAMP, etc.)
                                 rows[row_idx][col_idx] = self._serialize_value(
@@ -4135,7 +4235,7 @@ class IRISExecutor:
                     session_id=session_id,
                 )
 
-                # Feature 030: Schema output translation (SQLUser → public)
+                # Feature 030: Schema output translation ({IRIS_SCHEMA} → public)
                 # Only apply to information_schema queries that return schema columns
                 if rows and columns:
                     column_names = [col.get("name", "") for col in columns]
@@ -4162,7 +4262,7 @@ class IRISExecutor:
             except Exception as e:
                 logger.error(
                     "IRIS external execution failed",
-                    sql=sql[:100] + "..." if len(sql) > 100 else sql,
+                    sql=optimized_sql[:100] + "..." if len(optimized_sql) > 100 else optimized_sql,
                     error=str(e),
                     session_id=session_id,
                 )
@@ -4274,107 +4374,15 @@ class IRISExecutor:
     def _expand_select_star(
         self, sql: str, expected_columns: int, session_id: str | None = None
     ) -> list[str] | None:
-        """
-        Layer 1.5: Expand SELECT * queries using INFORMATION_SCHEMA (2025-11-14 fix).
-
-        Updated to handle multiple tables in JOINs by extracting all table names
-        and combining their column definitions in order.
-
-        Args:
-            sql: Original SQL query
-            expected_columns: Number of columns in the actual result
-            session_id: Optional session identifier for logging
-
-        Returns:
-            List of column names if successful, None if method fails
-        """
         try:
             import iris
+            import re
 
-            if not re.search(r"(SELECT|RETURNING)\s+\*", sql, re.IGNORECASE):
-                return None
-
-            table_names = self._extract_table_names_from_select(sql)
-            if not table_names and "RETURNING" in sql.upper():
-                # Try to extract table from INSERT/UPDATE/DELETE (Feature 034 fix)
-                table_match = re.search(
-                    r"(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:SQLUser\s*\.\s*)?\"?(\w+)\"?",
-                    sql,
-                    re.IGNORECASE,
-                )
-                if table_match:
-                    table_names = [table_match.group(1)]
-            if not table_names:
-                return None
-
-            logger.debug(
-                "Detected SELECT * query with tables",
-                tables=table_names,
-                session_id=session_id,
-            )
-
-            all_column_names = []
-            for table_name in table_names:
-                metadata_sql = f"""
-                    SELECT column_name
-                    FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE LOWER(table_name) = LOWER('{table_name}')
-                    ORDER BY ordinal_position
-                """
-
-                result = iris.sql.exec(metadata_sql)
-                table_columns = [row[0] for row in result]
-                all_column_names.extend(table_columns)
-
-            if all_column_names:
-                logger.info(
-                    "✅ SELECT * expansion successful",
-                    tables=table_names,
-                    columns=all_column_names,
-                    expected=expected_columns,
-                    actual=len(all_column_names),
-                    session_id=session_id,
-                )
-                return all_column_names
-            else:
-                logger.warning(
-                    "No columns found in INFORMATION_SCHEMA for tables",
-                    tables=table_names,
-                    session_id=session_id,
-                )
-                return None
-
-        except Exception as e:
-            logger.debug(
-                "SELECT * expansion failed",
-                error=str(e),
-                error_type=type(e).__name__,
-                session_id=session_id,
-            )
-            return None
-
-    def _discover_metadata_with_limit_zero(
-        self, sql: str, session_id: str | None = None
-    ) -> list[str] | None:
-        """
-        Layer 1: Discover column metadata using LIMIT 0 pattern (database-native approach).
-
-        This implements the protocol-native solution recommended by Perplexity research:
-        Execute the query with LIMIT 0 to discover column structure without fetching data.
-
-        Args:
-            sql: Original SQL query
-            session_id: Optional session identifier for logging
-
-        Returns:
-            List of column names if successful, None if method fails
-
-        References:
-            - Perplexity research 2025-11-11: "LIMIT 0 pattern for metadata discovery"
-            - PostgreSQL Parse/Describe mechanism alternative
-        """
-        try:
-            import iris
+            if "RETURNING" in sql.upper():
+                sql = re.sub(r"RETURNING\s+\*", "SELECT *", sql, flags=re.IGNORECASE)
+                select_match = re.search(r"SELECT\s+.*", sql, re.IGNORECASE | re.DOTALL)
+                if select_match:
+                    sql = select_match.group(0)
 
             # Wrap original query in subquery with LIMIT 0 to discover structure
             # Pattern: SELECT * FROM (original_query) AS _metadata LIMIT 0
@@ -4648,7 +4656,7 @@ class IRISExecutor:
                 -7: 16,  # BIT → bool
                 -6: 21,  # TINYINT → int2
                 -5: 20,  # BIGINT → int8
-                1: 23,  # int4
+                1: 1042,  # CHAR → bpchar
                 2: 1700,  # numeric
                 3: 20,  # int8
                 4: 23,  # int4

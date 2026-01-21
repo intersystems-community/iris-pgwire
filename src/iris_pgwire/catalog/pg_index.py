@@ -12,6 +12,7 @@ which is sufficient for Prisma introspection.
 from dataclasses import dataclass, field
 from typing import Any
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from .oid_generator import OIDGenerator
 from .pg_class import PgClass
 
@@ -69,10 +70,10 @@ class PgIndexEmulator:
 
     def from_primary_key(
         self,
-        schema: str,
         table_name: str,
         constraint_name: str,
         column_positions: list[int],
+        schema: str = IRIS_SCHEMA,
     ) -> tuple[PgClass, PgIndex]:
         """
         Generate pg_class and pg_index entries for a primary key.
@@ -80,76 +81,76 @@ class PgIndexEmulator:
         Returns both the index relation (pg_class) and index details (pg_index).
 
         Args:
-            schema: Schema name
             table_name: Table name
             constraint_name: PK constraint name
             column_positions: Column positions (attnum values)
+            schema: Schema name
 
         Returns:
             Tuple of (PgClass for index, PgIndex entry)
         """
         return self._create_index(
-            schema=schema,
             table_name=table_name,
             index_name=f"{table_name}_{constraint_name}_idx",
             column_positions=column_positions,
             is_unique=True,
             is_primary=True,
+            schema=schema,
         )
 
     def from_unique_constraint(
         self,
-        schema: str,
         table_name: str,
         constraint_name: str,
         column_positions: list[int],
+        schema: str = IRIS_SCHEMA,
     ) -> tuple[PgClass, PgIndex]:
         """
         Generate pg_class and pg_index entries for a unique constraint.
 
         Args:
-            schema: Schema name
             table_name: Table name
             constraint_name: Unique constraint name
             column_positions: Column positions (attnum values)
+            schema: Schema name
 
         Returns:
             Tuple of (PgClass for index, PgIndex entry)
         """
         return self._create_index(
-            schema=schema,
             table_name=table_name,
             index_name=f"{table_name}_{constraint_name}_idx",
             column_positions=column_positions,
             is_unique=True,
             is_primary=False,
+            schema=schema,
         )
 
     def _create_index(
         self,
-        schema: str,
         table_name: str,
         index_name: str,
         column_positions: list[int],
         is_unique: bool,
         is_primary: bool,
+        schema: str = IRIS_SCHEMA,
     ) -> tuple[PgClass, PgIndex]:
         """
         Create pg_class and pg_index entries for an index.
 
         Args:
-            schema: Schema name
             table_name: Table name
             index_name: Index name
             column_positions: Column positions
             is_unique: Is unique index
             is_primary: Is primary key index
+            schema: Schema name
 
         Returns:
             Tuple of (PgClass, PgIndex)
         """
-        table_oid = self.oid_gen.get_table_oid(schema, table_name)
-        index_oid = self.oid_gen.get_index_oid(schema, index_name)
+        table_oid = self.oid_gen.get_table_oid(table_name, schema)
+        index_oid = self.oid_gen.get_index_oid(index_name, schema)
         namespace_oid = self.oid_gen.get_namespace_oid("public")
 
         # Create pg_class entry for the index

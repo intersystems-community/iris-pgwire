@@ -23,6 +23,8 @@ import psycopg
 import pytest
 import structlog
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 # Add iris-devtester to path if it's in the expected sibling directory
 devtester_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../iris-devtester"))
 if os.path.exists(devtester_path) and devtester_path not in sys.path:
@@ -683,10 +685,10 @@ def iris_clean_namespace(embedded_iris, iris_config):
     # Query existing tables before test starts
     iris_config["namespace"]
     result = embedded_iris.sql.exec(
-        """
+        f"""
         SELECT TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_SCHEMA = 'SQLUser'
+        WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
     """
     )
     existing_tables = {row[0] for row in result}
@@ -704,10 +706,10 @@ def iris_clean_namespace(embedded_iris, iris_config):
     try:
         # Find tables created during test
         result = embedded_iris.sql.exec(
-            """
+            f"""
             SELECT TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
-            WHERE TABLE_SCHEMA = 'SQLUser'
+            WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
         """
         )
         current_tables = {row[0] for row in result}
@@ -716,7 +718,7 @@ def iris_clean_namespace(embedded_iris, iris_config):
         # Drop tables created during test
         for table_name in new_tables:
             try:
-                embedded_iris.sql.exec(f"DROP TABLE SQLUser.{table_name} CASCADE")
+                embedded_iris.sql.exec(f"DROP TABLE {IRIS_SCHEMA}.{table_name} CASCADE")
                 logger.debug("iris_clean_namespace: Dropped table", table=table_name)
             except Exception as e:
                 logger.warning(

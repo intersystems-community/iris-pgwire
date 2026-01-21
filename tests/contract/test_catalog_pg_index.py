@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_index catalog emulation.
 """
 
 import pytest
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class TestPgIndexPrimaryKey:
@@ -23,10 +24,10 @@ class TestPgIndexPrimaryKey:
         emulator = PgIndexEmulator(oid_gen)
 
         index_class, pg_index = emulator.from_primary_key(
-            schema="SQLUser",
             table_name="users",
             constraint_name="pkey",
             column_positions=[1],
+            schema=IRIS_SCHEMA,
         )
 
         # Verify pg_index entry
@@ -47,10 +48,10 @@ class TestPgIndexPrimaryKey:
         emulator = PgIndexEmulator(oid_gen)
 
         index_class, pg_index = emulator.from_primary_key(
-            schema="SQLUser",
             table_name="order_items",
             constraint_name="pkey",
             column_positions=[1, 2],
+            schema=IRIS_SCHEMA,
         )
 
         assert pg_index.indisprimary is True
@@ -69,9 +70,7 @@ class TestPgIndexOIDConsistency:
         oid_gen = OIDGenerator()
         emulator = PgIndexEmulator(oid_gen)
 
-        index_class, pg_index = emulator.from_primary_key(
-            "SQLUser", "users", "pkey", [1]
-        )
+        index_class, pg_index = emulator.from_primary_key("users", "pkey", [1], schema=IRIS_SCHEMA)
 
         assert index_class.oid == pg_index.indexrelid
 
@@ -83,11 +82,9 @@ class TestPgIndexOIDConsistency:
         oid_gen = OIDGenerator()
         emulator = PgIndexEmulator(oid_gen)
 
-        index_class, pg_index = emulator.from_primary_key(
-            "SQLUser", "users", "pkey", [1]
-        )
+        index_class, pg_index = emulator.from_primary_key("users", "pkey", [1], schema=IRIS_SCHEMA)
 
-        expected_table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        expected_table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         assert pg_index.indrelid == expected_table_oid
 
 
@@ -138,19 +135,15 @@ class TestPgIndexLookup:
         emulator = PgIndexEmulator(oid_gen)
 
         # Add index for users table
-        idx1_class, idx1 = emulator.from_primary_key(
-            "SQLUser", "users", "pkey", [1]
-        )
+        idx1_class, idx1 = emulator.from_primary_key("users", "pkey", [1], schema=IRIS_SCHEMA)
         emulator.add_index(idx1_class, idx1)
 
         # Add index for orders table
-        idx2_class, idx2 = emulator.from_primary_key(
-            "SQLUser", "orders", "pkey", [1]
-        )
+        idx2_class, idx2 = emulator.from_primary_key("orders", "pkey", [1], schema=IRIS_SCHEMA)
         emulator.add_index(idx2_class, idx2)
 
         # Get users indexes
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         indexes = emulator.get_by_table_oid(table_oid)
 
         assert len(indexes) == 1
@@ -169,10 +162,10 @@ class TestPgIndexUniqueIndex:
         emulator = PgIndexEmulator(oid_gen)
 
         index_class, pg_index = emulator.from_unique_constraint(
-            schema="SQLUser",
             table_name="users",
             constraint_name="email_unique",
             column_positions=[3],  # email column
+            schema=IRIS_SCHEMA,
         )
 
         assert pg_index.indisunique is True

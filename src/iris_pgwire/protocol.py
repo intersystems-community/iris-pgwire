@@ -2780,20 +2780,13 @@ class PGWireProtocol:
                         format_code = 0  # Default to text
 
                     if format_code == 0:
-                        # Text format - decode and try to preserve numeric types
                         text_value = param_data.decode("utf-8")
-
-                        # Try to convert to int or float if it looks numeric
-                        # This handles asyncpg sending integers as text when param type is UNKNOWN
                         try:
-                            # Try int first
                             if "." not in text_value and "e" not in text_value.lower():
                                 param_values.append(int(text_value))
                             else:
-                                # Try float
                                 param_values.append(float(text_value))
                         except (ValueError, TypeError):
-                            # Not a number, keep as string
                             param_values.append(text_value)
                     elif format_code == 1:
                         # Binary format - decode based on parameter type OID
@@ -2961,20 +2954,14 @@ class PGWireProtocol:
                                     col_match = re.search(r'"?(\w+)"?\s*$', col)
                                     if col_match:
                                         col_name = col_match.group(1)
-                                        # Determine type OID based on column name
-                                        # Note: Default to text (25) for unknown columns
-                                        # Use int4 for id columns, bigint for timestamp-like columns
-                                        # (Prisma often stores timestamps as BigInt)
-                                        if col_name.lower() == "id":
-                                            type_oid = 23  # int4
-                                        elif col_name.lower() in (
+                                        if col_name.lower() in (
                                             "created_at",
                                             "updated_at",
                                             "deleted_at",
                                         ):
-                                            type_oid = 20  # bigint - JS/Prisma often stores timestamps as bigint
+                                            type_oid = 20
                                         else:
-                                            type_oid = 25  # text
+                                            type_oid = 25
                                         returning_columns.append(
                                             {
                                                 "name": col_name,

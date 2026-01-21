@@ -2,7 +2,7 @@
 SQL Pipeline - Unified transformation pipeline for IRIS compatibility (Feature 036)
 
 This orchestrates the various stages of SQL translation:
-1. Schema Mapping (public -> SQLUser)
+1. Schema Mapping (public -> {IRIS_SCHEMA})
 2. Statement Filtering (skipping unsupported DDL)
 3. Parameter Translation ($n -> ?)
 4. Refinement (ORDER BY alias fixes, etc.)

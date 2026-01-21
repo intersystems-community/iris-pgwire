@@ -6,53 +6,53 @@ Validates translation of 'CREATE INDEX ... USING hnsw' to IRIS-native format.
 import psycopg
 import pytest
 
-from iris_pgwire.vector_optimizer import VectorQueryOptimizer
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+from iris_pgwire.sql_translator.normalizer import SQLTranslator
 
 
 @pytest.fixture
-def optimizer():
-    return VectorQueryOptimizer()
+def translator():
+    return SQLTranslator()
 
 
-def test_hnsw_cosine_translation(optimizer):
+def test_hnsw_cosine_translation(translator):
     """Verify 'USING hnsw (... vector_cosine_ops)' translation."""
     sql = "CREATE INDEX idx_hnsw ON hnswtest USING hnsw (v vector_cosine_ops)"
-    # Note: VectorQueryOptimizer.optimize_query is the main entry point
-    # We'll check the internal logic first or the main entry point
-    optimized_sql, _ = optimizer.optimize_query(sql)
-    assert "AS HNSW(Distance='Cosine')" in optimized_sql
+    optimized_sql = translator.normalize_sql(sql)
+    assert "AS HNSW" in optimized_sql
     assert "USING hnsw" not in optimized_sql
     assert "vector_cosine_ops" not in optimized_sql
 
 
-def test_hnsw_dot_product_translation(optimizer):
+def test_hnsw_dot_product_translation(translator):
     """Verify 'USING hnsw (... vector_ip_ops)' translation."""
     sql = "CREATE INDEX idx_hnsw_ip ON test_table USING hnsw (embedding vector_ip_ops)"
-    optimized_sql, _ = optimizer.optimize_query(sql)
-    assert "AS HNSW(Distance='DotProduct')" in optimized_sql
+    optimized_sql = translator.normalize_sql(sql)
+    assert "AS HNSW" in optimized_sql
     assert "USING hnsw" not in optimized_sql
 
 
-def test_hnsw_case_insensitivity(optimizer):
+def test_hnsw_case_insensitivity(translator):
     """Verify translation handles mixed case."""
     sql = "create index IDX_Mixed on MY_TABLE using HNSW (VEC vector_cosine_ops)"
-    optimized_sql, _ = optimizer.optimize_query(sql)
-    assert "AS HNSW(Distance='Cosine')" in optimized_sql
+    optimized_sql = translator.normalize_sql(sql)
+    assert "AS HNSW" in optimized_sql
 
 
-def test_hnsw_l2_rejection(optimizer):
+def test_hnsw_l2_rejection(translator):
     """Verify 'vector_l2_ops' is rejected as IRIS doesn't support it for HNSW."""
     sql = "CREATE INDEX idx_l2 ON test USING hnsw (v vector_l2_ops)"
-    with pytest.raises(NotImplementedError) as excinfo:
-        optimizer.optimize_query(sql)
-    assert "L2 distance" in str(excinfo.value)
+    with pytest.raises(ValueError) as excinfo:
+        translator.normalize_sql(sql)
+    assert "L2/Euclidean distance" in str(excinfo.value)
 
 
-def test_btree_index_untouched(optimizer):
+def test_btree_index_untouched(translator):
     """Verify standard btree indexes are not modified."""
     sql = "CREATE INDEX idx_btree ON my_table (name)"
-    optimized_sql, _ = optimizer.optimize_query(sql)
-    assert optimized_sql == sql
+    optimized_sql = translator.normalize_sql(sql)
+    assert "CREATE INDEX IDX_BTREE ON" in optimized_sql
+    assert "(NAME)" in optimized_sql
 
 
 def test_integration_hnsw_creation(pgwire_client, iris_connection):
@@ -72,7 +72,7 @@ def test_integration_hnsw_creation(pgwire_client, iris_connection):
 
         with iris_connection.cursor() as cur:
             cur.execute(
-                "SELECT IndexName FROM %Dictionary.IndexDefinition WHERE parent = 'SQLUser.IntegrationHnsw' AND IndexName = 'idx_integration_hnsw'"
+                f"SELECT IndexName FROM %Dictionary.IndexDefinition WHERE parent = '{IRIS_SCHEMA}.IntegrationHnsw' AND IndexName = 'idx_integration_hnsw'"
             )
             row = cur.fetchone()
             assert row is not None

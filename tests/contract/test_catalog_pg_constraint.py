@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_constraint catalog emulation per pg_constraint_contract.
 """
 
 import pytest
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 
 class TestPgConstraintPrimaryKey:
@@ -23,11 +24,11 @@ class TestPgConstraintPrimaryKey:
         emulator = PgConstraintEmulator(oid_gen)
 
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="users",
             constraint_name="users_pkey",
             constraint_type="PRIMARY KEY",
             column_positions=[1],
+            schema=IRIS_SCHEMA,
         )
 
         assert constraint.contype == "p"  # primary key
@@ -44,11 +45,11 @@ class TestPgConstraintPrimaryKey:
         emulator = PgConstraintEmulator(oid_gen)
 
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="order_items",
             constraint_name="order_items_pkey",
             constraint_type="PRIMARY KEY",
             column_positions=[1, 2],  # composite key
+            schema=IRIS_SCHEMA,
         )
 
         assert constraint.contype == "p"
@@ -71,13 +72,13 @@ class TestPgConstraintForeignKey:
         emulator = PgConstraintEmulator(oid_gen)
 
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="orders",
             constraint_name="orders_user_fk",
             constraint_type="FOREIGN KEY",
             column_positions=[2],  # user_id is 2nd column
             ref_table_name="users",
             ref_column_positions=[1],  # id is 1st column
+            schema=IRIS_SCHEMA,
         )
 
         assert constraint.contype == "f"  # foreign key
@@ -95,17 +96,17 @@ class TestPgConstraintForeignKey:
 
         # Create FK
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="orders",
             constraint_name="orders_user_fk",
             constraint_type="FOREIGN KEY",
             column_positions=[2],
             ref_table_name="users",
             ref_column_positions=[1],
+            schema=IRIS_SCHEMA,
         )
 
         # Verify confrelid matches users table OID
-        expected_ref_oid = oid_gen.get_table_oid("SQLUser", "users")
+        expected_ref_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         assert constraint.confrelid == expected_ref_oid
 
 
@@ -125,11 +126,11 @@ class TestPgConstraintUnique:
         emulator = PgConstraintEmulator(oid_gen)
 
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="users",
             constraint_name="users_email_unique",
             constraint_type="UNIQUE",
             column_positions=[3],  # email column
+            schema=IRIS_SCHEMA,
         )
 
         assert constraint.contype == "u"  # unique
@@ -148,11 +149,11 @@ class TestPgConstraintCompositeKey:
         emulator = PgConstraintEmulator(oid_gen)
 
         constraint = emulator.from_iris_constraint(
-            schema="SQLUser",
             table_name="subscriptions",
             constraint_name="subscriptions_user_product_unique",
             constraint_type="UNIQUE",
             column_positions=[1, 2],  # (user_id, product_id)
+            schema=IRIS_SCHEMA,
         )
 
         assert constraint.contype == "u"
@@ -171,10 +172,10 @@ class TestPgConstraintOIDStability:
         emulator2 = PgConstraintEmulator(OIDGenerator())
 
         c1 = emulator1.from_iris_constraint(
-            "SQLUser", "users", "users_pkey", "PRIMARY KEY", [1]
+            "users", "users_pkey", "PRIMARY KEY", [1], schema=IRIS_SCHEMA
         )
         c2 = emulator2.from_iris_constraint(
-            "SQLUser", "users", "users_pkey", "PRIMARY KEY", [1]
+            "users", "users_pkey", "PRIMARY KEY", [1], schema=IRIS_SCHEMA
         )
 
         assert c1.oid == c2.oid
@@ -233,22 +234,22 @@ class TestPgConstraintLookup:
 
         # Add constraints for users table
         pk = emulator.from_iris_constraint(
-            "SQLUser", "users", "users_pkey", "PRIMARY KEY", [1]
+            "users", "users_pkey", "PRIMARY KEY", [1], schema=IRIS_SCHEMA
         )
         unique = emulator.from_iris_constraint(
-            "SQLUser", "users", "users_email_unique", "UNIQUE", [3]
+            "users", "users_email_unique", "UNIQUE", [3], schema=IRIS_SCHEMA
         )
         emulator.add_constraint(pk)
         emulator.add_constraint(unique)
 
         # Add constraint for different table
         other = emulator.from_iris_constraint(
-            "SQLUser", "orders", "orders_pkey", "PRIMARY KEY", [1]
+            "orders", "orders_pkey", "PRIMARY KEY", [1], schema=IRIS_SCHEMA
         )
         emulator.add_constraint(other)
 
         # Get users constraints
-        table_oid = oid_gen.get_table_oid("SQLUser", "users")
+        table_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         constraints = emulator.get_by_table_oid(table_oid)
 
         assert len(constraints) == 2
@@ -263,18 +264,18 @@ class TestPgConstraintLookup:
 
         # Add FK constraint
         fk = emulator.from_iris_constraint(
-            "SQLUser",
             "orders",
             "orders_user_fk",
             "FOREIGN KEY",
             [2],
             ref_table_name="users",
             ref_column_positions=[1],
+            schema=IRIS_SCHEMA,
         )
         emulator.add_constraint(fk)
 
         # Get constraints referencing users
-        users_oid = oid_gen.get_table_oid("SQLUser", "users")
+        users_oid = oid_gen.get_table_oid("users", IRIS_SCHEMA)
         constraints = emulator.get_by_referenced_table(users_oid)
 
         assert len(constraints) == 1

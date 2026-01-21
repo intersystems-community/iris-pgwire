@@ -10,6 +10,7 @@ Standard PostgreSQL namespace OIDs:
 - information_schema: 11323
 """
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,11 +35,11 @@ class PgNamespaceEmulator:
     Emulate pg_namespace from IRIS metadata.
 
     Maps:
-    - 'public' -> SQLUser (configurable via schema_mapper)
+    - 'public' -> {IRIS_SCHEMA} (configurable via schema_mapper)
     - 'pg_catalog' -> system types namespace
     - 'information_schema' -> SQL standard schema
 
-    Since IRIS typically uses a single user schema (SQLUser),
+    Since IRIS typically uses a single user schema ({IRIS_SCHEMA}),
     we provide static namespaces matching PostgreSQL expectations.
     """
 

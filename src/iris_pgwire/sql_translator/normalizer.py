@@ -9,7 +9,7 @@ Constitutional Requirements:
 - < 10% total execution time increase vs baseline
 
 Feature 030 Extension:
-- PostgreSQL schema mapping (public → SQLUser)
+- PostgreSQL schema mapping (public → {IRIS_SCHEMA})
 
 Feature 035 Extension:
 - ENUM type handling (CREATE TYPE skip, column type translation)

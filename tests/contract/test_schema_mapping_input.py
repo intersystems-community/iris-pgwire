@@ -2,54 +2,54 @@
 Contract tests for translate_input_schema() function.
 
 These tests validate the input SQL translation from PostgreSQL 'public'
-schema references to IRIS 'SQLUser' schema.
+schema references to IRIS '{IRIS_SCHEMA}' schema.
 
 Feature: 030-pg-schema-mapping
 """
 
 import pytest
 
-from iris_pgwire.schema_mapper import translate_input_schema
+from iris_pgwire.schema_mapper import IRIS_SCHEMA, translate_input_schema
 
 
 class TestSchemaInputTranslation:
     """Contract tests for translate_input_schema() per contracts/schema-mapping.md"""
 
     def test_where_clause_public(self):
-        """WHERE table_schema = 'public' → 'SQLUser'"""
+        """WHERE table_schema = 'public' → '{IRIS_SCHEMA}'"""
         sql = "SELECT * FROM information_schema.tables WHERE table_schema = 'public'"
         result = translate_input_schema(sql)
-        assert "table_schema = 'SQLUser'" in result
+        assert f"table_schema = '{IRIS_SCHEMA}'" in result
         assert "'public'" not in result
 
     def test_schema_qualified_name(self):
-        """FROM public.tablename → SQLUser.tablename"""
+        """FROM public.tablename → {IRIS_SCHEMA}.tablename"""
         sql = "SELECT * FROM public.users"
         result = translate_input_schema(sql)
-        assert "SQLUser.users" in result
+        assert f'{IRIS_SCHEMA}."USERS"' in result
         assert "public.users" not in result
 
     def test_case_insensitive_uppercase(self):
-        """Case-insensitive: 'PUBLIC' → 'SQLUser'"""
+        """Case-insensitive: 'PUBLIC' → '{IRIS_SCHEMA}'"""
         sql = "WHERE table_schema = 'PUBLIC'"
         result = translate_input_schema(sql)
-        assert "SQLUser" in result
+        assert IRIS_SCHEMA in result
         assert "'PUBLIC'" not in result
 
     def test_case_insensitive_mixed(self):
-        """Case-insensitive: 'Public' → 'SQLUser'"""
+        """Case-insensitive: 'Public' → '{IRIS_SCHEMA}'"""
         sql = "WHERE table_schema = 'Public'"
         result = translate_input_schema(sql)
-        assert "SQLUser" in result
+        assert IRIS_SCHEMA in result
         assert "'Public'" not in result
 
     def test_sqluser_unchanged(self):
-        """Explicit SQLUser references should not be double-mapped"""
-        sql = "WHERE table_schema = 'SQLUser'"
+        """Explicit {IRIS_SCHEMA} references should not be double-mapped"""
+        sql = f"WHERE table_schema = '{IRIS_SCHEMA}'"
         result = translate_input_schema(sql)
-        # Should have exactly one SQLUser, not double-mapped
-        assert result.count("SQLUser") == 1
-        assert "table_schema = 'SQLUser'" in result
+        # Should have exactly one IRIS_SCHEMA, not double-mapped
+        assert result.count(IRIS_SCHEMA) == 1
+        assert f"table_schema = '{IRIS_SCHEMA}'" in result
 
     def test_system_schema_unchanged(self):
         """IRIS system schemas (%SYS, etc.) should not be modified"""
@@ -68,7 +68,7 @@ class TestSchemaInputTranslation:
         """Schema reference in SELECT should be translated"""
         sql = "SELECT * FROM public.orders WHERE public.orders.id = 1"
         result = translate_input_schema(sql)
-        assert "SQLUser.orders" in result
+        assert f'{IRIS_SCHEMA}."ORDERS"' in result
         assert "public.orders" not in result
 
     def test_multiple_public_references(self):
@@ -80,9 +80,9 @@ class TestSchemaInputTranslation:
             WHERE t.schema = 'public'
         """
         result = translate_input_schema(sql)
-        assert "public" not in result.lower() or "'SQLUser'" in result
-        assert "SQLUser.tables" in result
-        assert "SQLUser.columns" in result
+        assert "public" not in result.lower() or f"'{IRIS_SCHEMA}'" in result
+        assert f'{IRIS_SCHEMA}."TABLES"' in result
+        assert f'{IRIS_SCHEMA}."COLUMNS"' in result
 
     def test_public_in_subquery(self):
         """Schema reference in subquery"""
@@ -92,7 +92,7 @@ class TestSchemaInputTranslation:
             ) AS active_users
         """
         result = translate_input_schema(sql)
-        assert "SQLUser.users" in result
+        assert f'{IRIS_SCHEMA}."USERS"' in result
         assert "public.users" not in result
 
     def test_information_schema_query(self):
@@ -104,7 +104,7 @@ class TestSchemaInputTranslation:
             ORDER BY table_name
         """
         result = translate_input_schema(sql)
-        assert "table_schema = 'SQLUser'" in result
+        assert f"table_schema = '{IRIS_SCHEMA}'" in result
         # information_schema itself should NOT be modified
         assert "information_schema.tables" in result
 
@@ -113,7 +113,7 @@ class TestSchemaInputTranslation:
         sql = 'SELECT * FROM "public".users'
         result = translate_input_schema(sql)
         # Should translate double-quoted schema reference
-        assert "SQLUser" in result or '"SQLUser"' in result
+        assert IRIS_SCHEMA in result or f'"{IRIS_SCHEMA}"' in result
 
     def test_no_false_positives_in_strings(self):
         """The word 'public' in string literals (not schema refs) should be preserved"""
@@ -126,19 +126,19 @@ class TestSchemaInputTranslation:
         """INSERT INTO public.tablename should be translated"""
         sql = "INSERT INTO public.users (name, email) VALUES ('John', 'john@example.com')"
         result = translate_input_schema(sql)
-        assert "SQLUser.users" in result
+        assert f'{IRIS_SCHEMA}."USERS"' in result
         assert "public.users" not in result
 
     def test_update_with_schema(self):
         """UPDATE public.tablename should be translated"""
         sql = "UPDATE public.users SET name = 'Jane' WHERE id = 1"
         result = translate_input_schema(sql)
-        assert "SQLUser.users" in result
+        assert f'{IRIS_SCHEMA}."USERS"' in result
         assert "public.users" not in result
 
     def test_delete_with_schema(self):
         """DELETE FROM public.tablename should be translated"""
         sql = "DELETE FROM public.users WHERE id = 1"
         result = translate_input_schema(sql)
-        assert "SQLUser.users" in result
+        assert f'{IRIS_SCHEMA}."USERS"' in result
         assert "public.users" not in result

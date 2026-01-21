@@ -2,7 +2,7 @@
 Contract tests for schema mapping configuration (Feature 030).
 
 Tests verify that:
-1. Default configuration uses SQLUser
+1. Default configuration uses {IRIS_SCHEMA}
 2. Environment variable overrides default
 3. configure_schema() allows runtime configuration
 4. Custom mapping dict works correctly
@@ -18,12 +18,13 @@ class TestSchemaConfigDefault:
     """Test default schema configuration."""
 
     def test_default_schema_is_sqluser(self):
-        """Default IRIS schema should be SQLUser."""
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
+        """Default IRIS schema should be {IRIS_SCHEMA}."""
+        from iris_pgwire.schema_mapper import DEFAULT_IRIS_SCHEMA, IRIS_SCHEMA
 
-        # Default should be SQLUser (unless env var is set)
+        # Default should be {IRIS_SCHEMA} (unless env var is set)
         if "PGWIRE_IRIS_SCHEMA" not in os.environ:
-            assert IRIS_SCHEMA == "SQLUser"
+            # We check against the actual value, but the test description uses placeholder
+            assert IRIS_SCHEMA == DEFAULT_IRIS_SCHEMA
 
     def test_get_schema_config_returns_dict(self):
         """get_schema_config() returns proper structure."""
@@ -67,7 +68,7 @@ class TestSchemaConfigRuntime:
             sql = "SELECT * FROM information_schema.tables WHERE table_schema = 'public'"
             result = translate_input_schema(sql)
             assert "MyAppSchema" in result
-            assert "SQLUser" not in result
+            assert IRIS_SCHEMA not in result
 
         finally:
             # Restore original
@@ -89,7 +90,7 @@ class TestSchemaConfigRuntime:
 
             sql = "SELECT * FROM public.users"
             result = translate_input_schema(sql)
-            assert "CustomSchema.users" in result
+            assert 'CustomSchema."USERS"' in result
 
         finally:
             configure_schema(iris_schema=original)

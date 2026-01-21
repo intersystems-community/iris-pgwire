@@ -14,22 +14,21 @@ Well-known namespace OIDs:
 - information_schema: 11323
 """
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
-ObjectType = Literal[
-    "namespace", "table", "column", "constraint", "index", "type", "default"
-]
+ObjectType = Literal["namespace", "table", "column", "constraint", "index", "type", "default"]
 
 
 @dataclass
 class ObjectIdentity:
     """Identity tuple for OID generation."""
 
-    namespace: str  # Schema name (e.g., 'SQLUser')
-    object_type: ObjectType  # Object category
     object_name: str  # Fully qualified name (e.g., 'users' or 'users.id')
+    namespace: str = IRIS_SCHEMA  # Schema name (e.g., '{IRIS_SCHEMA}')
+    object_type: ObjectType = "table"  # Object category
 
     @property
     def identity_string(self) -> str:
@@ -46,8 +45,8 @@ class OIDGenerator:
 
     Usage:
         gen = OIDGenerator()
-        table_oid = gen.get_oid('SQLUser', 'table', 'users')
-        column_oid = gen.get_oid('SQLUser', 'column', 'users.id')
+        table_oid = gen.get_oid('{IRIS_SCHEMA}', 'table', 'users')
+        column_oid = gen.get_oid('{IRIS_SCHEMA}', 'column', 'users.id')
     """
 
     # Well-known namespace OIDs (match PostgreSQL)
@@ -65,14 +64,14 @@ class OIDGenerator:
         """Initialize OID generator with empty cache."""
         self._cache: dict[str, int] = {}
 
-    def get_oid(self, namespace: str, object_type: str, object_name: str) -> int:
+    def get_oid(self, object_type: str, object_name: str, namespace: str = IRIS_SCHEMA) -> int:
         """
         Generate deterministic OID for an object.
 
         Args:
-            namespace: Schema name (e.g., 'SQLUser')
             object_type: Object category ('table', 'column', 'constraint', etc.)
             object_name: Object name (e.g., 'users' or 'users.id' for columns)
+            namespace: Schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             Deterministic OID in user range (>= 16384)
@@ -95,7 +94,7 @@ class OIDGenerator:
         Returns:
             Deterministic OID
         """
-        return self.get_oid(identity.namespace, identity.object_type, identity.object_name)
+        return self.get_oid(identity.object_type, identity.object_name, identity.namespace)
 
     def _generate_oid(self, identity_string: str) -> int:
         """
@@ -141,57 +140,57 @@ class OIDGenerator:
             return self.WELL_KNOWN_NAMESPACES[ns_lower]
 
         # Generate OID for custom namespace
-        return self.get_oid("", "namespace", namespace)
+        return self.get_oid("namespace", namespace, "")
 
-    def get_table_oid(self, schema: str, table_name: str) -> int:
+    def get_table_oid(self, table_name: str, schema: str = IRIS_SCHEMA) -> int:
         """
         Convenience method to get OID for a table.
 
         Args:
-            schema: Schema name (e.g., 'SQLUser')
             table_name: Table name (e.g., 'users')
+            schema: Schema name (e.g., '{IRIS_SCHEMA}')
 
         Returns:
             Table OID
         """
-        return self.get_oid(schema, "table", table_name)
+        return self.get_oid("table", table_name, schema)
 
-    def get_column_oid(self, schema: str, table_name: str, column_name: str) -> int:
+    def get_column_oid(self, table_name: str, column_name: str, schema: str = IRIS_SCHEMA) -> int:
         """
         Convenience method to get OID for a column.
 
         Args:
-            schema: Schema name
             table_name: Table name
             column_name: Column name
+            schema: Schema name
 
         Returns:
             Column OID
         """
-        return self.get_oid(schema, "column", f"{table_name}.{column_name}")
+        return self.get_oid("column", f"{table_name}.{column_name}", schema)
 
-    def get_constraint_oid(self, schema: str, constraint_name: str) -> int:
+    def get_constraint_oid(self, constraint_name: str, schema: str = IRIS_SCHEMA) -> int:
         """
         Convenience method to get OID for a constraint.
 
         Args:
-            schema: Schema name
             constraint_name: Constraint name
+            schema: Schema name
 
         Returns:
             Constraint OID
         """
-        return self.get_oid(schema, "constraint", constraint_name)
+        return self.get_oid("constraint", constraint_name, schema)
 
-    def get_index_oid(self, schema: str, index_name: str) -> int:
+    def get_index_oid(self, index_name: str, schema: str = IRIS_SCHEMA) -> int:
         """
         Convenience method to get OID for an index.
 
         Args:
-            schema: Schema name
             index_name: Index name
+            schema: Schema name
 
         Returns:
             Index OID
         """
-        return self.get_oid(schema, "index", index_name)
+        return self.get_oid("index", index_name, schema)
