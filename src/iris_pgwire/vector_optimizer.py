@@ -145,7 +145,7 @@ class VectorQueryOptimizer:
         try:
             order_by_pattern = re.compile(
                 r"(VECTOR_(?:COSINE|DOT_PRODUCT|L2))\s*\(\s*"
-                r"([\w\.]+)\s*,\s*"
+                r"((?:\"[^\"]+\"|[\w\.]+))\s*,\s*"
                 r"(TO_VECTOR\s*\(\s*['\"]?([?%]s?|\$\d+)['\"]?\s*(?:,\s*(\w+))?\s*\))",
                 re.IGNORECASE,
             )
@@ -360,11 +360,11 @@ class VectorQueryOptimizer:
     def _rewrite_operators_in_text(self, sql: str) -> str:
         """Helper to rewrite operators in a given text"""
         # Improved operand pattern to handle more cases robustly (placeholders, literals, functions)
-        operand = r"(?:[\w\.]+(?:\([^)]*\))?|'[^']*'|\[[^\]]+\]|\?|%s|\$\d+)"
+        operand = r'(?:"[^"]+(?:"\s*\.\s*"[^"]+)*"|[\w\.]+(?:\([^)]*\))?|\'[^\']*\'|\[[^\]]+\]|\?|%s|\$\d+)(?:::\w+)?'
 
         # <=> operator (cosine distance) -> 1 - VECTOR_COSINE
         if "<=>" in sql:
-            pattern = rf"({operand})\s*<=>\s*({operand})(?:::\w+)?"
+            pattern = rf"({operand})\s*<=>\s*({operand})"
 
             def replace_cosine_distance(match):
                 left, right = match.groups()
@@ -411,7 +411,7 @@ class VectorQueryOptimizer:
 
         # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
         if "<#>" in sql:
-            pattern = rf"({operand})\s*<#>\s*({operand})(?:::\w+)?"
+            pattern = rf"({operand})\s*<#>\s*({operand})"
 
             def replace_inner_product(match):
                 left, right = match.groups()

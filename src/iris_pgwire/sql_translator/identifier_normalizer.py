@@ -27,7 +27,7 @@ class IdentifierNormalizer:
         # Matches: "QuotedIdentifier", UnquotedIdentifier, schema.table, schema.table.column
         # Improved version: handles whitespace around dots and ensures single-unit matching
         self._identifier_pattern = re.compile(
-            r'((?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))*)'
+            r'((?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*|%s)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))*)'
         )
 
         # SQL keywords that should NOT be uppercased in context
@@ -114,6 +114,7 @@ class IdentifierNormalizer:
             "NULLIF",
             "GREATEST",
             "LEAST",
+            "%s",
         }
 
         self._data_types = {
@@ -385,6 +386,9 @@ class IdentifierNormalizer:
                     identifier_count += 1
                     return full_id
 
+            if full_id in self._sql_keywords:
+                return full_id
+
             # Not a SAVEPOINT identifier - normalize parts
             if "." in full_id:
                 parts = []
@@ -438,6 +442,9 @@ class IdentifierNormalizer:
             nonlocal identifier_count
 
             full_id = match.group(1)
+
+            if full_id in self._sql_keywords:
+                return full_id
 
             # Handle qualified types/defaults
             if "." in full_id:
