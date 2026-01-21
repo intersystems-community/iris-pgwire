@@ -30,6 +30,7 @@ from .sql_translator import (
     SQLTranslator,  # Feature 021: PostgreSQL→IRIS normalization
     TransactionTranslator,
 )  # Feature 022: PostgreSQL transaction verb translation
+from .sql_translator.parser import get_parser
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .type_mapping import (
@@ -104,6 +105,7 @@ class IRISExecutor:
         self.sql_pipeline = SQLPipeline()
         self.sql_interceptor = SQLInterceptor(self)
         self.sql_translator = self.sql_pipeline.translator
+        self.sql_parser = get_parser()
         self.transaction_translator = TransactionTranslator()
 
         # Connection pool management
@@ -121,9 +123,9 @@ class IRISExecutor:
 
         logger.info(
             "IRIS executor initialized",
-            host=iris_config.get("host"),
-            port=iris_config.get("port"),
-            namespace=iris_config.get("namespace"),
+            host=self.iris_config.get("host"),
+            port=self.iris_config.get("port"),
+            namespace=self.iris_config.get("namespace"),
             embedded_mode=self.embedded_mode,
         )
 
@@ -3241,15 +3243,7 @@ class IRISExecutor:
                         session_id=session_id,
                     )
                     # Determine command tag from SQL
-                    sql_upper = sql.strip().upper()
-                    if sql_upper.startswith("DELETE"):
-                        command_tag = "DELETE"
-                    elif sql_upper.startswith("UPDATE"):
-                        command_tag = "UPDATE"
-                    elif sql_upper.startswith("INSERT"):
-                        command_tag = "INSERT"
-                    else:
-                        command_tag = "UNKNOWN"
+                    command_tag = self._determine_command_tag(sql, 0)
 
                     return {
                         "success": True,  # SQLCODE 100 is success!
@@ -4380,30 +4374,27 @@ class IRISExecutor:
 
     def _determine_command_tag(self, sql: str, row_count: int) -> str:
         """Determine PostgreSQL command tag from SQL"""
-        sql_upper = sql.upper().strip()
+        # Normalize: strip and get first word
+        sql_clean = sql.strip().upper()
+        if not sql_clean:
+            return "UNKNOWN"
 
-        if sql_upper.startswith("SELECT"):
+        first_word = sql_clean.split()[0] if sql_clean.split() else ""
+
+        if first_word == "SELECT":
             return "SELECT"
-        elif sql_upper.startswith("INSERT"):
+        elif first_word == "INSERT":
             return f"INSERT 0 {row_count}"
-        elif sql_upper.startswith("UPDATE"):
+        elif first_word == "UPDATE":
             return f"UPDATE {row_count}"
-        elif sql_upper.startswith("DELETE"):
+        elif first_word == "DELETE":
             return f"DELETE {row_count}"
-        elif sql_upper.startswith("CREATE"):
-            return "CREATE"
-        elif sql_upper.startswith("DROP"):
-            return "DROP"
-        elif sql_upper.startswith("ALTER"):
-            return "ALTER"
-        elif sql_upper.startswith("BEGIN"):
-            return "BEGIN"
-        elif sql_upper.startswith("COMMIT"):
-            return "COMMIT"
-        elif sql_upper.startswith("ROLLBACK"):
-            return "ROLLBACK"
-        elif sql_upper.startswith("SHOW"):
-            return "SHOW"
+        elif first_word == "MERGE":
+            return f"MERGE {row_count}"
+        elif first_word == "TRUNCATE":
+            return "TRUNCATE"
+        elif first_word in ("CREATE", "DROP", "ALTER", "BEGIN", "COMMIT", "ROLLBACK", "SHOW"):
+            return first_word
         else:
             return "UNKNOWN"
 

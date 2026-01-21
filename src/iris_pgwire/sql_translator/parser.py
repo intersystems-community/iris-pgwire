@@ -593,10 +593,18 @@ class IRISSQLParser:
         sql_clean = sql.strip().upper()
         return sql_clean.startswith("SELECT") or sql_clean.startswith("WITH")
 
+    def is_show_statement(self, sql: str) -> bool:
+        """Check if SQL is a SHOW statement"""
+        return sql.strip().upper().startswith("SHOW")
+
     def is_dml_statement(self, sql: str) -> bool:
-        """Check if SQL is a DML statement (INSERT, UPDATE, DELETE)"""
+        """Check if SQL is a DML statement (INSERT, UPDATE, DELETE, MERGE)"""
         sql_clean = sql.strip().upper()
-        return any(sql_clean.startswith(stmt) for stmt in ["INSERT", "UPDATE", "DELETE"])
+        return any(sql_clean.startswith(stmt) for stmt in ["INSERT", "UPDATE", "DELETE", "MERGE"])
+
+    def has_returning_clause(self, sql: str) -> bool:
+        """Check if SQL has a RETURNING clause"""
+        return "RETURNING" in sql.upper()
 
     def is_ddl_statement(self, sql: str) -> bool:
         """Check if SQL is a DDL statement"""

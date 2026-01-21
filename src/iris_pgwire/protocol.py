@@ -2906,16 +2906,16 @@ class PGWireProtocol:
                     connection_id=self.connection_id,
                     statement_name=name,
                     query_preview=query[:100],
-                    is_select=query_upper.startswith("SELECT"),
-                    is_show=query_upper.startswith("SHOW"),
+                    is_select=self.iris_executor.sql_parser.is_select_statement(query),
+                    is_show=self.iris_executor.sql_parser.is_show_statement(query),
                 )
 
                 # Check if query has RETURNING clause (INSERT/UPDATE/DELETE with RETURNING)
-                has_returning = "RETURNING" in query_upper
+                has_returning = self.iris_executor.sql_parser.has_returning_clause(query)
 
                 if (
-                    query_upper.startswith("SELECT")
-                    or query_upper.startswith("SHOW")
+                    self.iris_executor.sql_parser.is_select_statement(query)
+                    or self.iris_executor.sql_parser.is_show_statement(query)
                     or has_returning
                 ):
                     # Execute metadata discovery to get column information
@@ -2923,7 +2923,9 @@ class PGWireProtocol:
                     # For RETURNING queries, we'll send synthetic column metadata based on RETURNING columns
                     try:
                         # Special handling for RETURNING queries - extract columns from RETURNING clause
-                        if has_returning and not query_upper.startswith("SELECT"):
+                        if has_returning and not self.iris_executor.sql_parser.is_select_statement(
+                            query
+                        ):
                             import re
 
                             # Extract RETURNING columns from query
@@ -3085,14 +3087,19 @@ class PGWireProtocol:
 
                     # Batch Execution Interception:
                     # Short-circuit Describe portal for DML statements.
-                    is_dml = any(query_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"])
-                    has_returning = "RETURNING" in query_upper
-
-                    if is_dml and not has_returning:
+                    # DML portals (without RETURNING) don't have RowDescription.
+                    is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
+                    if is_dml:
+                        logger.info(
+                            "Describe portal: DML statement (no row metadata)", portal_name=name
+                        )
                         await self.send_no_data()
                         return
 
-                    if query_upper.startswith("SELECT") or query_upper.startswith("SHOW"):
+                    # Metadata discovery for SELECT/SHOW
+                    if self.iris_executor.sql_parser.is_select_statement(
+                        query
+                    ) or self.iris_executor.sql_parser.is_show_statement(query):
                         try:
                             result = await self.iris_executor.execute_query(
                                 query, params=portal.get("params", [])
@@ -3277,9 +3284,8 @@ class PGWireProtocol:
             # Intercept INSERT/UPDATE/DELETE (DML) without RETURNING for protocol-level batching.
             # Standard PostgreSQL clients (psycopg3) send Sync every 5 rows, which is slow.
             # We buffer parameters and send synthetic CommandComplete to keep client pipe full.
-            query_upper = query.strip().upper()
-            is_dml = any(query_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"])
-            has_returning = "RETURNING" in query_upper
+            is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
+            has_returning = self.iris_executor.sql_parser.has_returning_clause(query)
 
             if is_dml and not has_returning:
                 # Store SQL if first row in batch
@@ -3291,6 +3297,7 @@ class PGWireProtocol:
 
                 # Send synthetic CommandComplete immediately to client
                 # This tricks the client into sending the next row immediately.
+                query_upper = query.strip().upper()
                 tag = f"{query_upper.split()[0]} 0 1\x00".encode()
                 msg_len = 4 + len(tag)
                 self.writer.write(struct.pack("!cI", MSG_COMMAND_COMPLETE, msg_len) + tag)
