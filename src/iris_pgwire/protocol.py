@@ -1299,15 +1299,15 @@ class PGWireProtocol:
             # Handle transaction commands first (no IRIS execution needed)
             query_upper = query.upper().strip()
             if query_upper in ("BEGIN", "START TRANSACTION"):
-                await self.iris_executor.begin_transaction()
+                await self.iris_executor.begin_transaction(session_id=self.connection_id)
                 await self.send_transaction_response("BEGIN", send_ready=send_ready)
                 return
             elif query_upper in ("COMMIT", "END"):
-                await self.iris_executor.commit_transaction()
+                await self.iris_executor.commit_transaction(session_id=self.connection_id)
                 await self.send_transaction_response("COMMIT", send_ready=send_ready)
                 return
             elif query_upper == "ROLLBACK":
-                await self.iris_executor.rollback_transaction()
+                await self.iris_executor.rollback_transaction(session_id=self.connection_id)
                 await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
                 return
 
@@ -1373,7 +1373,9 @@ class PGWireProtocol:
                 )
 
             # Execute translated SQL against IRIS
-            result = await self.iris_executor.execute_query(final_sql)
+            result = await self.iris_executor.execute_query(
+                final_sql, session_id=self.connection_id
+            )
 
             # Add translation metadata to result for debugging/monitoring
             if translation_result.get("translation_used"):
@@ -2379,7 +2381,7 @@ class PGWireProtocol:
                 return
 
             await self.iris_executor.execute_many(
-                sql_to_exec, params_to_exec, session_id=f"batch_{self.connection_id}"
+                sql_to_exec, params_to_exec, session_id=self.connection_id
             )
         except Exception as e:
             logger.error("Batch flush failed", connection_id=self.connection_id, error=str(e))
@@ -3035,7 +3037,9 @@ class PGWireProtocol:
                             param_count=param_count,
                         )
 
-                        result = await self.iris_executor.execute_query(query, params=dummy_params)
+                        result = await self.iris_executor.execute_query(
+                            query, params=dummy_params, session_id=self.connection_id
+                        )
 
                         if result.get("success") and result.get("columns"):
                             await self.send_row_description(result["columns"])
@@ -3105,7 +3109,9 @@ class PGWireProtocol:
                     ) or self.iris_executor.sql_parser.is_show_statement(query):
                         try:
                             result = await self.iris_executor.execute_query(
-                                query, params=portal.get("params", [])
+                                query,
+                                params=portal.get("params", []),
+                                session_id=self.connection_id,
                             )
                             if result.get("success") and result.get("columns"):
                                 result_formats = portal.get("result_formats", [])
@@ -3240,13 +3246,13 @@ class PGWireProtocol:
                 )
 
                 if transaction_type == "BEGIN":
-                    await self.iris_executor.begin_transaction()
+                    await self.iris_executor.begin_transaction(session_id=self.connection_id)
                     await self.send_transaction_response_extended_protocol("BEGIN")
                 elif transaction_type == "COMMIT":
-                    await self.iris_executor.commit_transaction()
+                    await self.iris_executor.commit_transaction(session_id=self.connection_id)
                     await self.send_transaction_response_extended_protocol("COMMIT")
                 elif transaction_type == "ROLLBACK":
-                    await self.iris_executor.rollback_transaction()
+                    await self.iris_executor.rollback_transaction(session_id=self.connection_id)
                     await self.send_transaction_response_extended_protocol("ROLLBACK")
                 return
 
@@ -3319,7 +3325,7 @@ class PGWireProtocol:
             await self.flush_batch()
 
             result = await self.iris_executor.execute_query(
-                query, params=params if params else None
+                query, params=params if params else None, session_id=self.connection_id
             )
 
             if result["success"]:

@@ -796,9 +796,8 @@ class IRISExecutor:
 
             try:
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
-                transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(
-                    sql
+                transaction_translated_sql = (
+                    self.transaction_translator.translate_transaction_command(sql)
                 )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
@@ -920,12 +919,11 @@ class IRISExecutor:
 
             try:
                 # Get pooled connection
-                connection = self._get_pooled_connection()
+                connection = self._get_pooled_connection(session_id=session_id)
 
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
-                transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(
-                    sql
+                transaction_translated_sql = (
+                    self.transaction_translator.translate_transaction_command(sql)
                 )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
@@ -1080,7 +1078,13 @@ class IRISExecutor:
 
         return statements
 
-    def _safe_execute(self, sql: str, params: list | None = None, is_embedded: bool = True) -> Any:
+    def _safe_execute(
+        self,
+        sql: str,
+        params: list | None = None,
+        is_embedded: bool = True,
+        session_id: str | None = None,
+    ) -> Any:
         """Execute SQL with DDL idempotency handling."""
         import iris
 
@@ -1127,7 +1131,7 @@ class IRISExecutor:
 
             else:
                 # External mode - use DBAPI cursor
-                connection = self._get_pooled_connection()
+                connection = self._get_pooled_connection(session_id=session_id)
                 cursor = connection.cursor()
                 try:
                     if params:
@@ -2854,9 +2858,8 @@ class IRISExecutor:
                 self._get_iris_connection()
 
                 # 1. Transaction Translation
-                transaction_translator = TransactionTranslator()
-                transaction_translated_sql = transaction_translator.translate_transaction_command(
-                    sql
+                transaction_translated_sql = (
+                    self.transaction_translator.translate_transaction_command(sql)
                 )
 
                 # 2. SQL Normalization
@@ -2866,7 +2869,7 @@ class IRISExecutor:
                 optimized_sql = normalized_sql
 
                 # Log transaction translation metrics
-                txn_metrics = transaction_translator.get_translation_metrics()
+                txn_metrics = self.transaction_translator.get_translation_metrics()
                 logger.info(
                     "Transaction verb translation applied",
                     total_translations=txn_metrics["total_translations"],
@@ -2878,7 +2881,7 @@ class IRISExecutor:
                 )
 
                 # Log normalization metrics
-                norm_metrics = translator.get_normalization_metrics()
+                norm_metrics = self.sql_translator.get_normalization_metrics()
                 logger.info(
                     "SQL normalization applied",
                     identifiers_normalized=norm_metrics["identifier_count"],
@@ -3078,17 +3081,23 @@ class IRISExecutor:
                             f"Executing intermediate statement: {stmt[:80]}...",
                             session_id=session_id,
                         )
-                        self._safe_execute(stmt, optimized_params, is_embedded=True)
+                        self._safe_execute(
+                            stmt, optimized_params, is_embedded=True, session_id=session_id
+                        )
 
                     # Execute last statement and capture results
                     last_stmt = statements[-1]
                     logger.debug(
                         f"Executing final statement: {last_stmt[:80]}...", session_id=session_id
                     )
-                    result = self._safe_execute(last_stmt, optimized_params, is_embedded=True)
+                    result = self._safe_execute(
+                        last_stmt, optimized_params, is_embedded=True, session_id=session_id
+                    )
                 else:
                     # Single statement - execute normally
-                    result = self._safe_execute(optimized_sql, optimized_params, is_embedded=True)
+                    result = self._safe_execute(
+                        optimized_sql, optimized_params, is_embedded=True, session_id=session_id
+                    )
 
                 # RETURNING emulation: After INSERT/UPDATE/DELETE, fetch the affected row(s)
                 if returning_operation and returning_columns:
@@ -3684,10 +3693,14 @@ class IRISExecutor:
 
                 # Execute all statements except the last
                 for stmt in statements[:-1]:
-                    self._safe_execute(stmt, optimized_params, is_embedded=False)
+                    self._safe_execute(
+                        stmt, optimized_params, is_embedded=False, session_id=session_id
+                    )
 
                 # Execute last statement and capture cursor
-                cursor = self._safe_execute(statements[-1], optimized_params, is_embedded=False)
+                cursor = self._safe_execute(
+                    statements[-1], optimized_params, is_embedded=False, session_id=session_id
+                )
 
                 # RETURNING emulation
                 if returning_operation and returning_columns:
