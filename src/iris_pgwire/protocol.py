@@ -2916,7 +2916,7 @@ class PGWireProtocol:
                 )
 
                 # Check if query has RETURNING clause (INSERT/UPDATE/DELETE with RETURNING)
-                has_returning = self.iris_executor.sql_parser.has_returning_clause(query)
+                has_returning = self.iris_executor.has_returning_clause(query)
 
                 if (
                     self.iris_executor.sql_parser.is_select_statement(query)
@@ -3096,17 +3096,20 @@ class PGWireProtocol:
                     # Short-circuit Describe portal for DML statements.
                     # DML portals (without RETURNING) don't have RowDescription.
                     is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
-                    if is_dml:
+                    has_returning = self.iris_executor.has_returning_clause(query)
+                    if is_dml and not has_returning:
                         logger.info(
                             "Describe portal: DML statement (no row metadata)", portal_name=name
                         )
                         await self.send_no_data()
                         return
 
-                    # Metadata discovery for SELECT/SHOW
-                    if self.iris_executor.sql_parser.is_select_statement(
-                        query
-                    ) or self.iris_executor.sql_parser.is_show_statement(query):
+                    # Metadata discovery for SELECT/SHOW/RETURNING
+                    if (
+                        self.iris_executor.sql_parser.is_select_statement(query)
+                        or self.iris_executor.sql_parser.is_show_statement(query)
+                        or has_returning
+                    ):
                         try:
                             result = await self.iris_executor.execute_query(
                                 query,

@@ -16,6 +16,10 @@ from typing import Any
 import structlog
 
 from .catalog.oid_generator import OIDGenerator  # OID generation for catalog emulation
+
+# IRIS POSIXTIME constants
+POSIXTIME_OFFSET = 1152921504606846976
+POSIXTIME_MAX = POSIXTIME_OFFSET + 7258118400000000  # ~2200-01-01
 from .conversions import (
     BulkInsertJob,
     DdlErrorHandler,
@@ -309,12 +313,58 @@ class IRISExecutor:
 
         return None
 
-    def _infer_type_from_value(self, value) -> int:
+    def has_returning_clause(self, query: str) -> bool:
+        """
+        Check if query has a RETURNING clause.
+        """
+        if not query:
+            return False
+        return bool(re.search(r"\bRETURNING\b", query, re.IGNORECASE | re.DOTALL))
+
+    def _get_column_type_from_schema(
+        self, table: str, column: str, session_id: str | None = None
+    ) -> int | None:
+        """
+        Query INFORMATION_SCHEMA.COLUMNS for the given table and column.
+        Returns the PostgreSQL type OID.
+        """
+        try:
+            metadata_sql = f"""
+                SELECT DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE LOWER(TABLE_NAME) = LOWER('{table}')
+                AND LOWER(COLUMN_NAME) = LOWER('{column}')
+                AND TABLE_SCHEMA = 'SQLUser'
+            """
+            if self.embedded_mode:
+                import iris
+
+                result = iris.sql.exec(metadata_sql)
+                row = next(iter(result), None)
+            else:
+                conn = self._get_pooled_connection(session_id=session_id)
+                cursor = conn.cursor()
+                try:
+                    cursor.execute(metadata_sql)
+                    row = cursor.fetchone()
+                finally:
+                    cursor.close()
+                    self._return_connection(conn, session_id=session_id)
+
+            if row:
+                iris_type = row[0]
+                return self._map_iris_type_to_oid(iris_type)
+        except Exception as e:
+            logger.debug(f"Failed to get type from schema for {table}.{column}: {e}")
+        return None
+
+    def _infer_type_from_value(self, value, column_name: str | None = None) -> int:
         """
         Infer PostgreSQL type OID from Python value
 
         Args:
             value: Python value from result row
+            column_name: Optional column name for better inference
 
         Returns:
             PostgreSQL type OID (int)
@@ -327,13 +377,17 @@ class IRISExecutor:
         INT4_MAX = 2147483647  # 2^31 - 1
 
         if value is None:
-            return 25  # VARCHAR (most flexible for NULL)
+            return 1043  # VARCHAR (most flexible for NULL)
         elif isinstance(value, bool):
             return 16  # BOOL
         elif isinstance(value, int):
-            # CRITICAL FIX: Check if integer exceeds INT4 range
-            # IRIS returns timestamps as large integers that can exceed INT4 max
-            # These need to be sent as INT8 (BIGINT) to avoid binary encoding errors
+            # IRIS POSIXTIME detection (1114)
+            if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
+                return 1114  # TIMESTAMP
+
+            # BIGINT (20) for ID/Key columns or if value exceeds INT4 range
+            if column_name and any(k in column_name.lower() for k in ("id", "key")):
+                return 20  # BIGINT
             if INT4_MIN <= value <= INT4_MAX:
                 return 23  # INTEGER (INT4)
             else:
@@ -345,9 +399,54 @@ class IRISExecutor:
         elif isinstance(value, bytes):
             return 17  # BYTEA
         elif isinstance(value, str):
-            return 25  # VARCHAR/TEXT
+            # Check for UUID pattern
+            uuid_pattern = (
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            )
+            if re.match(uuid_pattern, value):
+                return 2950  # UUID
+            return 1043  # VARCHAR
         else:
-            return 25  # Default to VARCHAR
+            return 1043  # Default to VARCHAR
+
+    def _serialize_value(self, value: Any, type_oid: int) -> Any:
+        """
+        Robust value serialization for PostgreSQL wire protocol compatibility.
+        Converts IRIS-specific types (like microsecond timestamps) to protocol-friendly formats.
+        """
+        if value is None:
+            return None
+
+        # OID 1114 = TIMESTAMP
+        if type_oid == 1114:
+            if isinstance(value, int):
+                # Convert IRIS/PostgreSQL microsecond integer to ISO8601 string
+                try:
+                    import datetime
+
+                    if value >= POSIXTIME_OFFSET:
+                        # IRIS POSIXTIME (microseconds since 1970-01-01)
+                        unix_us = value - POSIXTIME_OFFSET
+                        epoch = datetime.datetime(1970, 1, 1)
+                        ts_obj = epoch + datetime.timedelta(microseconds=unix_us)
+                    else:
+                        # PostgreSQL legacy/IRIS microsecond integer (microseconds since 2000-01-01)
+                        epoch = datetime.datetime(2000, 1, 1)
+                        ts_obj = epoch + datetime.timedelta(microseconds=value)
+
+                    # Return ISO8601 string preferred by node-postgres and other clients
+                    return ts_obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                except Exception:
+                    return value
+            elif isinstance(value, dt.datetime):
+                return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # OID 1082 = DATE
+        if type_oid == 1082 and isinstance(value, int):
+            # IRIS Horolog to PG Days already handled in row loop, but for safety:
+            return value
+
+        return value
 
     def _split_sql_statements(self, sql: str) -> list[str]:
         """
@@ -1134,7 +1233,7 @@ class IRISExecutor:
                 connection = self._get_pooled_connection(session_id=session_id)
                 cursor = connection.cursor()
                 try:
-                    if params:
+                    if params is not None:
                         cursor.execute(sql, params)
                     else:
                         cursor.execute(sql)
@@ -1284,6 +1383,7 @@ class IRISExecutor:
         params: list | None,
         is_embedded: bool,
         connection: Any = None,
+        session_id: str | None = None,
     ) -> tuple[list[Any], Any]:
         """
         Emulate PostgreSQL RETURNING clause for IRIS.
@@ -1381,6 +1481,50 @@ class IRISExecutor:
                         params[-where_param_count:] if params and where_param_count > 0 else None
                     )
                     rows, meta = _fetch_results(select_sql, where_params)
+
+            # Feature 036: Build proper metadata with actual IRIS types if needed
+            if meta is None or not any("type_oid" in c for c in meta if isinstance(c, dict)):
+                if columns == "*":
+                    # For SELECT *, expand from schema
+                    col_names = self._expand_select_star(
+                        f"RETURNING * FROM SQLUser.{table}", 0, session_id=session_id
+                    )
+                    if col_names:
+                        new_meta = []
+                        for col in col_names:
+                            col_oid = self._get_column_type_from_schema(
+                                table, col, session_id=session_id
+                            )
+                            new_meta.append(
+                                {
+                                    "name": col,
+                                    "type_oid": col_oid or 1043,
+                                    "type_size": -1,
+                                    "type_modifier": -1,
+                                    "format_code": 0,
+                                }
+                            )
+                        meta = new_meta
+                else:
+                    new_meta = []
+                    for i, col in enumerate(columns):
+                        col_oid = self._get_column_type_from_schema(
+                            table, col, session_id=session_id
+                        )
+                        if col_oid is None and rows:
+                            # Fallback to inference from value
+                            col_oid = self._infer_type_from_value(rows[0][i], col)
+
+                        new_meta.append(
+                            {
+                                "name": col,
+                                "type_oid": col_oid or 1043,
+                                "type_size": -1,
+                                "type_modifier": -1,
+                                "format_code": 0,
+                            }
+                        )
+                    meta = new_meta
 
         except Exception as e:
             logger.error(f"RETURNING emulation failed for {operation}", error=str(e))
@@ -3081,9 +3225,7 @@ class IRISExecutor:
                             f"Executing intermediate statement: {stmt[:80]}...",
                             session_id=session_id,
                         )
-                        self._safe_execute(
-                            stmt, optimized_params, is_embedded=True, session_id=session_id
-                        )
+                        self._safe_execute(stmt, None, is_embedded=True, session_id=session_id)
 
                     # Execute last statement and capture results
                     last_stmt = statements[-1]
@@ -3174,7 +3316,18 @@ class IRISExecutor:
                         # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
                         if "CURRENT_TIMESTAMP" in sql_upper and type_oid == 25:
                             logger.info(
-                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 25 (TEXT) → 1114 (TIMESTAMP)",
+                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
+                                column_name=col_name,
+                                original_oid=type_oid,
+                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
+                            )
+                            type_oid = 1114  # TIMESTAMP
+
+                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
+                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
+                        if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
+                            logger.info(
+                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
                                 column_name=col_name,
                                 original_oid=type_oid,
                                 reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
@@ -3234,11 +3387,17 @@ class IRISExecutor:
                     # Build type_oid lookup by column index
                     column_type_oids = [col["type_oid"] for col in columns]
 
-                    # Convert date values in-place
+                    # Convert and serialize values in-place
                     for row_idx, row in enumerate(rows):
                         for col_idx, value in enumerate(row):
                             if col_idx < len(column_type_oids):
                                 type_oid = column_type_oids[col_idx]
+
+                                # Robust serialization (TIMESTAMP, etc.)
+                                rows[row_idx][col_idx] = self._serialize_value(
+                                    rows[row_idx][col_idx], type_oid
+                                )
+                                value = rows[row_idx][col_idx]
 
                                 # OID 1082 = DATE type
                                 if type_oid == 1082 and value is not None:
@@ -3386,13 +3545,53 @@ class IRISExecutor:
         columns = []
         sql_upper = sql.strip().upper()
 
+        # Layer 0.5: Explicit RETURNING columns (Feature 034 fix)
+        if "RETURNING" in sql_upper and "*" not in sql_upper:
+            (
+                returning_operation,
+                returning_table,
+                returning_columns,
+                returning_where_clause,
+                stripped_sql,
+            ) = self._parse_returning_clause(sql)
+
+            if returning_operation and isinstance(returning_columns, list) and returning_columns:
+                logger.info("✅ Layer 0.5 SUCCESS: RETURNING metadata discovery")
+                for i, name in enumerate(returning_columns):
+                    # Try to get type from schema for accuracy
+                    col_oid = self._get_column_type_from_schema(
+                        returning_table, name, session_id=session_id
+                    )
+
+                    if col_oid is None:
+                        # Fallback to inference from value
+                        col_oid = (
+                            self._infer_type_from_value(rows[0][i], name)
+                            if rows and i < len(rows[0])
+                            else 1043
+                        )
+
+                    columns.append(
+                        {
+                            "name": name,
+                            "type_oid": col_oid,
+                            "type_size": -1,
+                            "type_modifier": -1,
+                            "format_code": 0,
+                        }
+                    )
+                if expected_count is None or len(columns) == expected_count:
+                    return columns
+
         # Layer 1: LIMIT 0 pattern
         limit_zero_names = self._discover_metadata_with_limit_zero(sql, session_id)
         if limit_zero_names and (expected_count is None or len(limit_zero_names) == expected_count):
             logger.info("✅ Layer 1 SUCCESS: LIMIT 0 metadata discovery")
             for i, name in enumerate(limit_zero_names):
                 inferred_type = (
-                    self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                    self._infer_type_from_value(rows[0][i], name)
+                    if rows and i < len(rows[0])
+                    else 1043
                 )
                 columns.append(
                     {
@@ -3406,7 +3605,7 @@ class IRISExecutor:
             return columns
 
         # Layer 1.5: SELECT * expansion
-        if "*" in sql_upper and "SELECT" in sql_upper:
+        if "*" in sql_upper and ("SELECT" in sql_upper or "RETURNING" in sql_upper):
             expanded_names = self._expand_select_star(
                 sql, expected_count or 0, session_id=session_id
             )
@@ -3414,7 +3613,9 @@ class IRISExecutor:
                 logger.info("✅ Layer 1.5 SUCCESS: Table metadata expansion")
                 for i, name in enumerate(expanded_names):
                     inferred_type = (
-                        self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                        self._infer_type_from_value(rows[0][i], name)
+                        if rows and i < len(rows[0])
+                        else 1043
                     )
                     columns.append(
                         {
@@ -3436,7 +3637,9 @@ class IRISExecutor:
             for i, alias in enumerate(extracted_aliases):
                 col_name = alias.lower() if isinstance(alias, str) else alias
                 inferred_type = (
-                    self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
+                    self._infer_type_from_value(rows[0][i], col_name)
+                    if rows and i < len(rows[0])
+                    else 1043
                 )
 
                 # Check for CAST overrides
@@ -3445,7 +3648,7 @@ class IRISExecutor:
                     inferred_type = cast_oid
 
                 # Handle CURRENT_TIMESTAMP
-                if "CURRENT_TIMESTAMP" in sql_upper and inferred_type == 25:
+                if "CURRENT_TIMESTAMP" in sql_upper and inferred_type == 1043:
                     inferred_type = 1114
 
                 col_name = self._normalize_iris_column_name(col_name, sql, inferred_type)
@@ -3466,10 +3669,12 @@ class IRISExecutor:
         use_qcolumn = "SELECT" in sql_upper and "FROM" not in sql_upper
 
         for i in range(actual_count):
-            inferred_type = (
-                self._infer_type_from_value(rows[0][i]) if rows and i < len(rows[0]) else 25
-            )
             col_name = "?column?" if use_qcolumn else f"column{i + 1}"
+            inferred_type = (
+                self._infer_type_from_value(rows[0][i], col_name)
+                if rows and i < len(rows[0])
+                else 1043
+            )
             columns.append(
                 {
                     "name": col_name,
@@ -3647,7 +3852,11 @@ class IRISExecutor:
                         if isinstance(p, list):
                             processed_params.append("[" + ",".join(str(float(v)) for v in p) + "]")
                         else:
-                            processed_params.append(p)
+                            # Feature 036: Ensure we pass strings or numbers, not complex objects
+                            if p is not None and not isinstance(p, (int, float, str, bool, bytes)):
+                                processed_params.append(str(p))
+                            else:
+                                processed_params.append(p)
                     optimized_params = processed_params
 
                 # Performance tracking
@@ -3693,9 +3902,7 @@ class IRISExecutor:
 
                 # Execute all statements except the last
                 for stmt in statements[:-1]:
-                    self._safe_execute(
-                        stmt, optimized_params, is_embedded=False, session_id=session_id
-                    )
+                    self._safe_execute(stmt, None, is_embedded=False, session_id=session_id)
 
                 # Execute last statement and capture cursor
                 cursor = self._safe_execute(
@@ -3783,6 +3990,17 @@ class IRISExecutor:
                                 )
                                 type_oid = 701  # FLOAT8
 
+                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
+                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
+                        if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
+                            logger.info(
+                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
+                                column_name=col_name,
+                                original_oid=type_oid,
+                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
+                            )
+                            type_oid = 1114  # TIMESTAMP
+
                         columns.append(
                             {
                                 "name": col_name,
@@ -3843,11 +4061,17 @@ class IRISExecutor:
                     # Build type_oid lookup by column index
                     column_type_oids = [col["type_oid"] for col in columns]
 
-                    # Convert date values in-place
+                    # Convert and serialize values in-place
                     for row_idx, row in enumerate(rows):
                         for col_idx, value in enumerate(row):
                             if col_idx < len(column_type_oids):
                                 type_oid = column_type_oids[col_idx]
+
+                                # Robust serialization (TIMESTAMP, etc.)
+                                rows[row_idx][col_idx] = self._serialize_value(
+                                    rows[row_idx][col_idx], type_oid
+                                )
+                                value = rows[row_idx][col_idx]
 
                                 # OID 1082 = DATE type
                                 if type_oid == 1082 and value is not None:
@@ -4067,10 +4291,19 @@ class IRISExecutor:
         try:
             import iris
 
-            if not re.search(r"SELECT\s+\*\s+FROM", sql, re.IGNORECASE):
+            if not re.search(r"(SELECT|RETURNING)\s+\*", sql, re.IGNORECASE):
                 return None
 
             table_names = self._extract_table_names_from_select(sql)
+            if not table_names and "RETURNING" in sql.upper():
+                # Try to extract table from INSERT/UPDATE/DELETE (Feature 034 fix)
+                table_match = re.search(
+                    r"(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:SQLUser\s*\.\s*)?\"?(\w+)\"?",
+                    sql,
+                    re.IGNORECASE,
+                )
+                if table_match:
+                    table_names = [table_match.group(1)]
             if not table_names:
                 return None
 
@@ -4427,7 +4660,7 @@ class IRISExecutor:
                 16: 16,  # bool
                 17: 17,  # bytea
             }
-            return int_type_mapping.get(iris_type, 25)  # Default to text
+            return int_type_mapping.get(iris_type, 1043)  # Default to VARCHAR
 
         # Handle string type names
         type_mapping = {
@@ -4449,7 +4682,7 @@ class IRISExecutor:
             "VARBINARY": 17,  # bytea
             "VECTOR": 16388,  # custom vector type
         }
-        return type_mapping.get(str(iris_type).upper(), 25)  # Default to text
+        return type_mapping.get(str(iris_type).upper(), 1043)  # Default to VARCHAR
 
     def _extract_table_names_from_select(self, sql: str) -> list[str]:
         """
@@ -4522,7 +4755,7 @@ class IRISExecutor:
         # Normalize type name (remove size, etc.)
         normalized_type = iris_type.upper().split("(")[0].strip()
 
-        return type_map.get(normalized_type, 25)  # Default to TEXT (OID 25)
+        return type_map.get(normalized_type, 1043)  # Default to VARCHAR (OID 1043)
 
     def _determine_command_tag(self, sql: str, row_count: int) -> str:
         """Determine PostgreSQL command tag from SQL"""
