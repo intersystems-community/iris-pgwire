@@ -71,6 +71,10 @@ class PGWireServer:
         ssl_cert_path: str | None = None,
         ssl_key_path: str | None = None,
         enable_scram: bool = False,
+        connection_pool_size: int = 10,
+        connection_pool_timeout: float = 5.0,
+        enable_query_cache: bool = True,
+        query_cache_size: int = 1000,
     ):
         self.host = host
         self.port = port
@@ -96,7 +100,14 @@ class PGWireServer:
         self.connection_registry = {}  # backend_pid -> (protocol, backend_secret)
 
         # Initialize IRIS executor with server reference for P4 cancellation
-        self.iris_executor = IRISExecutor(self.iris_config, server=self)
+        self.iris_executor = IRISExecutor(
+            self.iris_config,
+            server=self,
+            connection_pool_size=connection_pool_size,
+            connection_pool_timeout=connection_pool_timeout,
+            enable_query_cache=enable_query_cache,
+            query_cache_size=query_cache_size,
+        )
 
         # Enhance with IntegratedML support
         self.iris_executor = enhance_iris_executor_with_integratedml(self.iris_executor)
@@ -269,6 +280,11 @@ async def main():
     ssl_cert_path = os.getenv("PGWIRE_SSL_CERT")
     ssl_key_path = os.getenv("PGWIRE_SSL_KEY")
 
+    connection_pool_size = int(os.getenv("PGWIRE_POOL_SIZE", "10"))
+    connection_pool_timeout = float(os.getenv("PGWIRE_POOL_TIMEOUT", "5.0"))
+    enable_query_cache = os.getenv("PGWIRE_QUERY_CACHE_ENABLED", "true").lower() == "true"
+    query_cache_size = int(os.getenv("PGWIRE_QUERY_CACHE_SIZE", "1000"))
+
     debug = os.getenv("PGWIRE_DEBUG", "false").lower() == "true"
 
     if debug:
@@ -286,6 +302,10 @@ async def main():
         enable_ssl=enable_ssl,
         ssl_cert_path=ssl_cert_path,
         ssl_key_path=ssl_key_path,
+        connection_pool_size=connection_pool_size,
+        connection_pool_timeout=connection_pool_timeout,
+        enable_query_cache=enable_query_cache,
+        query_cache_size=query_cache_size,
     )
 
     try:

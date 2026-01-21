@@ -80,9 +80,22 @@ class IRISExecutor:
     SQLAlchemy implementation.
     """
 
-    def __init__(self, iris_config: dict[str, Any], server=None):
+    def __init__(
+        self,
+        iris_config: dict[str, Any],
+        server=None,
+        connection_pool_size: int = 10,
+        connection_pool_timeout: float = 5.0,
+        enable_query_cache: bool = True,
+        query_cache_size: int = 1000,
+    ):
         self.iris_config = iris_config
         self.server = server  # Reference to server for P4 cancellation
+        self.connection_pool_size = connection_pool_size
+        self.connection_pool_timeout = connection_pool_timeout
+        self.enable_query_cache = enable_query_cache
+        self.query_cache_size = query_cache_size
+
         self.connection = None
         self.session_connections = {}
         self.session_executors = {}  # Thread affinity: one executor per session
@@ -91,7 +104,7 @@ class IRISExecutor:
 
         # Thread pool for async IRIS operations (constitutional requirement)
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=10, thread_name_prefix="iris_executor"
+            max_workers=connection_pool_size, thread_name_prefix="iris_executor"
         )
 
         # Performance monitoring
@@ -111,9 +124,14 @@ class IRISExecutor:
         self.transaction_translator = TransactionTranslator()
 
         # Connection pool management
-        self._connection_lock = threading.RLock()
+        self._connection_lock = threading.Condition(threading.RLock())
         self._connection_pool = []
-        self._max_connections = 10
+        self._active_count = 0
+        self._max_connections = connection_pool_size
+
+        # Query cache (LRU)
+        self._query_cache = {}
+        self._query_cache_lock = threading.Lock()
 
         # Load custom type mappings from configuration file (if exists)
         # This allows users to customize IRIS→PostgreSQL type mappings
@@ -199,6 +217,32 @@ class IRISExecutor:
                 return None
 
         return value
+
+    def _get_normalized_sql(self, sql: str, execution_path: str = "direct") -> str:
+        if not self.enable_query_cache:
+            return self.sql_translator.normalize_sql(sql, execution_path=execution_path)
+
+        cache_key = (sql, execution_path)
+        with self._query_cache_lock:
+            if cache_key in self._query_cache:
+                val = self._query_cache.pop(cache_key)
+                self._query_cache[cache_key] = val
+                return val
+
+        normalized = self.sql_translator.normalize_sql(sql, execution_path=execution_path)
+
+        with self._query_cache_lock:
+            if cache_key in self._query_cache:
+                self._query_cache.pop(cache_key)
+
+            self._query_cache[cache_key] = normalized
+            if len(self._query_cache) > self.query_cache_size:
+                try:
+                    self._query_cache.pop(next(iter(self._query_cache)))
+                except (StopIteration, KeyError):
+                    pass
+
+        return normalized
 
     def _convert_iris_horolog_date_to_pg(self, horolog_days: int) -> int:
         """Convert IRIS Horolog date to PostgreSQL date format using centralized utility."""
@@ -758,8 +802,7 @@ class IRISExecutor:
                 )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
-                translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(
+                normalized_sql = self._get_normalized_sql(
                     transaction_translated_sql, execution_path="batch"
                 )
 
@@ -886,8 +929,7 @@ class IRISExecutor:
                 )
 
                 # Feature 021: Apply PostgreSQL→IRIS SQL normalization
-                translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(
+                normalized_sql = self._get_normalized_sql(
                     transaction_translated_sql, execution_path="batch"
                 )
 
@@ -2818,8 +2860,7 @@ class IRISExecutor:
                 )
 
                 # 2. SQL Normalization
-                translator = SQLTranslator()
-                normalized_sql = translator.normalize_sql(
+                normalized_sql = self._get_normalized_sql(
                     transaction_translated_sql, execution_path="direct"
                 )
                 optimized_sql = normalized_sql
@@ -3452,7 +3493,7 @@ class IRISExecutor:
                 )
 
                 # 2. SQL Normalization
-                normalized_sql = self.sql_translator.normalize_sql(
+                normalized_sql = self._get_normalized_sql(
                     transaction_translated_sql, execution_path="external"
                 )
                 optimized_sql = normalized_sql
@@ -3925,6 +3966,27 @@ class IRISExecutor:
         import iris
 
         with self._connection_lock:
+            # Wait for a connection to be available if we've reached the limit
+            start_time = time.time()
+            while not self._connection_pool and self._active_count >= self._max_connections:
+                elapsed = time.time() - start_time
+                remaining = self.connection_pool_timeout - elapsed
+                if remaining <= 0:
+                    logger.error(
+                        "Connection pool exhausted and timeout reached",
+                        timeout=self.connection_pool_timeout,
+                        active_count=self._active_count,
+                        pool_size=len(self._connection_pool),
+                    )
+                    raise ConnectionError(
+                        f"Connection pool timeout after {self.connection_pool_timeout}s"
+                    )
+
+                if not self._connection_lock.wait(remaining):
+                    raise ConnectionError(
+                        f"Connection pool timeout after {self.connection_pool_timeout}s"
+                    )
+
             if self._connection_pool:
                 conn = self._connection_pool.pop()
             else:
@@ -3935,6 +3997,7 @@ class IRISExecutor:
                     username=self.iris_config["username"],
                     password=self.iris_config["password"],
                 )
+                self._active_count += 1
 
             if session_id:
                 self.session_connections[session_id] = conn
@@ -3943,6 +4006,7 @@ class IRISExecutor:
 
     def _return_connection(self, conn, session_id: str | None = None):
         if session_id:
+            # Session connections stay active until session close
             return
 
         with self._connection_lock:
@@ -3953,6 +4017,8 @@ class IRISExecutor:
                     conn.close()
                 except Exception:
                     pass
+                self._active_count -= 1
+            self._connection_lock.notify()
 
     def close_session(self, session_id: str):
         with self._connection_lock:
