@@ -3618,6 +3618,102 @@ class IRISExecutor:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._get_executor(session_id), _sync_execute, sql, params, session_id)
 
+    def _discover_metadata_with_limit_zero(
+        self, sql: str, session_id: str | None = None
+    ) -> list[str] | None:
+        """
+        Layer 1: Discover column metadata using LIMIT 0 pattern (database-native approach).
+
+        This implements the protocol-native solution recommended by Perplexity research:
+        Execute the query with LIMIT 0 to discover column structure without fetching data.
+
+        Args:
+            sql: Original SQL query
+            session_id: Optional session identifier for logging
+
+        Returns:
+            List of column names if successful, None if method fails
+
+        References:
+            - Perplexity research 2025-11-11: "LIMIT 0 pattern for metadata discovery"
+            - PostgreSQL Parse/Describe mechanism alternative
+        """
+        try:
+            iris = self._import_iris()
+            if not iris:
+                return None
+
+            # Wrap original query in subquery with LIMIT 0 to discover structure
+            # Pattern: SELECT * FROM (original_query) AS _metadata LIMIT 0
+            metadata_query = f"SELECT * FROM ({sql}) AS _metadata_discovery LIMIT 0"
+
+            logger.debug(
+                "Attempting LIMIT 0 metadata discovery",
+                original_sql=sql[:100],
+                metadata_sql=metadata_query[:150],
+                session_id=session_id,
+            )
+
+            # Execute metadata query - should return 0 rows but expose column structure
+            result = iris.sql.exec(metadata_query)
+
+            # Try to extract column names from result metadata
+            column_names = []
+
+            # Method 1: Check for _meta attribute (IRIS may expose this)
+            if hasattr(result, "_meta") and result._meta:
+                for col_info in result._meta:
+                    if isinstance(col_info, dict) and "name" in col_info:
+                        column_names.append(col_info["name"])
+                    elif hasattr(col_info, "name"):
+                        column_names.append(col_info.name)
+
+                if column_names:
+                    logger.info(
+                        "LIMIT 0 metadata discovery: extracted from _meta",
+                        columns=column_names,
+                        session_id=session_id,
+                    )
+                    return column_names
+
+            # Method 2: Try iterating result (even with 0 rows, may expose structure)
+            try:
+                for row in result:
+                    break
+            except Exception:
+                pass
+
+            # Method 3: Check for description attribute (DB-API 2.0 standard)
+            if hasattr(result, "description") and result.description:
+                for col_desc in result.description:
+                    if isinstance(col_desc, (list, tuple)) and len(col_desc) > 0:
+                        column_names.append(str(col_desc[0]))
+                    elif hasattr(col_desc, "name"):
+                        column_names.append(col_desc.name)
+
+                if column_names:
+                    logger.info(
+                        "LIMIT 0 metadata discovery: extracted from description",
+                        columns=column_names,
+                        session_id=session_id,
+                    )
+                    return column_names
+
+            # No metadata could be extracted
+            logger.debug(
+                "LIMIT 0 metadata discovery: no metadata exposed by IRIS", session_id=session_id
+            )
+            return None
+
+        except Exception as e:
+            logger.debug(
+                "LIMIT 0 metadata discovery failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                session_id=session_id,
+            )
+            return None
+
     def _discover_metadata(
         self,
         sql: str,
