@@ -156,12 +156,28 @@ class IRISExecutor:
             embedded_mode=self.embedded_mode,
         )
 
-    def _detect_iris_environment(self):
-        """Detect if we're running in IRIS embedded Python environment"""
+    def _import_iris(self):
+        """
+        Gracefully import InterSystems IRIS module.
+        Handles both embedded Python and external driver environments.
+        """
         try:
-            # Try to import IRIS embedded Python module
             import iris
 
+            return iris
+        except ImportError:
+            try:
+                # Fallback for some environments
+                import intersystems_iris as iris
+
+                return iris
+            except ImportError:
+                return None
+
+    def _detect_iris_environment(self):
+        """Detect if we're running in IRIS embedded Python environment"""
+        iris = self._import_iris()
+        if iris:
             # Check if we're in embedded mode by testing for embedded-specific features
             if hasattr(iris, "sql") and hasattr(iris.sql, "exec"):
                 self.embedded_mode = True
@@ -174,7 +190,7 @@ class IRISExecutor:
                 print("🔌 IRIS Python driver available, using external connection", flush=True)
                 logger.info("IRIS Python driver available, using external connection")
                 return False
-        except ImportError:
+        else:
             self.embedded_mode = False
             print("❌ IRIS Python driver not available", flush=True)
             logger.info("IRIS Python driver not available")
@@ -341,10 +357,12 @@ class IRISExecutor:
                 ORDER BY ORDINAL_POSITION
             """
             if self.embedded_mode:
-                import iris
-
-                result = iris.sql.exec(metadata_sql)
-                return [row[0] for row in result]
+                iris = self._import_iris()
+                if iris:
+                    result = iris.sql.exec(metadata_sql)
+                    return [row[0] for row in result]
+                else:
+                    logger.warning("IRIS module not available in embedded mode")
             else:
                 conn = self._get_pooled_connection(session_id=session_id)
                 cursor = conn.cursor()
@@ -377,10 +395,12 @@ class IRISExecutor:
                 AND LOWER(TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
             """
             if self.embedded_mode:
-                import iris
-
-                result = iris.sql.exec(metadata_sql)
-                row = next(iter(result), None)
+                iris = self._import_iris()
+                if iris:
+                    result = iris.sql.exec(metadata_sql)
+                    row = next(iter(result), None)
+                else:
+                    row = None
             else:
                 conn = self._get_pooled_connection(session_id=session_id)
                 cursor = conn.cursor()
@@ -555,15 +575,17 @@ class IRISExecutor:
     async def _test_embedded_connection(self):
         """Test IRIS embedded Python connection"""
 
-        def _sync_test():
-            import iris
-
+        def _sync_test(captured_self, captured_iris):
+            if captured_iris is None:
+                return False
             # Simple test query
-            result = iris.sql.exec("SELECT 1 as test_column").fetch()
+            result = captured_iris.sql.exec("SELECT 1 as test_column").fetch()
             return result[0]["test_column"] == 1
 
+        iris = self._import_iris()
+
         # Run in thread to avoid blocking asyncio loop
-        result = await asyncio.to_thread(_sync_test)
+        result = await asyncio.to_thread(_sync_test, self, iris)
         if not result:
             raise RuntimeError("IRIS embedded test query failed")
 
@@ -571,17 +593,18 @@ class IRISExecutor:
         """Test external IRIS connection using intersystems driver"""
         try:
 
-            def _sync_test():
-                import iris
-
+            def _sync_test(captured_self, captured_iris_config, captured_iris):
                 # Test real connection to IRIS
                 try:
-                    conn = iris.connect(
-                        hostname=self.iris_config["host"],
-                        port=self.iris_config["port"],
-                        namespace=self.iris_config["namespace"],
-                        username=self.iris_config["username"],
-                        password=self.iris_config["password"],
+                    if captured_iris is None:
+                        raise ImportError("IRIS module not available")
+
+                    conn = captured_iris.connect(
+                        hostname=captured_iris_config["host"],
+                        port=captured_iris_config["port"],
+                        namespace=captured_iris_config["namespace"],
+                        username=captured_iris_config["username"],
+                        password=captured_iris_config["password"],
                     )
 
                     # Test simple query
@@ -600,11 +623,13 @@ class IRISExecutor:
                     # Fallback to config validation
                     required_keys = ["host", "port", "username", "password", "namespace"]
                     for key in required_keys:
-                        if key not in self.iris_config:
+                        if key not in captured_iris_config:
                             raise ValueError(f"Missing IRIS config: {key}")
                     return True
 
-            result = await asyncio.to_thread(_sync_test)
+            iris = self._import_iris()
+
+            result = await asyncio.to_thread(_sync_test, self, self.iris_config, iris)
 
             logger.info(
                 "IRIS connection test successful",
@@ -617,25 +642,27 @@ class IRISExecutor:
         except Exception as e:
             logger.error("IRIS connection test failed", error=str(e))
             raise
-
     async def _test_vector_support(self):
         """Test if IRIS vector support is available (from caretdev pattern)"""
         try:
             if self.embedded_mode:
 
-                def _sync_vector_test():
-                    import iris
-
+                def _sync_vector_test(captured_self, captured_iris):
                     try:
+                        if captured_iris is None:
+                            return False
                         # Test query from caretdev implementation
-                        iris.sql.exec("select vector_cosine(to_vector('1'), to_vector('1'))")
+                        captured_iris.sql.exec("select vector_cosine(to_vector('1'), to_vector('1'))")
                         return True
                     except Exception as e:
                         # Vector support not available (license or feature not enabled)
                         logger.debug("Vector test query failed", error=str(e))
                         return False
 
-                result = await asyncio.to_thread(_sync_vector_test)
+                iris = self._import_iris()
+
+                result = await asyncio.to_thread(_sync_vector_test, self, iris)
+
                 self.vector_support = result
                 if result:
                     logger.info("IRIS vector support detected")
@@ -644,10 +671,10 @@ class IRISExecutor:
 
             else:
                 # For external connections, test using DBAPI
-                def _sync_vector_test_external():
+                def _sync_vector_test_external(captured_self):
                     connection = None
                     try:
-                        connection = self._get_pooled_connection()
+                        connection = captured_self._get_pooled_connection()
                         cursor = connection.cursor()
                         cursor.execute("select vector_cosine(to_vector('1'), to_vector('1'))")
                         cursor.fetchone()
@@ -658,9 +685,9 @@ class IRISExecutor:
                         return False
                     finally:
                         if connection:
-                            self._return_connection(connection)
+                            captured_self._return_connection(connection)
 
-                result = await asyncio.to_thread(_sync_vector_test_external)
+                result = await asyncio.to_thread(_sync_vector_test_external, self)
                 self.vector_support = result
                 if result:
                     logger.info("IRIS vector support detected (external)")
@@ -918,7 +945,7 @@ class IRISExecutor:
         This method leverages IRIS's native batch execution capabilities for maximum performance.
         """
 
-        def _sync_execute_many():
+        def _sync_execute_many(sql, params_list, session_id):
             """
             Synchronous IRIS batch execution in thread pool.
 
@@ -931,7 +958,17 @@ class IRISExecutor:
             For external mode, use _execute_many_external_async() which supports
             true executemany() with DBAPI.
             """
-            import iris
+            iris = self._import_iris()
+            if not iris:
+                return {
+                    "success": False,
+                    "error": "IRIS module not found",
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command_tag": "ERROR",
+                    "execution_time_ms": 0,
+                }
 
             logger.info(
                 "🚀 EXECUTING BATCH IN EMBEDDED MODE (loop-based)",
@@ -968,12 +1005,12 @@ class IRISExecutor:
                 start_time = time.perf_counter()
 
                 rows_affected = 0
-                for params in params_list:
+                for row_params in params_list:
                     inline_sql = "N/A"
                     try:
                         # Build inline SQL by replacing ? placeholders with actual values
                         inline_sql = normalized_sql
-                        for param_value in params:
+                        for param_value in row_params:
                             # Convert value to SQL literal
                             if param_value is None:
                                 sql_literal = "NULL"
@@ -994,7 +1031,7 @@ class IRISExecutor:
                     except Exception as row_error:
                         logger.error(
                             f"Failed to execute row {rows_affected + 1}: {row_error}",
-                            params=params[:3] if len(params) > 3 else params,
+                            params=row_params[:3] if len(row_params) > 3 else row_params,
                             inline_sql_preview=(
                                 inline_sql[:200] if "inline_sql" in locals() else "N/A"
                             ),
@@ -1035,7 +1072,9 @@ class IRISExecutor:
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute_many)
+        return await loop.run_in_executor(
+            self._get_executor(session_id), _sync_execute_many, sql, params_list, session_id
+        )
 
     async def _execute_many_external_async(
         self, sql: str, params_list: list[list], session_id: str | None = None
@@ -1050,9 +1089,8 @@ class IRISExecutor:
         - Expected throughput: 2,400-10,000+ rows/sec
         """
 
-        def _sync_execute_many():
+        def _sync_execute_many(sql, params_list, session_id):
             """Synchronous IRIS DBAPI executemany() in thread pool"""
-
             logger.info(
                 "🚀 EXECUTING BATCH IN EXTERNAL MODE (executemany)",
                 sql_preview=sql[:100],
@@ -1171,7 +1209,9 @@ class IRISExecutor:
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute_many)
+        return await loop.run_in_executor(
+            self._get_executor(session_id), _sync_execute_many, sql, params_list, session_id
+        )
 
     def _split_multi_row_insert(self, sql: str) -> list[str]:
         """
@@ -1232,7 +1272,9 @@ class IRISExecutor:
         session_id: str | None = None,
     ) -> Any:
         """Execute SQL with DDL idempotency handling."""
-        import iris
+        iris = self._import_iris()
+        if not iris:
+            raise RuntimeError("IRIS module not available")
 
         # Skip execution for empty statements or comment-only statements
         # This avoids sending no-op SQL or comments to the IRIS SQL engine
@@ -1448,21 +1490,22 @@ class IRISExecutor:
         meta = None
 
         # Helper to execute and materialize results
-        def _fetch_results(sql, select_params=None):
+        def _fetch_results(captured_sql, select_params=None):
             if is_embedded:
-                import iris
-
-                res = iris.sql.exec(sql, *select_params) if select_params else iris.sql.exec(sql)
-                return list(res), getattr(res, "_meta", None)
+                iris = self._import_iris()
+                if iris:
+                    res = iris.sql.exec(captured_sql, *select_params) if select_params else iris.sql.exec(captured_sql)
+                    return list(res), getattr(res, "_meta", None)
+                return [], None
             else:
                 cursor = connection.cursor()
                 if select_params:
                     fetch_params = (
                         tuple(select_params) if isinstance(select_params, list) else select_params
                     )
-                    cursor.execute(sql, fetch_params)
+                    cursor.execute(captured_sql, fetch_params)
                 else:
-                    cursor.execute(sql)
+                    cursor.execute(captured_sql)
                 r = cursor.fetchall()
                 m = cursor.description
                 cursor.close()
@@ -1585,9 +1628,30 @@ class IRISExecutor:
     ) -> dict[str, Any]:
         """Execute query in IRIS embedded Python environment (async wrapper)"""
 
-        def _sync_execute():
+        def _sync_execute(captured_sql, captured_params, captured_session_id):
             """Synchronous IRIS execution in thread pool"""
-            import iris
+            sql = captured_sql
+            params = captured_params
+            session_id = captured_session_id
+            optimized_sql = sql
+            optimized_params = params
+            sql_upper = sql.upper()
+            sql_upper_check = sql.upper()
+            optimized_sql_upper = sql_upper
+            optimized_sql_upper_check = sql_upper_check
+            optimized_sql_upper_stripped = sql_upper.strip()
+
+            iris = self._import_iris()
+            if not iris:
+                return {
+                    "success": False,
+                    "error": "IRIS module not found",
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command_tag": "ERROR",
+                    "execution_time_ms": 0,
+                }
 
             if hasattr(iris, "system") and hasattr(iris.system, "Process"):
                 iris.system.Process.SetNamespace(self.iris_config.get("namespace", "USER"))
@@ -1607,11 +1671,10 @@ class IRISExecutor:
             # - Npgsql queries pg_type during connection bootstrap to build type registry
             # - IRIS doesn't have PostgreSQL system catalogs (pg_type, pg_enum, pg_catalog)
             # Solution: Return FAKE pg_type data with standard PostgreSQL type OIDs
-            sql_upper = sql.upper()
 
             # pg_enum - Return empty with column metadata (no enums defined)
             # CRITICAL: PostgreSQL protocol requires RowDescription even for 0-row results
-            if "PG_ENUM" in sql_upper:
+            if "PG_ENUM" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_enum query (returning empty with column metadata)",
                     sql_preview=sql[:100],
@@ -1681,16 +1744,16 @@ class IRISExecutor:
             import re
 
             is_simple_pg_namespace = (
-                "PG_NAMESPACE" in sql_upper
+                "PG_NAMESPACE" in optimized_sql_upper
                 and
                 # Must have FROM pg_namespace (direct table access)
-                re.search(r"\bFROM\s+PG_NAMESPACE\b", sql_upper)
+                re.search(r"\bFROM\s+PG_NAMESPACE\b", optimized_sql_upper)
                 and
                 # Must NOT have JOIN (which indicates complex query)
-                "JOIN" not in sql_upper
+                "JOIN" not in optimized_sql_upper
                 and
                 # Must NOT have multiple FROM clauses (subqueries are OK)
-                len(re.findall(r"\bFROM\b", sql_upper)) <= 2  # Allow 1 main + 1 subquery
+                len(re.findall(r"\bFROM\b", optimized_sql_upper)) <= 2  # Allow 1 main + 1 subquery
             )
 
             if is_simple_pg_namespace:
@@ -1833,7 +1896,7 @@ class IRISExecutor:
             # 3. Index query (WITH rawindex) - needs index info, NOT check constraints
             # 4. Foreign key relationships query - needs parent/child column info
             # CRITICAL: Must check BEFORE pg_class since constraint queries also reference pg_class
-            if "PG_CONSTRAINT" in sql_upper or "CONSTR.CONNAME" in sql_upper:
+            if "PG_CONSTRAINT" in optimized_sql_upper or "CONSTR.CONNAME" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_constraint query (returning from INFORMATION_SCHEMA)",
                     sql_preview=sql[:200],
@@ -1844,15 +1907,15 @@ class IRISExecutor:
                 # SPECIFIC pattern: contype NOT IN ('p', 'u', 'f') - filters for check/exclusion only
                 # MUST NOT match WITH rawindex queries which also have condeferrable/condeferred
                 is_check_constraint_query = (
-                    "NOT IN" in sql_upper
-                    and ("'P'" in sql_upper or "'U'" in sql_upper or "'F'" in sql_upper)
-                    and "CONTYPE" in sql_upper  # Must explicitly filter by contype
+                    "NOT IN" in optimized_sql_upper
+                    and ("'P'" in optimized_sql_upper or "'U'" in optimized_sql_upper or "'F'" in optimized_sql_upper)
+                    and "CONTYPE" in optimized_sql_upper  # Must explicitly filter by contype
                 )
 
                 # Also detect specific check constraint columns, but NOT if it's a WITH rawindex query
-                is_rawindex_query = "WITH RAWINDEX" in sql_upper
-                has_deferrable = "IS_DEFERRABLE" in sql_upper  # Only exact match, not CONDEFERRABLE
-                has_deferred = "IS_DEFERRED" in sql_upper  # Only exact match, not CONDEFERRED
+                is_rawindex_query = "WITH RAWINDEX" in optimized_sql_upper
+                has_deferrable = "IS_DEFERRABLE" in optimized_sql_upper  # Only exact match, not CONDEFERRABLE
+                has_deferred = "IS_DEFERRED" in optimized_sql_upper  # Only exact match, not CONDEFERRED
 
                 # Check constraint query: has is_deferrable/is_deferred columns AND NOT a rawindex query
                 if is_check_constraint_query or (
@@ -1926,7 +1989,9 @@ class IRISExecutor:
                     }
 
                 try:
-                    import iris
+                    iris = self._import_iris()
+                    if not iris:
+                        raise RuntimeError("IRIS module not available")
 
                     # Query INFORMATION_SCHEMA for constraints
                     # Map constraint types: PRIMARY KEY -> p, UNIQUE -> u, FOREIGN KEY -> f
@@ -2110,8 +2175,8 @@ class IRISExecutor:
             # INFORMATION_SCHEMA.SEQUENCES - Return empty sequence information for Prisma
             # Prisma queries sequences using PostgreSQL-style syntax with colons
             # IRIS interprets : as host variable prefix, so we intercept this
-            if "INFORMATION_SCHEMA.SEQUENCES" in sql_upper or (
-                "SEQUENCE_NAME" in sql_upper and "SEQUENCE_SCHEMA" in sql_upper
+            if "INFORMATION_SCHEMA.SEQUENCES" in optimized_sql_upper or (
+                "SEQUENCE_NAME" in optimized_sql_upper and "SEQUENCE_SCHEMA" in optimized_sql_upper
             ):
                 logger.info(
                     "Intercepting sequence query (returning empty - IRIS sequences not exposed)",
@@ -2191,7 +2256,7 @@ class IRISExecutor:
             # pg_extension - Return empty extension information for Prisma introspection
             # Prisma queries pg_extension for installed PostgreSQL extensions
             # IRIS doesn't have PostgreSQL-style extensions, return empty
-            if "PG_EXTENSION" in sql_upper:
+            if "PG_EXTENSION" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_extension query (returning empty - IRIS has no PG extensions)",
                     sql_preview=sql[:200],
@@ -2235,7 +2300,7 @@ class IRISExecutor:
             # pg_proc - Return empty function/procedure information for Prisma introspection
             # Prisma queries pg_proc for stored procedures and functions
             # IRIS doesn't expose stored procedures via pg_proc, so return empty
-            if "PG_PROC" in sql_upper:
+            if "PG_PROC" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_proc query (returning empty - IRIS procedures not exposed)",
                     sql_preview=sql[:200],
@@ -2281,7 +2346,7 @@ class IRISExecutor:
             # SELECT views.viewname AS view_name, views.definition AS view_sql, views.schemaname AS namespace, ...
             # FROM pg_catalog.pg_views views INNER JOIN pg_catalog.pg_namespace ...
             # CRITICAL: Must check BEFORE pg_class since view queries may JOIN with pg_class
-            if "PG_VIEWS" in sql_upper:
+            if "PG_VIEWS" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_views query (returning empty - IRIS views not exposed)",
                     sql_preview=sql[:200],
@@ -2337,10 +2402,10 @@ class IRISExecutor:
             # WHERE namespace.nspname = ANY($1) AND tbl.relkind IN ('r', 'p')
             # CRITICAL: Only intercept simple pg_class table queries, not JOINs with pg_attribute for column info
             is_simple_pg_class = (
-                "PG_CLASS" in sql_upper
-                and "PG_ATTRIBUTE" not in sql_upper  # Not a column info query
-                and "ATT.ATTTYPID" not in sql_upper  # Not a column type query
-                and "INFO.COLUMN_NAME" not in sql_upper  # Not an information_schema column query
+                "PG_CLASS" in optimized_sql_upper
+                and "PG_ATTRIBUTE" not in optimized_sql_upper  # Not a column info query
+                and "ATT.ATTTYPID" not in optimized_sql_upper  # Not a column type query
+                and "INFO.COLUMN_NAME" not in optimized_sql_upper  # Not an information_schema column query
             )
 
             if is_simple_pg_class:
@@ -2351,7 +2416,9 @@ class IRISExecutor:
                 )
 
                 try:
-                    import iris
+                    iris = self._import_iris()
+                    if not iris:
+                        raise RuntimeError("IRIS module not available")
 
                     # Query INFORMATION_SCHEMA for table list
                     tables_sql = """
@@ -2503,9 +2570,9 @@ class IRISExecutor:
             # WHERE namespace = ANY($1) AND table_name = ANY($2)
             # CRITICAL: Must be BEFORE generic pg_attribute handler
             if (
-                "INFO.TABLE_NAME" in sql_upper
-                and "INFO.COLUMN_NAME" in sql_upper
-                and "FORMAT_TYPE" in sql_upper
+                "INFO.TABLE_NAME" in optimized_sql_upper
+                and "INFO.COLUMN_NAME" in optimized_sql_upper
+                and "FORMAT_TYPE" in optimized_sql_upper
             ):
                 logger.info(
                     "Intercepting Prisma column info query (returning IRIS columns from INFORMATION_SCHEMA)",
@@ -2514,7 +2581,9 @@ class IRISExecutor:
                 )
 
                 try:
-                    import iris
+                    iris = self._import_iris()
+                    if not iris:
+                        raise RuntimeError("IRIS module not available")
 
                     # Query INFORMATION_SCHEMA.COLUMNS for column metadata
                     # Filter by {IRIS_SCHEMA} schema (maps to public)
@@ -2751,9 +2820,9 @@ class IRISExecutor:
             # Npgsql queries for composite type definitions, but IRIS doesn't have these
             # CRITICAL: PostgreSQL protocol requires RowDescription even for 0-row results
             if (
-                "PG_ATTRIBUTE" in sql_upper
-                or "ATT.ATTNAME" in sql_upper
-                or "ATT.ATTTYPID" in sql_upper
+                "PG_ATTRIBUTE" in optimized_sql_upper
+                or "ATT.ATTNAME" in optimized_sql_upper
+                or "ATT.ATTTYPID" in optimized_sql_upper
             ):
                 logger.info(
                     "Intercepting composite types query (returning empty with column metadata)",
@@ -2796,7 +2865,7 @@ class IRISExecutor:
             # pg_type - Return standard PostgreSQL types for Npgsql type registry
             # CRITICAL FIX: Parse SELECT clause to return columns in requested order
             # Npgsql sends different queries with different column structures
-            if "PG_TYPE" in sql_upper or "PG_CATALOG" in sql_upper:
+            if "PG_TYPE" in optimized_sql_upper or "PG_CATALOG" in optimized_sql_upper:
                 logger.info(
                     "Intercepting pg_type query (parsing SELECT clause for column order)",
                     sql_preview=sql[:150],
@@ -3179,20 +3248,19 @@ class IRISExecutor:
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
                 # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
                 if (
-                    '"public"' in sql_upper_check
-                    and not sql_upper_check.startswith("CREATE")
-                    and not sql_upper_check.startswith("ALTER")
+                    '"public"' in optimized_sql_upper_check
+                    and not optimized_sql_upper_check.startswith("CREATE")
+                    and not optimized_sql_upper_check.startswith("ALTER")
                 ):
-                    sql = self._get_normalized_sql(sql, execution_path="embedded")
+                    optimized_sql = self._get_normalized_sql(sql, execution_path="embedded")
                     logger.info(
                         f"Schema translation applied: public -> {IRIS_SCHEMA}",
-                        original_sql=sql[:100],
+                        original_sql=optimized_sql[:100],
                     )
 
                 # POSTGRESQL COMPATIBILITY: Handle SHOW commands that IRIS doesn't support
                 # Intercept and return fake results for PostgreSQL compatibility
-                sql_upper_stripped = optimized_sql.strip().upper()
-                if sql_upper_stripped.startswith("SHOW "):
+                if optimized_sql_upper_stripped.startswith("SHOW "):
                     logger.info(
                         "Intercepting SHOW command (PostgreSQL compatibility shim)",
                         sql=optimized_sql[:100],
@@ -3342,16 +3410,13 @@ class IRISExecutor:
                         type_oid = self._iris_type_to_pg_oid(iris_type)
 
                         # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
-                        # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
-                        # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
-                        sql_upper = sql.upper()
 
                         if iris_type == 2:
                             # Check for explicit casts
-                            if "AS INTEGER" in sql_upper or "AS INT" in sql_upper:
+                            if "AS INTEGER" in optimized_sql_upper or "AS INT" in optimized_sql_upper:
                                 # Already handled by asyncpg CAST INTEGER fix - don't override
                                 pass
-                            elif "AS NUMERIC" not in sql_upper and "AS DECIMAL" not in sql_upper:
+                            elif "AS NUMERIC" not in optimized_sql_upper and "AS DECIMAL" not in optimized_sql_upper:
                                 # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
                                 logger.info(
                                     "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
@@ -3363,7 +3428,7 @@ class IRISExecutor:
 
                         # CRITICAL FIX: CURRENT_TIMESTAMP returns type 25 (TEXT) in IRIS
                         # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                        if "CURRENT_TIMESTAMP" in sql_upper and type_oid == 25:
+                        if "CURRENT_TIMESTAMP" in optimized_sql_upper and type_oid == 25:
                             logger.info(
                                 "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
                                 column_name=col_name,
@@ -3374,7 +3439,7 @@ class IRISExecutor:
 
                         # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
                         # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                        if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
+                        if "CURRENT_TIMESTAMP" in optimized_sql_upper_check and type_oid == 1043:
                             logger.info(
                                 "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
                                 column_name=col_name,
@@ -3417,7 +3482,7 @@ class IRISExecutor:
                         columns = self._discover_metadata(
                             sql, session_id, expected_count=len(rows[0]), rows=rows
                         )
-                    elif sql_upper.startswith("SELECT"):
+                    elif optimized_sql_upper.startswith("SELECT"):
                         columns = self._discover_metadata(sql, session_id)
 
                 # PROFILING: Fetch complete
@@ -3498,10 +3563,8 @@ class IRISExecutor:
 
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
-                # Determine command tag based on SQL type
+                # Determine command tag
                 affected_count = len(rows)
-                if affected_count == 0 and hasattr(result, "rowcount") and result.rowcount > 0:
-                    affected_count = result.rowcount
                 command_tag = self._determine_command_tag(sql, affected_count)
 
                 # PROFILING: Log detailed breakdown
@@ -3514,12 +3577,6 @@ class IRISExecutor:
                     overhead_ms=round(t_total_elapsed - t_iris_elapsed, 2),
                     session_id=session_id,
                 )
-
-                # Feature 030: Schema output translation ({IRIS_SCHEMA} → public)
-                # Only apply to information_schema queries that return schema columns
-                if rows and columns:
-                    column_names = [col.get("name", "") for col in columns]
-                    rows = translate_output_schema(rows, column_names)
 
                 return {
                     "success": True,
@@ -3539,46 +3596,27 @@ class IRISExecutor:
                 }
 
             except Exception as e:
-                # IRIS SQLCODE 100 = "No rows found" - treat as success with 0 rows
-                # This is NOT an error - it's a normal response for DELETE/UPDATE with no matches
-                if hasattr(e, "sqlcode") and e.sqlcode == 100:
-                    logger.info(
-                        "IRIS SQLCODE 100 - No rows found (success with 0 rows)",
-                        sql=sql[:100] + "..." if len(sql) > 100 else sql,
-                        session_id=session_id,
-                    )
-                    # Determine command tag from SQL
-                    command_tag = self._determine_command_tag(sql, 0)
-
-                    return {
-                        "success": True,  # SQLCODE 100 is success!
-                        "rows": [],
-                        "columns": [],
-                        "row_count": 0,
-                        "command_tag": command_tag,
-                        "execution_time_ms": 0,
-                    }
-
-                # Real error - propagate it
                 logger.error(
                     "IRIS embedded execution failed",
                     sql=sql[:100] + "..." if len(sql) > 100 else sql,
                     error=str(e),
                     session_id=session_id,
                 )
+                # Feature 026: Determine command tag for failed DDL too (needed for command_tag in protocol)
+                command_tag = self._determine_command_tag(sql, 0)
                 return {
                     "success": False,
                     "error": str(e),
                     "rows": [],
                     "columns": [],
                     "row_count": 0,
-                    "command_tag": "ERROR",
+                    "command_tag": command_tag,
                     "execution_time_ms": 0,
                 }
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_execute, sql, params, session_id)
 
     def _discover_metadata(
         self,
@@ -3776,8 +3814,20 @@ class IRISExecutor:
         Execute SQL using external IRIS connection with proper async threading
         """
 
-        def _sync_external_execute():
+        def _sync_external_execute(captured_sql, captured_params, captured_session_id):
             """Synchronous external IRIS execution in thread pool"""
+            sql = captured_sql
+            params = captured_params
+            session_id = captured_session_id
+            optimized_sql = sql
+            optimized_params = params
+            sql_upper = sql.upper()
+            sql_upper_check = sql.upper()
+
+            # Initialize optimized derived variables at the top to avoid UnboundLocalError
+            optimized_sql_upper = sql_upper
+            optimized_sql_upper_check = sql_upper_check
+            optimized_sql_upper_stripped = sql_upper.strip()
             try:
                 # PROFILING: Track detailed timing
                 t_start_total = time.perf_counter()
@@ -3915,14 +3965,14 @@ class IRISExecutor:
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
                 # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
                 if (
-                    '"public"' in sql_upper_check
-                    and not sql_upper_check.startswith("CREATE")
-                    and not sql_upper_check.startswith("ALTER")
+                    '"public"' in optimized_sql_upper_check
+                    and not optimized_sql_upper_check.startswith("CREATE")
+                    and not optimized_sql_upper_check.startswith("ALTER")
                 ):
-                    sql = self._get_normalized_sql(sql, execution_path="external")
+                    optimized_sql = self._get_normalized_sql(sql, execution_path="external")
                     logger.info(
                         f"Schema translation applied (external): public -> {IRIS_SCHEMA}",
-                        original_sql=sql[:100],
+                        original_sql=optimized_sql[:100],
                     )
 
                 # Pre-process parameters to convert lists to IRIS vector strings
@@ -4056,11 +4106,11 @@ class IRISExecutor:
                             # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
                             type_oid = self._iris_type_to_pg_oid(iris_type)
 
-                            sql_upper_check = optimized_sql.upper()
+                            optimized_sql_upper_check = optimized_sql.upper()
 
                             if iris_type == 2:
                                 # Check for explicit casts
-                                if "AS INTEGER" in sql_upper_check or "AS INT" in sql_upper_check:
+                                if "AS INTEGER" in optimized_sql_upper_check or "AS INT" in optimized_sql_upper_check:
                                     # CAST(? AS INTEGER) - override to INT4
                                     logger.info(
                                         "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 23 (INT4)",
@@ -4070,8 +4120,8 @@ class IRISExecutor:
                                     )
                                     type_oid = 23  # INT4
                                 elif (
-                                    "AS NUMERIC" not in sql_upper_check
-                                    and "AS DECIMAL" not in sql_upper_check
+                                    "AS NUMERIC" not in optimized_sql_upper_check
+                                    and "AS DECIMAL" not in optimized_sql_upper_check
                                 ):
                                     # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
                                     logger.info(
@@ -4084,7 +4134,7 @@ class IRISExecutor:
 
                             # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
                             # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                            if "CURRENT_TIMESTAMP" in sql_upper_check and type_oid == 1043:
+                            if "CURRENT_TIMESTAMP" in optimized_sql_upper_check and type_oid == 1043:
                                 logger.info(
                                     "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
                                     column_name=col_name,
@@ -4278,7 +4328,7 @@ class IRISExecutor:
 
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_external_execute)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_external_execute, sql, params, session_id)
 
     def _get_iris_connection(self):
         """
@@ -4300,7 +4350,9 @@ class IRISExecutor:
         if session_id and session_id in self.session_connections:
             return self.session_connections[session_id]
 
-        import iris
+        iris = self._import_iris()
+        if not iris:
+            raise RuntimeError("IRIS module not available")
 
         with self._connection_lock:
             # Wait for a connection to be available if we've reached the limit
@@ -4375,7 +4427,10 @@ class IRISExecutor:
         self, sql: str, expected_columns: int, session_id: str | None = None
     ) -> list[str] | None:
         try:
-            import iris
+            iris = self._import_iris()
+            if not iris:
+                return None
+
             import re
 
             if "RETURNING" in sql.upper():
@@ -4884,41 +4939,44 @@ class IRISExecutor:
     async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction with async threading"""
 
-        def _sync_begin():
+        def _sync_begin(captured_session_id):
+            session_id = captured_session_id
             if self.embedded_mode:
-                import iris
-
-                iris.sql.exec("START TRANSACTION")
+                iris = self._import_iris()
+                if iris:
+                    iris.sql.exec("START TRANSACTION")
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_begin)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_begin, session_id)
 
     async def commit_transaction(self, session_id: str | None = None):
         """Commit transaction with async threading"""
 
-        def _sync_commit():
+        def _sync_commit(captured_session_id):
+            session_id = captured_session_id
             if self.embedded_mode:
-                import iris
-
-                iris.sql.exec("COMMIT")
+                iris = self._import_iris()
+                if iris:
+                    iris.sql.exec("COMMIT")
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_commit)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_commit, session_id)
 
     async def rollback_transaction(self, session_id: str | None = None):
         """Rollback transaction with async threading"""
 
-        def _sync_rollback():
+        def _sync_rollback(captured_session_id):
+            session_id = captured_session_id
             if self.embedded_mode:
-                import iris
-
-                iris.sql.exec("ROLLBACK")
+                iris = self._import_iris()
+                if iris:
+                    iris.sql.exec("ROLLBACK")
             # For external mode, transaction is managed per connection
 
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self._get_executor(session_id), _sync_rollback)
+        return await loop.run_in_executor(self._get_executor(session_id), _sync_rollback, session_id)
 
     async def cancel_query(self, backend_pid: int, backend_secret: int):
         """
@@ -4966,14 +5024,14 @@ class IRISExecutor:
         """Cancel query in IRIS embedded mode"""
         try:
 
-            def _sync_cancel():
+            def _sync_cancel(captured_self, captured_pid, captured_secret):
                 # In embedded mode, we could potentially use IRIS job control
                 # For now, return success for demo purposes
                 # Production would implement actual IRIS job termination
-                logger.info("Embedded query cancellation (demo mode)")
+                logger.info("Embedded query cancellation (demo mode)", pid=captured_pid)
                 return True
 
-            return await asyncio.to_thread(_sync_cancel)
+            return await asyncio.to_thread(_sync_cancel, self, backend_pid, backend_secret)
 
         except Exception as e:
             logger.error("Embedded query cancellation failed", error=str(e))
