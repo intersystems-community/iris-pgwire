@@ -3098,6 +3098,64 @@ class PGWireProtocol:
                         or has_returning
                     ):
                         try:
+                            # CRITICAL FIX: For DML with RETURNING, use synthetic metadata
+                            # instead of executing the query (which would cause duplicate execution)
+                            if has_returning and not self.iris_executor.sql_parser.is_select_statement(query):
+                                import re
+                                # Extract RETURNING columns from query
+                                returning_match = re.search(
+                                    r"\bRETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL
+                                )
+                                if returning_match:
+                                    returning_clause = returning_match.group(1).strip().rstrip(";")
+                                    raw_cols = [c.strip() for c in returning_clause.split(",")]
+                                    returning_columns = []
+                                    for col in raw_cols:
+                                        # Extract column name (last part after dots)
+                                        col_match = re.search(r'"?(\w+)"?\s*$', col)
+                                        if col_match:
+                                            col_name = col_match.group(1)
+                                            if col_name.lower() in ("created_at", "updated_at", "deleted_at"):
+                                                type_oid = 20  # BIGINT for timestamps
+                                            else:
+                                                type_oid = 25  # TEXT for others
+                                            returning_columns.append({
+                                                "name": col_name,
+                                                "type_oid": type_oid,
+                                                "type_size": -1,
+                                                "type_modifier": -1,
+                                                "format_code": 0,
+                                            })
+                                    
+                                    if returning_columns:
+                                        logger.info(
+                                            "🔍 Describe Portal: Sending synthetic RowDescription for RETURNING",
+                                            connection_id=self.connection_id,
+                                            portal_name=name,
+                                            columns=[c["name"] for c in returning_columns],
+                                        )
+                                        result_formats = portal.get("result_formats", [])
+                                        await self.send_row_description(returning_columns, result_formats)
+                                        return
+                                    
+                                    logger.info(
+                                        "🔍 Describe Portal: RETURNING * detected, sending NoData",
+                                        connection_id=self.connection_id,
+                                        portal_name=name,
+                                    )
+                                    portal["needs_row_description"] = True
+                                    await self.send_no_data()
+                                    return
+                                else:
+                                    logger.warning(
+                                        "Could not parse RETURNING clause in portal Describe",
+                                        connection_id=self.connection_id,
+                                        portal_name=name,
+                                    )
+                                    await self.send_no_data()
+                                    return
+                            
+                            # For SELECT/SHOW queries, execute to get metadata
                             result = await self.iris_executor.execute_query(
                                 query,
                                 params=portal.get("params", []),
@@ -3314,14 +3372,18 @@ class PGWireProtocol:
             # This ensures visibility of previous buffered inserts for the current query
             await self.flush_batch()
 
+            # DEBUG: Verify executor instance
+            # logger.warning(f"DEBUG: Using iris_executor at {id(self.iris_executor)}")
+
             result = await self.iris_executor.execute_query(
                 query, params=params if params else None, session_id=self.connection_id
             )
 
             if result["success"]:
                 # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
-                # Extended Protocol: Don't send RowDescription here - Describe already sent it
-                await self.send_query_result(result, send_ready=False, send_row_description=False)
+                # Check if Describe sent NoData for RETURNING * - if so, we need to send RowDescription
+                needs_row_desc = portal.get("needs_row_description", False) if portal else False
+                await self.send_query_result(result, send_ready=False, send_row_description=needs_row_desc)
             else:
                 await self.send_error_response(
                     "ERROR", "42000", "syntax_error", result.get("error", "Query execution failed")

@@ -858,6 +858,9 @@ class IRISExecutor:
 
         NEW: Integrates BulkInsertJob for tracking and supports native fast-insert path
         with string inlining fallback for maximum reliability.
+        
+        RETURNING SUPPORT: When SQL contains RETURNING clause, executes each INSERT
+        individually and aggregates the returned rows from all inserts.
         """
         job = BulkInsertJob(
             table_name=self._extract_table_name(sql) or "unknown", total_rows=len(params_list)
@@ -880,19 +883,26 @@ class IRISExecutor:
                     job_id=job.job_id,
                 )
 
-                # ALWAYS try native fast-insert path first
-                try:
-                    result = await self._execute_many_native(sql, params_list, session_id)
-                    job.mark_completed(rows_inserted=result.get("rows_affected", len(params_list)))
-                except Exception as native_error:
-                    logger.warning(
-                        "Native executemany() failed, falling back to string inlining",
-                        error=str(native_error)[:200],
-                        session_id=session_id,
+                # Check for RETURNING clause - requires special handling
+                if self.has_returning_clause(sql):
+                    result = await self._execute_many_with_returning(
+                        sql, params_list, session_id
                     )
-                    # Fallback to string inlining (reliable but slower)
-                    result = await self._execute_many_inline_fallback(sql, params_list, session_id)
                     job.mark_completed(rows_inserted=result.get("rows_affected", len(params_list)))
+                else:
+                    # ALWAYS try native fast-insert path first
+                    try:
+                        result = await self._execute_many_native(sql, params_list, session_id)
+                        job.mark_completed(rows_inserted=result.get("rows_affected", len(params_list)))
+                    except Exception as native_error:
+                        logger.warning(
+                            "Native executemany() failed, falling back to string inlining",
+                            error=str(native_error)[:200],
+                            session_id=session_id,
+                        )
+                        # Fallback to string inlining (reliable but slower)
+                        result = await self._execute_many_inline_fallback(sql, params_list, session_id)
+                        job.mark_completed(rows_inserted=result.get("rows_affected", len(params_list)))
 
                 # Add performance metadata
                 result["execution_metadata"] = {
@@ -910,6 +920,115 @@ class IRISExecutor:
         except Exception as e:
             job.mark_failed(str(e))
             raise
+
+    async def _execute_many_with_returning(
+        self, sql: str, params_list: list[list], session_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Execute batch INSERT/UPDATE/DELETE with RETURNING clause.
+        
+        Since IRIS doesn't support native RETURNING, we execute each statement
+        individually and aggregate the returned rows.
+        
+        Returns: dict with 'rows' containing all returned rows from all inserts.
+        """
+        # Parse the RETURNING clause
+        operation, table, columns, where_clause, stripped_sql = self._parse_returning_clause(sql)
+        
+        if not operation or not table:
+            logger.warning(
+                "Could not parse RETURNING clause, falling back to standard execute_many",
+                sql=sql[:100],
+                session_id=session_id,
+            )
+            return await self._execute_many_native(sql, params_list, session_id)
+        
+        logger.info(
+            "execute_many with RETURNING: processing batch individually",
+            operation=operation,
+            table=table,
+            columns=columns,
+            batch_size=len(params_list),
+            session_id=session_id,
+        )
+        
+        all_rows = []
+        all_meta = None
+        
+        for i, params in enumerate(params_list):
+            # Execute the stripped SQL (without RETURNING)
+            try:
+                if self.embedded_mode:
+                    iris = self._import_iris()
+                    if iris:
+                        normalized_params = self._normalize_parameters(params)
+                        if normalized_params:
+                            iris.sql.exec(stripped_sql, *normalized_params)
+                        else:
+                            iris.sql.exec(stripped_sql)
+                else:
+                    conn = self._get_pooled_connection(session_id=session_id)
+                    cursor = conn.cursor()
+                    try:
+                        normalized_params = self._normalize_parameters(params)
+                        if normalized_params:
+                            cursor.execute(stripped_sql, tuple(normalized_params))
+                        else:
+                            cursor.execute(stripped_sql)
+                        conn.commit()
+                    finally:
+                        cursor.close()
+                        self._return_connection(conn, session_id=session_id)
+                
+                # Emulate RETURNING for this row
+                rows, meta = self._emulate_returning(
+                    operation=operation,
+                    table=table,
+                    columns=columns,
+                    where_clause=where_clause,
+                    params=params,
+                    is_embedded=self.embedded_mode,
+                    session_id=session_id,
+                    original_sql=sql,
+                )
+                
+                if rows:
+                    all_rows.extend(rows)
+                if meta and not all_meta:
+                    all_meta = meta
+                    
+            except Exception as e:
+                logger.error(
+                    "execute_many with RETURNING: row failed",
+                    row_index=i,
+                    error=str(e),
+                    session_id=session_id,
+                )
+                raise
+        
+        logger.info(
+            "execute_many with RETURNING: completed",
+            total_rows_returned=len(all_rows),
+            batch_size=len(params_list),
+            session_id=session_id,
+        )
+        
+        # Build column info from metadata
+        columns_info = []
+        if all_meta:
+            for col_info in all_meta:
+                if isinstance(col_info, dict):
+                    columns_info.append(col_info)
+                elif hasattr(col_info, "name"):
+                    columns_info.append({"name": col_info.name, "type_oid": 1043})
+        
+        return {
+            "success": True,
+            "rows": all_rows,
+            "columns": columns_info,
+            "rows_affected": len(params_list),
+            "_execution_path": "execute_many_with_returning",
+        }
 
     async def _execute_many_native(
         self, sql: str, params_list: list[list], session_id: str | None = None
@@ -1314,6 +1433,30 @@ class IRISExecutor:
             if is_embedded:
                 # Embedded mode - return cursor-like object
                 if params is not None and len(params) > 0:
+                    # CRITICAL FIX: iris.sql.exec() doesn't properly handle None for
+                    # nullable FK columns - causes referential integrity failures.
+                    # When params contain None, inline the values instead of binding.
+                    if any(p is None for p in params):
+                        inline_sql = sql
+                        for param_value in params:
+                            if param_value is None:
+                                sql_literal = "NULL"
+                            elif isinstance(param_value, bool):
+                                # IRIS expects 1/0 for BIT columns
+                                sql_literal = "1" if param_value else "0"
+                            elif isinstance(param_value, int | float):
+                                sql_literal = str(param_value)
+                            else:
+                                # Strings need quoting and escaping
+                                escaped_value = str(param_value).replace("'", "''")
+                                sql_literal = f"'{escaped_value}'"
+                            inline_sql = inline_sql.replace("?", sql_literal, 1)
+                        logger.debug(
+                            "Using inline SQL for None params",
+                            original_sql=sql[:100],
+                            inline_sql=inline_sql[:100],
+                        )
+                        return iris.sql.exec(inline_sql)
                     return iris.sql.exec(sql, *params)
                 return iris.sql.exec(sql)
 
@@ -1462,6 +1605,99 @@ class IRISExecutor:
             stripped_sql,
         )
 
+    def _extract_insert_id_from_sql(
+        self, sql: str, params: list | None, session_id: str | None = None
+    ) -> tuple[str | None, Any]:
+        """
+        Extract the ID value from an INSERT statement for UUID-based systems.
+        
+        Returns: (id_column_name, id_value) or (None, None) if not found.
+        
+        Handles:
+        - INSERT INTO table (id, col1, col2) VALUES ($1, $2, $3) with params
+        - INSERT INTO table (id, col1, col2) VALUES ('uuid', 'val1', 'val2') with literals
+        """
+        import re
+        
+        # Parse column list from INSERT
+        col_match = re.search(
+            r'INSERT\s+INTO\s+[^\s(]+\s*\(\s*([^)]+)\s*\)',
+            sql,
+            re.IGNORECASE
+        )
+        if not col_match:
+            return None, None
+            
+        columns_str = col_match.group(1)
+        columns = [c.strip().strip('"').strip("'").lower() for c in columns_str.split(',')]
+        
+        # Find ID column position (common names: id, uuid, _id)
+        id_col_names = ['id', 'uuid', '_id']
+        id_col_idx = None
+        id_col_name = None
+        for i, col in enumerate(columns):
+            if col in id_col_names:
+                id_col_idx = i
+                id_col_name = col
+                break
+        
+        if id_col_idx is None:
+            return None, None
+        
+        # Extract value at that position
+        # Check if we have params (parameterized query)
+        if params and len(params) > id_col_idx:
+            id_value = params[id_col_idx]
+            logger.debug(
+                "Extracted ID from params",
+                id_column=id_col_name,
+                id_value=str(id_value)[:50],
+                session_id=session_id,
+            )
+            return id_col_name, id_value
+        
+        # Try to parse from VALUES clause (literal values)
+        values_match = re.search(
+            r'VALUES\s*\(\s*(.+?)\s*\)',
+            sql,
+            re.IGNORECASE | re.DOTALL
+        )
+        if values_match:
+            values_str = values_match.group(1)
+            # Split by comma, but respect quoted strings
+            values = []
+            current = ""
+            in_quote = False
+            quote_char = None
+            for char in values_str:
+                if char in ("'", '"') and not in_quote:
+                    in_quote = True
+                    quote_char = char
+                    current += char
+                elif char == quote_char and in_quote:
+                    in_quote = False
+                    quote_char = None
+                    current += char
+                elif char == ',' and not in_quote:
+                    values.append(current.strip())
+                    current = ""
+                else:
+                    current += char
+            if current.strip():
+                values.append(current.strip())
+            
+            if len(values) > id_col_idx:
+                id_value = values[id_col_idx].strip("'").strip('"')
+                logger.debug(
+                    "Extracted ID from VALUES literal",
+                    id_column=id_col_name,
+                    id_value=str(id_value)[:50],
+                    session_id=session_id,
+                )
+                return id_col_name, id_value
+        
+        return None, None
+
     def _emulate_returning(
         self,
         operation: str,
@@ -1472,6 +1708,7 @@ class IRISExecutor:
         is_embedded: bool,
         connection: Any = None,
         session_id: str | None = None,
+        original_sql: str | None = None,
     ) -> tuple[list[Any], Any]:
         """
         Emulate PostgreSQL RETURNING clause for IRIS.
@@ -1479,6 +1716,10 @@ class IRISExecutor:
         Returns: (rows, metadata)
         """
         import re
+
+        # CRITICAL FIX: Normalize table name to UPPERCASE for IRIS compatibility
+        # IRIS stores table names in uppercase in INFORMATION_SCHEMA
+        table_normalized = table.upper() if table else table
 
         # Handle columns as list or '*'
         if columns == "*":
@@ -1513,14 +1754,14 @@ class IRISExecutor:
 
         try:
             if operation == "INSERT":
-                # Try to get the last inserted ID
+                # Method 1: Try LAST_IDENTITY() for auto-increment IDs
                 id_rows, _ = _fetch_results("SELECT LAST_IDENTITY()")
                 last_id = id_rows[0][0] if id_rows and id_rows[0] else None
 
                 if last_id is not None and last_id != "" and last_id != 0:
                     # Try lookup by %ID first
                     rows, meta = _fetch_results(
-                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE %ID = ?', [last_id]
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE %ID = ?', [last_id]
                     )
                     if not rows and columns != "*":
                         id_cols = [
@@ -1530,21 +1771,45 @@ class IRISExecutor:
                         ]
                         for id_col in id_cols:
                             rows, meta = _fetch_results(
-                                f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE "{id_col}" = ?',
+                                f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE "{id_col}" = ?',
                                 [last_id],
                             )
                             if rows:
                                 break
 
-                    # LAST RESORT: Try %ID lookup using hardcoded query if other lookups failed
+                    # Try %ID lookup using hardcoded query if other lookups failed
                     if not rows:
                         rows, meta = _fetch_results(
-                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE %ID = (SELECT LAST_IDENTITY())'
+                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE %ID = (SELECT LAST_IDENTITY())'
                         )
 
+                # Method 2: For UUID-based systems, extract ID from INSERT VALUES
+                if not rows and original_sql:
+                    id_col_name, id_value = self._extract_insert_id_from_sql(
+                        original_sql, list(params) if params else None, session_id
+                    )
+                    if id_col_name and id_value:
+                        logger.info(
+                            "RETURNING emulation: Using extracted ID from INSERT",
+                            id_column=id_col_name,
+                            id_value=str(id_value)[:50],
+                            table=table_normalized,
+                            session_id=session_id,
+                        )
+                        rows, meta = _fetch_results(
+                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE "{id_col_name}" = ?',
+                            [id_value],
+                        )
+
+                # Method 3 (LAST RESORT): TOP 1 ORDER BY %ID DESC - risky under concurrency
                 if not rows:
+                    logger.warning(
+                        "RETURNING emulation: Falling back to TOP 1 (risky under concurrency)",
+                        table=table_normalized,
+                        session_id=session_id,
+                    )
                     rows, meta = _fetch_results(
-                        f'SELECT TOP 1 {col_list} FROM {IRIS_SCHEMA}."{table}" ORDER BY %ID DESC'
+                        f'SELECT TOP 1 {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" ORDER BY %ID DESC'
                     )
 
             elif operation in ("UPDATE", "DELETE"):
@@ -1564,7 +1829,7 @@ class IRISExecutor:
                     )
 
                     select_sql = (
-                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table}" WHERE {translated_where}'
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE {translated_where}'
                     )
 
                     # Extract WHERE clause parameters (they are the last N parameters)
@@ -3362,7 +3627,7 @@ class IRISExecutor:
                         # Use pre-captured rows for DELETE
                         result = MockResult(delete_returning_rows, delete_returning_meta)
                     else:
-                        # Emulate for INSERT/UPDATE
+                        # Emulate for INSERT/UPDATE - pass original SQL for UUID extraction
                         rows, meta = self._emulate_returning(
                             returning_operation,
                             returning_table,
@@ -3370,6 +3635,7 @@ class IRISExecutor:
                             returning_where_clause,
                             optimized_params,
                             is_embedded=True,
+                            original_sql=sql,  # Pass original SQL for UUID extraction
                         )
                         result = MockResult(rows, meta)
 
@@ -4142,7 +4408,7 @@ class IRISExecutor:
                         # Use pre-captured rows
                         cursor = MockResult(delete_returning_rows, delete_returning_meta)
                     else:
-                        # Emulate for INSERT/UPDATE
+                        # Emulate for INSERT/UPDATE - pass original SQL for UUID extraction
                         rows, meta = self._emulate_returning(
                             returning_operation,
                             returning_table,
@@ -4151,6 +4417,7 @@ class IRISExecutor:
                             optimized_params,
                             is_embedded=False,
                             connection=conn,
+                            original_sql=sql,  # Pass original SQL for UUID extraction
                         )
                         cursor = MockResult(rows, meta)
 
@@ -4523,11 +4790,72 @@ class IRISExecutor:
         self, sql: str, expected_columns: int, session_id: str | None = None
     ) -> list[str] | None:
         try:
+            import re
+
+            # Extract table name from SQL for schema-based column lookup
+            # Handle both SELECT * FROM table and INSERT/UPDATE ... RETURNING *
+            table_name = None
+            sql_upper = sql.upper()
+            
+            if "RETURNING" in sql_upper:
+                # For INSERT/UPDATE/DELETE ... RETURNING *, extract table from INTO/UPDATE/FROM
+                # INSERT INTO table_name ...
+                insert_match = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
+                if insert_match:
+                    table_name = insert_match.group(1)
+                else:
+                    # UPDATE table_name SET ...
+                    update_match = re.search(r"UPDATE\s+([^\s]+)\s+SET", sql, re.IGNORECASE)
+                    if update_match:
+                        table_name = update_match.group(1)
+                    else:
+                        # DELETE FROM table_name ...
+                        delete_match = re.search(r"DELETE\s+FROM\s+([^\s]+)", sql, re.IGNORECASE)
+                        if delete_match:
+                            table_name = delete_match.group(1)
+            else:
+                # SELECT * FROM table_name ...
+                from_match = re.search(r"FROM\s+([^\s,;()]+)", sql, re.IGNORECASE)
+                if from_match:
+                    table_name = from_match.group(1)
+            
+            # Method 0 (Preferred): Use INFORMATION_SCHEMA for reliable column names
+            if table_name:
+                # Strip schema prefix if present (e.g., SQLUser.workflow -> workflow)
+                if "." in table_name:
+                    table_name = table_name.split(".")[-1]
+                # Strip quotes
+                table_name = table_name.strip('"').strip("'")
+                
+                logger.debug(
+                    "Attempting schema-based column discovery",
+                    table_name=table_name,
+                    session_id=session_id,
+                )
+                
+                schema_columns = self._get_table_columns_from_schema(table_name, session_id)
+                if schema_columns:
+                    # Verify column count matches if we have expected_columns
+                    if expected_columns == 0 or len(schema_columns) == expected_columns:
+                        logger.info(
+                            "Schema-based column discovery succeeded",
+                            table_name=table_name,
+                            columns=schema_columns,
+                            session_id=session_id,
+                        )
+                        return schema_columns
+                    else:
+                        logger.debug(
+                            "Schema columns count mismatch, falling back",
+                            schema_count=len(schema_columns),
+                            expected=expected_columns,
+                            session_id=session_id,
+                        )
+
+            # Fallback: Try LIMIT 0 metadata discovery (doesn't work well with IRIS)
             iris = self._import_iris()
             if not iris:
                 return None
-
-            import re
 
             if "RETURNING" in sql.upper():
                 sql = re.sub(r"RETURNING\s+\*", "SELECT *", sql, flags=re.IGNORECASE)
