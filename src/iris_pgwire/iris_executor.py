@@ -1442,6 +1442,7 @@ class IRISExecutor:
         params: list | None = None,
         is_embedded: bool = True,
         session_id: str | None = None,
+        connection: Any = None,
     ) -> Any:
         """Execute SQL with DDL idempotency handling."""
         iris = self._import_iris()
@@ -1515,7 +1516,9 @@ class IRISExecutor:
 
             else:
                 # External mode - use DBAPI cursor
-                connection = self._get_pooled_connection(session_id=session_id)
+                # Use provided connection if available, otherwise get one from pool
+                if connection is None:
+                    connection = self._get_pooled_connection(session_id=session_id)
                 cursor = connection.cursor()
                 try:
                     if params is not None:
@@ -1525,8 +1528,11 @@ class IRISExecutor:
                         cursor.execute(sql)
                     return cursor
                 except Exception as e:
-                    # Don't close cursor here, let the caller handle it
-                    # But if execution failed, we might need to cleanup
+                    if cursor:
+                        try:
+                            cursor.close()
+                        except Exception:
+                            pass
                     raise e
         except Exception as e:
             result = self.ddl_handler.handle(sql, e)
@@ -3672,7 +3678,12 @@ class IRISExecutor:
                             f"Executing intermediate statement: {stmt[:80]}...",
                             session_id=session_id,
                         )
-                        self._safe_execute(stmt, None, is_embedded=True, session_id=session_id)
+                        tmp_result = self._safe_execute(stmt, None, is_embedded=True, session_id=session_id)
+                        if tmp_result and hasattr(tmp_result, "close"):
+                            try:
+                                tmp_result.close()
+                            except Exception:
+                                pass
 
                     # Execute last statement and capture results
                     last_stmt = statements[-1]
@@ -4257,6 +4268,10 @@ class IRISExecutor:
             optimized_sql_upper = sql_upper
             optimized_sql_upper_check = sql_upper_check
             optimized_sql_upper_stripped = sql_upper.strip()
+
+            conn = None
+            cursor = None
+
             try:
                 # PROFILING: Track detailed timing
                 t_start_total = time.perf_counter()
@@ -4462,11 +4477,16 @@ class IRISExecutor:
 
                 # Execute all statements except the last
                 for stmt in statements[:-1]:
-                    self._safe_execute(stmt, None, is_embedded=False, session_id=session_id)
+                    tmp_cursor = self._safe_execute(stmt, None, is_embedded=False, session_id=session_id, connection=conn)
+                    if tmp_cursor:
+                        try:
+                            tmp_cursor.close()
+                        except Exception:
+                            pass
 
                 # Execute last statement and capture cursor
                 cursor = self._safe_execute(
-                    statements[-1], optimized_params, is_embedded=False, session_id=session_id
+                    statements[-1], optimized_params, is_embedded=False, session_id=session_id, connection=conn
                 )
 
                 # RETURNING emulation
@@ -4617,10 +4637,6 @@ class IRISExecutor:
                             session_id=session_id,
                         )
 
-                cursor.close()
-                # Return connection to pool instead of closing
-                self._return_connection(conn, session_id=session_id)
-
                 # PROFILING: Fetch complete
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
 
@@ -4756,6 +4772,15 @@ class IRISExecutor:
                     "execution_time_ms": 0,
                 }
 
+            finally:
+                if cursor and hasattr(cursor, "close"):
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if conn:
+                    self._return_connection(conn, session_id=session_id)
+
         # Execute in thread pool to avoid blocking event loop
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._get_executor(session_id), _sync_external_execute, sql, params, session_id)
@@ -4776,9 +4801,33 @@ class IRISExecutor:
         # The _execute_many_embedded_async() method will use iris.sql.exec() in a loop
         return None
 
+    def _is_connection_alive(self, conn) -> bool:
+        """Check if an IRIS connection is still alive."""
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            return True
+        except Exception:
+            return False
+
     def _get_pooled_connection(self, session_id: str | None = None):
         if session_id and session_id in self.session_connections:
-            return self.session_connections[session_id]
+            conn = self.session_connections[session_id]
+            # Verify session connection is still alive
+            if self._is_connection_alive(conn):
+                return conn
+            else:
+                logger.warning(
+                    "Session connection died, removing and creating new one", session_id=session_id
+                )
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                del self.session_connections[session_id]
+                with self._connection_lock:
+                    self._active_count -= 1
 
         iris = self._import_iris()
         if not iris:
@@ -4809,11 +4858,9 @@ class IRISExecutor:
             if self._connection_pool:
                 conn = self._connection_pool.pop()
                 # Feature 018: Add simple health check for pooled connections
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT 1")
-                    cursor.close()
-                except Exception:
+                if self._is_connection_alive(conn):
+                    return conn
+                else:
                     logger.warning("Pooled connection failed health check, creating new one")
                     try:
                         conn.close()
