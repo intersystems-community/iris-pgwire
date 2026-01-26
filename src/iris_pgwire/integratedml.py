@@ -372,37 +372,47 @@ def enhance_iris_executor_with_integratedml(iris_executor):
     original_execute_query = iris_executor.execute_query
 
     async def execute_query_with_ml_support(sql: str, params=None, session_id=None):
-        """Enhanced execute_query with IntegratedML support
-
-        IMPORTANT: Must match original execute_query signature exactly:
-        - params (not parameters) for vector query optimizer compatibility
-        - session_id for transaction support
-        """
+        """Enhanced execute_query with IntegratedML support"""
+        # Feature 036 tactical fix: capture closure variables locally
+        c_sql = sql
+        c_params = params
+        c_session_id = session_id
 
         # Check if this is an IntegratedML command
-        if parser.is_integratedml_command(sql):
+        if parser.is_integratedml_command(c_sql):
             logger.info("Detected IntegratedML command, routing to ML executor")
             try:
-                return await ml_executor.execute_integratedml_command(sql)
+                return await ml_executor.execute_integratedml_command(c_sql)
             except Exception as e:
                 logger.warning("IntegratedML execution failed, trying fallback", error=str(e))
                 # Try to pass through to IRIS directly as fallback
-                return await original_execute_query(sql, params=params, session_id=session_id)
+                return await original_execute_query(c_sql, params=c_params, session_id=c_session_id)
 
         # Check for IRIS system functions
-        if any(func in sql.upper() for func in ["%SYSTEM.ML."]):
+        if any(func in c_sql.upper() for func in ["%SYSTEM.ML."]):
             logger.info("Detected IRIS system functions")
             try:
-                return await ml_executor.handle_system_function_query(sql)
+                return await ml_executor.handle_system_function_query(c_sql)
             except Exception as e:
                 logger.warning("System function handling failed, trying fallback", error=str(e))
                 # Try to pass through to IRIS directly as fallback
-                return await original_execute_query(sql, params=params, session_id=session_id)
+                return await original_execute_query(c_sql, params=c_params, session_id=c_session_id)
 
         # Fall back to original execution (with vector optimizer support)
-        return await original_execute_query(sql, params=params, session_id=session_id)
+        return await original_execute_query(c_sql, params=c_params, session_id=c_session_id)
 
-    # Replace the method
+    # Replace the methods
     iris_executor.execute_query = execute_query_with_ml_support
+
+    if hasattr(iris_executor, "execute_many"):
+        original_execute_many = iris_executor.execute_many
+
+        async def execute_many_with_ml_support(sql: str, params_list: Any, session_id=None):
+            """Enhanced execute_many with potential ML support (currently pass-through)"""
+            # IntegratedML doesn't currently support batch execution via this interface
+            # so we always pass through to the original executor
+            return await original_execute_many(sql, params_list, session_id=session_id)
+
+        iris_executor.execute_many = execute_many_with_ml_support
 
     return iris_executor

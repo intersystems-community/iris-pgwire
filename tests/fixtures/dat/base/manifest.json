@@ -1,0 +1,31 @@
+{
+  "fixture_id": "base",
+  "version": "1.0.0",
+  "schema_version": "1.0",
+  "description": "Base schema + rows from examples/superset-iris-healthcare and benchmarks",
+  "created_at": "2026-01-25T21:30:39.211538+00:00Z",
+  "iris_version": "unknown",
+  "namespace": "FIXTURE_6559B0CF",
+  "dat_file": "IRIS.DAT",
+  "checksum": "sha256:9f07629e631ba3473a33b350b81dc9bbdd79d29b27888055cbe8fb71648651c2",
+  "tables": [
+    {
+      "name": "SQLUser.LabResults",
+      "row_count": 10
+    },
+    {
+      "name": "SQLUser.Patients",
+      "row_count": 10
+    },
+    {
+      "name": "SQLUser.benchmark_vectors",
+      "row_count": 10
+    }
+  ],
+  "features": {
+    "patients_rows": 10,
+    "labresults_rows": 10,
+    "benchmark_vector_rows": 10
+  },
+  "known_queries": null
+}

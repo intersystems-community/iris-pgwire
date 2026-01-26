@@ -103,6 +103,38 @@ SELECT * FROM INFORMATION_SCHEMA.TABLES;
 
 ---
 
+## 🟡 Parameterized LIMIT/OFFSET Returns Empty Column Metadata
+
+**Severity**: Medium
+**Affects**: PostgreSQL clients that bind LIMIT/OFFSET parameters
+
+### Issue Description
+
+When using parameterized `LIMIT`/`OFFSET` (e.g., `LIMIT $1`) via certain clients (reported with postgres.js), the server returns empty column metadata. The row count is correct, but row objects are empty because `columns` is `[]`.
+
+### Reproduction
+
+```sql
+-- Works: literal LIMIT
+SELECT "id", "name" FROM "workflow_folder" LIMIT 1;
+
+-- Fails: parameterized LIMIT
+SELECT "id", "name" FROM "workflow_folder" LIMIT $1;
+```
+
+### Impact
+
+- Drizzle ORM parameterizes `.limit()` by default, breaking result mapping
+- Affects clients that rely on column metadata to build row objects
+
+### Workaround
+
+Inline `LIMIT`/`OFFSET` values instead of parameterizing them, or use raw queries with literal limits.
+
+**Reference**: See [LIMIT Parameter Bug Report](docs/LIMIT_PARAMETER_BUG.md) for details.
+
+---
+
 ## 🟡 HNSW Index Performance Requirements
 
 **Severity**: Medium

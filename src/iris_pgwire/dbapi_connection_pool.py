@@ -102,70 +102,91 @@ class IRISConnectionPool:
         """
         start_time = time.perf_counter()
 
-        try:
-            # Try to get existing connection from pool (non-blocking first)
+        while True:
             try:
-                conn_wrapper = self._pool.get_nowait()
-                logger.debug(f"Acquired existing connection: {conn_wrapper.connection_id}")
+                # Try to get existing connection from pool (non-blocking first)
+                try:
+                    conn_wrapper = self._pool.get_nowait()
+                    logger.debug(f"Acquired existing connection: {conn_wrapper.connection_id}")
 
-                # Check if connection needs recycling
-                if conn_wrapper.should_recycle():
-                    logger.info(
-                        "Connection recycling triggered",
-                        extra={
-                            "connection_id": conn_wrapper.connection_id,
-                            "age_seconds": conn_wrapper.age_seconds(),
-                        },
+                    # Check if connection needs recycling
+                    if conn_wrapper.should_recycle():
+                        logger.info(
+                            "Connection recycling triggered",
+                            extra={
+                                "connection_id": conn_wrapper.connection_id,
+                                "age_seconds": conn_wrapper.age_seconds(),
+                            },
+                        )
+                        await self._recycle_connection(conn_wrapper)
+                        # Continue loop to get another connection
+                        continue
+
+                    # OPTIMIZATION: Check health ONLY if idle for more than 10 seconds
+                    # This avoids the "SELECT 1" overhead on every acquisition under high load
+                    idle_seconds = 0
+                    if conn_wrapper.last_used_at:
+                        idle_seconds = (datetime.now(UTC) - conn_wrapper.last_used_at).total_seconds()
+                    
+                    if idle_seconds > 10.0:
+                        logger.debug(f"Connection {conn_wrapper.connection_id} idle for {idle_seconds:.1f}s, checking health")
+                        is_healthy = await self._check_connection_health(conn_wrapper)
+                        if not is_healthy:
+                            logger.warning(f"Removing unhealthy connection {conn_wrapper.connection_id} after idle period")
+                            await self._remove_connection(conn_wrapper)
+                            continue
+
+                    conn_wrapper.mark_in_use()
+                    self._record_acquisition(start_time)
+                    return conn_wrapper
+
+                except asyncio.QueueEmpty:
+                    # Pool empty - check if we can create new connection
+                    async with self._lock:
+                        if len(self._connections) < self.config.total_connections():
+                            # Create new connection
+                            conn_wrapper = await self._create_connection()
+                            conn_wrapper.mark_in_use()
+                            self._record_acquisition(start_time)
+                            return conn_wrapper
+
+                    # At capacity - wait for available connection
+                    logger.debug("Pool at capacity, waiting for available connection")
+                    conn_wrapper = await asyncio.wait_for(
+                        self._pool.get(), timeout=self.config.pool_timeout
                     )
-                    await self._recycle_connection(conn_wrapper)
-                    # Get new connection after recycling
-                    conn_wrapper = await self._create_connection()
 
-                conn_wrapper.mark_in_use()
-                self._record_acquisition(start_time)
-                return conn_wrapper
+                    # Check for recycling
+                    if conn_wrapper.should_recycle():
+                        await self._recycle_connection(conn_wrapper)
+                        # Continue loop to get/create another connection
+                        continue
+                    
+                    # Also check health for connections that just came out of waiting
+                    is_healthy = await self._check_connection_health(conn_wrapper)
+                    if not is_healthy:
+                        await self._remove_connection(conn_wrapper)
+                        continue
 
-            except asyncio.QueueEmpty:
-                # Pool empty - check if we can create new connection
-                async with self._lock:
-                    if len(self._connections) < self.config.total_connections():
-                        # Create new connection
-                        conn_wrapper = await self._create_connection()
-                        conn_wrapper.mark_in_use()
-                        self._record_acquisition(start_time)
-                        return conn_wrapper
+                    conn_wrapper.mark_in_use()
+                    self._record_acquisition(start_time)
+                    return conn_wrapper
 
-                # At capacity - wait for available connection
-                logger.debug("Pool at capacity, waiting for available connection")
-                conn_wrapper = await asyncio.wait_for(
-                    self._pool.get(), timeout=self.config.pool_timeout
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error(
+                    f"Connection acquisition timeout after {self.config.pool_timeout}s",
+                    extra={
+                        "pool_size": len(self._connections),
+                        "in_use": self._connections_in_use(),
+                    },
                 )
-
-                # Check for recycling
-                if conn_wrapper.should_recycle():
-                    await self._recycle_connection(conn_wrapper)
-                    conn_wrapper = await self._create_connection()
-
-                conn_wrapper.mark_in_use()
-                self._record_acquisition(start_time)
-                return conn_wrapper
-
-        except TimeoutError:
-            logger.error(
-                f"Connection acquisition timeout after {self.config.pool_timeout}s",
-                extra={
-                    "pool_size": len(self._connections),
-                    "in_use": self._connections_in_use(),
-                },
-            )
-            raise
-
-        except Exception as e:
-            logger.error(f"Connection acquisition failed: {e}")
-            self._total_failed += 1
-            self._is_healthy = False
-            self._last_error = str(e)
-            raise ConnectionError(f"Failed to acquire connection: {e}") from e
+                raise
+            except Exception as e:
+                logger.error(f"Connection acquisition failed: {e}")
+                self._total_failed += 1
+                self._is_healthy = False
+                self._last_error = str(e)
+                raise ConnectionError(f"Failed to acquire connection: {e}") from e
 
     async def release(self, conn_wrapper: DBAPIConnection) -> None:
         """
@@ -180,10 +201,12 @@ class IRISConnectionPool:
         if conn_wrapper.connection_id not in self._connections:
             raise ValueError(f"Connection {conn_wrapper.connection_id} not from this pool")
 
-        # Check health before returning to pool
-        is_healthy = await self._check_connection_health(conn_wrapper)
-
-        if not is_healthy:
+        # CRITICAL OPTIMIZATION: Do NOT check health on every release
+        # This was causing massive overhead and flakiness under load.
+        # Health is now checked on acquisition if idle for >10s.
+        
+        # Only remove if explicitly marked as unhealthy during its use
+        if not conn_wrapper.is_healthy:
             logger.warning(
                 "Unhealthy connection removed from pool",
                 extra={"connection_id": conn_wrapper.connection_id},

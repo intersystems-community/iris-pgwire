@@ -40,6 +40,8 @@ class DBAPIExecutor:
         await executor.close()
     """
 
+    backend_type: str = "dbapi"
+
     def __init__(self, config: BackendConfig):
         """
         Initialize DBAPI executor with connection pool.
@@ -93,10 +95,12 @@ class DBAPIExecutor:
             def execute_in_thread():
                 cursor = conn_wrapper.connection.cursor()  # type: ignore
                 try:
+                    # Strip trailing semicolon for IRIS compatibility
+                    clean_sql = sql.strip().rstrip(";")
                     if params:
-                        cursor.execute(sql, params)
+                        cursor.execute(clean_sql, params)
                     else:
-                        cursor.execute(sql)
+                        cursor.execute(clean_sql)
 
                     # Fetch results if available
                     if cursor.description:
@@ -129,11 +133,139 @@ class DBAPIExecutor:
             return results
 
         except Exception as e:
-            logger.error(f"Query execution failed: {e}", extra={"sql": sql[:200]})
+            error_str = str(e).lower()
+            # Mark connection as unhealthy for common connection errors
+            connection_lost = any(msg in error_str for msg in [
+                "connection lost",
+                "not connected",
+                "communication link failure",
+                "socket error",
+                "operationalerror",
+                "interfaceerror"
+            ])
+            
+            logger.error(f"Query execution failed: {e}", extra={
+                "sql": sql[:200],
+                "connection_lost": connection_lost
+            })
             self._total_errors += 1
 
             if conn_wrapper:
-                conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
+                if connection_lost:
+                    conn_wrapper.mark_failed(str(e))
+                else:
+                    conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
+
+            raise
+
+        finally:
+            # Release connection back to pool
+            if conn_wrapper:
+                await self.pool.release(conn_wrapper)
+
+    async def execute_many(
+        self, sql: str, params_list: list[tuple] | list[list]
+    ) -> dict[str, Any]:
+        """
+        Execute SQL with multiple parameter sets for batch operations.
+
+        Args:
+            sql: SQL query string (usually INSERT)
+            params_list: List of parameter tuples/lists
+
+        Returns:
+            Dict with execution results (rows_affected, execution_time_ms, etc.)
+        """
+        start_time = time.perf_counter()
+        conn_wrapper = None
+
+        try:
+            # Acquire connection from pool
+            conn_wrapper = await self.pool.acquire()
+
+            # Execute batch in thread pool
+            def execute_batch_in_thread():
+                cursor = conn_wrapper.connection.cursor()  # type: ignore
+                try:
+                    # Strip trailing semicolon for IRIS compatibility
+                    clean_sql = sql.strip().rstrip(";")
+
+                    # Pre-process parameters (e.g. convert lists to IRIS vector strings)
+                    final_params_list = []
+                    for p_set in params_list:
+                        processed_params = [
+                            "[" + ",".join(map(str, p)) + "]" if isinstance(p, list) else p
+                            for p in p_set
+                        ]
+                        final_params_list.append(tuple(processed_params))
+
+                    logger.debug(
+                        "Executing executemany()",
+                        extra={
+                            "sql": clean_sql[:100],
+                            "batch_size": len(final_params_list),
+                        },
+                    )
+
+                    cursor.executemany(clean_sql, final_params_list)
+                    rows_affected = (
+                        cursor.rowcount if hasattr(cursor, "rowcount") else len(params_list)
+                    )
+                    return rows_affected
+                finally:
+                    cursor.close()
+
+            rows_affected = await asyncio.to_thread(execute_batch_in_thread)
+
+            # Record metrics
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            self._total_queries += 1  # Count batch as one "query" for high-level metrics
+            self._total_query_time_ms += elapsed_ms
+
+            conn_wrapper.record_query_execution(acquisition_time_ms=elapsed_ms, success=True)
+
+            logger.info(
+                "Batch executed successfully",
+                extra={
+                    "sql": sql[:100],
+                    "rows_affected": rows_affected,
+                    "elapsed_ms": round(elapsed_ms, 2),
+                },
+            )
+
+            return {
+                "success": True,
+                "rows_affected": rows_affected,
+                "execution_time_ms": elapsed_ms,
+                "batch_size": len(params_list),
+                "rows": [],
+                "columns": [],
+                "_execution_path": "dbapi_executemany",
+            }
+
+        except Exception as e:
+            error_str = str(e).lower()
+            # Mark connection as unhealthy for common connection errors
+            connection_lost = any(msg in error_str for msg in [
+                "connection lost",
+                "not connected",
+                "communication link failure",
+                "socket error",
+                "operationalerror",
+                "interfaceerror"
+            ])
+
+            logger.error(f"Batch execution failed: {e}", extra={
+                "sql": sql[:200],
+                "connection_lost": connection_lost
+            })
+            self._total_errors += 1
+
+            if conn_wrapper:
+                if connection_lost:
+                    conn_wrapper.mark_failed(str(e))
+                else:
+                    conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
 
             raise
 

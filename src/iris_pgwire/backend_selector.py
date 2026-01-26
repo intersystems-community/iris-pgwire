@@ -13,7 +13,7 @@ Contract: contracts/backend-selector-contract.md
 """
 
 import logging
-from typing import Protocol
+from typing import Any, Protocol
 
 from iris_pgwire.models.backend_config import BackendConfig, BackendType
 
@@ -25,11 +25,15 @@ class Executor(Protocol):
 
     backend_type: str
 
-    async def execute_query(self, sql: str, params=None):
+    async def execute_query(self, sql: str, params: Any = None) -> Any:
         """Execute SQL query."""
         ...
 
-    async def close(self):
+    async def execute_many(self, sql: str, params_list: Any) -> Any:
+        """Execute SQL with multiple parameter sets."""
+        ...
+
+    async def close(self) -> None:
         """Close executor resources."""
         ...
 
@@ -197,23 +201,36 @@ class BackendSelector:
             EmbeddedExecutor instance
 
         Raises:
-            ImportError: If IrisExecutor module not available
+            ImportError: If IRISExecutor module not available
         """
         try:
-            from iris_pgwire.iris_executor import IrisExecutor
+            from iris_pgwire.iris_executor import IRISExecutor
         except ImportError as e:
-            logger.error(f"Failed to import IrisExecutor: {e}")
+            logger.error(f"Failed to import IRISExecutor: {e}")
             raise ImportError(
-                "IrisExecutor not available. Ensure running inside IRIS process via irispython."
+                "IRISExecutor not available. Ensure running inside IRIS process via irispython."
             ) from e
 
-        executor = IrisExecutor()
-        executor.backend_type = "embedded"  # Set backend_type attribute
+        # Map BackendConfig keys to IRISExecutor legacy iris_config format
+        iris_config = {
+            "host": config.iris_hostname,
+            "port": config.iris_port,
+            "username": config.iris_username,
+            "password": config.iris_password,
+            "namespace": config.iris_namespace,
+        }
+        
+        executor = IRISExecutor(
+            iris_config,
+            connection_pool_size=config.pool_size,
+            connection_pool_timeout=float(config.pool_timeout)
+        )
+        # backend_type is now set in IRISExecutor.__init__
         logger.info(
             "Embedded executor created",
             extra={
-                "executor_type": "IrisExecutor",
-                "backend_type": "embedded",
+                "executor_type": "IRISExecutor",
+                "backend_type": executor.backend_type,
             },
         )
         return executor

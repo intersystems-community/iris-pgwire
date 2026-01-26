@@ -87,6 +87,8 @@ class IRISExecutor:
     SQLAlchemy implementation.
     """
 
+    backend_type: str = "embedded"
+
     def __init__(
         self,
         iris_config: dict[str, Any],
@@ -106,7 +108,9 @@ class IRISExecutor:
         self.connection = None
         self.session_connections = {}
         self.session_executors = {}  # Thread affinity: one executor per session
+        self.session_namespaces = {}  # Feature 034: Per-session IRIS namespace
         self.embedded_mode = False
+        self.backend_type = "embedded"  # Feature 018: Backend identification
         self.vector_support = False
 
         # Thread pool for async IRIS operations (constitutional requirement)
@@ -195,6 +199,18 @@ class IRISExecutor:
             print("❌ IRIS Python driver not available", flush=True)
             logger.info("IRIS Python driver not available")
             return False
+
+    def set_session_namespace(self, session_id: str, namespace: str):
+        """Set the IRIS namespace for a specific session (Feature 034)."""
+        with self._connection_lock:
+            self.session_namespaces[session_id] = namespace
+            logger.info("Session namespace registered", session_id=session_id, namespace=namespace)
+
+    def _get_session_namespace(self, session_id: str | None) -> str:
+        """Get the effective namespace for a session."""
+        if session_id and session_id in self.session_namespaces:
+            return self.session_namespaces[session_id]
+        return self.iris_config.get("namespace", "USER")
 
     def _get_executor(self, session_id: str | None = None) -> concurrent.futures.Executor:
         """
@@ -1043,10 +1059,43 @@ class IRISExecutor:
         if self.embedded_mode:
             return await self._execute_many_embedded_async(sql, params_list, session_id)
         else:
-            # For external mode, we don't have a robust string inlining fallback yet
-            # that doesn't depend on the 'iris' module.
-            # We should probably implement one or just re-raise the native error.
-            raise RuntimeError("String inlining fallback not supported in external mode")
+            # NEW: Implement robust fallback for external mode
+            # This executes each INSERT individually in the sequence
+            logger.warning(
+                "Using sequential fallback for external batch operation", 
+                session_id=session_id,
+                batch_size=len(params_list)
+            )
+            rows_affected = 0
+            for params in params_list:
+                await self.execute_query(sql, params, session_id)
+                rows_affected += 1
+            
+            return {
+                "success": True,
+                "rows_affected": rows_affected,
+                "_execution_path": "execute_many_sequential_fallback",
+            }
+
+    async def close(self) -> None:
+        """Close executor and resources. Part of Executor protocol."""
+        if self.thread_pool:
+            self.thread_pool.shutdown(wait=True)
+        
+        # Close all active connections
+        for conn in self.session_connections.values():
+            try:
+                conn.close()
+            except:
+                pass
+        self.session_connections.clear()
+        
+        if self.connection:
+            try:
+                self.connection.close()
+            except:
+                pass
+            self.connection = None
 
     def _extract_table_name(self, sql: str) -> str | None:
         """Extract table name from INSERT statement."""
@@ -1097,6 +1146,10 @@ class IRISExecutor:
             )
 
             try:
+                # Ensure correct namespace context in background thread (Feature 022)
+                if hasattr(iris, "system") and hasattr(iris.system, "Process"):
+                    iris.system.Process.SetNamespace(self.iris_config.get("namespace", "USER"))
+
                 # Feature 022: Apply PostgreSQL→IRIS transaction verb translation
                 transaction_translated_sql = (
                     self.transaction_translator.translate_transaction_command(sql)
@@ -1919,7 +1972,21 @@ class IRISExecutor:
                 }
 
             if hasattr(iris, "system") and hasattr(iris.system, "Process"):
-                iris.system.Process.SetNamespace(self.iris_config.get("namespace", "USER"))
+                effective_ns = self._get_session_namespace(session_id)
+                # Feature 034: Add retry for SetNamespace to handle environment timing issues
+                for attempt in range(3):
+                    try:
+                        # Try to switch to %SYS first to "reset" the namespace context if it's stuck
+                        if attempt > 0:
+                            iris.system.Process.SetNamespace("%SYS")
+                        iris.system.Process.SetNamespace(effective_ns)
+                        break
+                    except Exception as e:
+                        if "<NAMESPACE>" in str(e) and attempt < 2:
+                            logger.warning("Namespace not ready, retrying...", namespace=effective_ns, attempt=attempt+1)
+                            time.sleep(0.5)
+                            continue
+                        raise
 
             # Log entry to embedded execution path
 
@@ -4741,6 +4808,20 @@ class IRISExecutor:
 
             if self._connection_pool:
                 conn = self._connection_pool.pop()
+                # Feature 018: Add simple health check for pooled connections
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.close()
+                except Exception:
+                    logger.warning("Pooled connection failed health check, creating new one")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    self._active_count -= 1
+                    # Recurse once to get another connection or create new
+                    return self._get_pooled_connection(session_id)
             else:
                 conn = iris.connect(
                     hostname=self.iris_config["host"],
@@ -4772,12 +4853,36 @@ class IRISExecutor:
                 self._active_count -= 1
             self._connection_lock.notify()
 
+    def close(self):
+        """Shutdown connection pool and executors."""
+        with self._connection_lock:
+            # Shutdown thread pool
+            self.thread_pool.shutdown(wait=False)
+
+            # Shutdown session executors
+            for executor in self.session_executors.values():
+                executor.shutdown(wait=False)
+            self.session_executors.clear()
+
+            # Close pooled connections
+            for conn in self._connection_pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._connection_pool.clear()
+            self._active_count = 0
+
     def close_session(self, session_id: str):
         with self._connection_lock:
             # Shutdown and remove session executor for thread affinity
             executor = self.session_executors.pop(session_id, None)
             if executor:
                 executor.shutdown(wait=False)
+
+            # Feature 034: Clean up session namespace
+            if session_id in self.session_namespaces:
+                del self.session_namespaces[session_id]
 
             conn = self.session_connections.pop(session_id, None)
             if conn:

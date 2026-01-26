@@ -45,8 +45,10 @@ importlib.reload(iris_pgwire.bulk_executor)
 importlib.reload(iris_pgwire.vector_optimizer)
 
 # NOW import after reload
+from .backend_selector import BackendSelector
 from .integratedml import enhance_iris_executor_with_integratedml
 from .iris_executor import IRISExecutor
+from .models.backend_config import BackendConfig, BackendType
 from .protocol import PGWireProtocol
 
 
@@ -75,6 +77,7 @@ class PGWireServer:
         connection_pool_timeout: float = 5.0,
         enable_query_cache: bool = True,
         query_cache_size: int = 1000,
+        backend_type: str | None = None,
     ):
         self.host = host
         self.port = port
@@ -99,15 +102,27 @@ class PGWireServer:
         # P4: Connection registry for query cancellation
         self.connection_registry = {}  # backend_pid -> (protocol, backend_secret)
 
-        # Initialize IRIS executor with server reference for P4 cancellation
-        self.iris_executor = IRISExecutor(
-            self.iris_config,
-            server=self,
-            connection_pool_size=connection_pool_size,
-            connection_pool_timeout=connection_pool_timeout,
-            enable_query_cache=enable_query_cache,
-            query_cache_size=query_cache_size,
+        # Feature 018: Use BackendSelector to initialize IRIS executor
+        # This supports both native Embedded and external DBAPI backends
+        selector = BackendSelector()
+        
+        # Load backend type from env if not provided
+        if not backend_type:
+            backend_type = os.getenv("PGWIRE_BACKEND_TYPE", "embedded")
+            
+        config = BackendConfig(
+            backend_type=BackendType(backend_type.lower()),
+            iris_hostname=iris_host,
+            iris_port=iris_port,
+            iris_username=iris_username,
+            iris_password=iris_password,
+            iris_namespace=iris_namespace,
+            pool_size=connection_pool_size,
+            pool_timeout=int(connection_pool_timeout),
         )
+        
+        # Select appropriate executor (DBAPIExecutor or IRISExecutor)
+        self.iris_executor = selector.select_backend(config)
 
         # Enhance with IntegratedML support
         self.iris_executor = enhance_iris_executor_with_integratedml(self.iris_executor)
@@ -116,6 +131,7 @@ class PGWireServer:
             "PGWire server initialized",
             host=host,
             port=port,
+            backend_type=self.iris_executor.backend_type,
             iris_host=iris_host,
             iris_port=iris_port,
             iris_namespace=iris_namespace,
@@ -212,7 +228,7 @@ class PGWireServer:
             logger.error("Connection error", connection_id=connection_id, error=str(e))
         finally:
             # P4: Unregister connection from cancellation registry
-            if "protocol" in locals():
+            if "protocol" in locals() and protocol is not None:
                 self.unregister_connection(protocol)
 
             self.active_connections.discard(writer)
@@ -266,6 +282,13 @@ class PGWireServer:
 
 async def main():
     """Main entry point for the PGWire server"""
+    import sys
+    if 'iris' in sys.modules:
+        print(f"DEBUG: iris module already in sys.modules: {sys.modules['iris']}", flush=True)
+        print(f"DEBUG: iris module dir: {dir(sys.modules['iris'])}", flush=True)
+    else:
+        print("DEBUG: iris module NOT in sys.modules at start of main", flush=True)
+        
     # Read configuration from environment
     host = os.getenv("PGWIRE_HOST", "0.0.0.0")
     port = int(os.getenv("PGWIRE_PORT", "5432"))

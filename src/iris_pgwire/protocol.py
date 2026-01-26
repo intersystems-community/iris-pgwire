@@ -698,6 +698,12 @@ class PGWireProtocol:
                 connection_id=self.connection_id,
                 params=params,
             )
+
+            # Feature 034: Register session namespace with executor
+            requested_db = params.get("database")
+            if requested_db:
+                self.iris_executor.set_session_namespace(self.connection_id, requested_db)
+
             logger.debug("Startup message parsed", connection_id=self.connection_id, params=params)
 
     async def send_authentication_ok(self):
@@ -2869,6 +2875,66 @@ class PGWireProtocol:
                 "ERROR", "42P02", "undefined_parameter", f"Bind failed: {e}"
             )
 
+    def _build_metadata_dummy_params(self, query: str, param_count: int) -> list[Any]:
+        if param_count <= 0:
+            return []
+
+        dummy_params = [None] * param_count
+        limit_indexes, offset_indexes = self._find_limit_offset_param_indexes(query)
+
+        for idx in limit_indexes:
+            if 1 <= idx <= param_count:
+                dummy_params[idx - 1] = 1
+
+        for idx in offset_indexes:
+            if 1 <= idx <= param_count:
+                dummy_params[idx - 1] = 0
+
+        return dummy_params
+
+    def _find_limit_offset_param_indexes(self, query: str) -> tuple[set[int], set[int]]:
+        def placeholder_index_for_pos(pos: int) -> int:
+            return query[:pos].count("?") + 1
+
+        limit_indexes: set[int] = set()
+        offset_indexes: set[int] = set()
+
+        for match in re.finditer(r"\bLIMIT\s+\?\s+OFFSET\s+\?", query, re.IGNORECASE):
+            local = match.group(0)
+            first_q = local.find("?")
+            second_q = local.find("?", first_q + 1)
+            if first_q != -1:
+                limit_indexes.add(placeholder_index_for_pos(match.start() + first_q))
+            if second_q != -1:
+                offset_indexes.add(placeholder_index_for_pos(match.start() + second_q))
+
+        for match in re.finditer(r"\bLIMIT\s+\?\s*,\s*\?", query, re.IGNORECASE):
+            local = match.group(0)
+            first_q = local.find("?")
+            second_q = local.find("?", first_q + 1)
+            if first_q != -1:
+                offset_indexes.add(placeholder_index_for_pos(match.start() + first_q))
+            if second_q != -1:
+                limit_indexes.add(placeholder_index_for_pos(match.start() + second_q))
+
+        for match in re.finditer(r"\bLIMIT\s+\?", query, re.IGNORECASE):
+            local = match.group(0)
+            first_q = local.find("?")
+            if first_q != -1:
+                idx = placeholder_index_for_pos(match.start() + first_q)
+                if idx not in offset_indexes:
+                    limit_indexes.add(idx)
+
+        for match in re.finditer(r"\bOFFSET\s+\?", query, re.IGNORECASE):
+            local = match.group(0)
+            first_q = local.find("?")
+            if first_q != -1:
+                idx = placeholder_index_for_pos(match.start() + first_q)
+                if idx not in limit_indexes:
+                    offset_indexes.add(idx)
+
+        return limit_indexes, offset_indexes
+
     async def handle_describe_message(self, body: bytes):
         """
         P2: Handle Describe message for statement/portal description
@@ -3016,7 +3082,13 @@ class PGWireProtocol:
                             if isinstance(stmt.get("param_types"), int)
                             else len(stmt.get("param_types", []))
                         )
-                        dummy_params = [None] * param_count  # Use NULL for all parameters
+                        if param_count == 0 and "?" in query:
+                            param_count = query.count("?")
+
+                        dummy_params = self._build_metadata_dummy_params(
+                            query=query,
+                            param_count=param_count,
+                        )
 
                         logger.info(
                             "🔍 Describe Statement: Using dummy parameters for metadata",
