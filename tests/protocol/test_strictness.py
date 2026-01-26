@@ -53,8 +53,8 @@ async def test_reproduce_join_field_count_mismatch(iris_config):
     mock_iris = MagicMock()
     executor = IRISExecutor(mock_iris, iris_config)
 
-    def side_effect(sql, *args):
-        sql_upper = sql.upper()
+    def side_effect(captured_sql, *args):
+        sql_upper = captured_sql.upper()
         if "INFORMATION_SCHEMA.COLUMNS" in sql_upper:
             return [
                 ("user", "id", "INTEGER"),

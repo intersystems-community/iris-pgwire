@@ -9,74 +9,15 @@ Constitutional Requirements:
 - No Mocks: Tests against actual IRIS database and PGWire protocol
 """
 
+import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 
-@pytest.fixture(scope="session")
-def iris_container():
-    """
-    Verify IRIS container is running and accessible.
-
-    Returns:
-        dict: Connection parameters for IRIS database
-    """
-    # IRIS connection parameters from kg-ticket-resolver setup
-    params = {
-        "host": "localhost",
-        "port": 1975,
-        "namespace": "USER",
-        "username": "_SYSTEM",
-        "password": "SYS",
-    }
-
-    # TODO: Add health check for IRIS container
-    # For now, assume IRIS is running (manual prerequisite)
-
-    return params
-
-
-@pytest.fixture(scope="session")
-def pgwire_server(iris_container):
-    """
-    Ensure PGWire server is running and ready to accept connections.
-
-    Args:
-        iris_container: IRIS connection parameters
-
-    Returns:
-        dict: PGWire server connection parameters
-    """
-    params = {"host": "localhost", "port": 5432, "user": "test_user", "dbname": "USER"}
-
-    # TODO: Add PGWire server startup and health check
-    # For now, assume PGWire is running (manual prerequisite)
-
-    # Wait for port to be ready (simple check)
-    import socket
-
-    max_retries = 10
-    for i in range(max_retries):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            result = sock.connect_ex((params["host"], params["port"]))
-            sock.close()
-            if result == 0:
-                break
-        except Exception:
-            pass
-        if i < max_retries - 1:
-            time.sleep(1)
-
-    return params
-
-
 @pytest.fixture
-def psql_command(pgwire_server):
+def psql_command(pgwire_connection_params, pgwire_server):
     """
     Fixture for executing psql commands with stdin/stdout redirection.
 
@@ -115,13 +56,13 @@ def psql_command(pgwire_server):
         cmd = [
             "psql",
             "-h",
-            pgwire_server["host"],
+            pgwire_connection_params["host"],
             "-p",
-            str(pgwire_server["port"]),
+            str(pgwire_connection_params["port"]),
             "-U",
-            pgwire_server["user"],
+            pgwire_connection_params["user"],
             "-d",
-            pgwire_server["dbname"],
+            pgwire_connection_params["dbname"],
             "-c",
             sql,
         ]
@@ -133,6 +74,11 @@ def psql_command(pgwire_server):
                 stdin_data = f.read()
 
         # Execute command
+        env = None
+        if pgwire_connection_params.get("password"):
+            env = os.environ.copy()
+            env["PGPASSWORD"] = str(pgwire_connection_params["password"])
+
         try:
             result = subprocess.run(
                 cmd,
@@ -140,6 +86,7 @@ def psql_command(pgwire_server):
                 capture_output=True,
                 text=False if stdin_file else True,
                 timeout=30,
+                env=env,
             )
 
             # Handle stdout redirection

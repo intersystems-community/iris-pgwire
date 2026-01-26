@@ -17,11 +17,18 @@ import socket
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import psycopg
 import pytest
 import structlog
+
+import sys
+import os
+import iris_pgwire
+print(f"DIAGNOSTIC: sys.path = {sys.path}", file=sys.stderr)
+print(f"DIAGNOSTIC: iris_pgwire found at {iris_pgwire.__file__}", file=sys.stderr)
 
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
@@ -159,6 +166,19 @@ def wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
     return False
 
 
+def find_free_port(start: int, end: int) -> int:
+    """Find a free TCP port in the given range."""
+    for port in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free ports available in range {start}-{end}")
+
+
 def pytest_addoption(parser):
     """Add custom command line options for IRIS testing"""
     parser.addoption(
@@ -190,15 +210,56 @@ def iris_container(pytestconfig):
 
     try:
         from iris_devtester import IRISContainer
+        from iris_devtester.utils.password import unexpire_all_passwords
 
         # Use IRISContainer to ensure it's running
         logger.info("Ensuring IRIS container via iris-devtester", image=iris_image)
 
         # Determine container type based on image if provided
+        from iris_devtester.ports.registry import PortRegistry
+
+        bind_embedded_port = os.environ.get("PGWIRE_BIND_EMBEDDED_PORT", "0") == "1"
+        embedded_port_env = int(os.environ.get("PGWIRE_EMBEDDED_PORT", "0"))
+        embedded_port = embedded_port_env or find_free_port(5435, 5499)
+        project_path = str(Path(__file__).resolve().parents[1])
+        preferred_port = int(os.environ.get("IRIS_TEST_PORT", "0")) or find_free_port(1973, 1999)
+        port_registry = PortRegistry(port_range=(preferred_port, preferred_port))
+
+        try:
+            port_registry.release_port(project_path)
+        except Exception:
+            pass
+
         if iris_image:
-            container_mgr = IRISContainer(image=iris_image)
+            container_mgr = IRISContainer(
+                image=iris_image,
+                port_registry=port_registry,
+                project_path=project_path,
+                preferred_port=preferred_port,
+                username="_SYSTEM",
+                password="SYS",
+            )
         else:
-            container_mgr = IRISContainer.community()
+            container_mgr = IRISContainer.community(
+                port_registry=port_registry,
+                project_path=project_path,
+                preferred_port=preferred_port,
+                username="_SYSTEM",
+                password="SYS",
+            )
+
+        try:
+            container_mgr.with_credentials("_SYSTEM", "SYS")
+        except Exception as e:
+            logger.warning("Failed to preconfigure IRIS credentials", error=str(e))
+
+        # Expose embedded PGWire port for in-container server usage.
+        if bind_embedded_port:
+            os.environ.setdefault("PGWIRE_EMBEDDED_PORT", str(embedded_port))
+            try:
+                container_mgr.with_bind_ports(5432, embedded_port)
+            except Exception as e:
+                logger.warning("Failed to bind embedded PGWire port", error=str(e))
 
         with container_mgr as iris:
             # iris-devtester handles health checks, password resets, and CallIn
@@ -211,12 +272,46 @@ def iris_container(pytestconfig):
                     iris.reset_password("SuperUser", "SYS")
                     iris.reset_password("_SYSTEM", "SYS")
 
-                from iris_devtester.utils import unexpire_all_passwords
-
-                unexpire_all_passwords(iris)
+                unexpire_all_passwords(iris.get_container_name())
                 logger.info("Passwords managed successfully")
             except Exception as e:
                 logger.warning("Failed to manage passwords", error=str(e))
+
+            # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
+            try:
+                from iris_devtester.connections import get_connection
+                from iris_devtester.config import IRISConfig
+
+                config = iris.get_config()
+                for attempt in range(3):
+                    try:
+                        conn = get_connection(
+                            IRISConfig(
+                                host=config.host,
+                                port=config.port,
+                                namespace=config.namespace,
+                                username=config.username,
+                                password=config.password,
+                                container_name=iris.get_container_name(),
+                            )
+                        )
+                        conn.close()
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            "DBAPI verification failed",
+                            attempt=attempt + 1,
+                            error=str(e),
+                        )
+                        if hasattr(iris, "reset_password"):
+                            iris.reset_password("SuperUser", "SYS")
+                            iris.reset_password("_SYSTEM", "SYS")
+                        unexpire_all_passwords(iris.get_container_name())
+                        time.sleep(2)
+                else:
+                    pytest.fail("DBAPI verification failed after password remediation")
+            except Exception as e:
+                pytest.fail(f"DBAPI verification failed: {e}")
 
             if iris_persist:
                 logger.info("IRIS container will PERSIST after tests")
@@ -244,10 +339,11 @@ def iris_config(iris_container) -> dict[str, Any]:
         "host": "localhost",
         "port": 1972,
         "namespace": "USER",
-        "username": "SuperUser",
+        "username": "_SYSTEM",
         "password": "SYS",
     }
 
+    config_from_devtester = False
     if iris_container:
         if hasattr(iris_container, "get_config"):
             try:
@@ -262,6 +358,7 @@ def iris_config(iris_container) -> dict[str, Any]:
                         "password": idt_config.password,
                     }
                 )
+                config_from_devtester = True
                 logger.info(
                     "iris_config updated from iris-devtester via get_config",
                     host=config_dict["host"],
@@ -275,15 +372,80 @@ def iris_config(iris_container) -> dict[str, Any]:
             config_dict["username"] = iris_container.username
         if hasattr(iris_container, "password"):
             config_dict["password"] = iris_container.password
-        if hasattr(iris_container, "get_container_host_ip"):
+        if not config_from_devtester and hasattr(iris_container, "get_container_host_ip"):
             config_dict["host"] = iris_container.get_container_host_ip()
-        if hasattr(iris_container, "get_exposed_port"):
+        if not config_from_devtester and hasattr(iris_container, "get_exposed_port"):
             try:
                 config_dict["port"] = int(iris_container.get_exposed_port(1972))
             except:
                 pass
 
     return config_dict
+
+
+@pytest.fixture(scope="session")
+def dat_fixture_root() -> Path:
+    return Path(__file__).parent / "fixtures" / "dat"
+
+
+@pytest.fixture(scope="session")
+def base_dat_fixture(iris_container, dat_fixture_root):
+    """
+    Ensure base DAT fixture exists (schema + base rows from examples/benchmarks).
+    """
+    if not HAS_DEVTESTER or not iris_container:
+        pytest.skip("iris-devtester required for DAT fixture creation")
+
+    if os.environ.get("PGWIRE_SKIP_DAT_FIXTURES") == "1":
+        pytest.skip("DAT fixture creation skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+
+    from iris_pgwire.testing.base_fixture_builder import ensure_base_fixture
+
+    return ensure_base_fixture(container=iris_container, fixture_root=dat_fixture_root)
+
+
+@pytest.fixture(scope="module")
+def pgwire_namespace(iris_container, iris_config, request):
+    """
+    Create a unique namespace per module for isolation.
+    """
+    if not HAS_DEVTESTER or not iris_container:
+        yield iris_config["namespace"]
+        return
+
+    try:
+        namespace = iris_container.get_test_namespace(prefix="TEST")
+    except Exception:
+        namespace = f"TEST_{request.node.name}".upper().replace(".", "_")[:25]
+    try:
+        yield namespace
+    finally:
+        try:
+            iris_container.delete_namespace(namespace)
+        except Exception as e:
+            logger.warning("Failed to delete test namespace", namespace=namespace, error=str(e))
+
+
+@pytest.fixture(scope="module")
+def load_base_fixture(iris_container, base_dat_fixture, pgwire_namespace):
+    """
+    Load the base DAT fixture into the module namespace.
+    """
+    if not HAS_DEVTESTER or not iris_container:
+        pytest.skip("iris-devtester required for DAT fixture loading")
+
+    if os.environ.get("PGWIRE_SKIP_DAT_FIXTURES") == "1":
+        pytest.skip("DAT fixture loading skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+
+    from iris_pgwire.testing.base_fixture_builder import restore_fixture
+
+    restore_fixture(
+        container=iris_container,
+        fixture_dir=Path(base_dat_fixture),
+        target_namespace=pgwire_namespace,
+        validate=False,
+    )
+    yield base_dat_fixture
 
 
 @pytest.fixture
@@ -397,10 +559,10 @@ def iris_fixture(iris_connection, iris_config, iris_container):
         pytest.fail(f"Fixture initialization failed: {e}")
 
 
-@pytest.fixture(scope="session")
-def pgwire_server(iris_container, iris_config):
+@pytest.fixture(scope="module")
+def pgwire_server(iris_container, iris_config, pgwire_namespace, load_base_fixture):
     """
-    Start PGWire server against real IRIS for testing session in a separate thread.
+    Start PGWire server against real IRIS for testing module in a separate thread.
     This prevents deadlocks when synchronous pgwire_client fixtures block the main thread.
     """
     import threading
@@ -410,12 +572,12 @@ def pgwire_server(iris_container, iris_config):
     # Configure server for testing
     server = PGWireServer(
         host="127.0.0.1",
-        port=5434,
+        port=int(os.environ.get("PGWIRE_PORT", "5434")),
         iris_host=iris_config["host"],
         iris_port=iris_config["port"],
         iris_username=iris_config["username"],
         iris_password=iris_config["password"],
-        iris_namespace=iris_config["namespace"],
+        iris_namespace=pgwire_namespace,
         enable_ssl=False,
     )
 
@@ -443,8 +605,9 @@ def pgwire_server(iris_container, iris_config):
     # Wait for server to be ready using active polling
     logger.info("Waiting for PGWire server to be ready...")
     start_wait = time.perf_counter()
+    server_port = server.port
     while time.perf_counter() - start_wait < 30:
-        if wait_for_port("127.0.0.1", 5434, timeout=0.1):
+        if wait_for_port("127.0.0.1", server_port, timeout=0.1):
             logger.info(f"PGWire server ready after {time.perf_counter() - start_wait:.2f}s")
             break
         time.sleep(0.5)
@@ -461,13 +624,14 @@ def pgwire_server(iris_container, iris_config):
 
 
 @pytest.fixture
-def pgwire_connection_params():
+def pgwire_connection_params(iris_config, pgwire_namespace):
     """Connection parameters for PGWire server"""
     return {
-        "host": "127.0.0.1",
-        "port": 5434,
-        "user": "test_user",
-        "dbname": "USER",
+        "host": os.environ.get("PGWIRE_HOST", "127.0.0.1"),
+        "port": int(os.environ.get("PGWIRE_PORT", "5434")),
+        "user": os.environ.get("PGWIRE_USER", iris_config["username"]),
+        "password": os.environ.get("PGWIRE_PASSWORD", iris_config["password"]),
+        "dbname": os.environ.get("PGWIRE_DBNAME", pgwire_namespace),
         "connect_timeout": 10,
     }
 
@@ -507,7 +671,7 @@ async def psycopg_connection(pgwire_server, pgwire_connection_params):
 
 
 @pytest.fixture(scope="function")
-def pgwire_client(pgwire_server, iris_config):
+def pgwire_client(pgwire_server, pgwire_connection_params):
     """
     Provide PostgreSQL wire protocol client connection.
     Depends on pgwire_server being started.
@@ -520,11 +684,11 @@ def pgwire_client(pgwire_server, iris_config):
         # Connect to PGWire server
         # Standard port 5434
         connection = psycopg.connect(
-            host="127.0.0.1",
-            port=5434,
-            dbname=iris_config["namespace"],
-            user=iris_config["username"],
-            password=iris_config["password"],
+            host=pgwire_connection_params["host"],
+            port=pgwire_connection_params["port"],
+            dbname=pgwire_connection_params["dbname"],
+            user=pgwire_connection_params["user"],
+            password=pgwire_connection_params["password"],
             connect_timeout=30,
         )
 
@@ -563,7 +727,7 @@ def pgwire_client(pgwire_server, iris_config):
         logger.error(
             "pgwire_client: PGWire server not available",
             error=str(e),
-            hint="Start PGWire server on port 5434 before running tests",
+            hint="Start PGWire server before running tests",
         )
         pytest.skip(f"PGWire server not available: {e}")
 
@@ -821,7 +985,7 @@ def pytest_runtest_makereport(item, call):
             try:
                 # 1. Check for password issues in the exception
                 if call.excinfo:
-                    from iris_devtester.utils.password_reset import detect_password_change_required
+                    from iris_devtester.utils.password import detect_password_change_required
 
                     if detect_password_change_required(str(call.excinfo.value)):
                         troubleshooting_data["password_issue"] = True
@@ -887,6 +1051,12 @@ def pytest_runtest_makereport(item, call):
 def pytest_configure(config):
     """Configure pytest with custom markers"""
     logger.info("pytest_configure: Initializing IRIS PGWire test framework")
+
+    os.environ.setdefault("PGWIRE_HOST", "127.0.0.1")
+    os.environ.setdefault("PGWIRE_PORT", "5434")
+    os.environ.setdefault("PGWIRE_USER", "SuperUser")
+    os.environ.setdefault("PGWIRE_PASSWORD", "SYS")
+    os.environ.setdefault("PGWIRE_DBNAME", "USER")
 
     config.addinivalue_line("markers", "e2e: E2E tests with real PostgreSQL clients")
     config.addinivalue_line("markers", "integration: Integration tests with IRIS")

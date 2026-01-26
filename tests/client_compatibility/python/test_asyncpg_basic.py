@@ -21,10 +21,12 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
+import os
+
 # Connection configuration
 PGWIRE_CONFIG = {
     "host": "localhost",
-    "port": 5432,
+    "port": int(os.environ.get("PGPORT", 5432)),
     "user": "test_user",
     "password": "test",
     "database": "USER",

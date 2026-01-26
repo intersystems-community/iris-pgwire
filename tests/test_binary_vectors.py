@@ -25,7 +25,8 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
 
     # Calculate text query size
     vector_text = "[" + ",".join(str(v) for v in vector) + "]"
-    sql = f"SELECT id FROM benchmark_vectors ORDER BY embedding <=> '{vector_text}' LIMIT 5"
+    column_name = f"embedding_{dimensions}"
+    sql = f\"SELECT id FROM benchmark_vectors ORDER BY {column_name} <=> '{vector_text}' LIMIT 5\"
     print(f"Text query size: {len(sql)} chars")
 
     try:
@@ -42,7 +43,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                 print("\n2. Testing vector query with TEXT parameter...")
                 try:
                     cur.execute(
-                        "SELECT id FROM benchmark_vectors ORDER BY embedding <=> %s LIMIT 5",
+                        f\"SELECT id FROM benchmark_vectors ORDER BY {column_name} <=> %s LIMIT 5\",
                         (vector_text,),
                     )
                     results_text = cur.fetchall()
@@ -58,7 +59,7 @@ def test_binary_vector_encoding(dimensions: int, port: int, path_name: str):
                     # Note: psycopg3 should auto-detect list as array and send binary
                     cur.execute(
                         psycopg.sql.SQL(
-                            "SELECT id FROM benchmark_vectors ORDER BY embedding <=> %s LIMIT 5"
+                            f\"SELECT id FROM benchmark_vectors ORDER BY {column_name} <=> %s LIMIT 5\"
                         ),
                         (vector,),
                         # Force binary format for parameter
