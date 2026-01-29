@@ -87,6 +87,35 @@ class DBAPIExecutor:
         """
         return re.sub(r"\$\d+", "?", sql)
 
+    def _convert_params_for_iris(self, params: Any) -> Any:
+        """
+        Convert parameters to IRIS-compatible formats.
+        Specifically handles ISO 8601 timestamps.
+        """
+        if params is None:
+            return None
+
+        if isinstance(params, (list, tuple)):
+            return [self._convert_value_for_iris(v) for v in params]
+
+        return self._convert_value_for_iris(params)
+
+    def _convert_value_for_iris(self, value: Any) -> Any:
+        """Helper to convert a single value."""
+        if isinstance(value, str):
+            # FR-004: Normalize ISO 8601 timestamp strings for IRIS
+            # Handles: YYYY-MM-DD[T ]HH:MM:SS[.fff][Z|[+-]HH:MM]
+            # IRIS rejects the 'T' and 'Z' or offset in %PosixTime/TIMESTAMP
+            import re
+
+            ts_match = re.match(
+                r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?(\d{2})?)?$",
+                value,
+            )
+            if ts_match:
+                return f"{ts_match.group(1)} {ts_match.group(2)}"
+        return value
+
     async def execute_query(
         self, sql: str, params: tuple | None = None, session_id: str | None = None, **kwargs
     ) -> dict[str, Any]:
@@ -116,6 +145,9 @@ class DBAPIExecutor:
             # Translate placeholders ($1 -> ?)
             sql = self._translate_placeholders(sql)
 
+            # Convert parameters for IRIS (e.g., ISO 8601 timestamps)
+            converted_params = self._convert_params_for_iris(params)
+
             # Acquire connection from pool
             conn_wrapper = await self.pool.acquire()
 
@@ -134,8 +166,8 @@ class DBAPIExecutor:
                         # For now, we log it.
                         logger.debug(f"Session {session_id} using namespace {ns}")
 
-                    if params:
-                        cursor.execute(clean_sql, params)
+                    if converted_params:
+                        cursor.execute(clean_sql, converted_params)
                     else:
                         cursor.execute(clean_sql)
 
@@ -256,9 +288,12 @@ class DBAPIExecutor:
                     # Pre-process parameters (e.g. convert lists to IRIS vector strings)
                     final_params_list = []
                     for p_set in params_list:
+                        # Convert ISO 8601 timestamps and other formats
+                        converted_p_set = self._convert_params_for_iris(p_set)
+
                         processed_params = [
                             "[" + ",".join(map(str, p)) + "]" if isinstance(p, list) else p
-                            for p in p_set
+                            for p in converted_p_set
                         ]
                         final_params_list.append(tuple(processed_params))
 

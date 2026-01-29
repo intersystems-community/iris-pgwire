@@ -1211,11 +1211,14 @@ class IRISExecutor:
 
                 rows_affected = 0
                 for row_params in params_list:
+                    # Normalize parameters for IRIS (e.g. ISO timestamps)
+                    normalized_row_params = self._normalize_parameters(row_params)
+
                     inline_sql = "N/A"
                     try:
                         # Build inline SQL by replacing ? placeholders with actual values
                         inline_sql = normalized_sql
-                        for param_value in row_params:
+                        for param_value in normalized_row_params:
                             # Convert value to SQL literal
                             if param_value is None:
                                 sql_literal = "NULL"
@@ -4384,3 +4387,34 @@ class IRISExecutor:
         except Exception as e:
             logger.warning("Vector query translation failed", error=str(e), sql=sql[:100])
             return sql  # Return original if translation fails
+
+    def _convert_params_for_iris(self, params: Any) -> Any:
+        """
+        Convert parameters to IRIS-compatible formats.
+        Specifically handles ISO 8601 timestamps.
+        """
+        if params is None:
+            return None
+
+        if isinstance(params, (list, tuple)):
+            return [self._convert_value_for_iris(v) for v in params]
+
+        return self._convert_value_for_iris(params)
+
+    def _convert_value_for_iris(self, value: Any) -> Any:
+        """Helper to convert a single value."""
+        if isinstance(value, str):
+            # Check for ISO 8601 timestamp: 2026-01-29T21:27:38.111Z
+            # or 2026-01-29T21:27:38.111+00:00
+            # IRIS rejects the 'T' and 'Z' or offset in %PosixTime/TIMESTAMP
+            if len(value) >= 19 and value[10] == "T":
+                # Replace 'T' with space
+                converted = value.replace("T", " ")
+                # Remove 'Z' if present
+                if converted.endswith("Z"):
+                    converted = converted[:-1]
+                # Remove timezone offset if present (e.g., +00:00)
+                if "+" in converted:
+                    converted = converted.split("+")[0]
+                return converted
+        return value
