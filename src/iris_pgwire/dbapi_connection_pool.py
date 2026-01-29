@@ -115,11 +115,11 @@ class IRISConnectionPool:
 
                         # Check if connection needs recycling
                         if conn_wrapper.should_recycle():
-                logger.info(
-                    "Recycling old connection",
-                    connection_id=conn_wrapper.connection_id,
-                    age_seconds=round(conn_wrapper.age_seconds, 1),
-                )
+                            logger.info(
+                                "Recycling old connection",
+                                connection_id=conn_wrapper.connection_id,
+                                age_seconds=round(conn_wrapper.age_seconds, 1),
+                            )
 
                             await self._recycle_connection(conn_wrapper)
                             # Continue loop to get another connection
@@ -134,12 +134,11 @@ class IRISConnectionPool:
                             ).total_seconds()
 
                         if idle_seconds > 10.0:
-                        logger.debug(
-                            "Acquired connection from pool",
-                            connection_id=conn_wrapper.connection_id,
-                            wait_ms=round(wait_ms, 2),
-                        )
-
+                            logger.debug(
+                                "Checking health of idle connection",
+                                connection_id=conn_wrapper.connection_id,
+                                idle_seconds=round(idle_seconds, 1),
+                            )
 
                             is_healthy = await self._check_connection_health(conn_wrapper)
                             if not is_healthy:
@@ -345,7 +344,6 @@ class IRISConnectionPool:
                 idle_seconds=round(conn_wrapper.idle_seconds, 1),
             )
 
-
             return conn_wrapper
 
         except Exception as e:
@@ -365,12 +363,11 @@ class IRISConnectionPool:
         del self._connections[conn_wrapper.connection_id]
         self._total_recycled += 1
 
-            logger.info(
-                "Removed connection from pool",
-                connection_id=conn_wrapper.connection_id,
-                is_overflow=conn_wrapper.is_overflow,
-            )
-
+        logger.info(
+            "Removed connection from pool",
+            connection_id=conn_wrapper.connection_id,
+            is_overflow=conn_wrapper.is_overflow,
+        )
 
     async def _check_connection_health(self, conn_wrapper: DBAPIConnection) -> bool:
         """
