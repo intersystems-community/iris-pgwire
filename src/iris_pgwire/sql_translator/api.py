@@ -7,7 +7,7 @@ Provides translation, cache management, and diagnostic interfaces.
 Constitutional Compliance: High-performance API with sub-5ms response times.
 """
 
-import logging
+import structlog
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -134,7 +134,7 @@ class SQLTranslationAPI:
             translator: SQL translator instance (uses global if None)
         """
         self.translator = translator or get_translator()
-        self.logger = logging.getLogger("iris_pgwire.sql_translator.api")
+        self.logger = structlog.get_logger("iris_pgwire.sql_translator.api")
 
         # Request tracking
         self._request_count = 0

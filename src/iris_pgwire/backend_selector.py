@@ -12,12 +12,13 @@ Feature: 018-add-dbapi-option
 Contract: contracts/backend-selector-contract.md
 """
 
-import logging
 from typing import Any, Protocol
+
+import structlog
 
 from iris_pgwire.models.backend_config import BackendConfig, BackendType
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class Executor(Protocol):
@@ -125,19 +126,17 @@ class BackendSelector:
 
         logger.info(
             "Selecting backend executor",
-            extra={
-                "backend_type": backend_type.value,
-                "requires_pool": config.requires_pool(),
-                "pool_config": (
-                    {
-                        "size": config.pool_size,
-                        "overflow": config.pool_max_overflow,
-                        "total": config.total_connections(),
-                    }
-                    if config.requires_pool()
-                    else None
-                ),
-            },
+            backend_type=backend_type.value,
+            requires_pool=config.requires_pool(),
+            pool_config=(
+                {
+                    "size": config.pool_size,
+                    "overflow": config.pool_max_overflow,
+                    "total": config.total_connections(),
+                }
+                if config.requires_pool()
+                else None
+            ),
         )
 
         if backend_type == BackendType.DBAPI:
@@ -188,13 +187,11 @@ class BackendSelector:
 
             logger.info(
                 "DBAPI configuration validated",
-                extra={
-                    "hostname": config.iris_hostname,
-                    "port": config.iris_port,
-                    "namespace": config.iris_namespace,
-                    "pool_size": config.pool_size,
-                    "pool_overflow": config.pool_max_overflow,
-                },
+                hostname=config.iris_hostname,
+                port=config.iris_port,
+                namespace=config.iris_namespace,
+                pool_size=config.pool_size,
+                pool_overflow=config.pool_max_overflow,
             )
 
         # Embedded backend validation
@@ -227,11 +224,9 @@ class BackendSelector:
         executor = DBAPIExecutor(config)
         logger.info(
             "DBAPI executor created",
-            extra={
-                "executor_type": "DBAPIExecutor",
-                "pool_size": config.pool_size,
-                "otel_enabled": config.enable_otel,
-            },
+            executor_type="DBAPIExecutor",
+            pool_size=config.pool_size,
+            otel_enabled=config.enable_otel,
         )
         return executor
 
@@ -274,10 +269,8 @@ class BackendSelector:
         # backend_type is now set in IRISExecutor.__init__
         logger.info(
             "Embedded executor created",
-            extra={
-                "executor_type": "IRISExecutor",
-                "backend_type": executor.backend_type,
-            },
+            executor_type="IRISExecutor",
+            backend_type=executor.backend_type,
         )
         return executor
 

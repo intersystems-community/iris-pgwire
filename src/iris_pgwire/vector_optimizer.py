@@ -7,16 +7,17 @@ must be literals, not parameters.
 """
 
 import base64
-import logging
 import re
 import struct
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import structlog
+
 # Feature 021: PostgreSQL→IRIS SQL normalization
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

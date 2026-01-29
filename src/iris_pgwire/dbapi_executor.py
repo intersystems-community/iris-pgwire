@@ -14,10 +14,11 @@ Contract: contracts/dbapi-executor-contract.md
 """
 
 import asyncio
-import logging
 import re
 import time
 from typing import Any
+
+import structlog
 
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
@@ -27,7 +28,7 @@ from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.sql_translator import SQLPipeline
 from iris_pgwire.sql_translator.parser import get_parser
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class DBAPIExecutor:
@@ -72,14 +73,12 @@ class DBAPIExecutor:
 
         logger.info(
             "DBAPI executor initialized",
-            extra={
-                "backend_type": self.backend_type,
-                "hostname": config.iris_hostname,
-                "port": config.iris_port,
-                "namespace": config.iris_namespace,
-                "pool_size": config.pool_size,
-                "strict_single_connection": config.strict_single_connection,
-            },
+            backend_type=self.backend_type,
+            hostname=config.iris_hostname,
+            port=config.iris_port,
+            namespace=config.iris_namespace,
+            pool_size=config.pool_size,
+            strict_single_connection=config.strict_single_connection,
         )
 
     def _translate_placeholders(self, sql: str) -> str:
@@ -174,11 +173,9 @@ class DBAPIExecutor:
 
             logger.debug(
                 "Query executed",
-                extra={
-                    "sql": sql[:100],
-                    "rows_returned": len(rows),
-                    "elapsed_ms": round(elapsed_ms, 2),
-                },
+                sql=sql[:100],
+                rows_returned=len(rows),
+                elapsed_ms=round(elapsed_ms, 2),
             )
 
             return {
@@ -207,7 +204,8 @@ class DBAPIExecutor:
 
             logger.error(
                 f"Query execution failed: {e}",
-                extra={"sql": sql[:200], "connection_lost": connection_lost},
+                sql=sql[:200],
+                connection_lost=connection_lost,
             )
             self._total_errors += 1
 
@@ -266,10 +264,8 @@ class DBAPIExecutor:
 
                     logger.debug(
                         "Executing executemany()",
-                        extra={
-                            "sql": clean_sql[:100],
-                            "batch_size": len(final_params_list),
-                        },
+                        sql=clean_sql[:100],
+                        batch_size=len(final_params_list),
                     )
 
                     cursor.executemany(clean_sql, final_params_list)
@@ -291,11 +287,9 @@ class DBAPIExecutor:
 
             logger.info(
                 "Batch executed successfully",
-                extra={
-                    "sql": sql[:100],
-                    "rows_affected": rows_affected,
-                    "elapsed_ms": round(elapsed_ms, 2),
-                },
+                sql=sql[:100],
+                rows_affected=rows_affected,
+                elapsed_ms=round(elapsed_ms, 2),
             )
 
             return {
@@ -325,7 +319,8 @@ class DBAPIExecutor:
 
             logger.error(
                 f"Batch execution failed: {e}",
-                extra={"sql": sql[:200], "connection_lost": connection_lost},
+                sql=sql[:200],
+                connection_lost=connection_lost,
             )
             self._total_errors += 1
 
@@ -467,33 +462,27 @@ class DBAPIExecutor:
         if request.exceeds_sla():
             logger.warning(
                 "Vector translation exceeded 5ms SLA",
-                extra={
-                    "request_id": request.request_id,
-                    "translation_ms": request.translation_time_ms,
-                    "operator": request.vector_operator,
-                    "dimensions": request.vector_dimensions,
-                },
+                request_id=request.request_id,
+                translation_ms=request.translation_time_ms,
+                operator=request.vector_operator,
+                dimensions=request.vector_dimensions,
             )
 
         # Execute translated SQL
         logger.info(
             "Executing vector query",
-            extra={
-                "request_id": request.request_id,
-                "operator": request.vector_operator,
-                "dimensions": request.vector_dimensions,
-                "translation_ms": request.translation_time_ms,
-            },
+            request_id=request.request_id,
+            operator=request.vector_operator,
+            dimensions=request.vector_dimensions,
+            translation_ms=request.translation_time_ms,
         )
 
         results = await self.execute_query(request.translated_sql)
 
         logger.debug(
             "Vector query completed",
-            extra={
-                "request_id": request.request_id,
-                "rows_returned": len(results.get("rows", [])),
-            },
+            request_id=request.request_id,
+            rows_returned=len(results.get("rows", [])),
         )
 
         return results
@@ -559,10 +548,8 @@ class DBAPIExecutor:
         """
         logger.info(
             "Closing DBAPI executor",
-            extra={
-                "total_queries": self._total_queries,
-                "total_errors": self._total_errors,
-            },
+            total_queries=self._total_queries,
+            total_errors=self._total_errors,
         )
 
         # Close connection pool

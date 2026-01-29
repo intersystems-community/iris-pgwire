@@ -12,7 +12,13 @@ Constitutional Requirements:
 
 import re
 
+import structlog
+
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
+from .logging_config import DDL_SKIP_FORMAT
+
+logger = structlog.get_logger(__name__)
 
 
 class IdentifierNormalizer:
@@ -174,11 +180,6 @@ class IdentifierNormalizer:
                 flags=re.DOTALL,
             )
             # Log warning
-            import logging
-
-            from .logging_config import DDL_SKIP_FORMAT
-
-            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
             logger.warning(DDL_SKIP_FORMAT.format("GENERATED column"))
 
         # CRITICAL FIX: Exclude string literals from normalization
@@ -216,11 +217,6 @@ class IdentifierNormalizer:
         if "USING" in normalized_sql.upper():
             normalized_sql = re.sub(r"(?i)\s+USING\s+btree\b", "", normalized_sql)
             # Log warning
-            import logging
-
-            from .logging_config import DDL_SKIP_FORMAT
-
-            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
             logger.warning(DDL_SKIP_FORMAT.format("USING btree"))
 
         if "WITH" in normalized_sql.upper() and "FILLFACTOR" in normalized_sql.upper():
@@ -228,11 +224,6 @@ class IdentifierNormalizer:
                 r"(?i)\s+WITH\s*\(\s*fillfactor\s*=\s*\d+\s*\)", "", normalized_sql
             )
             # Log warning
-            import logging
-
-            from .logging_config import DDL_SKIP_FORMAT
-
-            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
             logger.warning(DDL_SKIP_FORMAT.format("WITH (fillfactor)"))
 
         if "::" in normalized_sql:
@@ -243,11 +234,6 @@ class IdentifierNormalizer:
                 normalized_sql,
             )
             # Log warning
-            import logging
-
-            from .logging_config import DDL_SKIP_FORMAT
-
-            logger = logging.getLogger("iris_pgwire.sql_translator.normalizer")
             logger.warning(DDL_SKIP_FORMAT.format("Cast syntax"))
 
         return normalized_sql, identifier_count

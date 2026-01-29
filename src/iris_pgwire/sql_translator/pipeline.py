@@ -10,7 +10,7 @@ This orchestrates the various stages of SQL translation:
 6. Normalization (Identifiers, dates, booleans, enums)
 """
 
-import logging
+import structlog
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,7 +18,7 @@ from .models import PerformanceStats, TranslationResult
 from .normalizer import SQLTranslator
 from .refiner import SQLRefiner
 
-logger = logging.getLogger("iris_pgwire.sql_translator.pipeline")
+logger = structlog.get_logger("iris_pgwire.sql_translator.pipeline")
 
 
 class SQLPipeline:

@@ -7,11 +7,12 @@ to the original IRIS SQL, ensuring constitutional compliance with accuracy requi
 Constitutional Compliance: High-confidence validation ensuring accurate translation.
 """
 
-import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+import structlog
 
 from .models import (
     ConstructMapping,
@@ -79,7 +80,7 @@ class SemanticValidator:
             validation_level: Level of validation rigor to apply
         """
         self.validation_level = validation_level
-        self.logger = logging.getLogger("iris_pgwire.sql_translator.validator")
+        self.logger = structlog.get_logger("iris_pgwire.sql_translator.validator")
 
         # Validation rules and patterns
         self._setup_validation_rules()

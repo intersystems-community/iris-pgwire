@@ -17,7 +17,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import logging
+import re
 import secrets
 import struct
 import time
@@ -30,8 +30,7 @@ import structlog
 from iris_pgwire.constitutional import get_governor
 from iris_pgwire.performance_monitor import get_monitor
 
-logger = logging.getLogger(__name__)
-structured_logger = structlog.get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class AuthenticationState(Enum):
@@ -98,7 +97,7 @@ class IRISAuthenticationProvider:
         governor = get_governor()
 
         # Log authentication attempt with constitutional monitoring
-        structured_logger.info(
+        logger.info(
             "IRIS authentication attempt initiated",
             username=username,
             constitutional_compliance_enabled=True,
@@ -146,7 +145,7 @@ class IRISAuthenticationProvider:
             )
 
             # Log constitutional compliance status
-            structured_logger.info(
+            logger.info(
                 "IRIS authentication completed",
                 username=username,
                 auth_time_ms=auth_time,
@@ -156,7 +155,7 @@ class IRISAuthenticationProvider:
             )
 
             if not sla_compliant:
-                structured_logger.warning(
+                logger.warning(
                     "Constitutional SLA violation in authentication",
                     username=username,
                     auth_time_ms=auth_time,
@@ -176,7 +175,7 @@ class IRISAuthenticationProvider:
                 operation="iris_authentication", duration_ms=auth_time, success=False
             )
 
-            structured_logger.error(
+            logger.error(
                 "IRIS authentication error", username=username, error=str(e), auth_time_ms=auth_time
             )
             return False, None
@@ -431,7 +430,7 @@ class PostgreSQLAuthenticator:
         governor = get_governor()
 
         # Log authentication attempt with constitutional monitoring
-        structured_logger.info(
+        logger.info(
             "PostgreSQL authentication initiated",
             connection_id=connection_id,
             username=username,
@@ -464,7 +463,7 @@ class PostgreSQLAuthenticator:
             )
 
             # Log constitutional compliance status
-            structured_logger.info(
+            logger.info(
                 "PostgreSQL authentication completed",
                 connection_id=connection_id,
                 username=username,
@@ -476,7 +475,7 @@ class PostgreSQLAuthenticator:
             )
 
             if not result.sla_compliant:
-                structured_logger.warning(
+                logger.warning(
                     "Constitutional SLA violation in PostgreSQL authentication",
                     connection_id=connection_id,
                     username=username,
@@ -498,7 +497,7 @@ class PostgreSQLAuthenticator:
                 operation="postgresql_authentication", duration_ms=auth_time, success=False
             )
 
-            structured_logger.error(
+            logger.error(
                 "PostgreSQL authentication error",
                 connection_id=connection_id,
                 username=username,

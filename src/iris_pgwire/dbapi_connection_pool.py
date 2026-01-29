@@ -13,10 +13,11 @@ Research: R2 (Queue-based connection pooling)
 """
 
 import asyncio
-import logging
 import time
 import uuid
 from datetime import UTC, datetime
+
+import structlog
 
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
@@ -25,7 +26,7 @@ from iris_pgwire.models.dbapi_connection import (
     DBAPIConnection,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class IRISConnectionPool:
@@ -76,14 +77,11 @@ class IRISConnectionPool:
         self._last_error: str | None = None
 
         logger.info(
-            "IRIS connection pool initialized",
-            extra={
-                "pool_size": config.pool_size,
-                "max_overflow": config.pool_max_overflow,
-                "total_capacity": config.total_connections(),
-                "timeout": config.pool_timeout,
-                "recycle": config.pool_recycle,
-            },
+            "Connection pool initialized",
+            pool_size=config.pool_size,
+            max_overflow=config.pool_max_overflow,
+            timeout=config.pool_timeout,
+            recycle_seconds=config.pool_recycle,
         )
 
     async def acquire(self) -> DBAPIConnection:
@@ -117,13 +115,12 @@ class IRISConnectionPool:
 
                         # Check if connection needs recycling
                         if conn_wrapper.should_recycle():
-                            logger.info(
-                                "Connection recycling triggered",
-                                extra={
-                                    "connection_id": conn_wrapper.connection_id,
-                                    "age_seconds": conn_wrapper.age_seconds(),
-                                },
-                            )
+                logger.info(
+                    "Recycling old connection",
+                    connection_id=conn_wrapper.connection_id,
+                    age_seconds=round(conn_wrapper.age_seconds, 1),
+                )
+
                             await self._recycle_connection(conn_wrapper)
                             # Continue loop to get another connection
                             continue
@@ -137,9 +134,13 @@ class IRISConnectionPool:
                             ).total_seconds()
 
                         if idle_seconds > 10.0:
-                            logger.debug(
-                                f"Connection {conn_wrapper.connection_id} idle for {idle_seconds:.1f}s, checking health"
-                            )
+                        logger.debug(
+                            "Acquired connection from pool",
+                            connection_id=conn_wrapper.connection_id,
+                            wait_ms=round(wait_ms, 2),
+                        )
+
+
                             is_healthy = await self._check_connection_health(conn_wrapper)
                             if not is_healthy:
                                 logger.warning(
@@ -187,10 +188,8 @@ class IRISConnectionPool:
                 except (asyncio.TimeoutError, TimeoutError):
                     logger.error(
                         f"Connection acquisition timeout after {self.config.pool_timeout}s",
-                        extra={
-                            "pool_size": len(self._connections),
-                            "in_use": self._connections_in_use(),
-                        },
+                        pool_size=len(self._connections),
+                        in_use=self._connections_in_use(),
                     )
                     raise
                 except Exception as e:
@@ -226,7 +225,7 @@ class IRISConnectionPool:
             if not conn_wrapper.is_healthy:
                 logger.warning(
                     "Unhealthy connection removed from pool",
-                    extra={"connection_id": conn_wrapper.connection_id},
+                    connection_id=conn_wrapper.connection_id,
                 )
                 await self._remove_connection(conn_wrapper)
                 return
@@ -276,20 +275,18 @@ class IRISConnectionPool:
 
         logger.info(
             "Pool health check",
-            extra={
-                "total": total_connections,
-                "in_use": connections_in_use,
-                "available": connections_available,
-                "utilization": state.utilization_percent(),
-                "is_healthy": self._is_healthy,
-            },
+            total=total_connections,
+            in_use=connections_in_use,
+            available=connections_available,
+            utilization=state.utilization_percent(),
+            is_healthy=self._is_healthy,
         )
 
         return state
 
     async def close(self) -> None:
         """Close all connections and shutdown pool."""
-        logger.info("Closing connection pool", extra={"connections": len(self._connections)})
+        logger.info("Closing connection pool", connections=len(self._connections))
 
         # Close all connections
         for conn_id, conn_wrapper in list(self._connections.items()):
@@ -343,12 +340,11 @@ class IRISConnectionPool:
             self._total_created += 1
 
             logger.info(
-                "Created new connection",
-                extra={
-                    "connection_id": conn_wrapper.connection_id,
-                    "total_connections": len(self._connections),
-                },
+                "Removing idle overflow connection",
+                connection_id=conn_wrapper.connection_id,
+                idle_seconds=round(conn_wrapper.idle_seconds, 1),
             )
+
 
             return conn_wrapper
 
@@ -369,13 +365,12 @@ class IRISConnectionPool:
         del self._connections[conn_wrapper.connection_id]
         self._total_recycled += 1
 
-        logger.info(
-            "Connection recycled",
-            extra={
-                "connection_id": conn_wrapper.connection_id,
-                "age_seconds": conn_wrapper.age_seconds(),
-            },
-        )
+            logger.info(
+                "Removed connection from pool",
+                connection_id=conn_wrapper.connection_id,
+                is_overflow=conn_wrapper.is_overflow,
+            )
+
 
     async def _check_connection_health(self, conn_wrapper: DBAPIConnection) -> bool:
         """
@@ -448,7 +443,7 @@ class IRISConnectionPool:
         if elapsed_ms > 1.0:
             logger.warning(
                 "Slow connection acquisition",
-                extra={"acquisition_ms": round(elapsed_ms, 3)},
+                acquisition_ms=round(elapsed_ms, 3),
             )
 
     @property

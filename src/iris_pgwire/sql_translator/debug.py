@@ -8,12 +8,13 @@ Constitutional Compliance: Complete transparency in translation decisions.
 """
 
 import json
-import logging
 import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+import structlog
 
 from .models import DebugTrace
 
@@ -71,14 +72,7 @@ class DebugTracer:
 
     def _setup_logging(self):
         """Setup structured logging for debug output"""
-        self.logger = logging.getLogger("iris_pgwire.sql_translator.debug")
-
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.DEBUG)
+        self.logger = structlog.get_logger("iris_pgwire.sql_translator.debug")
 
     def start_trace(self, trace_id: str, original_sql: str) -> DebugTrace:
         """
@@ -463,7 +457,7 @@ class DebugTracer:
                 html_parts.append("<h2>Parsing Steps</h2>")
                 for i, step in enumerate(trace.parsing_steps):
                     html_parts.append("<div class='step'>")
-                    html_parts.append(f"<h3>Step {i+1}: {step.step_name}</h3>")
+                    html_parts.append(f"<h3>Step {i + 1}: {step.step_name}</h3>")
                     html_parts.append(f"<p><strong>Duration:</strong> {step.duration_ms}ms</p>")
                     html_parts.append(f"<p><strong>Input:</strong></p><pre>{step.input_sql}</pre>")
                     html_parts.append(
@@ -481,7 +475,7 @@ class DebugTracer:
                 for i, decision in enumerate(trace.mapping_decisions):
                     css_class = "warning" if decision.confidence < 0.7 else "step"
                     html_parts.append(f"<div class='{css_class}'>")
-                    html_parts.append(f"<h3>Decision {i+1}: {decision.construct}</h3>")
+                    html_parts.append(f"<h3>Decision {i + 1}: {decision.construct}</h3>")
                     html_parts.append(
                         f"<p><strong>Chosen Mapping:</strong> {decision.chosen_mapping}</p>"
                     )
@@ -501,7 +495,7 @@ class DebugTracer:
                 html_parts.append("<h2>Warnings</h2>")
                 for i, warning in enumerate(trace.warnings):
                     html_parts.append("<div class='warning'>")
-                    html_parts.append(f"<h3>Warning {i+1}</h3>")
+                    html_parts.append(f"<h3>Warning {i + 1}</h3>")
                     html_parts.append(f"<p>{warning}</p>")
                     html_parts.append("</div>")
 
@@ -570,9 +564,9 @@ class DebugTracer:
 
         self._events.append(event)
 
-        # Log to standard logger
-        log_level = getattr(logging, level.value)
-        self.logger.log(log_level, f"[{component}] {message}", extra={"data": data})
+        # Log to structured logger
+        log_method = getattr(self.logger, level.value.lower())
+        log_method(f"[{component}] {message}", **data)
 
 
 # Global tracer instance

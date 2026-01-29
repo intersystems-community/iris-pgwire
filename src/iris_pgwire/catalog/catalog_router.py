@@ -6,10 +6,11 @@ Handles query parsing, array parameter translation, and regclass resolution.
 """
 
 import json
-import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+
+import structlog
 
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
@@ -22,7 +23,7 @@ from .pg_index import PgIndexEmulator
 from .pg_namespace import PgNamespaceEmulator
 from .pg_type import PgTypeEmulator
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

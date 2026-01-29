@@ -7,7 +7,6 @@ Coordinates all translation components with constitutional compliance monitoring
 Constitutional Compliance: Sub-5ms translation with high-confidence mappings.
 """
 
-import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -135,9 +134,6 @@ class IRISSQLTranslator:
         self._sla_violations = 0
         self._total_translations = 0
         self._start_time = datetime.now(UTC)
-
-        # Setup logging
-        self.logger = logging.getLogger("iris_pgwire.sql_translator")
 
         # Performance optimization
         self._thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="iris_translator")

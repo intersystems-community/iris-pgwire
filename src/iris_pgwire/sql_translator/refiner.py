@@ -6,10 +6,11 @@ but are required for specific ORMs or IRIS SQL compiler quirks.
 """
 
 import re
-import logging
 from dataclasses import dataclass
 
-logger = logging.getLogger("iris_pgwire.sql_translator.refiner")
+import structlog
+
+logger = structlog.get_logger("iris_pgwire.sql_translator.refiner")
 
 
 @dataclass

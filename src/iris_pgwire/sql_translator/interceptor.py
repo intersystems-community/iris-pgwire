@@ -4,12 +4,13 @@ SQL Interceptor - Registry for stubbed PostgreSQL system responses (Feature 036)
 This module decouples the procedural interception logic from IRISExecutor.
 """
 
-import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-logger = logging.getLogger("iris_pgwire.sql_translator.interceptor")
+import structlog
+
+logger = structlog.get_logger("iris_pgwire.sql_translator.interceptor")
 
 
 @dataclass
