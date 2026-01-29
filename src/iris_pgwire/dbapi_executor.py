@@ -19,6 +19,7 @@ import re
 import time
 from typing import Any
 
+from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
@@ -62,6 +63,7 @@ class DBAPIExecutor:
         self.sql_pipeline = SQLPipeline()
         self.sql_translator = self.sql_pipeline.translator
         self.sql_parser = get_parser()
+        self.catalog_router = CatalogRouter()
 
         # Performance metrics
         self._total_queries = 0
@@ -105,6 +107,13 @@ class DBAPIExecutor:
         conn_wrapper = None
 
         try:
+            # Feature: Handle catalog emulation shared across all paths
+            catalog_result = await self.catalog_router.handle_catalog_query(
+                sql, params, session_id, self
+            )
+            if catalog_result is not None:
+                return catalog_result
+
             # Translate placeholders ($1 -> ?)
             sql = self._translate_placeholders(sql)
 

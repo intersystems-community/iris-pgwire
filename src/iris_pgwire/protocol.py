@@ -2450,37 +2450,6 @@ class PGWireProtocol:
                 await self.send_parse_complete()
                 return
 
-            # CRITICAL: Intercept pg_type/pg_catalog queries in Extended Protocol
-            # asyncpg uses prepared statements to query pg_type for type introspection,
-            # which causes infinite recursion when we send OID 0 in ParameterDescription.
-            # Solution: Mark these queries and return empty results in Execute phase.
-            query_upper = query.upper().strip().rstrip(";")
-            if "pg_type" in query_upper or "pg_catalog" in query_upper:
-                logger.info(
-                    "Intercepting pg_type/pg_catalog query in Parse phase",
-                    connection_id=self.connection_id,
-                    statement_name=statement_name,
-                    query_preview=query[:100],
-                )
-
-                # Store a marker prepared statement (will return empty result in Execute)
-                self.prepared_statements[statement_name] = {
-                    "original_query": query,
-                    "translated_query": query,
-                    "param_types": [],
-                    "translation_metadata": {
-                        "constructs_translated": 0,
-                        "translation_time_ms": 0.0,
-                        "cache_hit": False,
-                        "warnings": [],
-                        "is_pg_catalog_query": True,  # Marker for Execute phase
-                    },
-                }
-
-                # Send ParseComplete response
-                await self.send_parse_complete()
-                return
-
             # Handle PostgreSQL SET commands in Parse phase
             # JDBC driver uses Extended Protocol, so we must intercept SET during Parse
             # to prevent translation failures and empty query storage
@@ -3397,30 +3366,6 @@ class PGWireProtocol:
                 return
 
             # CRITICAL: Handle pg_type/pg_catalog queries in Extended Protocol
-            # asyncpg queries pg_type using prepared statements when it sees OID 0,
-            # which would cause infinite recursion. We intercept in Parse phase and
-            # return empty results here in Execute phase to break the loop.
-            is_pg_catalog_query = translation_metadata.get("is_pg_catalog_query", False)
-            if is_pg_catalog_query:
-                logger.info(
-                    "pg_type/pg_catalog query intercepted in Execute phase",
-                    connection_id=self.connection_id,
-                    portal_name=portal_name,
-                    query_preview=query[:100] if query else "(empty)",
-                )
-                # Return empty result set
-                # Note: Describe phase already sent NoData for this query
-                # We just need to send CommandComplete here
-                tag = b"SELECT 0\x00"
-                cmd_complete_length = 4 + len(tag)
-                cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
-                self.writer.write(cmd_complete)
-                await self.writer.drain()
-                logger.info(
-                    "Sent empty result for pg_catalog query", connection_id=self.connection_id
-                )
-                return
-
             # Execute the query with parameters
             # IMPORTANT: Pass parameters separately to enable vector query optimizer
             # The optimizer needs to transform vector parameters BEFORE IRIS execution
@@ -3465,8 +3410,6 @@ class PGWireProtocol:
             await self.flush_batch()
 
             # DEBUG: Verify executor instance
-            # logger.warning(f"DEBUG: Using iris_executor at {id(self.iris_executor)}")
-
             result = await self.iris_executor.execute_query(
                 query, params=params if params else None, session_id=self.connection_id
             )
