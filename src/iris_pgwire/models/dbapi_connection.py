@@ -79,6 +79,7 @@ class DBAPIConnection(BaseModel):
     pool_recycle_seconds: int = Field(
         ge=60, description="Maximum connection lifetime before recycling"
     )
+    is_overflow: bool = Field(default=False, description="Whether this is an overflow connection")
 
     # Pydantic v2 configuration
     model_config = ConfigDict(
@@ -101,9 +102,27 @@ class DBAPIConnection(BaseModel):
                 "iris_port": 1972,
                 "iris_namespace": "USER",
                 "pool_recycle_seconds": 3600,
+                "is_overflow": False,
             }
         },
     )
+
+    @property
+    def idle_seconds(self) -> float:
+        """
+        Calculate connection idle time in seconds.
+
+        Returns:
+            Seconds since last usage, or since creation if never used.
+        """
+        reference_time = self.last_used_at or self.created_at
+        now = datetime.now(UTC)
+
+        if now < reference_time:
+            # Handle potential clock skew
+            return 0.0
+
+        return (now - reference_time).total_seconds()
 
     def age_seconds(self) -> float:
         """

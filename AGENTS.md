@@ -12,6 +12,7 @@ Auto-generated from all feature plans. Last updated: 2026-01-17
 - InterSystems IRIS (via pgwire) (036-address-all-6)
 - Python 3.11 + psycopg[binary], intersystems-irispython, iris-devtester (036-address-all-6)
 - Python 3.11+ + `intersystems-irispython`, `psycopg[binary]`, `pydantic`, `structlog` (037-pg-type-catalog)
+- Python 3.11+ + `pydantic`, `structlog`, `intersystems-irispython` (038-fix-attribute-error)
 
 - Python 3.11+ + `iris-devtester`, `intersystems-irispython`, `psycopg[binary]` (033-devtester-skills)
 
@@ -31,8 +32,8 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11+: Follow standard conventions
 
 ## Recent Changes
+- 038-fix-attribute-error: Added Python 3.11+ + `pydantic`, `structlog`, `intersystems-irispython`
 - 037-pg-type-catalog: Added Python 3.11+ + `intersystems-irispython`, `psycopg[binary]`, `pydantic`, `structlog`
-- 036-address-all-6: Added Python 3.11 + psycopg[binary], intersystems-irispython, iris-devtester
 - 036-address-all-6: Added Python 3.11 + psycopg[binary], intersystems-irispython, iris-devtester
 
 

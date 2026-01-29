@@ -339,9 +339,9 @@ class IRISConnectionPool:
             self._total_created += 1
 
             logger.info(
-                "Removing idle overflow connection",
+                "Created new IRIS connection",
                 connection_id=conn_wrapper.connection_id,
-                idle_seconds=round(conn_wrapper.idle_seconds, 1),
+                idle_seconds=round(getattr(conn_wrapper, "idle_seconds", 0.0), 1),
             )
 
             return conn_wrapper
