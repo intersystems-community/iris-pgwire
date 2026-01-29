@@ -47,7 +47,7 @@ class DBAPIConnection(BaseModel):
         default=ConnectionState.IDLE, description="Current connection state"
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When connection was created"
+        default_factory=lambda: datetime.now(UTC), description="When connection was created"
     )
     last_used_at: datetime | None = Field(default=None, description="When connection was last used")
     last_recycled_at: datetime | None = Field(

@@ -15,6 +15,7 @@ Contract: contracts/dbapi-executor-contract.md
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -22,6 +23,8 @@ from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
+from iris_pgwire.sql_translator import SQLPipeline
+from iris_pgwire.sql_translator.parser import get_parser
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,13 @@ class DBAPIExecutor:
         self.config = config
         self.pool = IRISConnectionPool(config)
         self.backend_type = "dbapi"
+        self.session_namespaces = {}
+        self.strict_single_connection = config.strict_single_connection
+
+        # SQL components required by protocol
+        self.sql_pipeline = SQLPipeline()
+        self.sql_translator = self.sql_pipeline.translator
+        self.sql_parser = get_parser()
 
         # Performance metrics
         self._total_queries = 0
@@ -66,28 +76,38 @@ class DBAPIExecutor:
                 "port": config.iris_port,
                 "namespace": config.iris_namespace,
                 "pool_size": config.pool_size,
+                "strict_single_connection": config.strict_single_connection,
             },
         )
 
-    async def execute_query(self, sql: str, params: tuple | None = None) -> list[tuple[Any, ...]]:
+    def _translate_placeholders(self, sql: str) -> str:
+        """
+        Translate PostgreSQL $1, $2 placeholders to DBAPI ? placeholders.
+        """
+        return re.sub(r"\$\d+", "?", sql)
+
+    async def execute_query(
+        self, sql: str, params: tuple | None = None, session_id: str | None = None, **kwargs
+    ) -> dict[str, Any]:
         """
         Execute SQL query via DBAPI connection pool.
 
         Args:
             sql: SQL query string
             params: Optional query parameters (for prepared statements)
+            session_id: Optional session identifier
+            **kwargs: Additional execution options
 
         Returns:
-            List of result rows as tuples
-
-        Raises:
-            ConnectionError: If connection acquisition fails
-            Exception: If query execution fails
+            Dict with 'rows' and 'columns' keys
         """
         start_time = time.perf_counter()
         conn_wrapper = None
 
         try:
+            # Translate placeholders ($1 -> ?)
+            sql = self._translate_placeholders(sql)
+
             # Acquire connection from pool
             conn_wrapper = await self.pool.acquire()
 
@@ -97,22 +117,44 @@ class DBAPIExecutor:
                 try:
                     # Strip trailing semicolon for IRIS compatibility
                     clean_sql = sql.strip().rstrip(";")
+
+                    # Feature 034: Apply per-session namespace if set
+                    if session_id and session_id in self.session_namespaces:
+                        ns = self.session_namespaces[session_id]
+                        # In DBAPI, we switch namespace by executing a command if supported,
+                        # but IRIS DBAPI connection is usually fixed to a namespace.
+                        # For now, we log it.
+                        logger.debug(f"Session {session_id} using namespace {ns}")
+
                     if params:
                         cursor.execute(clean_sql, params)
                     else:
                         cursor.execute(clean_sql)
 
                     # Fetch results if available
+                    rows = []
+                    columns = []
                     if cursor.description:
-                        results = cursor.fetchall()
-                    else:
-                        results = []
+                        rows = cursor.fetchall()
+                        for desc in cursor.description:
+                            columns.append(
+                                {
+                                    "name": desc[0],
+                                    "type_oid": self._map_dbapi_type_to_oid(desc[1]),
+                                    "type_size": desc[2] if len(desc) > 2 else -1,
+                                    "format_code": 0,
+                                }
+                            )
 
-                    return results
+                    row_count = cursor.rowcount if hasattr(cursor, "rowcount") else len(rows)
+                    if row_count < 0:
+                        row_count = len(rows)
+
+                    return rows, columns, row_count
                 finally:
                     cursor.close()
 
-            results = await asyncio.to_thread(execute_in_thread)
+            rows, columns, row_count = await asyncio.to_thread(execute_in_thread)
 
             # Record metrics
             elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -125,29 +167,39 @@ class DBAPIExecutor:
                 "Query executed",
                 extra={
                     "sql": sql[:100],
-                    "rows_returned": len(results),
+                    "rows_returned": len(rows),
                     "elapsed_ms": round(elapsed_ms, 2),
                 },
             )
 
-            return results
+            return {
+                "success": True,
+                "rows": rows,
+                "columns": columns,
+                "row_count": row_count,
+                "command_tag": self._determine_command_tag(sql, row_count),
+                "execution_time_ms": elapsed_ms,
+            }
 
         except Exception as e:
             error_str = str(e).lower()
             # Mark connection as unhealthy for common connection errors
-            connection_lost = any(msg in error_str for msg in [
-                "connection lost",
-                "not connected",
-                "communication link failure",
-                "socket error",
-                "operationalerror",
-                "interfaceerror"
-            ])
-            
-            logger.error(f"Query execution failed: {e}", extra={
-                "sql": sql[:200],
-                "connection_lost": connection_lost
-            })
+            connection_lost = any(
+                msg in error_str
+                for msg in [
+                    "connection lost",
+                    "not connected",
+                    "communication link failure",
+                    "socket error",
+                    "operationalerror",
+                    "interfaceerror",
+                ]
+            )
+
+            logger.error(
+                f"Query execution failed: {e}",
+                extra={"sql": sql[:200], "connection_lost": connection_lost},
+            )
             self._total_errors += 1
 
             if conn_wrapper:
@@ -164,7 +216,7 @@ class DBAPIExecutor:
                 await self.pool.release(conn_wrapper)
 
     async def execute_many(
-        self, sql: str, params_list: list[tuple] | list[list]
+        self, sql: str, params_list: list[tuple] | list[list], session_id: str | None = None
     ) -> dict[str, Any]:
         """
         Execute SQL with multiple parameter sets for batch operations.
@@ -172,6 +224,7 @@ class DBAPIExecutor:
         Args:
             sql: SQL query string (usually INSERT)
             params_list: List of parameter tuples/lists
+            session_id: Optional session identifier
 
         Returns:
             Dict with execution results (rows_affected, execution_time_ms, etc.)
@@ -180,6 +233,9 @@ class DBAPIExecutor:
         conn_wrapper = None
 
         try:
+            # Translate placeholders ($1 -> ?)
+            sql = self._translate_placeholders(sql)
+
             # Acquire connection from pool
             conn_wrapper = await self.pool.acquire()
 
@@ -246,19 +302,22 @@ class DBAPIExecutor:
         except Exception as e:
             error_str = str(e).lower()
             # Mark connection as unhealthy for common connection errors
-            connection_lost = any(msg in error_str for msg in [
-                "connection lost",
-                "not connected",
-                "communication link failure",
-                "socket error",
-                "operationalerror",
-                "interfaceerror"
-            ])
+            connection_lost = any(
+                msg in error_str
+                for msg in [
+                    "connection lost",
+                    "not connected",
+                    "communication link failure",
+                    "socket error",
+                    "operationalerror",
+                    "interfaceerror",
+                ]
+            )
 
-            logger.error(f"Batch execution failed: {e}", extra={
-                "sql": sql[:200],
-                "connection_lost": connection_lost
-            })
+            logger.error(
+                f"Batch execution failed: {e}",
+                extra={"sql": sql[:200], "connection_lost": connection_lost},
+            )
             self._total_errors += 1
 
             if conn_wrapper:
@@ -274,7 +333,114 @@ class DBAPIExecutor:
             if conn_wrapper:
                 await self.pool.release(conn_wrapper)
 
-    async def execute_vector_query(self, request: VectorQueryRequest) -> list[tuple[Any, ...]]:
+    async def test_connection(self):
+        """Test IRIS connectivity by acquiring and releasing a connection."""
+        conn_wrapper = await self.pool.acquire()
+        try:
+
+            def test_query():
+                cursor = conn_wrapper.connection.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+
+            await asyncio.to_thread(test_query)
+        finally:
+            await self.pool.release(conn_wrapper)
+
+    def set_session_namespace(self, session_id: str, namespace: str):
+        """Set the IRIS namespace for a specific session."""
+        self.session_namespaces[session_id] = namespace
+
+    def close_session(self, session_id: str):
+        """Close resources for a specific session."""
+        if session_id in self.session_namespaces:
+            del self.session_namespaces[session_id]
+
+    async def begin_transaction(self, session_id: str | None = None):
+        """Begin a transaction."""
+        await self.execute_query("START TRANSACTION", session_id=session_id)
+
+    async def commit_transaction(self, session_id: str | None = None):
+        """Commit a transaction."""
+        await self.execute_query("COMMIT", session_id=session_id)
+
+    async def rollback_transaction(self, session_id: str | None = None):
+        """Rollback a transaction."""
+        await self.execute_query("ROLLBACK", session_id=session_id)
+
+    async def cancel_query(self, backend_pid: int, backend_secret: int) -> bool:
+        """Cancel a running query (DBAPI implementation)."""
+        # For external connections, we might need server reference to terminate connection
+        logger.warning(f"cancel_query not fully implemented for DBAPI (pid={backend_pid})")
+        return False
+
+    def get_iris_type_mapping(self) -> dict[str, dict[str, Any]]:
+        """Get IRIS to PostgreSQL type mappings."""
+        return {
+            "BIGINT": {"oid": 20, "typname": "int8", "typlen": 8},
+            "BIT": {"oid": 1560, "typname": "bit", "typlen": -1},
+            "BOOLEAN": {"oid": 16, "typname": "bool", "typlen": 1},
+            "CHAR": {"oid": 1042, "typname": "bpchar", "typlen": -1},
+            "DATE": {"oid": 1082, "typname": "date", "typlen": 4},
+            "DOUBLE": {"oid": 701, "typname": "float8", "typlen": 8},
+            "FLOAT": {"oid": 701, "typname": "float8", "typlen": 8},
+            "INTEGER": {"oid": 23, "typname": "int4", "typlen": 4},
+            "NUMERIC": {"oid": 1700, "typname": "numeric", "typlen": -1},
+            "SMALLINT": {"oid": 21, "typname": "int2", "typlen": 2},
+            "TEXT": {"oid": 25, "typname": "text", "typlen": -1},
+            "TIME": {"oid": 1083, "typname": "time", "typlen": 8},
+            "TIMESTAMP": {"oid": 1114, "typname": "timestamp", "typlen": 8},
+            "VARCHAR": {"oid": 1043, "typname": "varchar", "typlen": -1},
+        }
+
+    def has_returning_clause(self, query: str) -> bool:
+        """Check if query has a RETURNING clause."""
+        if not query:
+            return False
+        return bool(re.search(r"\bRETURNING\b", query, re.IGNORECASE | re.DOTALL))
+
+    def get_returning_columns(self, query: str) -> list[str]:
+        """Extract column names from RETURNING clause."""
+        match = re.search(r"RETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return []
+        cols_str = match.group(1).strip()
+        if cols_str == "*":
+            return ["*"]
+        return [c.strip() for c in cols_str.split(",")]
+
+    def _map_dbapi_type_to_oid(self, dbapi_type: Any) -> int:
+        """Map DBAPI type to PostgreSQL OID."""
+        # Simple mapping for now, can be expanded
+        type_str = str(dbapi_type).upper()
+        if "INT" in type_str:
+            return 23
+        if "CHAR" in type_str or "STRING" in type_str:
+            return 1043
+        if "DATE" in type_str:
+            return 1082
+        if "TIME" in type_str:
+            return 1114
+        return 1043  # Default to VARCHAR
+
+    def _determine_command_tag(self, sql: str, row_count: int) -> str:
+        """Determine PostgreSQL command tag from SQL"""
+        sql_clean = sql.strip().upper()
+        if not sql_clean:
+            return "UNKNOWN"
+        first_word = sql_clean.split()[0] if sql_clean.split() else ""
+        if first_word == "SELECT":
+            return "SELECT"
+        elif first_word == "INSERT":
+            return f"INSERT 0 {row_count}"
+        elif first_word == "UPDATE":
+            return f"UPDATE {row_count}"
+        elif first_word == "DELETE":
+            return f"DELETE {row_count}"
+        else:
+            return first_word
+
+    async def execute_vector_query(self, request: VectorQueryRequest) -> dict[str, Any]:
         """
         Execute vector similarity query using translated SQL.
 
@@ -317,7 +483,7 @@ class DBAPIExecutor:
             "Vector query completed",
             extra={
                 "request_id": request.request_id,
-                "rows_returned": len(results),
+                "rows_returned": len(results.get("rows", [])),
             },
         )
 

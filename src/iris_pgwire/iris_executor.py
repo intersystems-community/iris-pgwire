@@ -97,6 +97,7 @@ class IRISExecutor:
         connection_pool_timeout: float = 5.0,
         enable_query_cache: bool = True,
         query_cache_size: int = 1000,
+        strict_single_connection: bool = False,
     ):
         self.iris_config = iris_config
         self.server = server  # Reference to server for P4 cancellation
@@ -104,6 +105,7 @@ class IRISExecutor:
         self.connection_pool_timeout = connection_pool_timeout
         self.enable_query_cache = enable_query_cache
         self.query_cache_size = query_cache_size
+        self.strict_single_connection = strict_single_connection
 
         self.connection = None
         self.session_connections = {}
@@ -356,6 +358,18 @@ class IRISExecutor:
             return False
         return bool(re.search(r"\bRETURNING\b", query, re.IGNORECASE | re.DOTALL))
 
+    def get_returning_columns(self, query: str) -> list[str]:
+        """
+        Extract column names from RETURNING clause.
+        """
+        match = re.search(r"RETURNING\s+(.+?)(?=$|;)", query, re.IGNORECASE | re.DOTALL)
+        if not match:
+            return []
+        cols_str = match.group(1).strip()
+        if cols_str == "*":
+            return ["*"]
+        return [c.strip() for c in cols_str.split(",")]
+
     def _get_table_columns_from_schema(
         self, table: str, session_id: str | None = None
     ) -> list[str]:
@@ -363,6 +377,9 @@ class IRISExecutor:
         Query INFORMATION_SCHEMA.COLUMNS for the given table.
         Returns the list of column names in order.
         """
+        if self.strict_single_connection:
+            logger.debug("Strict single connection enabled - skipping schema-based column lookup")
+            return []
         try:
             table_clean = table.strip('"').strip("'")
             metadata_sql = f"""
@@ -400,6 +417,9 @@ class IRISExecutor:
         Query INFORMATION_SCHEMA.COLUMNS for the given table and column.
         Returns the PostgreSQL type OID.
         """
+        if self.strict_single_connection:
+            logger.debug("Strict single connection enabled - skipping schema-based type lookup")
+            return None
         try:
             table_clean = table.strip('"').strip("'")
             column_clean = column.strip('"').strip("'")
@@ -774,7 +794,7 @@ class IRISExecutor:
         return new_params
 
     async def execute_query(
-        self, sql: str, params: list | None = None, session_id: str | None = None
+        self, sql: str, params: list | None = None, session_id: str | None = None, **kwargs
     ) -> dict[str, Any]:
         """
         Execute SQL query against IRIS with proper async threading

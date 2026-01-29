@@ -24,13 +24,58 @@ class Executor(Protocol):
     """Executor protocol for type hints."""
 
     backend_type: str
+    sql_pipeline: Any
+    sql_translator: Any
+    sql_parser: Any
 
-    async def execute_query(self, sql: str, params: Any = None) -> Any:
+    async def execute_query(
+        self, sql: str, params: Any = None, session_id: str | None = None, **kwargs
+    ) -> Any:
         """Execute SQL query."""
         ...
 
-    async def execute_many(self, sql: str, params_list: Any) -> Any:
+    async def execute_many(self, sql: str, params_list: Any, session_id: str | None = None) -> Any:
         """Execute SQL with multiple parameter sets."""
+        ...
+
+    async def test_connection(self) -> None:
+        """Test IRIS connectivity."""
+        ...
+
+    def set_session_namespace(self, session_id: str, namespace: str) -> None:
+        """Set the IRIS namespace for a specific session."""
+        ...
+
+    def close_session(self, session_id: str) -> None:
+        """Close resources for a specific session."""
+        ...
+
+    def has_returning_clause(self, query: str) -> bool:
+        """Check if query has a RETURNING clause."""
+        ...
+
+    def get_returning_columns(self, query: str) -> list[str]:
+        """Extract column names from RETURNING clause."""
+        ...
+
+    async def begin_transaction(self, session_id: str | None = None) -> Any:
+        """Begin a transaction."""
+        ...
+
+    async def commit_transaction(self, session_id: str | None = None) -> Any:
+        """Commit a transaction."""
+        ...
+
+    async def rollback_transaction(self, session_id: str | None = None) -> Any:
+        """Rollback a transaction."""
+        ...
+
+    async def cancel_query(self, backend_pid: int, backend_secret: int) -> bool:
+        """Cancel a running query."""
+        ...
+
+    def get_iris_type_mapping(self) -> dict[str, dict[str, Any]]:
+        """Get IRIS to PostgreSQL type mappings."""
         ...
 
     async def close(self) -> None:
@@ -219,11 +264,12 @@ class BackendSelector:
             "password": config.iris_password,
             "namespace": config.iris_namespace,
         }
-        
+
         executor = IRISExecutor(
             iris_config,
             connection_pool_size=config.pool_size,
-            connection_pool_timeout=float(config.pool_timeout)
+            connection_pool_timeout=float(config.pool_timeout),
+            strict_single_connection=config.strict_single_connection,
         )
         # backend_type is now set in IRISExecutor.__init__
         logger.info(

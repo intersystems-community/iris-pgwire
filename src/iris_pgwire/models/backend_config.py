@@ -78,6 +78,12 @@ class BackendConfig(BaseModel):
         description="Connection lifetime in seconds (1 hour default)",
     )
 
+    # Protocol Behavior
+    strict_single_connection: bool = Field(
+        default=False,
+        description="If True, prevents secondary metadata connections. Recommended for strict single-connection clients.",
+    )
+
     # Observability Configuration
     enable_otel: bool = Field(default=True, description="Enable OpenTelemetry instrumentation")
     otel_endpoint: str = Field(default="http://localhost:4318", description="OTLP endpoint URL")

@@ -105,11 +105,14 @@ class PGWireServer:
         # Feature 018: Use BackendSelector to initialize IRIS executor
         # This supports both native Embedded and external DBAPI backends
         selector = BackendSelector()
-        
-        # Load backend type from env if not provided
+
         if not backend_type:
             backend_type = os.getenv("PGWIRE_BACKEND_TYPE", "embedded")
-            
+
+        strict_single_connection = (
+            os.getenv("PGWIRE_STRICT_SINGLE_CONNECTION", "false").lower() == "true"
+        )
+
         config = BackendConfig(
             backend_type=BackendType(backend_type.lower()),
             iris_hostname=iris_host,
@@ -119,8 +122,9 @@ class PGWireServer:
             iris_namespace=iris_namespace,
             pool_size=connection_pool_size,
             pool_timeout=int(connection_pool_timeout),
+            strict_single_connection=strict_single_connection,
         )
-        
+
         # Select appropriate executor (DBAPIExecutor or IRISExecutor)
         self.iris_executor = selector.select_backend(config)
 
@@ -283,12 +287,13 @@ class PGWireServer:
 async def main():
     """Main entry point for the PGWire server"""
     import sys
-    if 'iris' in sys.modules:
+
+    if "iris" in sys.modules:
         print(f"DEBUG: iris module already in sys.modules: {sys.modules['iris']}", flush=True)
         print(f"DEBUG: iris module dir: {dir(sys.modules['iris'])}", flush=True)
     else:
         print("DEBUG: iris module NOT in sys.modules at start of main", flush=True)
-        
+
     # Read configuration from environment
     host = os.getenv("PGWIRE_HOST", "0.0.0.0")
     port = int(os.getenv("PGWIRE_PORT", "5432"))

@@ -19,16 +19,15 @@ import re
 import secrets
 import ssl
 import struct
-import time
 from typing import Any
 
 import structlog
 
+from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
-from .iris_executor import IRISExecutor
-from .sql_translator import PerformanceStats, TranslationContext, ValidationLevel, get_translator
+from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 
@@ -105,7 +104,7 @@ class PGWireProtocol:
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        iris_executor: IRISExecutor,
+        iris_executor: Executor,
         connection_id: str,
         enable_scram: bool = False,
     ):
@@ -3066,6 +3065,15 @@ class PGWireProtocol:
                                 )
                                 return
 
+                        # NEW: Respect strict_single_connection flag to avoid license exhaustion on CE
+                        if getattr(self.iris_executor, "strict_single_connection", False):
+                            logger.info(
+                                "Strict single-connection mode: skipping metadata discovery to protect license",
+                                connection_id=self.connection_id,
+                            )
+                            await self.send_no_data()
+                            return
+
                         logger.info(
                             "🔍 Describe Statement: Executing metadata discovery",
                             connection_id=self.connection_id,
@@ -3172,8 +3180,12 @@ class PGWireProtocol:
                         try:
                             # CRITICAL FIX: For DML with RETURNING, use synthetic metadata
                             # instead of executing the query (which would cause duplicate execution)
-                            if has_returning and not self.iris_executor.sql_parser.is_select_statement(query):
+                            if (
+                                has_returning
+                                and not self.iris_executor.sql_parser.is_select_statement(query)
+                            ):
                                 import re
+
                                 # Extract RETURNING columns from query
                                 returning_match = re.search(
                                     r"\bRETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL
@@ -3187,18 +3199,24 @@ class PGWireProtocol:
                                         col_match = re.search(r'"?(\w+)"?\s*$', col)
                                         if col_match:
                                             col_name = col_match.group(1)
-                                            if col_name.lower() in ("created_at", "updated_at", "deleted_at"):
+                                            if col_name.lower() in (
+                                                "created_at",
+                                                "updated_at",
+                                                "deleted_at",
+                                            ):
                                                 type_oid = 20  # BIGINT for timestamps
                                             else:
                                                 type_oid = 25  # TEXT for others
-                                            returning_columns.append({
-                                                "name": col_name,
-                                                "type_oid": type_oid,
-                                                "type_size": -1,
-                                                "type_modifier": -1,
-                                                "format_code": 0,
-                                            })
-                                    
+                                            returning_columns.append(
+                                                {
+                                                    "name": col_name,
+                                                    "type_oid": type_oid,
+                                                    "type_size": -1,
+                                                    "type_modifier": -1,
+                                                    "format_code": 0,
+                                                }
+                                            )
+
                                     if returning_columns:
                                         logger.info(
                                             "🔍 Describe Portal: Sending synthetic RowDescription for RETURNING",
@@ -3207,9 +3225,11 @@ class PGWireProtocol:
                                             columns=[c["name"] for c in returning_columns],
                                         )
                                         result_formats = portal.get("result_formats", [])
-                                        await self.send_row_description(returning_columns, result_formats)
+                                        await self.send_row_description(
+                                            returning_columns, result_formats
+                                        )
                                         return
-                                    
+
                                     logger.info(
                                         "🔍 Describe Portal: RETURNING * detected, sending NoData",
                                         connection_id=self.connection_id,
@@ -3226,7 +3246,7 @@ class PGWireProtocol:
                                     )
                                     await self.send_no_data()
                                     return
-                            
+
                             # For SELECT/SHOW queries, execute to get metadata
                             result = await self.iris_executor.execute_query(
                                 query,
@@ -3455,7 +3475,9 @@ class PGWireProtocol:
                 # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
                 # Check if Describe sent NoData for RETURNING * - if so, we need to send RowDescription
                 needs_row_desc = portal.get("needs_row_description", False) if portal else False
-                await self.send_query_result(result, send_ready=False, send_row_description=needs_row_desc)
+                await self.send_query_result(
+                    result, send_ready=False, send_row_description=needs_row_desc
+                )
             else:
                 await self.send_error_response(
                     "ERROR", "42000", "syntax_error", result.get("error", "Query execution failed")
