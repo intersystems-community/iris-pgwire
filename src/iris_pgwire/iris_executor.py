@@ -1623,41 +1623,49 @@ class IRISExecutor:
         if returning_clause == "*":
             returning_columns = "*"
         else:
-            # Parse column names from RETURNING clause
-            # Or just: col1, col2, ...
-            raw_cols = [c.strip() for c in returning_clause.split(",")]
+            # Better column parsing that preserves expressions and aliases
+            # Split by commas but respect parentheses
             returning_columns = []
-            for col in raw_cols:
-                # Extract just the column name (last part after dots)
-                # Handle aliased columns like "col AS alias"
-                if " AS " in col.upper():
-                    col_match = re.search(r'"?(\w+)"?\s*$', col)
-                else:
-                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+            current_col = ""
+            depth = 0
+            for char in returning_clause:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
 
+                if char == "," and depth == 0:
+                    col = current_col.strip()
+                    # Extract last part of identifier if it's schema-qualified
+                    # e.g. public.users.id -> id, or "public"."users"."id" -> id
+                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+                    if col_match:
+                        returning_columns.append(col_match.group(1).lower())
+                    else:
+                        returning_columns.append(col.lower())
+                    current_col = ""
+                else:
+                    current_col += char
+            if current_col.strip():
+                col = current_col.strip()
+                col_match = re.search(r'"?(\w+)"?\s*$', col)
                 if col_match:
                     returning_columns.append(col_match.group(1).lower())
+                else:
+                    returning_columns.append(col.lower())
 
         # Determine operation type and extract table/where clause
         sql_upper = sql.upper().strip()
+        # Robust table extraction regex for all operations
+        table_regex = r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?'
+        table_match = re.search(table_regex, sql, re.IGNORECASE)
+        if table_match:
+            returning_table = table_match.group(1).upper()
+
         if sql_upper.startswith("INSERT"):
             returning_operation = "INSERT"
-            table_match = re.search(
-                rf'INSERT\s+INTO\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
-                sql,
-                re.IGNORECASE,
-            )
-            if table_match:
-                returning_table = table_match.group(1)
         elif sql_upper.startswith("UPDATE"):
             returning_operation = "UPDATE"
-            table_match = re.search(
-                rf'UPDATE\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
-                sql,
-                re.IGNORECASE,
-            )
-            if table_match:
-                returning_table = table_match.group(1)
             # Extract WHERE clause (everything between WHERE and RETURNING)
             where_match = re.search(
                 r"\bWHERE\s+(.+?)\s+RETURNING\b",
@@ -1668,13 +1676,6 @@ class IRISExecutor:
                 returning_where_clause = where_match.group(1).strip()
         elif sql_upper.startswith("DELETE"):
             returning_operation = "DELETE"
-            table_match = re.search(
-                rf'DELETE\s+FROM\s+(?:{re.escape(IRIS_SCHEMA)}\s*\.\s*)?"?(\w+)"?',
-                sql,
-                re.IGNORECASE,
-            )
-            if table_match:
-                returning_table = table_match.group(1)
             # Extract WHERE clause
             where_match = re.search(
                 r"\bWHERE\s+(.+?)\s+RETURNING\b",
@@ -1684,13 +1685,15 @@ class IRISExecutor:
             if where_match:
                 returning_where_clause = where_match.group(1).strip()
 
+        # Strip RETURNING clause from SQL for execution
+        # Use a non-greedy match to avoid stripping important parts if multiple statements exist
         stripped_sql = re.sub(
             r"\s+RETURNING\s+.*?(?=$|;)",
             "",
             sql,
             flags=re.IGNORECASE | re.DOTALL,
             count=1,
-        )
+        ).strip()
 
         return (
             returning_operation,
@@ -1805,14 +1808,31 @@ class IRISExecutor:
         import re
 
         # CRITICAL FIX: Normalize table name to UPPERCASE for IRIS compatibility
-        # IRIS stores table names in uppercase in INFORMATION_SCHEMA
         table_normalized = table.upper() if table else table
 
         # Handle columns as list or '*'
         if columns == "*":
-            col_list = "*"
+            # Expand * early to get real column names
+            expanded_cols = self._expand_select_star(
+                f"SELECT * FROM {IRIS_SCHEMA}.{table_normalized}", 0, session_id=session_id
+            )
+            if expanded_cols:
+                columns = expanded_cols
+                col_list = ", ".join([f'"{col}"' for col in columns])
+            else:
+                col_list = "*"
         else:
-            col_list = ", ".join([f'"{col}"' for col in columns])
+            # columns is a list of expressions/names. Preserve them but quote simple identifiers.
+            processed_cols = []
+            for col in columns:
+                if re.match(r"^\"?\w+\"?$", col):
+                    # Simple identifier - quote it
+                    clean_col = col.strip('"')
+                    processed_cols.append(f'"{clean_col}"')
+                else:
+                    # Expression - leave as is
+                    processed_cols.append(col)
+            col_list = ", ".join(processed_cols)
 
         rows = []
         meta = None
@@ -1855,7 +1875,7 @@ class IRISExecutor:
                         f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE %ID = ?',
                         [last_id],
                     )
-                    if not rows and columns != "*":
+                    if not rows and isinstance(columns, list):
                         id_cols = [
                             c
                             for c in columns
@@ -1929,42 +1949,31 @@ class IRISExecutor:
                     )
                     rows, meta = _fetch_results(select_sql, where_params)
 
-            # Feature 036: Build proper metadata with actual IRIS types if needed
+            # Build/Fix metadata
             if meta is None or not any("type_oid" in c for c in meta if isinstance(c, dict)):
-                if columns == "*":
-                    # For SELECT *, expand from schema
-                    col_names = self._expand_select_star(
-                        f"RETURNING * FROM {IRIS_SCHEMA}.{table}", 0, session_id=session_id
-                    )
-                    if col_names:
-                        new_meta = []
-                        for col in col_names:
-                            col_oid = self._get_column_type_from_schema(
-                                table, col, session_id=session_id
-                            )
-                            new_meta.append(
-                                {
-                                    "name": col,
-                                    "type_oid": col_oid or 1043,
-                                    "type_size": -1,
-                                    "type_modifier": -1,
-                                    "format_code": 0,
-                                }
-                            )
-                        meta = new_meta
-                else:
+                if isinstance(columns, list):
                     new_meta = []
                     for i, col in enumerate(columns):
+                        # Extract alias or column name
+                        col_name = col
+                        alias_match = re.search(r"\s+AS\s+\"?(\w+)\"?$", col, re.IGNORECASE)
+                        if alias_match:
+                            col_name = alias_match.group(1)
+                        else:
+                            col_name = col_name.strip('"')
+                            if "." in col_name:
+                                col_name = col_name.split(".")[-1]
+
                         col_oid = self._get_column_type_from_schema(
-                            table, col, session_id=session_id
+                            table, col_name, session_id=session_id
                         )
                         if col_oid is None and rows:
                             # Fallback to inference from value
-                            col_oid = self._infer_type_from_value(rows[0][i], col)
+                            col_oid = self._infer_type_from_value(rows[0][i], col_name)
 
                         new_meta.append(
                             {
-                                "name": col,
+                                "name": col_name,
                                 "type_oid": col_oid or 1043,
                                 "type_size": -1,
                                 "type_modifier": -1,
@@ -1972,6 +1981,9 @@ class IRISExecutor:
                             }
                         )
                     meta = new_meta
+                else:
+                    # columns is '*' and expansion failed
+                    pass
 
         except Exception as e:
             logger.error(f"RETURNING emulation failed for {operation}", error=str(e))
@@ -2304,6 +2316,7 @@ class IRISExecutor:
                             returning_where_clause,
                             optimized_params,
                             is_embedded=True,
+                            session_id=session_id,
                             original_sql=sql,  # Pass original SQL for UUID extraction
                         )
                         result = MockResult(rows, meta)
@@ -2324,25 +2337,18 @@ class IRISExecutor:
                         # Get original IRIS column name
                         iris_col_name = col_info.get("name", "")
                         iris_type = col_info.get("type", "VARCHAR")
+                        precomputed_oid = col_info.get("type_oid")
 
                         # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
-                        # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
-                        # PostgreSQL uses ?column?, type names (int4), or function names (count)
                         col_name = self._normalize_iris_column_name(
                             iris_col_name, optimized_sql, iris_type
                         )
 
-                        # DEBUG: Log IRIS type for arithmetic expressions
-                        logger.info(
-                            "🔍 IRIS metadata type discovery",
-                            original_column_name=iris_col_name,
-                            normalized_column_name=col_name,
-                            iris_type=iris_type,
-                            col_info=col_info,
-                        )
-
                         # Get PostgreSQL type OID
-                        type_oid = self._iris_type_to_pg_oid(iris_type)
+                        if precomputed_oid is not None:
+                            type_oid = precomputed_oid
+                        else:
+                            type_oid = self._iris_type_to_pg_oid(iris_type)
 
                         # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
 
@@ -3094,6 +3100,13 @@ class IRISExecutor:
                     connection=conn,
                 )
 
+                # Commit for non-SELECT statements to ensure visibility for emulation and durability
+                if not statements[-1].upper().strip().startswith("SELECT"):
+                    try:
+                        conn.commit()
+                    except Exception as commit_err:
+                        logger.warning(f"Failed to commit {statements[-1][:50]}: {commit_err}")
+
                 # RETURNING emulation
                 if returning_operation and returning_columns:
                     if returning_operation == "DELETE":
@@ -3109,6 +3122,7 @@ class IRISExecutor:
                             optimized_params,
                             is_embedded=False,
                             connection=conn,
+                            session_id=session_id,
                             original_sql=sql,  # Pass original SQL for UUID extraction
                         )
                         cursor = MockResult(rows, meta)
@@ -3564,20 +3578,12 @@ class IRISExecutor:
 
             if "RETURNING" in sql_upper:
                 # For INSERT/UPDATE/DELETE ... RETURNING *, extract table from INTO/UPDATE/FROM
-                # INSERT INTO table_name ...
-                insert_match = re.search(r"INSERT\s+INTO\s+([^\s(]+)", sql, re.IGNORECASE)
-                if insert_match:
-                    table_name = insert_match.group(1)
-                else:
-                    # UPDATE table_name SET ...
-                    update_match = re.search(r"UPDATE\s+([^\s]+)\s+SET", sql, re.IGNORECASE)
-                    if update_match:
-                        table_name = update_match.group(1)
-                    else:
-                        # DELETE FROM table_name ...
-                        delete_match = re.search(r"DELETE\s+FROM\s+([^\s]+)", sql, re.IGNORECASE)
-                        if delete_match:
-                            table_name = delete_match.group(1)
+                table_regex = (
+                    r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?'
+                )
+                table_match = re.search(table_regex, sql, re.IGNORECASE)
+                if table_match:
+                    table_name = table_match.group(1)
             else:
                 # SELECT * FROM table_name ...
                 from_match = re.search(r"FROM\s+([^\s,;()]+)", sql, re.IGNORECASE)

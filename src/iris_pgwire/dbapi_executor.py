@@ -14,6 +14,7 @@ Contract: contracts/dbapi-executor-contract.md
 """
 
 import asyncio
+import datetime as dt
 import re
 import time
 from typing import Any
@@ -25,10 +26,41 @@ from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.sql_translator import SQLPipeline
 from iris_pgwire.sql_translator.parser import get_parser
 
 logger = structlog.get_logger(__name__)
+
+
+class MockResult:
+    """Mock result object for RETURNING emulation"""
+
+    def __init__(self, rows, meta=None):
+        self._rows = rows if rows is not None else []
+        self._meta = meta
+        self.description = meta
+        self.rowcount = len(self._rows)
+        self._index = 0
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        if self._index < len(self._rows):
+            row = self._rows[self._index]
+            self._index += 1
+            return row
+        return None
+
+    def fetch(self):
+        return self._rows
+
+    def close(self):
+        pass
 
 
 class DBAPIExecutor:
@@ -103,11 +135,9 @@ class DBAPIExecutor:
     def _convert_value_for_iris(self, value: Any) -> Any:
         """Helper to convert a single value."""
         if isinstance(value, str):
-            # FR-004: Normalize ISO 8601 timestamp strings for IRIS
-            # Handles: YYYY-MM-DD[T ]HH:MM:SS[.fff][Z|[+-]HH:MM]
+            # Check for ISO 8601 timestamp: 2026-01-29T21:27:38.111Z
+            # or 2026-01-29T21:27:38.111+00:00
             # IRIS rejects the 'T' and 'Z' or offset in %PosixTime/TIMESTAMP
-            import re
-
             ts_match = re.match(
                 r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?(\d{2})?)?$",
                 value,
@@ -151,20 +181,54 @@ class DBAPIExecutor:
             # Acquire connection from pool
             conn_wrapper = await self.pool.acquire()
 
+            # Detect RETURNING clause
+            has_returning = self.has_returning_clause(sql)
+
             # Execute query in thread pool (DBAPI is synchronous)
             def execute_in_thread():
                 cursor = conn_wrapper.connection.cursor()  # type: ignore
                 try:
-                    # Strip trailing semicolon for IRIS compatibility
-                    clean_sql = sql.strip().rstrip(";")
-
                     # Feature 034: Apply per-session namespace if set
                     if session_id and session_id in self.session_namespaces:
                         ns = self.session_namespaces[session_id]
-                        # In DBAPI, we switch namespace by executing a command if supported,
-                        # but IRIS DBAPI connection is usually fixed to a namespace.
-                        # For now, we log it.
                         logger.debug(f"Session {session_id} using namespace {ns}")
+
+                    # Handle RETURNING emulation
+                    if has_returning:
+                        op, table, cols, where, stripped_sql = self._parse_returning_clause(sql)
+                        if op and table:
+                            # Strip trailing semicolon
+                            clean_sql = stripped_sql.strip().rstrip(";")
+
+                            # For DELETE, we must fetch BEFORE deleting
+                            delete_rows = []
+                            delete_meta = None
+                            if op == "DELETE":
+                                delete_rows, delete_meta = self._emulate_returning_sync(
+                                    cursor, op, table, cols, where, converted_params, sql
+                                )
+
+                            # Execute the main statement
+                            if converted_params:
+                                cursor.execute(clean_sql, converted_params)
+                            else:
+                                cursor.execute(clean_sql)
+
+                            # Emulate RETURNING result
+                            if op == "DELETE":
+                                rows = delete_rows
+                                columns = delete_meta
+                            else:
+                                rows, columns = self._emulate_returning_sync(
+                                    cursor, op, table, cols, where, converted_params, sql
+                                )
+
+                            row_count = len(rows)
+                            return rows, columns, row_count
+
+                    # Standard execution path
+                    # Strip trailing semicolon for IRIS compatibility
+                    clean_sql = sql.strip().rstrip(";")
 
                     if converted_params:
                         cursor.execute(clean_sql, converted_params)
@@ -260,13 +324,8 @@ class DBAPIExecutor:
         """
         Execute SQL with multiple parameter sets for batch operations.
 
-        Args:
-            sql: SQL query string (usually INSERT)
-            params_list: List of parameter tuples/lists
-            session_id: Optional session identifier
-
-        Returns:
-            Dict with execution results (rows_affected, execution_time_ms, etc.)
+        RETURNING SUPPORT: When SQL contains RETURNING clause, executes each statement
+        individually and aggregates the returned rows.
         """
         start_time = time.perf_counter()
         conn_wrapper = None
@@ -274,6 +333,9 @@ class DBAPIExecutor:
         try:
             # Translate placeholders ($1 -> ?)
             sql = self._translate_placeholders(sql)
+
+            # Detect RETURNING clause
+            has_returning = self.has_returning_clause(sql)
 
             # Acquire connection from pool
             conn_wrapper = await self.pool.acquire()
@@ -285,6 +347,38 @@ class DBAPIExecutor:
                     # Strip trailing semicolon for IRIS compatibility
                     clean_sql = sql.strip().rstrip(";")
 
+                    if has_returning:
+                        op, table, cols, where, stripped_sql = self._parse_returning_clause(sql)
+                        if op and table:
+                            all_rows = []
+                            all_meta = None
+
+                            for params in params_list:
+                                converted_params = self._convert_params_for_iris(params)
+                                # For DELETE, capture before
+                                if op == "DELETE":
+                                    rows, meta = self._emulate_returning_sync(
+                                        cursor, op, table, cols, where, converted_params, sql
+                                    )
+                                    all_rows.extend(rows)
+                                    if not all_meta:
+                                        all_meta = meta
+
+                                # Execute statement
+                                cursor.execute(stripped_sql.strip().rstrip(";"), converted_params)
+
+                                # For INSERT/UPDATE, capture after
+                                if op != "DELETE":
+                                    rows, meta = self._emulate_returning_sync(
+                                        cursor, op, table, cols, where, converted_params, sql
+                                    )
+                                    all_rows.extend(rows)
+                                    if not all_meta:
+                                        all_meta = meta
+
+                            return all_rows, all_meta or [], len(params_list)
+
+                    # Standard batch execution
                     # Pre-process parameters (e.g. convert lists to IRIS vector strings)
                     final_params_list = []
                     for p_set in params_list:
@@ -307,11 +401,11 @@ class DBAPIExecutor:
                     rows_affected = (
                         cursor.rowcount if hasattr(cursor, "rowcount") else len(params_list)
                     )
-                    return rows_affected
+                    return [], [], rows_affected
                 finally:
                     cursor.close()
 
-            rows_affected = await asyncio.to_thread(execute_batch_in_thread)
+            rows, columns, rows_affected = await asyncio.to_thread(execute_batch_in_thread)
 
             # Record metrics
             elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -332,9 +426,11 @@ class DBAPIExecutor:
                 "rows_affected": rows_affected,
                 "execution_time_ms": elapsed_ms,
                 "batch_size": len(params_list),
-                "rows": [],
-                "columns": [],
-                "_execution_path": "dbapi_executemany",
+                "rows": rows,
+                "columns": columns,
+                "_execution_path": (
+                    "dbapi_executemany_returning" if has_returning else "dbapi_executemany"
+                ),
             }
 
         except Exception as e:
@@ -433,20 +529,374 @@ class DBAPIExecutor:
         }
 
     def has_returning_clause(self, query: str) -> bool:
-        """Check if query has a RETURNING clause."""
+        """
+        Check if query has a RETURNING clause.
+        """
         if not query:
             return False
         return bool(re.search(r"\bRETURNING\b", query, re.IGNORECASE | re.DOTALL))
 
     def get_returning_columns(self, query: str) -> list[str]:
-        """Extract column names from RETURNING clause."""
-        match = re.search(r"RETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL)
+        """
+        Extract column names from RETURNING clause.
+        """
+        match = re.search(r"RETURNING\s+(.+?)(?=$|;)", query, re.IGNORECASE | re.DOTALL)
         if not match:
             return []
         cols_str = match.group(1).strip()
         if cols_str == "*":
             return ["*"]
         return [c.strip() for c in cols_str.split(",")]
+
+    def _get_table_columns_from_schema(self, table: str, cursor=None) -> list[str]:
+        """
+        Query INFORMATION_SCHEMA.COLUMNS for the given table.
+        Returns the list of column names in order.
+        """
+        if self.strict_single_connection or cursor is None:
+            return []
+        try:
+            table_clean = table.strip('"').strip("'")
+            metadata_sql = f"""
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE LOWER(TABLE_NAME) = LOWER('{table_clean}')
+                AND LOWER(TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
+                ORDER BY ORDINAL_POSITION
+            """
+            cursor.execute(metadata_sql)
+            rows = cursor.fetchall()
+            return [row[0] for row in rows]
+        except Exception as e:
+            logger.debug(f"Failed to get columns from schema for {table}: {e}")
+        return []
+
+    def _get_column_type_from_schema(self, table: str, column: str, cursor=None) -> int | None:
+        """
+        Query INFORMATION_SCHEMA.COLUMNS for the given table and column.
+        Returns the PostgreSQL type OID.
+        """
+        if self.strict_single_connection or cursor is None:
+            return None
+        try:
+            table_clean = table.strip('"').strip("'")
+            column_clean = column.strip('"').strip("'")
+            metadata_sql = f"""
+                SELECT DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE LOWER(TABLE_NAME) = LOWER('{table_clean}')
+                AND LOWER(COLUMN_NAME) = LOWER('{column_clean}')
+                AND LOWER(TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
+            """
+            cursor.execute(metadata_sql)
+            row = cursor.fetchone()
+            if row:
+                iris_type = row[0]
+                return self._map_iris_type_to_oid(iris_type)
+        except Exception as e:
+            logger.debug(f"Failed to get type from schema for {table}.{column}: {e}")
+        return None
+
+    def _infer_type_from_value(self, value, column_name: str | None = None) -> int:
+        """
+        Infer PostgreSQL type OID from Python value
+        """
+        from decimal import Decimal
+
+        if value is None:
+            return 1043  # VARCHAR
+        elif isinstance(value, bool):
+            return 16  # BOOL
+        elif isinstance(value, int):
+            if column_name and any(k in column_name.lower() for k in ("id", "key")):
+                return 20  # BIGINT
+            return 23  # INTEGER
+        elif isinstance(value, float):
+            return 701  # FLOAT8
+        elif isinstance(value, Decimal):
+            return 1700  # NUMERIC
+        elif isinstance(value, dt.datetime):
+            return 1114
+        elif isinstance(value, dt.date):
+            return 1082
+        elif isinstance(value, str):
+            return 1043  # VARCHAR
+        else:
+            return 1043
+
+    def _serialize_value(self, value: Any, type_oid: int) -> Any:
+        """
+        Robust value serialization for PostgreSQL wire protocol compatibility.
+        """
+        if value is None:
+            return None
+
+        if type_oid == 1114:  # TIMESTAMP
+            if isinstance(value, dt.datetime):
+                return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            elif isinstance(value, str):
+                return value  # Already a string
+
+        return value
+
+    def _parse_returning_clause(
+        self, sql: str
+    ) -> tuple[str | None, str | None, Any, str | None, str]:
+        """
+        Parse RETURNING clause from SQL and return metadata.
+        Returns: (operation, table, columns, where_clause, stripped_sql)
+        """
+        returning_operation = None
+        returning_table = None
+        returning_columns = None
+        returning_where_clause = None
+
+        returning_pattern = r"\s+RETURNING\s+(.*?)($|;)"
+        returning_match = re.search(returning_pattern, sql, re.IGNORECASE | re.DOTALL)
+
+        if not returning_match:
+            return None, None, None, None, sql
+
+        returning_clause = returning_match.group(1).strip()
+
+        if returning_clause == "*":
+            returning_columns = "*"
+        else:
+            # Better column parsing that preserves expressions and aliases
+            # Split by commas but respect parentheses
+            returning_columns = []
+            current_col = ""
+            depth = 0
+            for char in returning_clause:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+
+                if char == "," and depth == 0:
+                    col = current_col.strip()
+                    # Extract last part of identifier if it's schema-qualified
+                    # e.g. public.users.id -> id, or "public"."users"."id" -> id
+                    col_match = re.search(r'"?(\w+)"?\s*$', col)
+                    if col_match:
+                        returning_columns.append(col_match.group(1).lower())
+                    else:
+                        returning_columns.append(col.lower())
+                    current_col = ""
+                else:
+                    current_col += char
+            if current_col.strip():
+                col = current_col.strip()
+                col_match = re.search(r'"?(\w+)"?\s*$', col)
+                if col_match:
+                    returning_columns.append(col_match.group(1).lower())
+                else:
+                    returning_columns.append(col.lower())
+
+        sql_upper = sql.upper().strip()
+        # Robust table extraction regex for all operations
+        table_regex = r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?'
+        table_match = re.search(table_regex, sql, re.IGNORECASE)
+        if table_match:
+            returning_table = table_match.group(1).upper()
+
+        if sql_upper.startswith("INSERT"):
+            returning_operation = "INSERT"
+        elif sql_upper.startswith("UPDATE"):
+            returning_operation = "UPDATE"
+            where_match = re.search(
+                r"\bWHERE\s+(.+?)\s+RETURNING\b",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if where_match:
+                returning_where_clause = where_match.group(1).strip()
+        elif sql_upper.startswith("DELETE"):
+            returning_operation = "DELETE"
+            where_match = re.search(
+                r"\bWHERE\s+(.+?)\s+RETURNING\b",
+                sql,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if where_match:
+                returning_where_clause = where_match.group(1).strip()
+
+        stripped_sql = re.sub(
+            r"\s+RETURNING\s+.*?(?=$|;)",
+            "",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+            count=1,
+        )
+
+        return (
+            returning_operation,
+            returning_table,
+            returning_columns,
+            returning_where_clause,
+            stripped_sql,
+        )
+
+    def _expand_select_star(self, sql: str, expected_columns: int, cursor=None) -> list[str] | None:
+        """
+        Expand SELECT * or RETURNING * into explicit column names using INFORMATION_SCHEMA.
+        """
+        try:
+            table_name = None
+            sql_upper = sql.upper()
+
+            if "RETURNING" in sql_upper:
+                table_regex = (
+                    r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?'
+                )
+                table_match = re.search(table_regex, sql, re.IGNORECASE)
+                if table_match:
+                    table_name = table_match.group(1)
+            else:
+                from_match = re.search(r"FROM\s+([^\s,;()]+)", sql, re.IGNORECASE)
+                if from_match:
+                    table_name = from_match.group(1)
+
+            if table_name:
+                if "." in table_name:
+                    table_name = table_name.split(".")[-1]
+                table_name = table_name.strip('"').strip("'")
+
+                schema_columns = self._get_table_columns_from_schema(table_name, cursor)
+                if schema_columns:
+                    if expected_columns == 0 or len(schema_columns) == expected_columns:
+                        return schema_columns
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to expand SELECT *: {e}")
+            return None
+
+    def _extract_insert_id_from_sql(
+        self, sql: str, params: list | None, session_id: str | None = None
+    ) -> tuple[str | None, Any]:
+        """
+        Extract the ID value from an INSERT statement.
+        """
+        col_match = re.search(r"INSERT\s+INTO\s+[^\s(]+\s*\(\s*([^)]+)\s*\)", sql, re.IGNORECASE)
+        if not col_match:
+            return None, None
+
+        columns_str = col_match.group(1)
+        columns = [c.strip().strip('"').strip("'").lower() for c in columns_str.split(",")]
+
+        id_col_names = ["id", "uuid", "_id"]
+        id_col_idx = None
+        id_col_name = None
+        for i, col in enumerate(columns):
+            if col in id_col_names:
+                id_col_idx = i
+                id_col_name = col
+                break
+
+        if id_col_idx is None:
+            return None, None
+
+        if params and len(params) > id_col_idx:
+            return id_col_name, params[id_col_idx]
+
+        return None, None
+
+    def _emulate_returning_sync(
+        self,
+        cursor,
+        operation: str,
+        table: str,
+        columns: list[str] | str,
+        where_clause: str | None,
+        params: list | None,
+        original_sql: str | None = None,
+    ) -> tuple[list[Any], Any]:
+        """
+        Synchronous emulation of RETURNING clause.
+        """
+        table_normalized = table.upper() if table else table
+        if columns == "*":
+            # Expand * using table schema
+            expanded_cols = self._get_table_columns_from_schema(table_normalized, cursor)
+            if expanded_cols:
+                col_list = ", ".join([f'"{col}"' for col in expanded_cols])
+                columns = expanded_cols  # Update columns for metadata generation
+            else:
+                col_list = "*"
+        else:
+            col_list = ", ".join([f'"{col}"' for col in columns])
+
+        rows = []
+        meta = None
+
+        try:
+            if operation == "INSERT":
+                # Method 1: LAST_IDENTITY()
+                cursor.execute("SELECT LAST_IDENTITY()")
+                id_row = cursor.fetchone()
+                last_id = id_row[0] if id_row else None
+
+                if last_id:
+                    cursor.execute(
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE %ID = ?',
+                        (last_id,),
+                    )
+                    rows = cursor.fetchall()
+                    meta = cursor.description
+
+                # Method 2: Extract from SQL if still no rows
+                if not rows and original_sql:
+                    id_col_name, id_value = self._extract_insert_id_from_sql(original_sql, params)
+                    if id_col_name and id_value:
+                        cursor.execute(
+                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE "{id_col_name}" = ?',
+                            (id_value,),
+                        )
+                        rows = cursor.fetchall()
+                        meta = cursor.description
+
+            elif operation in ("UPDATE", "DELETE"):
+                if where_clause:
+                    # Translate schema references in WHERE clause
+                    translated_where = re.sub(
+                        r'"public"\s*\.\s*"(\w+)"',
+                        rf'{IRIS_SCHEMA}."\1"',
+                        where_clause,
+                        flags=re.IGNORECASE,
+                    )
+                    translated_where = re.sub(
+                        r'\bpublic\s*\.\s*"(\w+)"',
+                        rf'{IRIS_SCHEMA}."\1"',
+                        translated_where,
+                        flags=re.IGNORECASE,
+                    )
+
+                    # Very basic where clause parameter extraction
+                    where_param_count = translated_where.count("?")
+                    where_params = (
+                        params[-where_param_count:] if params and where_param_count > 0 else None
+                    )
+
+                    cursor.execute(
+                        f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE {translated_where}',
+                        where_params or (),
+                    )
+                    rows = cursor.fetchall()
+                    meta = cursor.description
+
+            # Build metadata if needed
+            if meta and not any(isinstance(m, dict) and "type_oid" in m for m in meta):
+                new_meta = []
+                for i, desc in enumerate(meta):
+                    col_name = desc[0]
+                    col_oid = self._map_dbapi_type_to_oid(desc[1])
+                    new_meta.append({"name": col_name, "type_oid": col_oid, "format_code": 0})
+                meta = new_meta
+
+        except Exception as e:
+            logger.error(f"RETURNING emulation failed: {e}")
+
+        return rows, meta
 
     def _map_dbapi_type_to_oid(self, dbapi_type: Any) -> int:
         """Map DBAPI type to PostgreSQL OID."""
@@ -461,6 +911,41 @@ class DBAPIExecutor:
         if "TIME" in type_str:
             return 1114
         return 1043  # Default to VARCHAR
+
+    def _map_iris_type_to_oid(self, iris_type: str) -> int:
+        """
+        Map IRIS data type to PostgreSQL type OID.
+
+        Args:
+            iris_type: IRIS data type (e.g., 'INT', 'VARCHAR', 'DATE')
+
+        Returns:
+            PostgreSQL type OID
+        """
+        type_map = {
+            "INT": 23,  # int4
+            "INTEGER": 23,  # int4
+            "BIGINT": 20,  # int8
+            "SMALLINT": 21,  # int2
+            "VARCHAR": 1043,  # varchar
+            "CHAR": 1042,  # char
+            "TEXT": 25,  # text
+            "DATE": 1082,  # date
+            "TIME": 1083,  # time
+            "TIMESTAMP": 1114,  # timestamp
+            "DOUBLE": 701,  # float8
+            "FLOAT": 701,  # float8
+            "NUMERIC": 1700,  # numeric
+            "DECIMAL": 1700,  # numeric
+            "BIT": 1560,  # bit
+            "BOOLEAN": 16,  # bool
+            "VARBINARY": 17,  # bytea
+        }
+
+        # Normalize type name (remove size, etc.)
+        normalized_type = iris_type.upper().split("(")[0].strip()
+
+        return type_map.get(normalized_type, 1043)  # Default to VARCHAR (OID 1043)
 
     def _determine_command_tag(self, sql: str, row_count: int) -> str:
         """Determine PostgreSQL command tag from SQL"""
