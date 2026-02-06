@@ -10,7 +10,9 @@ import sys
 import psycopg
 
 
-def validate_iris_pgwire(host: str = "localhost", port: int = 5432, database: str = "USER") -> str | None:
+def validate_iris_pgwire(
+    host: str = "localhost", port: int = 5432, database: str = "USER"
+) -> str | None:
     """
     Validate IRIS + PGWire connection.
 
@@ -23,12 +25,7 @@ def validate_iris_pgwire(host: str = "localhost", port: int = 5432, database: st
         None if successful, error message if failed
     """
     try:
-        conn = psycopg.connect(
-            host=host,
-            port=port,
-            dbname=database,
-            connect_timeout=10
-        )
+        conn = psycopg.connect(host=host, port=port, dbname=database, connect_timeout=10)
         conn.close()
         return None
     except Exception as e:
@@ -40,7 +37,7 @@ def validate_postgresql_psycopg3(
     port: int = 5433,
     database: str = "benchmark",
     username: str = "postgres",
-    password: str = "postgres"
+    password: str = "postgres",
 ) -> str | None:
     """
     Validate PostgreSQL + psycopg3 connection.
@@ -62,7 +59,7 @@ def validate_postgresql_psycopg3(
             dbname=database,
             user=username,
             password=password,
-            connect_timeout=10
+            connect_timeout=10,
         )
         # Verify pgvector extension
         with conn.cursor() as cur:
@@ -80,7 +77,7 @@ def validate_iris_dbapi(
     port: int = None,
     namespace: str = "USER",
     username: str = "_SYSTEM",
-    password: str = "SYS"
+    password: str = "SYS",
 ) -> str | None:
     """
     Validate IRIS + DBAPI connection using intersystems-irispython package.
@@ -109,16 +106,14 @@ def validate_iris_dbapi(
 
         # Verify iris.connect is available (not iris.sql.exec for embedded Python)
         if not hasattr(iris, "connect"):
-            return "IRIS DBAPI connection failed: iris.connect() not available. " \
-                   "Install intersystems-irispython package."
+            return (
+                "IRIS DBAPI connection failed: iris.connect() not available. "
+                "Install intersystems-irispython package."
+            )
 
         # Create DBAPI connection
         connection = iris.connect(
-            hostname=host,
-            port=port,
-            namespace=namespace,
-            username=username,
-            password=password
+            hostname=host, port=port, namespace=namespace, username=username, password=password
         )
 
         # Test the connection with a simple query

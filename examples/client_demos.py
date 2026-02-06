@@ -22,11 +22,7 @@ async def demo_psycopg_async():
 
         # Connect to IRIS via PGWire
         conn = await psycopg.AsyncConnection.connect(
-            host="127.0.0.1",
-            port=5432,
-            user="test_user",
-            dbname="USER",
-            connect_timeout=10
+            host="127.0.0.1", port=5432, user="test_user", dbname="USER", connect_timeout=10
         )
 
         print("✓ Connected to IRIS via PGWire")
@@ -43,12 +39,14 @@ async def demo_psycopg_async():
             print(f"✓ Vector creation: {result[0][:50]}...")
 
             # Vector similarity
-            await cur.execute("""
+            await cur.execute(
+                """
                 SELECT VECTOR_COSINE(
                     TO_VECTOR('[1,0,0]'),
                     TO_VECTOR('[1,0,0]')
                 ) as similarity
-            """)
+            """
+            )
             result = await cur.fetchone()
             print(f"✓ Vector similarity: {result[0]}")
 
@@ -65,6 +63,7 @@ async def demo_psycopg_async():
         print(f"✗ psycopg async demo failed: {e}\n")
         return False
 
+
 # Demo 2: psycopg (Sync) - Traditional synchronous client
 def demo_psycopg_sync():
     """Demo: psycopg sync client"""
@@ -75,11 +74,7 @@ def demo_psycopg_sync():
 
         # Synchronous connection
         with psycopg.connect(
-            host="127.0.0.1",
-            port=5432,
-            user="test_user",
-            dbname="USER",
-            connect_timeout=10
+            host="127.0.0.1", port=5432, user="test_user", dbname="USER", connect_timeout=10
         ) as conn:
             print("✓ Connected to IRIS via PGWire (sync)")
 
@@ -104,6 +99,7 @@ def demo_psycopg_sync():
         print(f"✗ psycopg sync demo failed: {e}\n")
         return False
 
+
 # Demo 3: asyncpg - High-performance async client
 async def demo_asyncpg():
     """Demo: asyncpg high-performance client"""
@@ -113,12 +109,7 @@ async def demo_asyncpg():
         import asyncpg
 
         # Connect to IRIS via PGWire
-        conn = await asyncpg.connect(
-            host="127.0.0.1",
-            port=5432,
-            user="test_user",
-            database="USER"
-        )
+        conn = await asyncpg.connect(host="127.0.0.1", port=5432, user="test_user", database="USER")
 
         print("✓ Connected to IRIS via PGWire (asyncpg)")
 
@@ -146,6 +137,7 @@ async def demo_asyncpg():
         print(f"✗ asyncpg demo failed: {e}\n")
         return False
 
+
 # Demo 4: SQLAlchemy - ORM and SQL toolkit
 def demo_sqlalchemy():
     """Demo: SQLAlchemy ORM with IRIS PGWire"""
@@ -157,8 +149,7 @@ def demo_sqlalchemy():
 
         # Create engine for IRIS via PGWire
         engine = create_engine(
-            "postgresql://test_user@127.0.0.1:5432/USER",
-            echo=False  # Set to True for SQL logging
+            "postgresql://test_user@127.0.0.1:5432/USER", echo=False  # Set to True for SQL logging
         )
 
         print("✓ SQLAlchemy engine created")
@@ -175,10 +166,7 @@ def demo_sqlalchemy():
             print(f"✓ Vector via SQLAlchemy: {row[0][:30]}...")
 
             # Parameterized query
-            result = conn.execute(
-                text("SELECT :x + :y as sum"),
-                {"x": 15, "y": 25}
-            )
+            result = conn.execute(text("SELECT :x + :y as sum"), {"x": 15, "y": 25})
             row = result.fetchone()
             print(f"✓ Parameterized query: {row[0]}")
 
@@ -191,6 +179,7 @@ def demo_sqlalchemy():
     except Exception as e:
         print(f"✗ SQLAlchemy demo failed: {e}\n")
         return False
+
 
 # Demo 5: pandas - Data analysis with PostgreSQL
 def demo_pandas():
@@ -209,17 +198,14 @@ def demo_pandas():
         # Read data into DataFrame
         df = pd.read_sql(
             "SELECT n as id, n*2 as value, RANDOM() as random_val FROM generate_series(1, 10) as n",
-            engine
+            engine,
         )
         print(f"✓ DataFrame created: {len(df)} rows")
         print(f"✓ DataFrame columns: {list(df.columns)}")
         print(f"✓ Sample data:\n{df.head(3)}")
 
         # Vector operations with pandas
-        vector_df = pd.read_sql(
-            "SELECT TO_VECTOR('[1,2,3]') as vector_col",
-            engine
-        )
+        vector_df = pd.read_sql("SELECT TO_VECTOR('[1,2,3]') as vector_col", engine)
         print(f"✓ Vector DataFrame: {len(vector_df)} rows")
 
         print("✓ pandas demo completed\n")
@@ -232,6 +218,7 @@ def demo_pandas():
         print(f"✗ pandas demo failed: {e}\n")
         return False
 
+
 # Demo 6: Performance Benchmarking
 async def demo_performance_benchmark():
     """Demo: Performance benchmarking of different operations"""
@@ -241,11 +228,7 @@ async def demo_performance_benchmark():
         import psycopg
 
         conn = await psycopg.AsyncConnection.connect(
-            host="127.0.0.1",
-            port=5432,
-            user="test_user",
-            dbname="USER",
-            connect_timeout=10
+            host="127.0.0.1", port=5432, user="test_user", dbname="USER", connect_timeout=10
         )
 
         print("✓ Connected for performance testing")
@@ -280,7 +263,7 @@ async def demo_performance_benchmark():
 
         # Benchmark 3: Large vectors
         print("\n--- Large Vector Performance ---")
-        large_vector = "[" + ",".join([str(i*0.1) for i in range(1024)]) + "]"
+        large_vector = "[" + ",".join([str(i * 0.1) for i in range(1024)]) + "]"
         large_vector_times = []
         for i in range(10):
             start = time.time()
@@ -299,7 +282,7 @@ async def demo_performance_benchmark():
         async with conn.cursor() as cur:
             for i in range(100):
                 start = time.time()
-                await cur.execute("SELECT %s + %s", (i, i*2))
+                await cur.execute("SELECT %s + %s", (i, i * 2))
                 await cur.fetchone()
                 prep_times.append(time.time() - start)
 
@@ -325,6 +308,7 @@ async def demo_performance_benchmark():
         print(f"✗ Performance benchmark failed: {e}\n")
         return False
 
+
 # Demo 7: Connection Pool Testing
 async def demo_connection_pool():
     """Demo: Connection pooling and concurrent access"""
@@ -335,9 +319,7 @@ async def demo_connection_pool():
 
         # Create connection pool
         pool = psycopg_pool.AsyncConnectionPool(
-            conninfo="host=127.0.0.1 port=5432 user=test_user dbname=USER",
-            min_size=5,
-            max_size=20
+            conninfo="host=127.0.0.1 port=5432 user=test_user dbname=USER", min_size=5, max_size=20
         )
 
         print("✓ Connection pool created (5-20 connections)")
@@ -347,7 +329,9 @@ async def demo_connection_pool():
             start = time.time()
             async with pool.connection() as conn:
                 async with conn.cursor() as cur:
-                    await cur.execute("SELECT %s as worker_id, RANDOM() as random_val", (worker_id,))
+                    await cur.execute(
+                        "SELECT %s as worker_id, RANDOM() as random_val", (worker_id,)
+                    )
                     await cur.fetchone()
                     await asyncio.sleep(0.1)  # Simulate work
             return time.time() - start
@@ -373,6 +357,7 @@ async def demo_connection_pool():
     except Exception as e:
         print(f"✗ Connection pool demo failed: {e}\n")
         return False
+
 
 # Main demo runner
 async def run_all_demos():
@@ -409,9 +394,9 @@ async def run_all_demos():
             results.append((name, False))
 
     # Summary
-    print("="*60)
+    print("=" * 60)
     print("DEMO RESULTS SUMMARY")
-    print("="*60)
+    print("=" * 60)
 
     successful = sum(1 for _, success in results if success)
     total = len(results)
@@ -427,6 +412,7 @@ async def run_all_demos():
         print("IRIS PostgreSQL Wire Protocol is production-ready!")
     else:
         print(f"\n⚠ {total - successful} demos failed. Check dependencies and server status.")
+
 
 if __name__ == "__main__":
     asyncio.run(run_all_demos())

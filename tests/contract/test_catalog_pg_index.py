@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_index catalog emulation.
 """
 
 import pytest
+
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 

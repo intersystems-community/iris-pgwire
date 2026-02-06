@@ -1,7 +1,8 @@
-import pytest
-import psycopg
 import os
 import time
+
+import psycopg
+import pytest
 
 
 def test_repro_returning_failure(pgwire_client):

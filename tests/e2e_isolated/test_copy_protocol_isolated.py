@@ -13,9 +13,9 @@ Performance Validation:
 - <100MB memory for 1M rows (FR-006 requirement)
 """
 
-import time
-import sys
 import os
+import sys
+import time
 from pathlib import Path
 
 # Add src to path for local iris_pgwire
@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import pytest
 from iris_devtester import IRISContainer
 from iris_devtester.utils.password import unexpire_all_passwords
+
 from tests.conftest import find_free_port
 
 # Test data paths
@@ -31,7 +32,9 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 PATIENTS_CSV = REPO_ROOT / "examples" / "superset-iris-healthcare" / "data" / "patients-data.csv"
 
 
-def start_pgwire_in_container(container, iris_port: int, iris_namespace: str, pgwire_port: int = 5432):
+def start_pgwire_in_container(
+    container, iris_port: int, iris_namespace: str, pgwire_port: int = 5432
+):
     """
     Start PGWire server inside an isolated IRIS container.
 
@@ -135,27 +138,28 @@ def isolated_iris_with_pgwire():
     """
     import asyncio
     import threading
+
     from iris_pgwire.server import PGWireServer
 
     # Use standard IRIS container
     with IRISContainer.community() as iris:
         container_name = iris.get_container_name()
-        
+
         # CRITICAL: Enable CallIn service for DBAPI TCP connections
         if not iris.check_callin_enabled():
             iris.enable_callin_service()
             print("✅ CallIn service enabled")
-        
+
         # CRITICAL: Unexpire passwords to allow authentication
         success, msg = unexpire_all_passwords(container_name, timeout=60)
         print(f"✅ Unexpire passwords: {success}, {msg}")
-        
+
         # Give IRIS a moment to propagate setup
         time.sleep(2)
-        
+
         config = iris.get_config()
         target_namespace = "USER"
-        
+
         # NOTE: DAT fixture restore requires SYS.Database.RestoreNamespace which
         # is not available in Community Edition. For isolated tests, we use
         # the default USER namespace without fixture restore.
@@ -173,14 +177,17 @@ def isolated_iris_with_pgwire():
         )
 
         stop_event = threading.Event()
+
         def run_server():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+
             async def start_and_wait():
                 await server.start()
                 while not stop_event.is_set():
                     await asyncio.sleep(0.1)
                 await server.stop()
+
             try:
                 loop.run_until_complete(start_and_wait())
             finally:
@@ -201,7 +208,7 @@ def isolated_iris_with_pgwire():
                 import intersystems_iris.dbapi._DBAPI as iris_dbapi
             except ImportError:
                 import iris as iris_dbapi
-            
+
         # Retry connection to handle potential propagation delay
         iris_conn = None
         for attempt in range(5):
@@ -211,12 +218,13 @@ def isolated_iris_with_pgwire():
                     port=config.port,
                     username=config.username,  # SuperUser from iris-devtester
                     password=config.password,  # SYS from iris-devtester
-                    namespace=target_namespace
+                    namespace=target_namespace,
                 )
                 print(f"✅ IRIS DBAPI connection established on attempt {attempt+1}")
                 break
             except Exception as e:
-                if attempt == 4: raise
+                if attempt == 4:
+                    raise
                 print(f"⏳ IRIS connection failed, retrying... ({e})")
                 time.sleep(2)
 
@@ -243,7 +251,7 @@ def test_isolated_iris_available(isolated_iris_with_pgwire):
     This proves we have a clean IRIS environment, not "whatever container is running".
     """
     params = isolated_iris_with_pgwire
-    
+
     # Wait for PGWire to settle
     time.sleep(1)
 
@@ -340,7 +348,6 @@ with psycopg.connect(
 ) as conn:
 """
 
-
     # Write test script to container
     tar_stream = io.BytesIO()
     with tarfile.open(fileobj=tar_stream, mode="w") as tar:
@@ -359,8 +366,7 @@ with psycopg.connect(
     }
 
     exit_code, output = container.exec_run(
-        ["/usr/irissys/bin/irispython", "/tmp/test_copy.py"],
-        environment=env
+        ["/usr/irissys/bin/irispython", "/tmp/test_copy.py"], environment=env
     )
 
     # Parse results

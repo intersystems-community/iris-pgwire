@@ -7,6 +7,7 @@ Required for Drizzle ORM and other clients that introspect data types.
 
 from dataclasses import dataclass
 from typing import Any
+
 from .oid_generator import OIDGenerator
 
 

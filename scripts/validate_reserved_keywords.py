@@ -32,18 +32,16 @@ def check_iris_reserved_words():
     try:
         # Connect to IRIS
         conn = dbapi.connect(
-            hostname="localhost",
-            port=1972,
-            namespace="USER",
-            username="_SYSTEM",
-            password="SYS"
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
         )
         cursor = conn.cursor()
         print("✅ Connected to IRIS at localhost:1972\n")
 
         # Get our current list
         our_keywords = sorted(ColumnNameValidator.IRIS_RESERVED)
-        print(f"📋 Checking {len(our_keywords)} keywords from ColumnNameValidator.IRIS_RESERVED...\n")
+        print(
+            f"📋 Checking {len(our_keywords)} keywords from ColumnNameValidator.IRIS_RESERVED...\n"
+        )
 
         # Test each keyword against IRIS
         iris_confirms = []
@@ -75,7 +73,7 @@ def check_iris_reserved_words():
             except Exception as e:
                 error_str = str(e).lower()
                 # Check if error indicates reserved word
-                if any(x in error_str for x in ['reserved', 'keyword', 'expected', 'syntax']):
+                if any(x in error_str for x in ["reserved", "keyword", "expected", "syntax"]):
                     iris_confirms.append(keyword)
                 else:
                     errors.append((keyword, str(e)))
@@ -127,11 +125,7 @@ def test_with_actual_table_creation():
 
     try:
         conn = dbapi.connect(
-            hostname="localhost",
-            port=1972,
-            namespace="USER",
-            username="_SYSTEM",
-            password="SYS"
+            hostname="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
         )
         cursor = conn.cursor()
         print("\n🧪 Testing with actual table creation...")

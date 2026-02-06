@@ -172,7 +172,7 @@ class IRISSQLParser:
         try:
             with PerformanceTimer() as timer:
                 # Step 1: Basic SQL parsing with sqlparse
-                if debug_mode:
+                if debug_trace:
                     debug_trace.add_parsing_step(
                         "basic_parsing", sql, sql, 0.0, input_length=len(sql)
                     )
@@ -197,7 +197,7 @@ class IRISSQLParser:
                 # Step 6: Validate parsing completeness
                 self._validate_parsing(sql, constructs, debug_trace)
 
-            if debug_mode:
+            if debug_trace:
                 debug_trace.add_parsing_step(
                     "parsing_complete", sql, sql, timer.elapsed_ms, constructs_found=len(constructs)
                 )

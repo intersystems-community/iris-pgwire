@@ -148,13 +148,14 @@ class IRISSQLTranslator:
         Returns:
             Translation result with SQL and metadata
         """
+        # Start debug trace
+        debug_trace = None
+        trace_id = None
         with PerformanceTimer() as timer:
             # Generate trace ID if debug enabled
             trace_id = context.trace_id or (str(uuid.uuid4()) if self.enable_debug else None)
 
             try:
-                # Start debug trace
-                debug_trace = None
                 if self.enable_debug and trace_id and self.tracer:
                     debug_trace = self.tracer.start_trace(trace_id, context.original_sql)
 

@@ -6,7 +6,6 @@ Calculates performance metrics per FR-004:
 - Latency percentiles (P50, P95, P99)
 """
 
-
 import numpy as np
 
 
@@ -36,13 +35,7 @@ def calculate_metrics(timings: list[float]) -> dict[str, float]:
         ~83.3
     """
     if not timings:
-        return {
-            'p50_ms': 0.0,
-            'p95_ms': 0.0,
-            'p99_ms': 0.0,
-            'qps': 0.0,
-            'count': 0
-        }
+        return {"p50_ms": 0.0, "p95_ms": 0.0, "p99_ms": 0.0, "qps": 0.0, "count": 0}
 
     timings_array = np.array(timings)
 
@@ -57,16 +50,12 @@ def calculate_metrics(timings: list[float]) -> dict[str, float]:
     total_time_s = total_time_ms / 1000.0
     qps = len(timings) / total_time_s if total_time_s > 0 else 0.0
 
-    return {
-        'p50_ms': p50,
-        'p95_ms': p95,
-        'p99_ms': p99,
-        'qps': qps,
-        'count': len(timings)
-    }
+    return {"p50_ms": p50, "p95_ms": p95, "p99_ms": p99, "qps": qps, "count": len(timings)}
 
 
-def calculate_category_metrics(timings_by_category: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+def calculate_category_metrics(
+    timings_by_category: dict[str, list[float]],
+) -> dict[str, dict[str, float]]:
     """
     Calculate metrics for each query category.
 
@@ -87,15 +76,12 @@ def calculate_category_metrics(timings_by_category: dict[str, list[float]]) -> d
         5.5
     """
     return {
-        category: calculate_metrics(timings)
-        for category, timings in timings_by_category.items()
+        category: calculate_metrics(timings) for category, timings in timings_by_category.items()
     }
 
 
 def validate_constitutional_overhead(
-    pgwire_timings: list[float],
-    iris_dbapi_timings: list[float],
-    threshold_ms: float = 5.0
+    pgwire_timings: list[float], iris_dbapi_timings: list[float], threshold_ms: float = 5.0
 ) -> dict[str, any]:
     """
     Validate translation overhead against constitutional requirement.
@@ -116,11 +102,11 @@ def validate_constitutional_overhead(
     """
     if not pgwire_timings or not iris_dbapi_timings:
         return {
-            'compliant': False,
-            'reason': 'Insufficient data for validation',
-            'overhead_p50_ms': None,
-            'overhead_p95_ms': None,
-            'overhead_p99_ms': None
+            "compliant": False,
+            "reason": "Insufficient data for validation",
+            "overhead_p50_ms": None,
+            "overhead_p95_ms": None,
+            "overhead_p99_ms": None,
         }
 
     pgwire = np.array(pgwire_timings)
@@ -139,10 +125,14 @@ def validate_constitutional_overhead(
     compliant = overhead_p95 < threshold_ms
 
     return {
-        'compliant': compliant,
-        'overhead_p50_ms': overhead_p50,
-        'overhead_p95_ms': overhead_p95,
-        'overhead_p99_ms': overhead_p99,
-        'threshold_ms': threshold_ms,
-        'status': '✅ Compliant' if compliant else f'⚠️ P95 overhead {overhead_p95:.2f}ms exceeds {threshold_ms}ms threshold'
+        "compliant": compliant,
+        "overhead_p50_ms": overhead_p50,
+        "overhead_p95_ms": overhead_p95,
+        "overhead_p99_ms": overhead_p99,
+        "threshold_ms": threshold_ms,
+        "status": (
+            "✅ Compliant"
+            if compliant
+            else f"⚠️ P95 overhead {overhead_p95:.2f}ms exceeds {threshold_ms}ms threshold"
+        ),
     }

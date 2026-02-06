@@ -17,7 +17,6 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import re
 import secrets
 import struct
 import time

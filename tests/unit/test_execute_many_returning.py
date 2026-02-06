@@ -7,8 +7,11 @@ These tests verify that:
 3. The method handles RETURNING * and explicit columns
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+
+from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
 
 class TestExecuteManyReturningParsing:
@@ -23,6 +26,7 @@ class TestExecuteManyReturningParsing:
             exec = IRISExecutor()
             exec.embedded_mode = True
             exec._connection_pool = []
+            exec.metadata_cache = None
             return exec
 
     def test_has_returning_clause_detects_returning(self, executor):
@@ -37,7 +41,16 @@ class TestExecuteManyReturningParsing:
         """Should extract RETURNING columns correctly."""
         sql = 'INSERT INTO SQLUser."workflow" ("id", "name") VALUES (?, ?) RETURNING "id", "name", "created_at"'
 
-        operation, table, columns, where, stripped = executor._parse_returning_clause(sql)
+        plan = ReturningPlan.from_sql(
+            sql, metadata_cache=executor.metadata_cache, executor=executor
+        )
+        operation, table, columns, where = (
+            plan.operation,
+            plan.table,
+            plan.columns,
+            plan.where_clause,
+        )
+        stripped = plan.sql_without_returning
 
         assert operation == "INSERT"
         assert table == "WORKFLOW"
@@ -48,7 +61,16 @@ class TestExecuteManyReturningParsing:
         """Should handle RETURNING * correctly."""
         sql = 'INSERT INTO SQLUser."workflow" ("id", "name") VALUES (?, ?) RETURNING *'
 
-        operation, table, columns, where, stripped = executor._parse_returning_clause(sql)
+        plan = ReturningPlan.from_sql(
+            sql, metadata_cache=executor.metadata_cache, executor=executor
+        )
+        operation, table, columns, where = (
+            plan.operation,
+            plan.table,
+            plan.columns,
+            plan.where_clause,
+        )
+        stripped = plan.sql_without_returning
 
         assert operation == "INSERT"
         assert table == "WORKFLOW"

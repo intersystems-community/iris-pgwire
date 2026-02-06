@@ -7,9 +7,9 @@ The cache is keyed by (schema, table) and expires entries after a configurable
 TTL (default 5 minutes).
 """
 
-import time
 import threading
-from typing import Any, Dict, Tuple
+import time
+from typing import Any
 
 try:
     import structlog
@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - structlog may not be installed everywh
     logger = logging.getLogger(__name__)
 
 
-ColumnMetadata = Dict[str, Dict[str, Any]]
+ColumnMetadata = dict[str, dict[str, Any]]
 
 
 class MetadataCache:
@@ -34,7 +34,7 @@ class MetadataCache:
             ttl_seconds: Time-to-live for cache entries in seconds.
         """
         self._ttl = max(1, ttl_seconds)
-        self._cache: Dict[Tuple[str, str], Tuple[float, ColumnMetadata]] = {}
+        self._cache: dict[tuple[str, str], tuple[float, ColumnMetadata]] = {}
         self._lock = threading.RLock()
 
     async def get_column_metadata(self, schema: str, table: str, executor) -> ColumnMetadata:

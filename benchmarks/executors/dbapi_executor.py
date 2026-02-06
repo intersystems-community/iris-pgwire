@@ -17,7 +17,7 @@ class DbapiExecutor:
         port: int = 1972,
         namespace: str = "USER",
         username: str = "_SYSTEM",
-        password: str = "SYS"
+        password: str = "SYS",
     ):
         """
         Initialize IRIS DBAPI executor.
@@ -47,7 +47,7 @@ class DbapiExecutor:
                 port=self.port,
                 namespace=self.namespace,
                 username=self.username,
-                password=self.password
+                password=self.password,
             )
 
     def execute(self, query: str) -> Any:

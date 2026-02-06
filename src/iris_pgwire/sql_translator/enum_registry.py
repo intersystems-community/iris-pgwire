@@ -13,7 +13,6 @@ Constitutional Requirements:
 """
 
 
-
 class EnumTypeRegistry:
     """
     Session-scoped registry for PostgreSQL ENUM type names.

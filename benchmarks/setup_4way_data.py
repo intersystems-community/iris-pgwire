@@ -42,12 +42,14 @@ def setup_postgres(executor: PostgresExecutor, vectors):
         # Create table with pgvector extension
         executor.execute("DROP TABLE IF EXISTS benchmark_vectors CASCADE")
         executor.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        executor.execute(f"""
+        executor.execute(
+            f"""
             CREATE TABLE benchmark_vectors (
                 id INT PRIMARY KEY,
                 embedding vector({len(vectors[0][1])})
             )
-        """)
+        """
+        )
 
         # Insert vectors
         for id, vec in vectors:
@@ -70,17 +72,21 @@ def setup_iris(executor: DbapiExecutor, vectors):
 
         # Create table with IRIS VECTOR
         executor.execute("DROP TABLE IF EXISTS benchmark_vectors")
-        executor.execute(f"""
+        executor.execute(
+            f"""
             CREATE TABLE benchmark_vectors (
                 id INT PRIMARY KEY,
                 embedding VECTOR(DOUBLE, {len(vectors[0][1])})
             )
-        """)
+        """
+        )
 
         # Insert vectors
         for id, vec in vectors:
             vec_text = "[" + ",".join(str(v) for v in vec) + "]"
-            executor.execute(f"INSERT INTO benchmark_vectors VALUES ({id}, TO_VECTOR('{vec_text}'))")
+            executor.execute(
+                f"INSERT INTO benchmark_vectors VALUES ({id}, TO_VECTOR('{vec_text}'))"
+            )
 
         count = executor.execute("SELECT COUNT(*) FROM benchmark_vectors")[0][0]
         print(f"  ✅ IRIS: {count} vectors inserted")
@@ -92,12 +98,15 @@ def setup_iris(executor: DbapiExecutor, vectors):
 def main():
     """Main setup routine."""
     import sys
+
     print("🔧 4-Way Benchmark Data Setup")
     print("=" * 60)
 
     # Configuration
     VECTOR_COUNT = 1000  # Small dataset for quick benchmarks
-    DIMENSIONS = int(sys.argv[1]) if len(sys.argv) > 1 else 128  # Use 128 by default to avoid huge queries
+    DIMENSIONS = (
+        int(sys.argv[1]) if len(sys.argv) > 1 else 128
+    )  # Use 128 by default to avoid huge queries
 
     print(f"Generating {VECTOR_COUNT} test vectors ({DIMENSIONS}D)...")
     vectors = generate_test_vectors(VECTOR_COUNT, DIMENSIONS)
@@ -105,22 +114,19 @@ def main():
 
     # Setup Path 1: PostgreSQL
     postgres = PostgresExecutor(
-        host="localhost", port=5433,
-        username="postgres", password="postgres", database="benchmark"
+        host="localhost", port=5433, username="postgres", password="postgres", database="benchmark"
     )
     setup_postgres(postgres, vectors)
 
     # Setup Path 2+3: IRIS (shared by DBAPI direct and PGWire-DBAPI)
     iris_main = DbapiExecutor(
-        host="localhost", port=1974,
-        username="_SYSTEM", password="SYS", namespace="USER"
+        host="localhost", port=1974, username="_SYSTEM", password="SYS", namespace="USER"
     )
     setup_iris(iris_main, vectors)
 
     # Setup Path 4: IRIS embedded (separate instance)
     iris_embedded = DbapiExecutor(
-        host="localhost", port=1975,
-        username="_SYSTEM", password="SYS", namespace="USER"
+        host="localhost", port=1975, username="_SYSTEM", password="SYS", namespace="USER"
     )
     setup_iris(iris_embedded, vectors)
 

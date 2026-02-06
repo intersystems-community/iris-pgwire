@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_attrdef catalog emulation (column defaults).
 """
 
 import pytest
+
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 

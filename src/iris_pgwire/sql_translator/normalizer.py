@@ -19,7 +19,6 @@ Feature 035 Extension:
 
 import re
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
 from ..conversions.json_path import JsonPathBuilder
@@ -30,18 +29,15 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
-from .metadata_cache import MetadataCache
 from .mappings import translate_document_filters, translate_sql_constructs
+from .metadata_cache import MetadataCache
 from .models import (
-    ConstructMapping,
-    ConstructType,
     PerformanceStats,
-    SourceLocation,
     TranslationResult,
 )
 from .refiner import SQLRefiner
 from .skipped_table_set import SkippedTableSet
-from .statement_filter import SkipReason, StatementFilter
+from .statement_filter import StatementFilter
 
 
 class SQLTranslator:

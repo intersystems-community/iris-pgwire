@@ -5,15 +5,11 @@ Generates reproducible normalized random vectors for production-scale testing.
 Per FR-008: All three database methods use identical test data.
 """
 
-
 import numpy as np
 
 
 def generate_test_vectors(
-    count: int,
-    dimensions: int = 1024,
-    seed: int = 42,
-    normalize: bool = True
+    count: int, dimensions: int = 1024, seed: int = 42, normalize: bool = True
 ) -> np.ndarray:
     """
     Generate reproducible random vectors for benchmark testing.
@@ -69,8 +65,8 @@ def vector_to_text(vector: np.ndarray) -> str:
         >>> vector_to_text(vec)
         '[0.1,0.2,0.3]'
     """
-    values = ','.join(str(v) for v in vector)
-    return f'[{values}]'
+    values = ",".join(str(v) for v in vector)
+    return f"[{values}]"
 
 
 def generate_query_vector(dimensions: int = 1024, seed: int | None = None) -> np.ndarray:

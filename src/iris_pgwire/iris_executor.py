@@ -11,15 +11,12 @@ import datetime as dt
 import re
 import threading
 import time
+from decimal import Decimal
 from typing import Any
 
 import structlog
 
 from .catalog import CatalogRouter  # Feature: Consolidated catalog emulation
-
-# IRIS POSIXTIME constants
-POSIXTIME_OFFSET = 1152921504606846976
-POSIXTIME_MAX = POSIXTIME_OFFSET + 7258118400000000  # ~2200-01-01
 from .conversions import (
     BulkInsertJob,
     DdlErrorHandler,
@@ -39,11 +36,15 @@ from .sql_translator import (
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
 from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
-from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
+from .sql_translator.returning_plan import ReturningPlan
 from .type_mapping import (
     load_type_mappings_from_file,
 )  # Configurable type mapping
+
+# IRIS POSIXTIME constants
+POSIXTIME_OFFSET = 1152921504606846976
+POSIXTIME_MAX = POSIXTIME_OFFSET + 7258118400000000  # ~2200-01-01
 
 logger = structlog.get_logger()
 
@@ -471,9 +472,6 @@ class IRISExecutor:
         Returns:
             PostgreSQL type OID (int)
         """
-        # Import Decimal for type checking
-        from decimal import Decimal
-
         # INT4 range limits
         INT4_MIN = -2147483648  # -2^31
         INT4_MAX = 2147483647  # 2^31 - 1
@@ -531,17 +529,15 @@ class IRISExecutor:
             if isinstance(value, int):
                 # Convert IRIS/PostgreSQL microsecond integer to ISO8601 string
                 try:
-                    import datetime
-
                     if value >= POSIXTIME_OFFSET:
                         # IRIS POSIXTIME (microseconds since 1970-01-01)
                         unix_us = value - POSIXTIME_OFFSET
-                        epoch = datetime.datetime(1970, 1, 1)
-                        ts_obj = epoch + datetime.timedelta(microseconds=unix_us)
+                        epoch = dt.datetime(1970, 1, 1)
+                        ts_obj = epoch + dt.timedelta(microseconds=unix_us)
                     else:
                         # PostgreSQL legacy/IRIS microsecond integer (microseconds since 2000-01-01)
-                        epoch = datetime.datetime(2000, 1, 1)
-                        ts_obj = epoch + datetime.timedelta(microseconds=value)
+                        epoch = dt.datetime(2000, 1, 1)
+                        ts_obj = epoch + dt.timedelta(microseconds=value)
 
                     # Return ISO8601 string preferred by node-postgres and other clients
                     return ts_obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -1132,6 +1128,18 @@ class IRISExecutor:
             except:
                 pass
             self.connection = None
+
+        with self._connection_lock:
+            for executor in self.session_executors.values():
+                executor.shutdown(wait=False)
+            self.session_executors.clear()
+            for conn in self._connection_pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._connection_pool.clear()
+            self._active_count = 0
 
     def _extract_table_name(self, sql: str) -> str | None:
         """Extract table name from INSERT statement."""
@@ -2192,7 +2200,6 @@ class IRISExecutor:
                 returning_operation = plan.operation
                 returning_table = plan.table
                 returning_columns = plan.columns
-                returning_where_clause = plan.where_clause
                 if plan.has_returning:
                     logger.info(
                         "RETURNING clause detected - will emulate",
@@ -2459,10 +2466,8 @@ class IRISExecutor:
                 # PostgreSQL wire protocol expects dates as INTEGER days since 2000-01-01
                 # This conversion MUST happen before returning results to clients
                 if rows and columns:
-                    import datetime
-
                     # PostgreSQL J2000 epoch: 2000-01-01
-                    PG_EPOCH = datetime.date(2000, 1, 1)
+                    PG_EPOCH = dt.date(2000, 1, 1)
 
                     # Build type_oid lookup by column index
                     column_type_oids = [col["type_oid"] for col in columns]
@@ -2491,7 +2496,7 @@ class IRISExecutor:
                                         # IRIS returns dates as ISO strings (YYYY-MM-DD)
                                         if isinstance(value, str):
                                             # Parse ISO date string
-                                            date_obj = datetime.datetime.strptime(
+                                            date_obj = dt.datetime.strptime(
                                                 value, "%Y-%m-%d"
                                             ).date()
                                             # Convert to PostgreSQL days since 2000-01-01
@@ -2646,7 +2651,7 @@ class IRISExecutor:
 
             # Method 2: Try iterating result (even with 0 rows, may expose structure)
             try:
-                for row in result:
+                for _row in result:
                     break
             except Exception:
                 pass
@@ -2654,7 +2659,7 @@ class IRISExecutor:
             # Method 3: Check for description attribute (DB-API 2.0 standard)
             if hasattr(result, "description") and result.description:
                 for col_desc in result.description:
-                    if isinstance(col_desc, (list, tuple)) and len(col_desc) > 0:
+                    if isinstance(col_desc, list | tuple) and len(col_desc) > 0:
                         column_names.append(str(col_desc[0]))
                     elif hasattr(col_desc, "name"):
                         column_names.append(col_desc.name)
@@ -2708,8 +2713,8 @@ class IRISExecutor:
                 returning_operation,
                 returning_table,
                 returning_columns,
-                returning_where_clause,
-                stripped_sql,
+                _,
+                _,
             ) = self._parse_returning_clause(sql)
 
             if returning_operation:
@@ -2885,13 +2890,10 @@ class IRISExecutor:
             session_id = captured_session_id
             optimized_sql = sql
             optimized_params = params
-            sql_upper = sql.upper()
             sql_upper_check = sql.upper()
 
             # Initialize optimized derived variables at the top to avoid UnboundLocalError
-            optimized_sql_upper = sql_upper
             optimized_sql_upper_check = sql_upper_check
-            optimized_sql_upper_stripped = sql_upper.strip()
 
             conn = None
             cursor = None
@@ -3012,6 +3014,7 @@ class IRISExecutor:
                     metadata_cache=self.metadata_cache,
                     executor=self,
                 )
+                returning_operation = plan.operation
 
                 if plan.has_returning:
                     logger.info(
@@ -3050,7 +3053,9 @@ class IRISExecutor:
                             processed_params.append("[" + ",".join(str(float(v)) for v in p) + "]")
                         else:
                             # Feature 036: Ensure we pass strings or numbers, not complex objects
-                            if p is not None and not isinstance(p, (int, float, str, bool, bytes)):
+                            if p is not None and not isinstance(
+                                p, int | float | str | bool | bytes
+                            ):
                                 processed_params.append(str(p))
                             else:
                                 processed_params.append(p)
@@ -3256,9 +3261,9 @@ class IRISExecutor:
                             {
                                 "name": col_name,
                                 "type_oid": type_oid,
-                                "type_size": desc[2]
-                                if not isinstance(desc, dict) and len(desc) > 2
-                                else -1,
+                                "type_size": (
+                                    desc[2] if not isinstance(desc, dict) and len(desc) > 2 else -1
+                                ),
                                 "type_modifier": -1,
                                 "format_code": 0,  # Text format
                             }
@@ -3302,10 +3307,8 @@ class IRISExecutor:
                 # CRITICAL: Convert IRIS date format to PostgreSQL format (EXTERNAL MODE)
                 # Same conversion logic as embedded mode
                 if rows and columns:
-                    import datetime
-
                     # PostgreSQL J2000 epoch: 2000-01-01
-                    PG_EPOCH = datetime.date(2000, 1, 1)
+                    PG_EPOCH = dt.date(2000, 1, 1)
 
                     # Build type_oid lookup by column index
                     column_type_oids = [col["type_oid"] for col in columns]
@@ -3334,7 +3337,7 @@ class IRISExecutor:
                                         # IRIS returns dates as ISO strings (YYYY-MM-DD)
                                         if isinstance(value, str):
                                             # Parse ISO date string
-                                            date_obj = datetime.datetime.strptime(
+                                            date_obj = dt.datetime.strptime(
                                                 value, "%Y-%m-%d"
                                             ).date()
                                             # Convert to PostgreSQL days since 2000-01-01
@@ -3560,26 +3563,6 @@ class IRISExecutor:
                     pass
                 self._active_count -= 1
             self._connection_lock.notify()
-
-    def close(self):
-        """Shutdown connection pool and executors."""
-        with self._connection_lock:
-            # Shutdown thread pool
-            self.thread_pool.shutdown(wait=False)
-
-            # Shutdown session executors
-            for executor in self.session_executors.values():
-                executor.shutdown(wait=False)
-            self.session_executors.clear()
-
-            # Close pooled connections
-            for conn in self._connection_pool:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            self._connection_pool.clear()
-            self._active_count = 0
 
     async def close_session(self, session_id: str):
         with self._connection_lock:
@@ -4169,7 +4152,6 @@ class IRISExecutor:
         """Begin a transaction with async threading"""
 
         def _sync_begin(captured_session_id):
-            session_id = captured_session_id
             if self.embedded_mode:
                 iris = self._import_iris()
                 if iris:
@@ -4183,7 +4165,6 @@ class IRISExecutor:
         """Commit transaction with async threading"""
 
         def _sync_commit(captured_session_id):
-            session_id = captured_session_id
             if self.embedded_mode:
                 iris = self._import_iris()
                 if iris:
@@ -4197,7 +4178,6 @@ class IRISExecutor:
         """Rollback transaction with async threading"""
 
         def _sync_rollback(captured_session_id):
-            session_id = captured_session_id
             if self.embedded_mode:
                 iris = self._import_iris()
                 if iris:
@@ -4436,7 +4416,7 @@ class IRISExecutor:
         if params is None:
             return None
 
-        if isinstance(params, (list, tuple)):
+        if isinstance(params, list | tuple):
             return [self._convert_value_for_iris(v) for v in params]
 
         return self._convert_value_for_iris(params)

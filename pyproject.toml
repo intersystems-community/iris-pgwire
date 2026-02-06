@@ -121,44 +121,16 @@ path = "src/iris_pgwire/__init__.py"
 packages = ["src/iris_pgwire"]
 
 [tool.hatch.build.targets.sdist]
-# Include only essential files in source distribution
-include = [
+# Include only production-relevant directories
+only-include = [
     "/src",
-    "/README.md",
+    "/docs/*.md",  # Only top-level docs
+    "/examples/*.py",  # Only Python examples, no subdirs
+    "/examples/*.md",
+    "/*.md",
+    "/*.txt",
     "/LICENSE",
-    "/CHANGELOG.md",
     "/pyproject.toml",
-    "/examples/*.py",
-    "/examples/BI_TOOLS_SETUP.md",
-    "/docs/TRANSLATION_API.md",
-    "/docs/VECTOR_PARAMETER_BINDING.md",
-    "/docs/DUAL_PATH_ARCHITECTURE.md",
-    "/docs/HNSW_FINDINGS_*.md",
-]
-
-# Explicitly exclude development files
-exclude = [
-    "/.claude",
-    "/.specify",
-    "/.git",
-    "/.github",
-    "/tests",
-    "/benchmarks",
-    "/deployment",
-    "/docker",
-    "/specs",
-    "*.cpf",
-    "*.sh",
-    "/CLAUDE.md",
-    "/PROGRESS.md",
-    "/STATUS.md",
-    "/TODO.md",
-    "/TESTING.md",
-    "/docker-compose*.yml",
-    "/Dockerfile*",
-    "/merge.cpf",
-    "/uv.lock",
-    "/iris_pgwire.json",
 ]
 
 [tool.black]

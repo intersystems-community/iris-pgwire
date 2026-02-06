@@ -24,9 +24,8 @@ import psycopg
 import pytest
 import structlog
 
-import sys
-import os
 import iris_pgwire
+
 print(f"DIAGNOSTIC: sys.path = {sys.path}", file=sys.stderr)
 print(f"DIAGNOSTIC: iris_pgwire found at {iris_pgwire.__file__}", file=sys.stderr)
 
@@ -279,8 +278,8 @@ def iris_container(pytestconfig):
 
             # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
             try:
-                from iris_devtester.connections import get_connection
                 from iris_devtester.config import IRISConfig
+                from iris_devtester.connections import get_connection
 
                 config = iris.get_config()
                 for attempt in range(3):

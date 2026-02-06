@@ -47,7 +47,6 @@ importlib.reload(iris_pgwire.vector_optimizer)
 # NOW import after reload
 from .backend_selector import BackendSelector
 from .integratedml import enhance_iris_executor_with_integratedml
-from .iris_executor import IRISExecutor
 from .models.backend_config import BackendConfig, BackendType
 from .protocol import PGWireProtocol
 
@@ -286,7 +285,6 @@ class PGWireServer:
 
 async def main():
     """Main entry point for the PGWire server"""
-    import sys
 
     if "iris" in sys.modules:
         print(f"DEBUG: iris module already in sys.modules: {sys.modules['iris']}", flush=True)

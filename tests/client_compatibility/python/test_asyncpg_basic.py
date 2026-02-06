@@ -15,13 +15,12 @@ Test Coverage:
 - Transactions (async with conn.transaction())
 """
 
+import os
 from datetime import date
 
 import asyncpg
 import pytest
 import pytest_asyncio
-
-import os
 
 # Connection configuration
 PGWIRE_CONFIG = {

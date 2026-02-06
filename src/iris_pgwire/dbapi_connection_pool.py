@@ -184,7 +184,7 @@ class IRISConnectionPool:
                         self._record_acquisition(start_time)
                         return conn_wrapper
 
-                except (asyncio.TimeoutError, TimeoutError):
+                except TimeoutError:
                     logger.error(
                         f"Connection acquisition timeout after {self.config.pool_timeout}s",
                         pool_size=len(self._connections),

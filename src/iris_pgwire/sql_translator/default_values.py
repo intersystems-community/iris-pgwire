@@ -437,7 +437,7 @@ class DefaultValuesTranslator:
         new_vals: list[str] = []
         has_default = False
 
-        for col, val in zip(cols, vals):
+        for col, val in zip(cols, vals, strict=False):
             if val.upper() == "DEFAULT":
                 has_default = True
                 continue

@@ -1,6 +1,7 @@
-import pytest
-import psycopg
 import os
+
+import psycopg
+import pytest
 
 
 def test_returning_type_mapping_uuid_repro(pgwire_client, iris_connection):

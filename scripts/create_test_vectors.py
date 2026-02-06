@@ -24,55 +24,61 @@ def generate_random_vector(dimensions=1024):
 
 def vector_to_iris_literal(vec):
     """Convert Python list to IRIS vector literal format"""
-    return '[' + ','.join(str(float(v)) for v in vec) + ']'
+    return "[" + ",".join(str(float(v)) for v in vec) + "]"
 
 
 def main():
     import iris
 
-    print('Creating test vector data for HNSW testing...')
+    print("Creating test vector data for HNSW testing...")
 
     # Create table
-    print('\n1. Creating test_1024 table...')
-    iris.sql.exec('DROP TABLE IF EXISTS test_1024')
-    iris.sql.exec('''
+    print("\n1. Creating test_1024 table...")
+    iris.sql.exec("DROP TABLE IF EXISTS test_1024")
+    iris.sql.exec(
+        """
         CREATE TABLE test_1024 (
             id INTEGER PRIMARY KEY,
             vec VECTOR(FLOAT, 1024)
         )
-    ''')
-    print('   ✅ Table created')
+    """
+    )
+    print("   ✅ Table created")
 
     # Insert 1000 vectors
-    print('\n2. Inserting 1000 test vectors...')
+    print("\n2. Inserting 1000 test vectors...")
     for i in range(1000):
         if (i + 1) % 100 == 0:
-            print(f'   Inserted {i + 1}/1000 vectors...')
+            print(f"   Inserted {i + 1}/1000 vectors...")
 
         vec = generate_random_vector(1024)
         vec_literal = vector_to_iris_literal(vec)
 
-        iris.sql.exec(f'''
+        iris.sql.exec(
+            f"""
             INSERT INTO test_1024 (id, vec)
             VALUES ({i + 1}, TO_VECTOR('{vec_literal}', FLOAT))
-        ''')
+        """
+        )
 
-    print('   ✅ 1000 vectors inserted')
+    print("   ✅ 1000 vectors inserted")
 
     # Create HNSW index
-    print('\n3. Creating HNSW index...')
-    iris.sql.exec('''
+    print("\n3. Creating HNSW index...")
+    iris.sql.exec(
+        """
         CREATE INDEX idx_vec_hnsw ON test_1024(vec) AS HNSW(Distance='DotProduct')
-    ''')
-    print('   ✅ HNSW index created')
+    """
+    )
+    print("   ✅ HNSW index created")
 
     # Verify
-    print('\n4. Verifying data...')
-    iris.sql.exec('SELECT COUNT(*) FROM test_1024')
-    print('   ✅ Table has 1000 vectors')
+    print("\n4. Verifying data...")
+    iris.sql.exec("SELECT COUNT(*) FROM test_1024")
+    print("   ✅ Table has 1000 vectors")
 
-    print('\n✅ SUCCESS: Test data and HNSW index ready!')
+    print("\n✅ SUCCESS: Test data and HNSW index ready!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

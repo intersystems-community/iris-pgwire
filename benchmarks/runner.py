@@ -52,12 +52,7 @@ class BenchmarkRunner:
         self.config = config
         self.raw_results: list[PerformanceResult] = []
 
-    def execute_warmup(
-        self,
-        executor: Callable[[str], Any],
-        query: str,
-        warmup_count: int = None
-    ):
+    def execute_warmup(self, executor: Callable[[str], Any], query: str, warmup_count: int = None):
         """
         Execute warmup queries to avoid cold-start bias (FR-009, T014).
 
@@ -76,11 +71,7 @@ class BenchmarkRunner:
                 pass
 
     def measure_query_execution(
-        self,
-        method_name: str,
-        query_id: str,
-        executor: Callable[[str], Any],
-        query: str
+        self, method_name: str, query_id: str, executor: Callable[[str], Any], query: str
     ) -> PerformanceResult:
         """
         Execute query with high-resolution timing (T015).
@@ -112,9 +103,9 @@ class BenchmarkRunner:
 
             # Count rows if possible
             row_count = 0
-            if hasattr(result, '__len__'):
+            if hasattr(result, "__len__"):
                 row_count = len(result)
-            elif hasattr(result, 'rowcount'):
+            elif hasattr(result, "rowcount"):
                 row_count = result.rowcount
 
             return PerformanceResult(
@@ -124,7 +115,7 @@ class BenchmarkRunner:
                 timestamp=datetime.now(),
                 elapsed_ms=elapsed_ms,
                 success=True,
-                row_count=row_count
+                row_count=row_count,
             )
 
         except Exception as e:
@@ -139,7 +130,7 @@ class BenchmarkRunner:
                 elapsed_ms=elapsed_ms,
                 success=False,
                 error_message=str(e),
-                row_count=0
+                row_count=0,
             )
 
     def execute_benchmark_queries(
@@ -147,7 +138,7 @@ class BenchmarkRunner:
         method_name: str,
         executor: Callable[[str], Any],
         queries: dict[str, list[str]],
-        iterations: int = None
+        iterations: int = None,
     ) -> list[PerformanceResult]:
         """
         Execute all benchmark queries for a single method.
@@ -174,19 +165,14 @@ class BenchmarkRunner:
                 # Execute iterations
                 for _iteration in range(iteration_count):
                     result = self.measure_query_execution(
-                        method_name=method_name,
-                        query_id=query_id,
-                        executor=executor,
-                        query=query
+                        method_name=method_name, query_id=query_id, executor=executor, query=query
                     )
                     results.append(result)
 
         return results
 
     def aggregate_results(
-        self,
-        method_name: str,
-        results: list[PerformanceResult]
+        self, method_name: str, results: list[PerformanceResult]
     ) -> MethodResults:
         """
         Aggregate performance results for a single method.
@@ -205,7 +191,7 @@ class BenchmarkRunner:
         # Group by category
         timings_by_category = {}
         for result in successful:
-            category = result.query_id.rsplit('_', 1)[0]  # Extract category from query_id
+            category = result.query_id.rsplit("_", 1)[0]  # Extract category from query_id
             if category not in timings_by_category:
                 timings_by_category[category] = []
             timings_by_category[category].append(result.elapsed_ms)
@@ -221,28 +207,26 @@ class BenchmarkRunner:
         by_category = {}
         for category, metrics in category_metrics.items():
             by_category[category] = CategoryMetrics(
-                count=metrics['count'],
-                qps=metrics['qps'],
-                p50_ms=metrics['p50_ms'],
-                p95_ms=metrics['p95_ms'],
-                p99_ms=metrics['p99_ms']
+                count=metrics["count"],
+                qps=metrics["qps"],
+                p50_ms=metrics["p50_ms"],
+                p95_ms=metrics["p95_ms"],
+                p99_ms=metrics["p99_ms"],
             )
 
         return MethodResults(
             method_name=method_name,
             queries_executed=len(results),
             queries_failed=len(failed),
-            qps=overall_metrics['qps'],
-            latency_p50_ms=overall_metrics['p50_ms'],
-            latency_p95_ms=overall_metrics['p95_ms'],
-            latency_p99_ms=overall_metrics['p99_ms'],
-            by_category=by_category
+            qps=overall_metrics["qps"],
+            latency_p50_ms=overall_metrics["p50_ms"],
+            latency_p95_ms=overall_metrics["p95_ms"],
+            latency_p99_ms=overall_metrics["p99_ms"],
+            by_category=by_category,
         )
 
     def run(
-        self,
-        executors: dict[str, Callable[[str], Any]],
-        queries: dict[str, list[str]]
+        self, executors: dict[str, Callable[[str], Any]], queries: dict[str, list[str]]
     ) -> BenchmarkReport:
         """
         Execute complete benchmark across all methods (T019).
@@ -281,9 +265,7 @@ class BenchmarkRunner:
             try:
                 # Execute all queries
                 results = self.execute_benchmark_queries(
-                    method_name=method_name,
-                    executor=executor,
-                    queries=queries
+                    method_name=method_name, executor=executor, queries=queries
                 )
 
                 # Aggregate results
@@ -320,5 +302,5 @@ class BenchmarkRunner:
             method_results=method_results,
             raw_results=all_raw_results,
             validation_errors=[],
-            state=BenchmarkState.COMPLETED
+            state=BenchmarkState.COMPLETED,
         )

@@ -1,5 +1,6 @@
-import psycopg
 import os
+
+import psycopg
 
 PGWIRE_PORT = int(os.environ.get("PGWIRE_PORT", "5435"))
 

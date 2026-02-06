@@ -1,6 +1,7 @@
 import pytest
-from iris_pgwire.vector_optimizer import optimize_vector_query
+
 from iris_pgwire.sql_translator.normalizer import SQLTranslator
+from iris_pgwire.vector_optimizer import optimize_vector_query
 
 
 @pytest.fixture

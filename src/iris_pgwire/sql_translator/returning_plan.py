@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any
 
 try:
     from structlog import get_logger
@@ -22,7 +22,7 @@ from .metadata_cache import MetadataCache
 class ReturningColumnMeta:
     raw_expression: str
     normalized_name: str
-    alias: Optional[str]
+    alias: str | None
     select_expression: str
     is_simple_identifier: bool
 
@@ -30,22 +30,22 @@ class ReturningColumnMeta:
 @dataclass
 class ReturningPlan:
     original_sql: str
-    operation: Optional[str]
-    table: Optional[str]
-    returning_clause: Optional[str]
-    columns: Optional[list[str] | str]
-    column_meta: Optional[list[ReturningColumnMeta]]
-    where_clause: Optional[str]
+    operation: str | None
+    table: str | None
+    returning_clause: str | None
+    columns: list[str] | str | None
+    column_meta: list[ReturningColumnMeta] | None
+    where_clause: str | None
     stripped_sql: str
     insert_columns: list[str]
-    on_conflict_clause: Optional[str]
-    conflict_action: Optional[str]
-    conflict_set_clause: Optional[str]
-    conflict_where_clause: Optional[str]
-    conflict_target: Optional[str]
+    on_conflict_clause: str | None
+    conflict_action: str | None
+    conflict_set_clause: str | None
+    conflict_where_clause: str | None
+    conflict_target: str | None
     conflict_target_columns: list[str]
-    conflict_constraint: Optional[str]
-    metadata_cache: Optional[MetadataCache]
+    conflict_constraint: str | None
+    metadata_cache: MetadataCache | None
 
     @property
     def has_returning(self) -> bool:
@@ -57,13 +57,17 @@ class ReturningPlan:
             return "*"
         return ", ".join(col.select_expression for col in self.column_meta)
 
+    @property
+    def sql_without_returning(self) -> str:
+        return self.stripped_sql
+
     @classmethod
     def from_sql(
         cls,
         sql: str,
-        metadata_cache: Optional[MetadataCache] = None,
+        metadata_cache: MetadataCache | None = None,
         executor: Any | None = None,
-    ) -> "ReturningPlan":
+    ) -> ReturningPlan:
         normalized_sql = sql.strip()
         returning_clause, returning_columns, returning_meta = cls._extract_returning(normalized_sql)
         conflict_clause, conflict_target, conflict_target_columns, conflict_constraint = (
@@ -101,7 +105,7 @@ class ReturningPlan:
     @staticmethod
     def _extract_returning(
         sql: str,
-    ) -> Tuple[Optional[str], Optional[list[str] | str], Optional[list[ReturningColumnMeta]]]:
+    ) -> tuple[str | None, list[str] | str | None, list[ReturningColumnMeta] | None]:
         match = re.search(r"\bRETURNING\b", sql, re.IGNORECASE)
         if not match:
             return None, None, None
@@ -136,8 +140,8 @@ class ReturningPlan:
 
     @staticmethod
     def _extract_on_conflict(
-        sql: str, returning_clause: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str], list[str], Optional[str]]:
+        sql: str, returning_clause: str | None
+    ) -> tuple[str | None, str | None, list[str], str | None]:
         match = re.search(r"\bON\s+CONFLICT\b", sql, re.IGNORECASE)
         if not match:
             return None, None, [], None
@@ -173,8 +177,8 @@ class ReturningPlan:
 
     @staticmethod
     def _parse_conflict_action(
-        clause: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        clause: str | None,
+    ) -> tuple[str | None, str | None, str | None]:
         if not clause:
             return None, None, None
         do_nothing = re.search(r"\bDO\s+NOTHING\b", clause, re.IGNORECASE)
@@ -196,9 +200,7 @@ class ReturningPlan:
         )
 
     @staticmethod
-    def _strip_clauses(
-        sql: str, returning_clause: Optional[str], conflict_clause: Optional[str]
-    ) -> str:
+    def _strip_clauses(sql: str, returning_clause: str | None, conflict_clause: str | None) -> str:
         stripped = sql
         if returning_clause:
             stripped = re.sub(
@@ -209,7 +211,7 @@ class ReturningPlan:
         return stripped.strip()
 
     @staticmethod
-    def _extract_operation(sql: str) -> Optional[str]:
+    def _extract_operation(sql: str) -> str | None:
         cleaned = sql.strip().upper()
         if cleaned.startswith("INSERT"):
             return "INSERT"
@@ -220,7 +222,7 @@ class ReturningPlan:
         return None
 
     @staticmethod
-    def _extract_table(sql: str) -> Optional[str]:
+    def _extract_table(sql: str) -> str | None:
         match = re.search(
             r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?',
             sql,
@@ -231,9 +233,7 @@ class ReturningPlan:
         return match.group(1).upper()
 
     @staticmethod
-    def _extract_where(
-        operation: Optional[str], sql: str, returning_clause: Optional[str]
-    ) -> Optional[str]:
+    def _extract_where(operation: str | None, sql: str, returning_clause: str | None) -> str | None:
         if operation not in ("UPDATE", "DELETE"):
             return None
         end = len(sql)
@@ -295,7 +295,7 @@ class ReturningPlan:
         return value.lower()
 
     @staticmethod
-    def _describe_column(expr: str) -> Tuple[str, Optional[str], str, bool]:
+    def _describe_column(expr: str) -> tuple[str, str | None, str, bool]:
         cleaned = expr.strip()
         alias = None
         alias_match = re.search(r"\s+AS\s+(?P<alias>\"[^\"]+\"|\w+)$", cleaned, re.IGNORECASE)

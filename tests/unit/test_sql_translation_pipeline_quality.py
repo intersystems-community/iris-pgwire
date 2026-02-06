@@ -1,9 +1,11 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
+from iris_pgwire.protocol import PGWireProtocol
+from iris_pgwire.sql_translator.models import PerformanceStats, TranslationResult
 from iris_pgwire.sql_translator.normalizer import SQLTranslator
 from iris_pgwire.sql_translator.pipeline import SQLPipeline
-from iris_pgwire.sql_translator.models import TranslationResult, PerformanceStats
-from iris_pgwire.protocol import PGWireProtocol
 
 
 def test_translator_result_structure():

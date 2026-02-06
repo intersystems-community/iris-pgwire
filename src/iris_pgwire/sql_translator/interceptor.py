@@ -5,8 +5,9 @@ This module decouples the procedural interception logic from IRISExecutor.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 import structlog
 
@@ -18,7 +19,7 @@ class InterceptResult:
     """Result of a query interception"""
 
     intercepted: bool
-    result: Optional[Dict[str, Any]] = None
+    result: dict[str, Any] | None = None
 
 
 class SQLInterceptor:
@@ -28,7 +29,7 @@ class SQLInterceptor:
 
     def __init__(self, iris_executor: Any):
         self._executor = iris_executor
-        self._patterns: Dict[re.Pattern, Callable] = {}
+        self._patterns: dict[re.Pattern, Callable] = {}
         self._init_standard_interceptors()
 
     def _init_standard_interceptors(self):
@@ -49,7 +50,7 @@ class SQLInterceptor:
         self._patterns[re.compile(pattern, re.IGNORECASE | re.DOTALL)] = handler
 
     def intercept(
-        self, sql: str, params: Optional[List] = None, session_id: Optional[str] = None
+        self, sql: str, params: list | None = None, session_id: str | None = None
     ) -> InterceptResult:
         """Check if query matches any registered patterns and return stub if so"""
         sql_upper = sql.upper().strip()
@@ -61,8 +62,8 @@ class SQLInterceptor:
         return InterceptResult(intercepted=False)
 
     def _handle_show(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         sql_upper = sql.upper().strip().rstrip(";")
         param_name = sql_upper[5:].strip()
 
@@ -93,8 +94,8 @@ class SQLInterceptor:
         }
 
     def _handle_prisma_schema_check(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         schema_exists = True
         schema_name = "public"
 
@@ -138,8 +139,8 @@ class SQLInterceptor:
         }
 
     def _handle_asyncpg_introspection(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "rows": [["off", "off"]],
@@ -163,8 +164,8 @@ class SQLInterceptor:
         }
 
     def _handle_current_setting(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "rows": [["off"]],
@@ -181,8 +182,8 @@ class SQLInterceptor:
         }
 
     def _handle_set_config(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "rows": [["off"]],
@@ -199,13 +200,13 @@ class SQLInterceptor:
         }
 
     def _handle_advisory_unlock(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {"success": True, "rows": [], "columns": [], "row_count": 0}
 
     def _handle_current_database(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         namespace_name = getattr(self._executor, "iris_namespace", "USER")
         return {
             "success": True,
@@ -223,8 +224,8 @@ class SQLInterceptor:
         }
 
     def _handle_version(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "rows": [["PostgreSQL 16.0 (InterSystems IRIS PGWire Protocol)"]],
@@ -241,8 +242,8 @@ class SQLInterceptor:
         }
 
     def _handle_discard_all(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         return {
             "success": True,
             "rows": [],
@@ -253,8 +254,8 @@ class SQLInterceptor:
         }
 
     def _handle_pg_indexes(
-        self, sql: str, params: Optional[List], session_id: Optional[str]
-    ) -> Dict[str, Any]:
+        self, sql: str, params: list | None, session_id: str | None
+    ) -> dict[str, Any]:
         """Handle pg_indexes metadata queries (simulated for HNSW tests)"""
         import re
 

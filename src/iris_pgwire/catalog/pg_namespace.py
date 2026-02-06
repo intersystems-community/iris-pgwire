@@ -10,7 +10,6 @@ Standard PostgreSQL namespace OIDs:
 - information_schema: 11323
 """
 
-from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from dataclasses import dataclass
 from typing import Any
 

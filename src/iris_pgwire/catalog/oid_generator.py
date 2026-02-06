@@ -14,10 +14,11 @@ Well-known namespace OIDs:
 - information_schema: 11323
 """
 
-from iris_pgwire.schema_mapper import IRIS_SCHEMA
 import hashlib
 from dataclasses import dataclass
 from typing import Literal
+
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 ObjectType = Literal["namespace", "table", "column", "constraint", "index", "type", "default"]
 

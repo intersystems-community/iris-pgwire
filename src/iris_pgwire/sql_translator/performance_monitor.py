@@ -366,9 +366,7 @@ class PerformanceMonitor:
                     "p50_time_ms": statistics.median(all_times),
                     "p95_time_ms": self._percentile(all_times, 0.95),
                     "p99_time_ms": self._percentile(all_times, 0.99),
-                    "uptime_seconds": (
-                        datetime.now(UTC) - self._start_time
-                    ).total_seconds(),
+                    "uptime_seconds": (datetime.now(UTC) - self._start_time).total_seconds(),
                 }
 
             # Generate recommendations
