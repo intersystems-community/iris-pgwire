@@ -31,7 +31,11 @@ class SQLPipeline:
         self.refiner = SQLRefiner()
 
     def process(
-        self, sql: str, params: list | None = None, session_id: str | None = None
+        self,
+        sql: str,
+        params: list | None = None,
+        session_id: str | None = None,
+        executor: Any | None = None,
     ) -> tuple[str, list | None, TranslationResult]:
         """
         Process SQL and parameters through the full pipeline.
@@ -46,7 +50,7 @@ class SQLPipeline:
                 ),
             )
 
-        result = self.translator.normalize_sql_with_result(sql)
+        result = self.translator.normalize_sql_with_result(sql, executor=executor)
 
         if result.was_skipped:
             return "", params, result

@@ -37,7 +37,9 @@ from .sql_translator import (
     TransactionTranslator,
 )  # Feature 022: PostgreSQL transaction verb translation
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
+from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
+from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .type_mapping import (
     load_type_mappings_from_file,
@@ -127,6 +129,7 @@ class IRISExecutor:
         # DDL idempotency and splitting handlers
         self.ddl_handler = DdlErrorHandler()
         self.ddl_splitter = DdlSplitter()
+        self.metadata_cache = MetadataCache()
 
         self.sql_pipeline = SQLPipeline()
         self.sql_interceptor = SQLInterceptor(self)
@@ -260,7 +263,9 @@ class IRISExecutor:
 
     def _get_normalized_sql(self, sql: str, execution_path: str = "direct") -> str:
         if not self.enable_query_cache:
-            return self.sql_translator.normalize_sql(sql, execution_path=execution_path)
+            return self.sql_translator.normalize_sql(
+                sql, execution_path=execution_path, executor=self
+            )
 
         cache_key = (sql, execution_path)
         with self._query_cache_lock:
@@ -269,7 +274,9 @@ class IRISExecutor:
                 self._query_cache[cache_key] = val
                 return val
 
-        normalized = self.sql_translator.normalize_sql(sql, execution_path=execution_path)
+        normalized = self.sql_translator.normalize_sql(
+            sql, execution_path=execution_path, executor=self
+        )
 
         with self._query_cache_lock:
             if cache_key in self._query_cache:
@@ -981,10 +988,9 @@ class IRISExecutor:
 
         Returns: dict with 'rows' containing all returned rows from all inserts.
         """
-        # Parse the RETURNING clause
-        operation, table, columns, where_clause, stripped_sql = self._parse_returning_clause(sql)
+        plan = ReturningPlan.from_sql(sql, metadata_cache=self.metadata_cache, executor=self)
 
-        if not operation or not table:
+        if not plan.operation or not plan.table:
             logger.warning(
                 "Could not parse RETURNING clause, falling back to standard execute_many",
                 sql=sql[:100],
@@ -994,9 +1000,9 @@ class IRISExecutor:
 
         logger.info(
             "execute_many with RETURNING: processing batch individually",
-            operation=operation,
-            table=table,
-            columns=columns,
+            operation=plan.operation,
+            table=plan.table,
+            columns=plan.columns,
             batch_size=len(params_list),
             session_id=session_id,
         )
@@ -1012,18 +1018,18 @@ class IRISExecutor:
                     if iris:
                         normalized_params = self._normalize_parameters(params)
                         if normalized_params:
-                            iris.sql.exec(stripped_sql, *normalized_params)
+                            iris.sql.exec(plan.stripped_sql, *normalized_params)
                         else:
-                            iris.sql.exec(stripped_sql)
+                            iris.sql.exec(plan.stripped_sql)
                 else:
                     conn = self._get_pooled_connection(session_id=session_id)
                     cursor = conn.cursor()
                     try:
                         normalized_params = self._normalize_parameters(params)
                         if normalized_params:
-                            cursor.execute(stripped_sql, tuple(normalized_params))
+                            cursor.execute(plan.stripped_sql, tuple(normalized_params))
                         else:
-                            cursor.execute(stripped_sql)
+                            cursor.execute(plan.stripped_sql)
                         conn.commit()
                     finally:
                         cursor.close()
@@ -1031,10 +1037,7 @@ class IRISExecutor:
 
                 # Emulate RETURNING for this row
                 rows, meta = self._emulate_returning(
-                    operation=operation,
-                    table=table,
-                    columns=columns,
-                    where_clause=where_clause,
+                    plan=plan,
                     params=params,
                     is_embedded=self.embedded_mode,
                     session_id=session_id,
@@ -1601,107 +1604,8 @@ class IRISExecutor:
         Parse RETURNING clause from SQL and return metadata.
         Returns: (operation, table, columns, where_clause, stripped_sql)
         """
-        import re
-
-        returning_operation = None
-        returning_table = None
-        returning_columns = None
-        returning_where_clause = None
-        stripped_sql = sql
-
-        # Use improved regex to handle trailing semicolons and greedy matching
-        # Pattern: look for RETURNING followed by anything until semicolon or end of string
-        returning_pattern = r"\s+RETURNING\s+(.*?)($|;)"
-        returning_match = re.search(returning_pattern, sql, re.IGNORECASE | re.DOTALL)
-
-        if not returning_match:
-            return None, None, None, None, sql
-
-        returning_clause = returning_match.group(1).strip()
-
-        # Parse column names from RETURNING clause
-        if returning_clause == "*":
-            returning_columns = "*"
-        else:
-            # Better column parsing that preserves expressions and aliases
-            # Split by commas but respect parentheses
-            returning_columns = []
-            current_col = ""
-            depth = 0
-            for char in returning_clause:
-                if char == "(":
-                    depth += 1
-                elif char == ")":
-                    depth -= 1
-
-                if char == "," and depth == 0:
-                    col = current_col.strip()
-                    # Extract last part of identifier if it's schema-qualified
-                    # e.g. public.users.id -> id, or "public"."users"."id" -> id
-                    col_match = re.search(r'"?(\w+)"?\s*$', col)
-                    if col_match:
-                        returning_columns.append(col_match.group(1).lower())
-                    else:
-                        returning_columns.append(col.lower())
-                    current_col = ""
-                else:
-                    current_col += char
-            if current_col.strip():
-                col = current_col.strip()
-                col_match = re.search(r'"?(\w+)"?\s*$', col)
-                if col_match:
-                    returning_columns.append(col_match.group(1).lower())
-                else:
-                    returning_columns.append(col.lower())
-
-        # Determine operation type and extract table/where clause
-        sql_upper = sql.upper().strip()
-        # Robust table extraction regex for all operations
-        table_regex = r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:(?:"?\w+"?)\s*\.\s*)*"?(\w+)"?'
-        table_match = re.search(table_regex, sql, re.IGNORECASE)
-        if table_match:
-            returning_table = table_match.group(1).upper()
-
-        if sql_upper.startswith("INSERT"):
-            returning_operation = "INSERT"
-        elif sql_upper.startswith("UPDATE"):
-            returning_operation = "UPDATE"
-            # Extract WHERE clause (everything between WHERE and RETURNING)
-            where_match = re.search(
-                r"\bWHERE\s+(.+?)\s+RETURNING\b",
-                sql,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if where_match:
-                returning_where_clause = where_match.group(1).strip()
-        elif sql_upper.startswith("DELETE"):
-            returning_operation = "DELETE"
-            # Extract WHERE clause
-            where_match = re.search(
-                r"\bWHERE\s+(.+?)\s+RETURNING\b",
-                sql,
-                re.IGNORECASE | re.DOTALL,
-            )
-            if where_match:
-                returning_where_clause = where_match.group(1).strip()
-
-        # Strip RETURNING clause from SQL for execution
-        # Use a non-greedy match to avoid stripping important parts if multiple statements exist
-        stripped_sql = re.sub(
-            r"\s+RETURNING\s+.*?(?=$|;)",
-            "",
-            sql,
-            flags=re.IGNORECASE | re.DOTALL,
-            count=1,
-        ).strip()
-
-        return (
-            returning_operation,
-            returning_table,
-            returning_columns,
-            returning_where_clause,
-            stripped_sql,
-        )
+        plan = ReturningPlan.from_sql(sql, metadata_cache=self.metadata_cache, executor=self)
+        return plan.operation, plan.table, plan.columns, plan.where_clause, plan.stripped_sql
 
     def _extract_insert_id_from_sql(
         self, sql: str, params: list | None, session_id: str | None = None
@@ -1790,15 +1694,14 @@ class IRISExecutor:
 
     def _emulate_returning(
         self,
-        operation: str,
-        table: str,
-        columns: list[str] | str,
-        where_clause: str | None,
+        plan: ReturningPlan,
         params: list | None,
         is_embedded: bool,
         connection: Any = None,
         session_id: str | None = None,
         original_sql: str | None = None,
+        override_operation: str | None = None,
+        override_where: str | None = None,
     ) -> tuple[list[Any], Any]:
         """
         Emulate PostgreSQL RETURNING clause for IRIS.
@@ -1808,7 +1711,12 @@ class IRISExecutor:
         import re
 
         # CRITICAL FIX: Normalize table name to UPPERCASE for IRIS compatibility
-        table_normalized = table.upper() if table else table
+        operation = override_operation or plan.operation
+        table = plan.table
+        table_normalized = table.upper() if table else None
+        table_lower = table.lower() if table else ""
+        columns = plan.columns
+        where_clause = override_where or plan.where_clause
 
         # Handle columns as list or '*'
         if columns == "*":
@@ -1822,17 +1730,20 @@ class IRISExecutor:
             else:
                 col_list = "*"
         else:
-            # columns is a list of expressions/names. Preserve them but quote simple identifiers.
-            processed_cols = []
-            for col in columns:
-                if re.match(r"^\"?\w+\"?$", col):
-                    # Simple identifier - quote it
-                    clean_col = col.strip('"')
-                    processed_cols.append(f'"{clean_col}"')
-                else:
-                    # Expression - leave as is
-                    processed_cols.append(col)
-            col_list = ", ".join(processed_cols)
+            if plan.column_meta:
+                col_list = plan.select_list
+            else:
+                # columns is a list of expressions/names. Preserve them but quote simple identifiers.
+                processed_cols = []
+                for col in columns:
+                    if re.match(r"^\"?\w+\"?$", col):
+                        # Simple identifier - quote it
+                        clean_col = col.strip('"')
+                        processed_cols.append(f'"{clean_col}"')
+                    else:
+                        # Expression - leave as is
+                        processed_cols.append(col)
+                col_list = ", ".join(processed_cols)
 
         rows = []
         meta = None
@@ -1879,7 +1790,7 @@ class IRISExecutor:
                         id_cols = [
                             c
                             for c in columns
-                            if c.lower() in ("id", "identity", "pk", table.lower() + "id")
+                            if c.lower() in ("id", "identity", "pk", table_lower + "id")
                         ]
                         for id_col in id_cols:
                             rows, meta = _fetch_results(
@@ -1951,7 +1862,27 @@ class IRISExecutor:
 
             # Build/Fix metadata
             if meta is None or not any("type_oid" in c for c in meta if isinstance(c, dict)):
-                if isinstance(columns, list):
+                column_defs = plan.column_meta or []
+                if column_defs:
+                    new_meta = []
+                    for idx, col_meta in enumerate(column_defs):
+                        col_name = col_meta.alias or col_meta.normalized_name
+                        col_oid = self._get_column_type_from_schema(
+                            table, col_name, session_id=session_id
+                        )
+                        if col_oid is None and rows and idx < len(rows[0]):
+                            col_oid = self._infer_type_from_value(rows[0][idx], col_name)
+                        new_meta.append(
+                            {
+                                "name": col_name,
+                                "type_oid": col_oid or 1043,
+                                "type_size": -1,
+                                "type_modifier": -1,
+                                "format_code": 0,
+                            }
+                        )
+                    meta = new_meta
+                elif isinstance(columns, list):
                     new_meta = []
                     for i, col in enumerate(columns):
                         # Extract alias or column name
@@ -1988,6 +1919,98 @@ class IRISExecutor:
         except Exception as e:
             logger.error(f"RETURNING emulation failed for {operation}", error=str(e))
 
+        return rows, meta
+
+    def _is_unique_violation(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return any(keyword in message for keyword in ("unique", "duplicate", "constraint"))
+
+    def _map_insert_column_values(self, plan: ReturningPlan, params: list | None) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        if not params:
+            return values
+        for idx, column in enumerate(plan.insert_columns):
+            if idx < len(params):
+                values[column] = params[idx]
+        return values
+
+    def _prepare_conflict_set_clause(
+        self, plan: ReturningPlan, column_values: dict[str, Any]
+    ) -> tuple[str, list[Any]]:
+        if not plan.conflict_set_clause:
+            return "", []
+        params: list[Any] = []
+        pattern = re.compile(r"\bEXCLUDED\.\"?(\w+)\"?", re.IGNORECASE)
+
+        def _replace(match: re.Match) -> str:
+            column = match.group(1).lower()
+            params.append(column_values.get(column))
+            return "?"
+
+        set_clause = pattern.sub(_replace, plan.conflict_set_clause)
+        return set_clause, params
+
+    def _prepare_conflict_where_clause(
+        self, plan: ReturningPlan, column_values: dict[str, Any]
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column in plan.conflict_target_columns:
+            identifier = column.upper()
+            clauses.append(f'"{identifier}" = ?')
+            params.append(column_values.get(column))
+
+        where_clause = " AND ".join(clauses)
+        if plan.conflict_where_clause:
+            if where_clause:
+                where_clause = f"{where_clause} AND {plan.conflict_where_clause}"
+            else:
+                where_clause = plan.conflict_where_clause
+        return where_clause, params
+
+    def _handle_on_conflict_update(
+        self,
+        plan: ReturningPlan,
+        params: list | None,
+        connection: Any,
+        session_id: str | None,
+        original_sql: str | None,
+    ) -> tuple[list[Any], Any]:
+        if not plan.table:
+            raise RuntimeError("Cannot emulate ON CONFLICT without target table")
+        if not plan.conflict_set_clause or not plan.conflict_target_columns:
+            raise RuntimeError("ON CONFLICT DO UPDATE clause is incomplete")
+
+        column_values = self._map_insert_column_values(plan, params)
+        set_clause, set_params = self._prepare_conflict_set_clause(plan, column_values)
+        where_clause, where_params = self._prepare_conflict_where_clause(plan, column_values)
+
+        if not set_clause or not where_clause:
+            raise RuntimeError("Insufficient data to build ON CONFLICT UPDATE")
+
+        update_sql = f'UPDATE {IRIS_SCHEMA}."{plan.table}" SET {set_clause} WHERE {where_clause}'
+        cursor = self._safe_execute(
+            update_sql,
+            set_params + where_params,
+            is_embedded=False,
+            session_id=session_id,
+            connection=connection,
+        )
+        try:
+            cursor.close()
+        except Exception:
+            pass
+
+        rows, meta = self._emulate_returning(
+            plan,
+            params=where_params,
+            is_embedded=False,
+            connection=connection,
+            session_id=session_id,
+            original_sql=original_sql,
+            override_operation="UPDATE",
+            override_where=where_clause,
+        )
         return rows, meta
 
     async def _execute_embedded_async(
@@ -2160,16 +2183,17 @@ class IRISExecutor:
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
 
-                # 5. RETURNING Parsing/Stripping (IRIS doesn't support it natively)
-                (
-                    returning_operation,
-                    returning_table,
-                    returning_columns,
-                    returning_where_clause,
+                # 5. RETURNING / ON CONFLICT parsing (IRIS doesn't support it natively)
+                plan = ReturningPlan.from_sql(
                     optimized_sql,
-                ) = self._parse_returning_clause(optimized_sql)
-
-                if returning_operation:
+                    metadata_cache=self.metadata_cache,
+                    executor=self,
+                )
+                returning_operation = plan.operation
+                returning_table = plan.table
+                returning_columns = plan.columns
+                returning_where_clause = plan.where_clause
+                if plan.has_returning:
                     logger.info(
                         "RETURNING clause detected - will emulate",
                         operation=returning_operation,
@@ -2177,6 +2201,7 @@ class IRISExecutor:
                         columns=returning_columns,
                         session_id=session_id,
                     )
+                optimized_sql = plan.stripped_sql
 
                 # 6. Semicolon Stripping
                 # CRITICAL: Strip trailing semicolon
@@ -2246,12 +2271,9 @@ class IRISExecutor:
                 # Pre-fetch rows for DELETE RETURNING (must happen before deletion)
                 delete_returning_rows = []
                 delete_returning_meta = None
-                if returning_operation == "DELETE" and returning_columns:
+                if plan.operation == "DELETE" and plan.columns:
                     delete_returning_rows, delete_returning_meta = self._emulate_returning(
-                        returning_operation,
-                        returning_table,
-                        returning_columns,
-                        returning_where_clause,
+                        plan,
                         optimized_params,
                         is_embedded=True,
                     )
@@ -2303,17 +2325,14 @@ class IRISExecutor:
                     )
 
                 # RETURNING emulation: After INSERT/UPDATE/DELETE, fetch the affected row(s)
-                if returning_operation and returning_columns:
-                    if returning_operation == "DELETE":
+                if plan.has_returning and plan.columns:
+                    if plan.operation == "DELETE":
                         # Use pre-captured rows for DELETE
                         result = MockResult(delete_returning_rows, delete_returning_meta)
                     else:
                         # Emulate for INSERT/UPDATE - pass original SQL for UUID extraction
                         rows, meta = self._emulate_returning(
-                            returning_operation,
-                            returning_table,
-                            returning_columns,
-                            returning_where_clause,
+                            plan,
                             optimized_params,
                             is_embedded=True,
                             session_id=session_id,
@@ -2987,28 +3006,26 @@ class IRISExecutor:
                 # PROFILING: Optimization complete
                 t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
 
-                # 5. RETURNING Parsing/Stripping (IRIS doesn't support it natively)
-                (
-                    returning_operation,
-                    returning_table,
-                    returning_columns,
-                    returning_where_clause,
+                # 5. RETURNING / ON CONFLICT parsing (IRIS doesn't support these natively)
+                plan = ReturningPlan.from_sql(
                     optimized_sql,
-                ) = self._parse_returning_clause(optimized_sql)
+                    metadata_cache=self.metadata_cache,
+                    executor=self,
+                )
 
-                if returning_operation:
+                if plan.has_returning:
                     logger.info(
                         "RETURNING clause detected - will emulate (external mode)",
-                        operation=returning_operation,
-                        table=returning_table,
-                        columns=returning_columns,
+                        operation=plan.operation,
+                        table=plan.table,
+                        columns=plan.columns,
                         session_id=session_id,
                     )
 
                 # 6. Semicolon Stripping
                 # CRITICAL: Strip trailing semicolon
                 # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
-                optimized_sql = optimized_sql.strip().rstrip(";")
+                optimized_sql = plan.stripped_sql.strip().rstrip(";")
 
                 # 7. Schema Translation
                 # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
@@ -3053,12 +3070,9 @@ class IRISExecutor:
                 # Pre-fetch rows for DELETE RETURNING
                 delete_returning_rows = []
                 delete_returning_meta = None
-                if returning_operation == "DELETE" and returning_columns:
+                if plan.operation == "DELETE" and plan.columns:
                     delete_returning_rows, delete_returning_meta = self._emulate_returning(
-                        returning_operation,
-                        returning_table,
-                        returning_columns,
-                        returning_where_clause,
+                        plan,
                         optimized_params,
                         is_embedded=False,
                         connection=conn,
@@ -3091,14 +3105,54 @@ class IRISExecutor:
                         except Exception:
                             pass
 
-                # Execute last statement and capture cursor
-                cursor = self._safe_execute(
-                    statements[-1],
-                    optimized_params,
-                    is_embedded=False,
-                    session_id=session_id,
-                    connection=conn,
-                )
+                # Execute last statement and handle ON CONFLICT if needed
+                cursor = None
+                conflict_emulated = False
+                try:
+                    cursor = self._safe_execute(
+                        statements[-1],
+                        optimized_params,
+                        is_embedded=False,
+                        session_id=session_id,
+                        connection=conn,
+                    )
+                except Exception as exc:
+                    if plan.conflict_action and self._is_unique_violation(exc):
+                        if plan.conflict_action == "DO NOTHING":
+                            logger.info(
+                                "ON CONFLICT DO NOTHING handled in executor",
+                                table=plan.table,
+                                session_id=session_id,
+                            )
+                            cursor = MockResult([], None)
+                            conflict_emulated = True
+                        else:
+                            rows, meta = self._handle_on_conflict_update(
+                                plan,
+                                optimized_params,
+                                conn,
+                                session_id,
+                                sql,
+                            )
+                            cursor = MockResult(rows, meta)
+                            conflict_emulated = True
+                    else:
+                        raise
+
+                # RETURNING emulation
+                if plan.has_returning and plan.columns and not conflict_emulated:
+                    if plan.operation == "DELETE":
+                        cursor = MockResult(delete_returning_rows, delete_returning_meta)
+                    else:
+                        rows, meta = self._emulate_returning(
+                            plan,
+                            optimized_params,
+                            is_embedded=False,
+                            connection=conn,
+                            session_id=session_id,
+                            original_sql=sql,
+                        )
+                        cursor = MockResult(rows, meta)
 
                 # Commit for non-SELECT statements to ensure visibility for emulation and durability
                 if not statements[-1].upper().strip().startswith("SELECT"):
@@ -3106,26 +3160,6 @@ class IRISExecutor:
                         conn.commit()
                     except Exception as commit_err:
                         logger.warning(f"Failed to commit {statements[-1][:50]}: {commit_err}")
-
-                # RETURNING emulation
-                if returning_operation and returning_columns:
-                    if returning_operation == "DELETE":
-                        # Use pre-captured rows
-                        cursor = MockResult(delete_returning_rows, delete_returning_meta)
-                    else:
-                        # Emulate for INSERT/UPDATE - pass original SQL for UUID extraction
-                        rows, meta = self._emulate_returning(
-                            returning_operation,
-                            returning_table,
-                            returning_columns,
-                            returning_where_clause,
-                            optimized_params,
-                            is_embedded=False,
-                            connection=conn,
-                            session_id=session_id,
-                            original_sql=sql,  # Pass original SQL for UUID extraction
-                        )
-                        cursor = MockResult(rows, meta)
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -3547,7 +3581,7 @@ class IRISExecutor:
             self._connection_pool.clear()
             self._active_count = 0
 
-    def close_session(self, session_id: str):
+    async def close_session(self, session_id: str):
         with self._connection_lock:
             # Shutdown and remove session executor for thread affinity
             executor = self.session_executors.pop(session_id, None)

@@ -47,7 +47,7 @@ class Executor(Protocol):
         """Set the IRIS namespace for a specific session."""
         ...
 
-    def close_session(self, session_id: str) -> None:
+    async def close_session(self, session_id: str) -> None:
         """Close resources for a specific session."""
         ...
 

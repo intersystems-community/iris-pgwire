@@ -30,6 +30,7 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
+from .metadata_cache import MetadataCache
 from .mappings import translate_document_filters, translate_sql_constructs
 from .models import (
     ConstructMapping,
@@ -60,7 +61,8 @@ class SQLTranslator:
     def __init__(self):
         self.identifier_normalizer = IdentifierNormalizer()
         self.date_translator = DATETranslator()
-        self.default_values_translator = DefaultValuesTranslator()
+        self.metadata_cache = MetadataCache()
+        self.default_values_translator = DefaultValuesTranslator(metadata_cache=self.metadata_cache)
 
         self.enum_registry = EnumTypeRegistry()
         self.skipped_tables = SkippedTableSet()
@@ -152,7 +154,12 @@ class SQLTranslator:
 
         return sql
 
-    def normalize_sql(self, sql: str, execution_path: str = "direct") -> str:
+    def normalize_sql(
+        self,
+        sql: str,
+        execution_path: str = "direct",
+        executor: Any | None = None,
+    ) -> str:
         """
         Normalize SQL for IRIS compatibility.
 
@@ -163,11 +170,14 @@ class SQLTranslator:
         Returns:
             Normalized SQL
         """
-        result = self.normalize_sql_with_result(sql, execution_path)
+        result = self.normalize_sql_with_result(sql, execution_path, executor)
         return result.translated_sql
 
     def normalize_sql_with_result(
-        self, sql: str, execution_path: str = "direct"
+        self,
+        sql: str,
+        execution_path: str = "direct",
+        executor: Any | None = None,
     ) -> TranslationResult:
         """
         Normalize SQL for IRIS compatibility with full result info.
@@ -249,7 +259,7 @@ class SQLTranslator:
         normalized_sql, json_count = self._translate_json_operators(normalized_sql)
         normalized_sql, vector_fn_count = self._translate_vector_functions(normalized_sql)
         normalized_sql = self._translate_vector_types(normalized_sql)
-        normalized_sql = self.default_values_translator.translate(normalized_sql)
+        normalized_sql = self.default_values_translator.translate(normalized_sql, executor=executor)
 
         # Call comprehensive mapping registries for HNSW and complex filters
         normalized_sql, construct_mappings = translate_sql_constructs(normalized_sql)

@@ -27,9 +27,11 @@ from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
+from .schema_mapper import IRIS_SCHEMA
 from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
+from .sql_translator.returning_plan import ReturningPlan
 
 logger = structlog.get_logger()
 
@@ -217,7 +219,7 @@ class PGWireProtocol:
                 trace_id=f"conn_{self.connection_id}",
             ) as tracker:
                 final_sql, _, result = self.iris_executor.sql_pipeline.process(
-                    original_sql, session_id=session_id
+                    original_sql, session_id=session_id, executor=self.iris_executor
                 )
 
                 return {
@@ -1218,7 +1220,7 @@ class PGWireProtocol:
             )
         finally:
             # Ensure pinned session connection is returned to pool
-            self.iris_executor.close_session(self.connection_id)
+            await self.iris_executor.close_session(self.connection_id)
 
     async def handle_query_message(self, body: bytes):
         """
@@ -1378,8 +1380,12 @@ class PGWireProtocol:
                 )
 
             # Execute translated SQL against IRIS
+            in_txn, autocommit = self._transaction_flags()
             result = await self.iris_executor.execute_query(
-                final_sql, session_id=self.connection_id
+                final_sql,
+                session_id=self.connection_id,
+                in_transaction=in_txn,
+                autocommit=autocommit,
             )
 
             # Add translation metadata to result for debugging/monitoring
@@ -2444,6 +2450,7 @@ class PGWireProtocol:
                         "warnings": [],
                         "is_empty_query": True,  # Marker for Execute phase
                     },
+                    "needs_row_description": False,
                 }
 
                 # Send ParseComplete response
@@ -2474,6 +2481,7 @@ class PGWireProtocol:
                         "warnings": [],
                         "is_set_command": True,  # Marker for Execute phase
                     },
+                    "needs_row_description": False,
                 }
 
                 # Send ParseComplete response
@@ -2504,6 +2512,7 @@ class PGWireProtocol:
                         "is_transaction_command": True,
                         "transaction_type": "BEGIN",
                     },
+                    "needs_row_description": False,
                 }
 
                 # Send ParseComplete response
@@ -2531,6 +2540,7 @@ class PGWireProtocol:
                         "is_transaction_command": True,
                         "transaction_type": "COMMIT",
                     },
+                    "needs_row_description": False,
                 }
 
                 # Send ParseComplete response
@@ -2558,6 +2568,7 @@ class PGWireProtocol:
                         "is_transaction_command": True,
                         "transaction_type": "ROLLBACK",
                     },
+                    "needs_row_description": False,
                 }
 
                 # Send ParseComplete response
@@ -2636,6 +2647,7 @@ class PGWireProtocol:
                     "cache_hit": perf_stats.cache_hit if perf_stats else False,
                     "warnings": translation_result.get("warnings", []),
                 },
+                "needs_row_description": False,
             }
 
             logger.info(
@@ -2811,11 +2823,16 @@ class PGWireProtocol:
                 )
 
             # Store portal with result format codes
+            needs_row_desc = stmt.get("needs_row_description", False)
             self.portals[portal_name] = {
                 "statement": statement_name,
                 "params": param_values,
                 "result_formats": result_formats,  # Store for use in send_data_row
+                "needs_row_description": needs_row_desc,
             }
+
+            if needs_row_desc:
+                stmt["needs_row_description"] = False
 
             # Batch Execution Interception
             if self.batch_statement_name != statement_name:
@@ -2903,6 +2920,12 @@ class PGWireProtocol:
 
         return limit_indexes, offset_indexes
 
+    def _transaction_flags(self) -> tuple[bool, bool]:
+        """Return (in_transaction, autocommit) based on current transaction status"""
+
+        in_transaction = self.transaction_status == STATUS_IN_TRANSACTION
+        return in_transaction, not in_transaction
+
     async def handle_describe_message(self, body: bytes):
         """
         P2: Handle Describe message for statement/portal description
@@ -2933,107 +2956,56 @@ class PGWireProtocol:
                 query = stmt.get("translated_query", stmt.get("query", ""))
                 query_upper = query.strip().upper()
 
+                plan = ReturningPlan.from_sql(
+                    query,
+                    metadata_cache=self.iris_executor.metadata_cache,
+                    executor=self.iris_executor,
+                )
+                is_select = self.iris_executor.sql_parser.is_select_statement(query)
+                is_show = self.iris_executor.sql_parser.is_show_statement(query)
+                has_returning = plan.has_returning
+
                 logger.info(
                     "🔍 Describe Statement: Checking query type",
                     connection_id=self.connection_id,
                     statement_name=name,
                     query_preview=query[:100],
-                    is_select=self.iris_executor.sql_parser.is_select_statement(query),
-                    is_show=self.iris_executor.sql_parser.is_show_statement(query),
+                    is_select=is_select,
+                    is_show=is_show,
+                    has_returning=has_returning,
                 )
 
-                # Check if query has RETURNING clause (INSERT/UPDATE/DELETE with RETURNING)
-                has_returning = self.iris_executor.has_returning_clause(query)
+                if has_returning and not (is_select or is_show):
+                    columns_info, resolved = await self._resolve_returning_columns(plan)
+                    if resolved and columns_info:
+                        await self.send_row_description(columns_info)
+                        stmt["needs_row_description"] = False
+                        logger.info(
+                            "🔍 Describe Statement: RETURNING columns sent",
+                            connection_id=self.connection_id,
+                            statement_name=name,
+                            column_count=len(columns_info),
+                        )
+                    else:
+                        stmt["needs_row_description"] = True
+                        logger.warning(
+                            "🔍 Describe Statement: RETURNING * unresolved, deferring to Execute",
+                            connection_id=self.connection_id,
+                            statement_name=name,
+                            plan_table=plan.table,
+                            plan_columns=plan.columns,
+                        )
+                        await self.send_no_data()
+                    logger.info(
+                        "Described object",
+                        connection_id=self.connection_id,
+                        name=name,
+                        type="S",
+                    )
+                    return
 
-                if (
-                    self.iris_executor.sql_parser.is_select_statement(query)
-                    or self.iris_executor.sql_parser.is_show_statement(query)
-                    or has_returning
-                ):
-                    # Execute metadata discovery to get column information
-                    # Use LIMIT 0 pattern to avoid fetching actual data
-                    # For RETURNING queries, we'll send synthetic column metadata based on RETURNING columns
+                if is_select or is_show or has_returning:
                     try:
-                        # Special handling for RETURNING queries - extract columns from RETURNING clause
-                        if has_returning and not self.iris_executor.sql_parser.is_select_statement(
-                            query
-                        ):
-                            import re
-
-                            # Extract RETURNING columns from query
-                            # Format: RETURNING "schema"."table"."col1", "schema"."table"."col2", ...
-                            returning_match = re.search(
-                                r"\bRETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL
-                            )
-                            if returning_match:
-                                returning_clause = (
-                                    returning_match.group(1).strip().rstrip(";")
-                                )  # Remove trailing semicolon
-                                logger.info(
-                                    "🔍 DEBUG: RETURNING clause parsed",
-                                    connection_id=self.connection_id,
-                                    returning_clause=returning_clause[:200],
-                                    returning_clause_len=len(returning_clause),
-                                )
-                                raw_cols = [c.strip() for c in returning_clause.split(",")]
-                                logger.info(
-                                    "🔍 DEBUG: Raw columns from split",
-                                    connection_id=self.connection_id,
-                                    raw_cols_count=len(raw_cols),
-                                    raw_cols=[c[:50] for c in raw_cols],
-                                )
-                                returning_columns = []
-                                for col in raw_cols:
-                                    # Extract column name (last part after dots)
-                                    col_match = re.search(r'"?(\w+)"?\s*$', col)
-                                    if col_match:
-                                        col_name = col_match.group(1)
-                                        if col_name.lower() in (
-                                            "created_at",
-                                            "updated_at",
-                                            "deleted_at",
-                                        ):
-                                            type_oid = 20
-                                        else:
-                                            type_oid = 25
-                                        returning_columns.append(
-                                            {
-                                                "name": col_name,
-                                                "type_oid": type_oid,
-                                                "type_size": -1,
-                                                "type_modifier": -1,
-                                                "format_code": 0,
-                                            }
-                                        )
-
-                                logger.info(
-                                    "🔍 Describe: Sending synthetic RowDescription for RETURNING",
-                                    connection_id=self.connection_id,
-                                    columns=[c["name"] for c in returning_columns],
-                                )
-                                await self.send_row_description(returning_columns)
-                                logger.info(
-                                    "Described object",
-                                    connection_id=self.connection_id,
-                                    name=name,
-                                    type="S",
-                                )
-                                return
-                            else:
-                                logger.warning(
-                                    "Could not parse RETURNING clause, falling back to NoData",
-                                    connection_id=self.connection_id,
-                                    query_preview=query[:100],
-                                )
-                                await self.send_no_data()
-                                logger.info(
-                                    "Described object",
-                                    connection_id=self.connection_id,
-                                    name=name,
-                                    type="S",
-                                )
-                                return
-
                         # NEW: Respect strict_single_connection flag to avoid license exhaustion on CE
                         if getattr(self.iris_executor, "strict_single_connection", False):
                             logger.info(
@@ -3049,11 +3021,6 @@ class PGWireProtocol:
                             query=query[:150],
                         )
 
-                        # Execute the query to discover column metadata
-                        # NOTE: We're not using LIMIT 0 wrapper because IRIS may not support it
-                        # Instead, we'll execute the full query but only need the metadata
-
-                        # CRITICAL: If statement has parameters, supply dummy values for metadata discovery
                         param_count = (
                             stmt["param_types"]
                             if isinstance(stmt.get("param_types"), int)
@@ -3073,21 +3040,24 @@ class PGWireProtocol:
                             param_count=param_count,
                         )
 
+                        in_txn, autocommit = self._transaction_flags()
                         result = await self.iris_executor.execute_query(
-                            query, params=dummy_params, session_id=self.connection_id
+                            query,
+                            params=dummy_params,
+                            session_id=self.connection_id,
+                            in_transaction=in_txn,
+                            autocommit=autocommit,
                         )
 
                         if result.get("success") and result.get("columns"):
                             await self.send_row_description(result["columns"])
-                            # CRITICAL: Mark that RowDescription was sent in Describe phase (text format)
-                            # Execute phase must use text format in DataRow to match RowDescription
                             stmt["row_description_sent_in_describe"] = True
                             logger.info(
                                 "✅ Sent RowDescription for statement Describe",
                                 connection_id=self.connection_id,
                                 statement_name=name,
                                 column_count=len(result["columns"]),
-                                columns=[c["name"] for c in result["columns"]],
+                                columns=[c.get("name") for c in result["columns"]],
                             )
                         else:
                             logger.warning(
@@ -3104,7 +3074,6 @@ class PGWireProtocol:
                             statement_name=name,
                             error=str(e),
                         )
-                        # Fall back to NoData on error
                         await self.send_no_data()
                 else:
                     # Non-SELECT queries (DDL/DML) return NoData
@@ -3123,114 +3092,73 @@ class PGWireProtocol:
                 portal = self.portals[name]
                 statement_name = portal["statement"]
 
-                if statement_name in self.prepared_statements:
-                    stmt = self.prepared_statements[statement_name]
-                    query = stmt.get("translated_query", stmt.get("query", ""))
-                    query_upper = query.strip().upper()
+                if statement_name not in self.prepared_statements:
+                    await self.send_no_data()
+                    return
 
-                    # Batch Execution Interception:
-                    # Short-circuit Describe portal for DML statements.
-                    # DML portals (without RETURNING) don't have RowDescription.
-                    is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
-                    has_returning = self.iris_executor.has_returning_clause(query)
-                    if is_dml and not has_returning:
-                        logger.info(
-                            "Describe portal: DML statement (no row metadata)", portal_name=name
-                        )
-                        await self.send_no_data()
-                        return
+                stmt = self.prepared_statements[statement_name]
+                query = stmt.get("translated_query", stmt.get("query", ""))
+                query_upper = query.strip().upper()
 
-                    # Metadata discovery for SELECT/SHOW/RETURNING
-                    if (
-                        self.iris_executor.sql_parser.is_select_statement(query)
-                        or self.iris_executor.sql_parser.is_show_statement(query)
-                        or has_returning
-                    ):
-                        try:
-                            # CRITICAL FIX: For DML with RETURNING, use synthetic metadata
-                            # instead of executing the query (which would cause duplicate execution)
-                            if (
-                                has_returning
-                                and not self.iris_executor.sql_parser.is_select_statement(query)
-                            ):
-                                import re
+                plan = ReturningPlan.from_sql(
+                    query,
+                    metadata_cache=self.iris_executor.metadata_cache,
+                    executor=self.iris_executor,
+                )
+                is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
+                is_select = self.iris_executor.sql_parser.is_select_statement(query)
+                is_show = self.iris_executor.sql_parser.is_show_statement(query)
+                has_returning = plan.has_returning
 
-                                # Extract RETURNING columns from query
-                                returning_match = re.search(
-                                    r"\bRETURNING\s+(.+)$", query, re.IGNORECASE | re.DOTALL
+                if is_dml and not has_returning:
+                    logger.info(
+                        "Describe portal: DML statement (no row metadata)", portal_name=name
+                    )
+                    await self.send_no_data()
+                    return
+
+                if is_select or is_show or has_returning:
+                    try:
+                        if has_returning and not is_select:
+                            columns_info, resolved = await self._resolve_returning_columns(plan)
+                            if resolved and columns_info:
+                                logger.info(
+                                    "🔍 Describe Portal: Sending synthetic RowDescription for RETURNING",
+                                    connection_id=self.connection_id,
+                                    portal_name=name,
+                                    columns=[col.get("name") for col in columns_info],
                                 )
-                                if returning_match:
-                                    returning_clause = returning_match.group(1).strip().rstrip(";")
-                                    raw_cols = [c.strip() for c in returning_clause.split(",")]
-                                    returning_columns = []
-                                    for col in raw_cols:
-                                        # Extract column name (last part after dots)
-                                        col_match = re.search(r'"?(\w+)"?\s*$', col)
-                                        if col_match:
-                                            col_name = col_match.group(1)
-                                            if col_name.lower() in (
-                                                "created_at",
-                                                "updated_at",
-                                                "deleted_at",
-                                            ):
-                                                type_oid = 20  # BIGINT for timestamps
-                                            else:
-                                                type_oid = 25  # TEXT for others
-                                            returning_columns.append(
-                                                {
-                                                    "name": col_name,
-                                                    "type_oid": type_oid,
-                                                    "type_size": -1,
-                                                    "type_modifier": -1,
-                                                    "format_code": 0,
-                                                }
-                                            )
+                                await self.send_row_description(
+                                    columns_info, portal.get("result_formats", [])
+                                )
+                                portal["needs_row_description"] = False
+                                return
 
-                                    if returning_columns:
-                                        logger.info(
-                                            "🔍 Describe Portal: Sending synthetic RowDescription for RETURNING",
-                                            connection_id=self.connection_id,
-                                            portal_name=name,
-                                            columns=[c["name"] for c in returning_columns],
-                                        )
-                                        result_formats = portal.get("result_formats", [])
-                                        await self.send_row_description(
-                                            returning_columns, result_formats
-                                        )
-                                        return
-
-                                    logger.info(
-                                        "🔍 Describe Portal: RETURNING * detected, sending NoData",
-                                        connection_id=self.connection_id,
-                                        portal_name=name,
-                                    )
-                                    portal["needs_row_description"] = True
-                                    await self.send_no_data()
-                                    return
-                                else:
-                                    logger.warning(
-                                        "Could not parse RETURNING clause in portal Describe",
-                                        connection_id=self.connection_id,
-                                        portal_name=name,
-                                    )
-                                    await self.send_no_data()
-                                    return
-
-                            # For SELECT/SHOW queries, execute to get metadata
-                            result = await self.iris_executor.execute_query(
-                                query,
-                                params=portal.get("params", []),
-                                session_id=self.connection_id,
+                            logger.info(
+                                "🔍 Describe Portal: RETURNING * unresolved, deferring to Execute",
+                                connection_id=self.connection_id,
+                                portal_name=name,
                             )
-                            if result.get("success") and result.get("columns"):
-                                result_formats = portal.get("result_formats", [])
-                                await self.send_row_description(result["columns"], result_formats)
-                            else:
-                                await self.send_no_data()
-                        except Exception as e:
-                            logger.warning(f"Metadata discovery failed for portal {name}: {e}")
+                            portal["needs_row_description"] = True
                             await self.send_no_data()
-                    else:
+                            return
+
+                        in_txn, autocommit = self._transaction_flags()
+                        result = await self.iris_executor.execute_query(
+                            query,
+                            params=portal.get("params", []),
+                            session_id=self.connection_id,
+                            in_transaction=in_txn,
+                            autocommit=autocommit,
+                        )
+
+                        if result.get("success") and result.get("columns"):
+                            result_formats = portal.get("result_formats", [])
+                            await self.send_row_description(result["columns"], result_formats)
+                        else:
+                            await self.send_no_data()
+                    except Exception as e:
+                        logger.warning(f"Metadata discovery failed for portal {name}: {e}")
                         await self.send_no_data()
                 else:
                     await self.send_no_data()
@@ -3249,6 +3177,72 @@ class PGWireProtocol:
             await self.send_error_response(
                 "ERROR", "42P02", "undefined_object", f"Describe failed: {e}"
             )
+
+    async def _resolve_returning_columns(
+        self, plan: ReturningPlan
+    ) -> tuple[list[dict[str, Any]] | None, bool]:
+        if not plan.columns:
+            return None, False
+
+        if plan.columns == "*":
+            expanded = await self._expand_returning_star_columns(plan)
+            if not expanded:
+                return None, False
+            return self._build_returning_column_info(expanded, plan), True
+
+        columns = plan.columns if isinstance(plan.columns, list) else [plan.columns]
+        return self._build_returning_column_info(columns, plan), True
+
+    def _build_returning_column_info(
+        self, column_names: list[str], plan: ReturningPlan
+    ) -> list[dict[str, Any]]:
+        columns_info: list[dict[str, Any]] = []
+        for idx, col_name in enumerate(column_names):
+            label = None
+            if plan.column_meta and idx < len(plan.column_meta):
+                meta = plan.column_meta[idx]
+                label = (meta.alias or meta.normalized_name) if meta else None
+
+            label = label or col_name
+            if isinstance(label, str):
+                label = label.lower()
+            else:
+                label = str(label).lower()
+
+            columns_info.append(
+                {
+                    "name": label,
+                    "type_oid": 25,
+                    "type_size": -1,
+                    "type_modifier": -1,
+                    "format_code": 0,
+                }
+            )
+
+        return columns_info
+
+    async def _expand_returning_star_columns(self, plan: ReturningPlan) -> list[str] | None:
+        if not plan.table:
+            return None
+
+        metadata_cache = getattr(self.iris_executor, "metadata_cache", None)
+        if not metadata_cache:
+            return None
+
+        try:
+            metadata = await metadata_cache.get_column_metadata(
+                IRIS_SCHEMA, plan.table, self.iris_executor
+            )
+            if metadata:
+                return list(metadata.keys())
+        except Exception as exc:
+            logger.warning(
+                "Failed to expand RETURNING * columns",
+                connection_id=self.connection_id,
+                table=plan.table,
+                error=str(exc),
+            )
+        return None
 
     async def handle_execute_message(self, body: bytes):
         """
@@ -3410,8 +3404,13 @@ class PGWireProtocol:
             await self.flush_batch()
 
             # DEBUG: Verify executor instance
+            in_txn, autocommit = self._transaction_flags()
             result = await self.iris_executor.execute_query(
-                query, params=params if params else None, session_id=self.connection_id
+                query,
+                params=params if params else None,
+                session_id=self.connection_id,
+                in_transaction=in_txn,
+                autocommit=autocommit,
             )
 
             if result["success"]:

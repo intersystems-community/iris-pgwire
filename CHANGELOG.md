@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2025-02-06
+
+### Added
+- **IRIS 2024.2+ compatibility**: Automatic `%EXACT` wrapping for `SELECT DISTINCT` and `UNION` preserves PostgreSQL set semantics on IRIS 2024.2+.
+- **Enhanced RETURNING emulation**: Multi-column and `RETURNING *` workflows now return metadata-rich results without forcing separate queries.
+- **ON CONFLICT support**: `DO NOTHING` and `DO UPDATE` branches replay IRIS-safe logic while keeping the client-facing `RETURNING` output consistent.
+- **Metadata-driven DEFAULTs**: Translators consult IRIS metadata to expand `DEFAULT` references in INSERT/UPDATE statements.
+- **Global boolean literals**: PostgreSQL `true`/`false` constants are translated into IRIS equivalents everywhere in the pipeline.
+- **DBAPI session pinning**: Connections remain tied to their originating session so identity lookups (`LAST_IDENTITY()`/`%EXACT` selects) stay accurate.
+
+### Fixed
+- **TypeError in DBAPIConnection**: Connection age calculations no longer raise `TypeError` when the pool is drained.
+- **IntegratedML decorators**: Signature mismatches in `IntegratedML` wrappers were corrected so they proxy arguments without losing positional context.
+
 ## [1.2.23] - 2026-01-25
 
 ### Fixed

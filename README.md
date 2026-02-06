@@ -114,6 +114,15 @@ See [Client Compatibility Guide](https://github.com/intersystems-community/iris-
 
 - **Performance**: ~4ms protocol overhead, dual backend (DBAPI/Embedded), async SQLAlchemy support. See [Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md)
 
+## 🎉 Release 1.3.0 / IRIS 2024.2+ Compatibility
+
+- **Full IRIS 2024.2+ compatibility**: Automatic `%EXACT` wrapping for `SELECT DISTINCT` and `UNION` ensures parity with PostgreSQL set semantics.
+- **Enhanced RETURNING emulation**: Multi-column and `RETURNING *` pipelines are handled with richer metadata, supplemental selects, and session-local lookups.
+- **ON CONFLICT support**: `DO NOTHING` and `DO UPDATE` branches map to IRIS logic while preserving consistent `RETURNING` output.
+- **Metadata-driven DEFAULTs**: The translator now resolves `DEFAULT` references via IRIS metadata so that INSERT/UPDATE statements stay intact.
+- **Global boolean translation**: PostgreSQL `true`/`false` literals translate to their IRIS equivalents automatically across all SQL paths.
+- **Session pinning for DBAPI**: Connections stay bound to the original session to maintain identity lookups (`LAST_IDENTITY()`, `%EXACT`, etc.) during emulation.
+
 ---
 
 ## 💻 Usage Examples

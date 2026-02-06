@@ -29,6 +29,7 @@ from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.sql_translator import SQLPipeline
 from iris_pgwire.sql_translator.parser import get_parser
+from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
 logger = structlog.get_logger(__name__)
 
@@ -90,7 +91,9 @@ class DBAPIExecutor:
         self.pool = IRISConnectionPool(config)
         self.backend_type = "dbapi"
         self.session_namespaces = {}
+        self.session_connections = {}
         self.strict_single_connection = config.strict_single_connection
+        self.session_transactions: dict[str, bool] = {}
 
         # SQL components required by protocol
         self.sql_pipeline = SQLPipeline()
@@ -163,104 +166,43 @@ class DBAPIExecutor:
         """
         start_time = time.perf_counter()
         conn_wrapper = None
+        release_connection = True
+        pinned_connection = False
+        original_sql = sql
 
         try:
-            # Feature: Handle catalog emulation shared across all paths
             catalog_result = await self.catalog_router.handle_catalog_query(
                 sql, params, session_id, self
             )
             if catalog_result is not None:
                 return catalog_result
 
-            # Translate placeholders ($1 -> ?)
             sql = self._translate_placeholders(sql)
-
-            # Convert parameters for IRIS (e.g., ISO 8601 timestamps)
+            plan = ReturningPlan.from_sql(sql)
             converted_params = self._convert_params_for_iris(params)
 
-            # Acquire connection from pool
-            conn_wrapper = await self.pool.acquire()
+            conn_wrapper, pinned_connection = await self._acquire_connection(session_id)
+            release_connection = not pinned_connection
 
-            # Detect RETURNING clause
-            has_returning = self.has_returning_clause(sql)
-
-            # Execute query in thread pool (DBAPI is synchronous)
             def execute_in_thread():
-                cursor = conn_wrapper.connection.cursor()  # type: ignore
-                try:
-                    # Feature 034: Apply per-session namespace if set
-                    if session_id and session_id in self.session_namespaces:
-                        ns = self.session_namespaces[session_id]
-                        logger.debug(f"Session {session_id} using namespace {ns}")
+                if session_id and session_id in self.session_namespaces:
+                    ns = self.session_namespaces[session_id]
+                    logger.debug(f"Session {session_id} using namespace {ns}")
 
-                    # Handle RETURNING emulation
-                    if has_returning:
-                        op, table, cols, where, stripped_sql = self._parse_returning_clause(sql)
-                        if op and table:
-                            # Strip trailing semicolon
-                            clean_sql = stripped_sql.strip().rstrip(";")
-
-                            # For DELETE, we must fetch BEFORE deleting
-                            delete_rows = []
-                            delete_meta = None
-                            if op == "DELETE":
-                                delete_rows, delete_meta = self._emulate_returning_sync(
-                                    cursor, op, table, cols, where, converted_params, sql
-                                )
-
-                            # Execute the main statement
-                            if converted_params:
-                                cursor.execute(clean_sql, converted_params)
-                            else:
-                                cursor.execute(clean_sql)
-
-                            # Emulate RETURNING result
-                            if op == "DELETE":
-                                rows = delete_rows
-                                columns = delete_meta
-                            else:
-                                rows, columns = self._emulate_returning_sync(
-                                    cursor, op, table, cols, where, converted_params, sql
-                                )
-
-                            row_count = len(rows)
-                            return rows, columns, row_count
-
-                    # Standard execution path
-                    # Strip trailing semicolon for IRIS compatibility
-                    clean_sql = sql.strip().rstrip(";")
-
-                    if converted_params:
-                        cursor.execute(clean_sql, converted_params)
-                    else:
-                        cursor.execute(clean_sql)
-
-                    # Fetch results if available
-                    rows = []
-                    columns = []
-                    if cursor.description:
-                        rows = cursor.fetchall()
-                        for desc in cursor.description:
-                            columns.append(
-                                {
-                                    "name": desc[0],
-                                    "type_oid": self._map_dbapi_type_to_oid(desc[1]),
-                                    "type_size": desc[2] if len(desc) > 2 else -1,
-                                    "format_code": 0,
-                                }
-                            )
-
-                    row_count = cursor.rowcount if hasattr(cursor, "rowcount") else len(rows)
-                    if row_count < 0:
-                        row_count = len(rows)
-
-                    return rows, columns, row_count
-                finally:
-                    cursor.close()
+                return self._execute_statement_sync(
+                    conn_wrapper.connection,
+                    plan,
+                    converted_params,
+                    session_id,
+                    original_sql,
+                )
 
             rows, columns, row_count = await asyncio.to_thread(execute_in_thread)
 
-            # Record metrics
+            tx_sql_upper = original_sql.strip().upper()
+            self._update_transaction_state(session_id, tx_sql_upper)
+            self._maybe_auto_commit(conn_wrapper.connection, session_id, tx_sql_upper)
+
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             self._total_queries += 1
             self._total_query_time_ms += elapsed_ms
@@ -285,7 +227,6 @@ class DBAPIExecutor:
 
         except Exception as e:
             error_str = str(e).lower()
-            # Mark connection as unhealthy for common connection errors
             connection_lost = any(
                 msg in error_str
                 for msg in [
@@ -308,14 +249,17 @@ class DBAPIExecutor:
             if conn_wrapper:
                 if connection_lost:
                     conn_wrapper.mark_failed(str(e))
+                    if session_id:
+                        self.session_connections.pop(session_id, None)
+                        self.session_transactions.pop(session_id, None)
+                    release_connection = True
                 else:
                     conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
 
             raise
 
         finally:
-            # Release connection back to pool
-            if conn_wrapper:
+            if conn_wrapper and release_connection:
                 await self.pool.release(conn_wrapper)
 
     async def execute_many(
@@ -329,90 +273,51 @@ class DBAPIExecutor:
         """
         start_time = time.perf_counter()
         conn_wrapper = None
+        release_connection = True
+        pinned_connection = False
+        original_sql = sql
 
         try:
-            # Translate placeholders ($1 -> ?)
             sql = self._translate_placeholders(sql)
+            plan = ReturningPlan.from_sql(sql)
 
-            # Detect RETURNING clause
-            has_returning = self.has_returning_clause(sql)
+            conn_wrapper, pinned_connection = await self._acquire_connection(session_id)
+            release_connection = not pinned_connection
 
-            # Acquire connection from pool
-            conn_wrapper = await self.pool.acquire()
+            all_rows: list[Any] = []
+            columns_info: list[dict[str, Any]] = []
+            rows_affected = 0
 
-            # Execute batch in thread pool
-            def execute_batch_in_thread():
-                cursor = conn_wrapper.connection.cursor()  # type: ignore
-                try:
-                    # Strip trailing semicolon for IRIS compatibility
-                    clean_sql = sql.strip().rstrip(";")
+            for params in params_list:
+                converted_params = self._convert_params_for_iris(params)
+                rows, columns, row_count = await asyncio.to_thread(
+                    self._execute_statement_sync,
+                    conn_wrapper.connection,
+                    plan,
+                    converted_params,
+                    session_id,
+                    original_sql,
+                )
 
-                    if has_returning:
-                        op, table, cols, where, stripped_sql = self._parse_returning_clause(sql)
-                        if op and table:
-                            all_rows = []
-                            all_meta = None
+                if rows:
+                    all_rows.extend(rows)
+                if columns and not columns_info:
+                    columns_info = columns
+                rows_affected += row_count
 
-                            for params in params_list:
-                                converted_params = self._convert_params_for_iris(params)
-                                # For DELETE, capture before
-                                if op == "DELETE":
-                                    rows, meta = self._emulate_returning_sync(
-                                        cursor, op, table, cols, where, converted_params, sql
-                                    )
-                                    all_rows.extend(rows)
-                                    if not all_meta:
-                                        all_meta = meta
+                tx_sql_upper = original_sql.strip().upper()
+                self._update_transaction_state(session_id, tx_sql_upper)
+                self._maybe_auto_commit(conn_wrapper.connection, session_id, tx_sql_upper)
 
-                                # Execute statement
-                                cursor.execute(stripped_sql.strip().rstrip(";"), converted_params)
-
-                                # For INSERT/UPDATE, capture after
-                                if op != "DELETE":
-                                    rows, meta = self._emulate_returning_sync(
-                                        cursor, op, table, cols, where, converted_params, sql
-                                    )
-                                    all_rows.extend(rows)
-                                    if not all_meta:
-                                        all_meta = meta
-
-                            return all_rows, all_meta or [], len(params_list)
-
-                    # Standard batch execution
-                    # Pre-process parameters (e.g. convert lists to IRIS vector strings)
-                    final_params_list = []
-                    for p_set in params_list:
-                        # Convert ISO 8601 timestamps and other formats
-                        converted_p_set = self._convert_params_for_iris(p_set)
-
-                        processed_params = [
-                            "[" + ",".join(map(str, p)) + "]" if isinstance(p, list) else p
-                            for p in converted_p_set
-                        ]
-                        final_params_list.append(tuple(processed_params))
-
-                    logger.debug(
-                        "Executing executemany()",
-                        sql=clean_sql[:100],
-                        batch_size=len(final_params_list),
-                    )
-
-                    cursor.executemany(clean_sql, final_params_list)
-                    rows_affected = (
-                        cursor.rowcount if hasattr(cursor, "rowcount") else len(params_list)
-                    )
-                    return [], [], rows_affected
-                finally:
-                    cursor.close()
-
-            rows, columns, rows_affected = await asyncio.to_thread(execute_batch_in_thread)
-
-            # Record metrics
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            self._total_queries += 1  # Count batch as one "query" for high-level metrics
+            self._total_queries += 1
             self._total_query_time_ms += elapsed_ms
 
             conn_wrapper.record_query_execution(acquisition_time_ms=elapsed_ms, success=True)
+
+            execution_path = (
+                "dbapi_executemany_returning" if plan.has_returning else "dbapi_executemany"
+            )
 
             logger.info(
                 "Batch executed successfully",
@@ -426,16 +331,13 @@ class DBAPIExecutor:
                 "rows_affected": rows_affected,
                 "execution_time_ms": elapsed_ms,
                 "batch_size": len(params_list),
-                "rows": rows,
-                "columns": columns,
-                "_execution_path": (
-                    "dbapi_executemany_returning" if has_returning else "dbapi_executemany"
-                ),
+                "rows": all_rows,
+                "columns": columns_info,
+                "_execution_path": execution_path,
             }
 
         except Exception as e:
             error_str = str(e).lower()
-            # Mark connection as unhealthy for common connection errors
             connection_lost = any(
                 msg in error_str
                 for msg in [
@@ -458,15 +360,312 @@ class DBAPIExecutor:
             if conn_wrapper:
                 if connection_lost:
                     conn_wrapper.mark_failed(str(e))
+                    if session_id:
+                        self.session_connections.pop(session_id, None)
+                        self.session_transactions.pop(session_id, None)
+                    release_connection = True
                 else:
                     conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
 
             raise
 
         finally:
-            # Release connection back to pool
-            if conn_wrapper:
+            if conn_wrapper and release_connection:
                 await self.pool.release(conn_wrapper)
+
+    async def _acquire_connection(self, session_id: str | None) -> tuple[Any, bool]:
+        if session_id and session_id in self.session_connections:
+            return self.session_connections[session_id], True
+
+        conn_wrapper = await self.pool.acquire()
+        if session_id:
+            self.session_connections[session_id] = conn_wrapper
+        return conn_wrapper, bool(session_id)
+
+    def _update_transaction_state(self, session_id: str | None, sql_upper: str | None) -> None:
+        if not session_id or not sql_upper:
+            return
+        normalized = sql_upper.strip().upper()
+        if normalized.startswith("START TRANSACTION") or normalized.startswith("BEGIN"):
+            self.session_transactions[session_id] = True
+        elif (
+            normalized.startswith("COMMIT")
+            or normalized.startswith("ROLLBACK")
+            or normalized.startswith("END")
+        ):
+            self.session_transactions.pop(session_id, None)
+
+    def _is_transaction_control_sql(self, sql_upper: str | None) -> bool:
+        if not sql_upper:
+            return False
+        normalized = sql_upper.strip().upper()
+        return any(
+            normalized.startswith(keyword)
+            for keyword in ("BEGIN", "START TRANSACTION", "COMMIT", "ROLLBACK", "END")
+        )
+
+    def _maybe_auto_commit(
+        self, connection: Any, session_id: str | None, sql_upper: str | None
+    ) -> None:
+        if not connection or not sql_upper:
+            return
+        if self._is_transaction_control_sql(sql_upper):
+            return
+        if session_id and self.session_transactions.get(session_id):
+            return
+        try:
+            connection.commit()
+        except Exception as commit_error:  # pragma: no cover - best effort
+            logger.warning("Auto-commit failed", error=str(commit_error), session_id=session_id)
+
+    def _execute_statement_sync(
+        self,
+        connection: Any,
+        plan: ReturningPlan,
+        params: list | tuple | None,
+        session_id: str | None,
+        original_sql: str | None,
+    ) -> tuple[list[Any], list[dict[str, Any]], int]:
+        cursor = connection.cursor()
+        try:
+            cleaned_sql = plan.stripped_sql.strip().rstrip(";")
+            execute_params = tuple(params) if params else None
+
+            delete_rows: list[Any] = []
+            delete_meta: list[dict[str, Any]] | None = None
+            if plan.operation == "DELETE" and plan.has_returning:
+                delete_rows, delete_meta = self._emulate_returning_sync(
+                    connection,
+                    plan,
+                    params,
+                    original_sql,
+                    override_operation="DELETE",
+                    override_where=plan.where_clause,
+                    override_where_params=self._extract_where_params(plan.where_clause, params),
+                )
+
+            try:
+                if execute_params:
+                    cursor.execute(cleaned_sql, execute_params)
+                else:
+                    cursor.execute(cleaned_sql)
+            except Exception as exc:
+                if plan.conflict_action == "DO NOTHING" and self._is_unique_violation(exc):
+                    return [], [], 0
+                if plan.conflict_action == "DO UPDATE" and self._is_unique_violation(exc):
+                    rows, columns = self._handle_on_conflict_update(
+                        plan, params, connection, session_id, original_sql
+                    )
+                    return rows, columns or [], len(rows)
+                raise
+
+            rows: list[Any] = []
+            columns: list[dict[str, Any]] = []
+            row_count = (
+                cursor.rowcount if getattr(cursor, "rowcount", -1) and cursor.rowcount >= 0 else 0
+            )
+
+            if plan.has_returning:
+                if plan.operation == "DELETE":
+                    rows, columns = delete_rows, delete_meta or []
+                    row_count = len(rows)
+                else:
+                    rows, columns = self._emulate_returning_sync(
+                        connection, plan, params, original_sql
+                    )
+                    row_count = len(rows)
+            else:
+                if cursor.description:
+                    rows = cursor.fetchall()
+                    columns = self._build_metadata_from_description(cursor.description)
+                row_count = max(row_count, len(rows))
+
+            return rows, columns, row_count
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def _handle_on_conflict_update(
+        self,
+        plan: ReturningPlan,
+        params: list | tuple | None,
+        connection: Any,
+        session_id: str | None,
+        original_sql: str | None,
+    ) -> tuple[list[Any], list[dict[str, Any]] | None]:
+        if not plan.table:
+            raise RuntimeError("Cannot emulate ON CONFLICT without target table")
+        if not plan.conflict_set_clause or not plan.conflict_target_columns:
+            raise RuntimeError("ON CONFLICT DO UPDATE clause is incomplete")
+
+        column_values = self._map_insert_column_values(plan, params)
+        set_clause, set_params = self._prepare_conflict_set_clause(plan, column_values)
+        where_clause, where_params = self._prepare_conflict_where_clause(plan, column_values)
+
+        if not set_clause or not where_clause:
+            raise RuntimeError("Insufficient data to build ON CONFLICT UPDATE")
+
+        update_sql = f'UPDATE {IRIS_SCHEMA}."{plan.table}" SET {set_clause} WHERE {where_clause}'
+        cursor = connection.cursor()
+        try:
+            cursor.execute(update_sql, tuple(set_params + where_params))
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+        rows, columns = self._emulate_returning_sync(
+            connection,
+            plan,
+            where_params,
+            original_sql,
+            override_operation="UPDATE",
+            override_where=where_clause,
+            override_where_params=where_params,
+        )
+        return rows, columns
+
+    def _is_unique_violation(self, error: Exception) -> bool:
+        message = str(error).lower()
+        return any(keyword in message for keyword in ("unique", "duplicate", "constraint"))
+
+    def _map_insert_column_values(
+        self, plan: ReturningPlan, params: list | tuple | None
+    ) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        if not params or not plan.insert_columns:
+            return values
+        for idx, column in enumerate(plan.insert_columns):
+            if idx < len(params):
+                values[column.lower()] = params[idx]
+        return values
+
+    def _prepare_conflict_set_clause(
+        self, plan: ReturningPlan, column_values: dict[str, Any]
+    ) -> tuple[str, list[Any]]:
+        if not plan.conflict_set_clause:
+            return "", []
+        params: list[Any] = []
+        pattern = re.compile(r"\bEXCLUDED\.\"?(\w+)\"?", re.IGNORECASE)
+
+        def _replace(match: re.Match) -> str:
+            column = match.group(1).lower()
+            params.append(column_values.get(column))
+            return "?"
+
+        set_clause = pattern.sub(_replace, plan.conflict_set_clause)
+        return set_clause, params
+
+    def _prepare_conflict_where_clause(
+        self, plan: ReturningPlan, column_values: dict[str, Any]
+    ) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column in plan.conflict_target_columns:
+            identifier = column.upper()
+            clauses.append(f'"{identifier}" = ?')
+            params.append(column_values.get(column.lower()))
+
+        where_clause = " AND ".join(clauses)
+        if plan.conflict_where_clause:
+            if where_clause:
+                where_clause = f"{where_clause} AND {plan.conflict_where_clause}"
+            else:
+                where_clause = plan.conflict_where_clause
+        return where_clause, params
+
+    def _extract_where_params(
+        self, where_clause: str | None, params: list | tuple | None
+    ) -> list[Any]:
+        if not where_clause or not params:
+            return []
+        count = where_clause.count("?")
+        if count == 0:
+            return []
+        values = list(params)
+        return values[-count:] if len(values) >= count else values
+
+    def _translate_schema_references(self, clause: str) -> str:
+        translated = re.sub(
+            r'"public"\s*\.\s*"(\w+)"',
+            rf'{IRIS_SCHEMA}."\1"',
+            clause,
+            flags=re.IGNORECASE,
+        )
+        translated = re.sub(
+            r'\bpublic\s*\.\s*"(\w+)"',
+            rf'{IRIS_SCHEMA}."\1"',
+            translated,
+            flags=re.IGNORECASE,
+        )
+        return translated
+
+    def _get_primary_key_columns(self, table: str, connection: Any) -> list[str]:
+        if not table or not connection:
+            return []
+        cursor = connection.cursor()
+        try:
+            metadata_sql = f"""
+                SELECT k.COLUMN_NAME
+                FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+                JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS t
+                    ON k.CONSTRAINT_NAME = t.CONSTRAINT_NAME
+                WHERE LOWER(t.TABLE_NAME) = LOWER('{table}')
+                AND LOWER(t.TABLE_SCHEMA) = LOWER('{IRIS_SCHEMA}')
+                AND t.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                ORDER BY k.ORDINAL_POSITION
+            """
+            cursor.execute(metadata_sql)
+            rows = cursor.fetchall()
+            return [row[0] for row in rows]
+        except Exception as e:
+            logger.debug("Failed to fetch primary key columns", table=table, error=str(e))
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return []
+
+    def _fetch_last_identity(self, connection: Any) -> Any | None:
+        if not connection:
+            return None
+        cursor = connection.cursor()
+        try:
+            cursor.execute("SELECT LAST_IDENTITY()")
+            row = cursor.fetchone()
+            return row[0] if row else None
+        except Exception as e:
+            logger.debug("LAST_IDENTITY() failed", error=str(e))
+            return None
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def _build_metadata_from_description(self, description: Any) -> list[dict[str, Any]]:
+        columns: list[dict[str, Any]] = []
+        if not description:
+            return columns
+        for desc in description:
+            if not desc:
+                continue
+            name = desc[0]
+            type_oid = self._map_dbapi_type_to_oid(desc[1]) if len(desc) > 1 else 1043
+            size = desc[2] if len(desc) > 2 else -1
+            columns.append(
+                {
+                    "name": name,
+                    "type_oid": type_oid,
+                    "type_size": size,
+                    "format_code": 0,
+                }
+            )
+        return columns
 
     async def test_connection(self):
         """Test IRIS connectivity by acquiring and releasing a connection."""
@@ -486,10 +685,15 @@ class DBAPIExecutor:
         """Set the IRIS namespace for a specific session."""
         self.session_namespaces[session_id] = namespace
 
-    def close_session(self, session_id: str):
+    async def close_session(self, session_id: str):
         """Close resources for a specific session."""
+        conn_wrapper = self.session_connections.pop(session_id, None)
+        if conn_wrapper:
+            logger.info("Closing session connection", session_id=session_id)
+            await self.pool.release(conn_wrapper)
         if session_id in self.session_namespaces:
             del self.session_namespaces[session_id]
+        self.session_transactions.pop(session_id, None)
 
     async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction."""
@@ -803,100 +1007,176 @@ class DBAPIExecutor:
 
     def _emulate_returning_sync(
         self,
-        cursor,
-        operation: str,
-        table: str,
-        columns: list[str] | str,
-        where_clause: str | None,
-        params: list | None,
+        connection: Any,
+        plan: ReturningPlan,
+        params: list | tuple | None,
         original_sql: str | None = None,
-    ) -> tuple[list[Any], Any]:
-        """
-        Synchronous emulation of RETURNING clause.
-        """
-        table_normalized = table.upper() if table else table
+        override_operation: str | None = None,
+        override_where: str | None = None,
+        override_where_params: list[Any] | None = None,
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
+        operation = override_operation or plan.operation
+        table = plan.table
+        table_normalized = table.upper() if table else None
+        if not table_normalized:
+            return [], []
+        columns = plan.columns or ["*"]
+        col_list = "*"
+
         if columns == "*":
-            # Expand * using table schema
-            expanded_cols = self._get_table_columns_from_schema(table_normalized, cursor)
+            meta_cursor = connection.cursor()
+            try:
+                expanded_cols = self._get_table_columns_from_schema(table_normalized, meta_cursor)
+            finally:
+                try:
+                    meta_cursor.close()
+                except Exception:
+                    pass
             if expanded_cols:
-                col_list = ", ".join([f'"{col}"' for col in expanded_cols])
-                columns = expanded_cols  # Update columns for metadata generation
+                columns = expanded_cols
+                col_list = ", ".join(f'"{col}"' for col in expanded_cols)
             else:
                 col_list = "*"
         else:
-            col_list = ", ".join([f'"{col}"' for col in columns])
+            if plan.column_meta:
+                col_list = plan.select_list
+            else:
+                processed: list[str] = []
+                for col in columns:
+                    if re.match(r'^"?\w+"?$', col):
+                        processed.append(f'"{col.strip('"')}"')
+                    else:
+                        processed.append(col)
+                col_list = ", ".join(processed)
 
-        rows = []
-        meta = None
+        rows: list[Any] = []
+        metadata: list[dict[str, Any]] | None = None
+        param_values = list(params) if params else []
+
+        def _fetch_rows(
+            query: str, query_params: list[Any] | None = None
+        ) -> tuple[list[Any], list[dict[str, Any]]]:
+            cur = connection.cursor()
+            try:
+                if query_params:
+                    cur.execute(query, tuple(query_params))
+                else:
+                    cur.execute(query)
+                fetched = cur.fetchall()
+                return fetched, self._build_metadata_from_description(cur.description)
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
 
         try:
             if operation == "INSERT":
-                # Method 1: LAST_IDENTITY()
-                cursor.execute("SELECT LAST_IDENTITY()")
-                id_row = cursor.fetchone()
-                last_id = id_row[0] if id_row else None
-
-                if last_id:
-                    cursor.execute(
+                last_identity = self._fetch_last_identity(connection)
+                if last_identity is not None:
+                    rows, metadata = _fetch_rows(
                         f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE %ID = ?',
-                        (last_id,),
+                        [last_identity],
                     )
-                    rows = cursor.fetchall()
-                    meta = cursor.description
 
-                # Method 2: Extract from SQL if still no rows
                 if not rows and original_sql:
-                    id_col_name, id_value = self._extract_insert_id_from_sql(original_sql, params)
-                    if id_col_name and id_value:
-                        cursor.execute(
-                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE "{id_col_name}" = ?',
-                            (id_value,),
+                    id_col, id_value = self._extract_insert_id_from_sql(
+                        original_sql, param_values, session_id
+                    )
+                    if id_col and id_value is not None:
+                        rows, metadata = _fetch_rows(
+                            f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE "{id_col}" = ?',
+                            [id_value],
                         )
-                        rows = cursor.fetchall()
-                        meta = cursor.description
+
+                if not rows:
+                    column_values = self._map_insert_column_values(plan, param_values)
+                    pk_columns = self._get_primary_key_columns(table_normalized, connection)
+                    if pk_columns:
+                        where_parts: list[str] = []
+                        where_params: list[Any] = []
+                        for pk in pk_columns:
+                            where_parts.append(f'"{pk.upper()}" = ?')
+                            where_params.append(column_values.get(pk.lower()))
+                        if all(val is not None for val in where_params):
+                            rows, metadata = _fetch_rows(
+                                f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE {" AND ".join(where_parts)}',
+                                where_params,
+                            )
+
+                if not rows:
+                    logger.warning(
+                        "RETURNING fallback: TOP 1 lookup",
+                        table=table_normalized,
+                    )
+                    rows, metadata = _fetch_rows(
+                        f'SELECT TOP 1 {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" ORDER BY %ID DESC'
+                    )
 
             elif operation in ("UPDATE", "DELETE"):
+                where_clause = override_where or plan.where_clause
                 if where_clause:
-                    # Translate schema references in WHERE clause
-                    translated_where = re.sub(
-                        r'"public"\s*\.\s*"(\w+)"',
-                        rf'{IRIS_SCHEMA}."\1"',
-                        where_clause,
-                        flags=re.IGNORECASE,
-                    )
-                    translated_where = re.sub(
-                        r'\bpublic\s*\.\s*"(\w+)"',
-                        rf'{IRIS_SCHEMA}."\1"',
-                        translated_where,
-                        flags=re.IGNORECASE,
-                    )
-
-                    # Very basic where clause parameter extraction
-                    where_param_count = translated_where.count("?")
+                    translated_where = self._translate_schema_references(where_clause)
                     where_params = (
-                        params[-where_param_count:] if params and where_param_count > 0 else None
+                        override_where_params
+                        if override_where_params is not None
+                        else self._extract_where_params(where_clause, param_values)
                     )
-
-                    cursor.execute(
+                    rows, metadata = _fetch_rows(
                         f'SELECT {col_list} FROM {IRIS_SCHEMA}."{table_normalized}" WHERE {translated_where}',
-                        where_params or (),
+                        where_params or None,
                     )
-                    rows = cursor.fetchall()
-                    meta = cursor.description
 
-            # Build metadata if needed
-            if meta and not any(isinstance(m, dict) and "type_oid" in m for m in meta):
-                new_meta = []
-                for i, desc in enumerate(meta):
-                    col_name = desc[0]
-                    col_oid = self._map_dbapi_type_to_oid(desc[1])
-                    new_meta.append({"name": col_name, "type_oid": col_oid, "format_code": 0})
-                meta = new_meta
+        except Exception as exc:  # pragma: no cover - best effort logging
+            logger.error(
+                f"RETURNING emulation failed for {operation}",
+                table=table_normalized,
+                error=str(exc),
+            )
 
-        except Exception as e:
-            logger.error(f"RETURNING emulation failed: {e}")
+        if metadata is None:
+            metadata = []
+            cursor = connection.cursor()
+            try:
+                if plan.column_meta:
+                    for idx, col_meta in enumerate(plan.column_meta):
+                        col_name = col_meta.alias or col_meta.normalized_name
+                        col_oid = self._get_column_type_from_schema(
+                            table or "", col_name or "", cursor
+                        )
+                        if col_oid is None and rows and idx < len(rows[0]):
+                            col_oid = self._infer_type_from_value(rows[0][idx], col_name)
+                        metadata.append(
+                            {
+                                "name": col_name,
+                                "type_oid": col_oid or 1043,
+                                "type_size": -1,
+                                "format_code": 0,
+                            }
+                        )
+                elif isinstance(columns, list) and columns:
+                    for idx, col in enumerate(columns):
+                        col_name = col.strip('"') if isinstance(col, str) else str(col)
+                        if "." in col_name:
+                            col_name = col_name.split(".")[-1]
+                        col_oid = self._get_column_type_from_schema(table or "", col_name, cursor)
+                        if col_oid is None and rows and idx < len(rows[0]):
+                            col_oid = self._infer_type_from_value(rows[0][idx], col_name)
+                        metadata.append(
+                            {
+                                "name": col_name,
+                                "type_oid": col_oid or 1043,
+                                "type_size": -1,
+                                "format_code": 0,
+                            }
+                        )
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
 
-        return rows, meta
+        return rows, metadata
 
     def _map_dbapi_type_to_oid(self, dbapi_type: Any) -> int:
         """Map DBAPI type to PostgreSQL OID."""

@@ -1,9 +1,9 @@
 """
-Boolean Translator - DEFAULT true/false to 1/0 translation (Feature 035)
+Boolean Translator - boolean literal normalization to 0/1 (Feature 035)
 
-Translates PostgreSQL boolean default literals to IRIS-compatible numeric values:
-- DEFAULT true → DEFAULT 1
-- DEFAULT false → DEFAULT 0
+Translates PostgreSQL boolean literals to IRIS-compatible numeric values:
+- true → 1
+- false → 0
 
 Context Safety:
 - Must NOT modify string literals ('true' remains 'true')
@@ -20,14 +20,14 @@ import re
 
 class BooleanTranslator:
     """
-    Translates PostgreSQL boolean DEFAULT literals to IRIS-compatible values.
+    Translates PostgreSQL boolean literals to IRIS-compatible values.
 
     PostgreSQL uses `true` and `false` keywords for boolean defaults.
     IRIS uses BIT type which expects 0/1 for defaults.
 
     Translation:
-    - DEFAULT true → DEFAULT 1
-    - DEFAULT false → DEFAULT 0
+    - true → 1
+    - false → 0
 
     Safety:
     - String literals protected ('true' not modified)
@@ -35,13 +35,13 @@ class BooleanTranslator:
     - Word boundaries respected (truetype not modified)
     """
 
-    # Pattern to match DEFAULT true/false with word boundaries
+    # Pattern to match standalone true/false with word boundaries
     # Group 1 captures 'true' or 'false'
-    _DEFAULT_BOOL_PATTERN = re.compile(r"\bDEFAULT\s+(true|false)\b", re.IGNORECASE)
+    _BOOL_PATTERN = re.compile(r"\b(true|false)\b", re.IGNORECASE)
 
     def translate(self, sql: str) -> tuple[str, int]:
         """
-        Translate DEFAULT true/false to DEFAULT 1/0.
+        Translate standalone true/false literals to 1/0.
 
         Args:
             sql: SQL statement potentially containing boolean defaults
@@ -49,7 +49,11 @@ class BooleanTranslator:
         Returns:
             Tuple of (translated_sql, translation_count)
         """
-        if not sql or "default" not in sql.lower():
+        if not sql:
+            return sql, 0
+
+        lower_sql = sql.lower()
+        if "true" not in lower_sql and "false" not in lower_sql:
             return sql, 0
 
         # Find protected regions (strings and comments)
@@ -60,7 +64,7 @@ class BooleanTranslator:
         result = []
         last_end = 0
 
-        for match in self._DEFAULT_BOOL_PATTERN.finditer(sql):
+        for match in self._BOOL_PATTERN.finditer(sql):
             match_start = match.start()
             match_end = match.end()
 
@@ -75,9 +79,9 @@ class BooleanTranslator:
             # Translate the boolean value
             bool_value = match.group(1).lower()
             if bool_value == "true":
-                result.append("DEFAULT 1")
+                result.append("1")
             else:
-                result.append("DEFAULT 0")
+                result.append("0")
 
             count += 1
             last_end = match_end

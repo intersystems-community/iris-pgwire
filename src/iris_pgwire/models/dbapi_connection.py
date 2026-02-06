@@ -124,6 +124,7 @@ class DBAPIConnection(BaseModel):
 
         return (now - reference_time).total_seconds()
 
+    @property
     def age_seconds(self) -> float:
         """
         Calculate connection age in seconds.
@@ -140,7 +141,7 @@ class DBAPIConnection(BaseModel):
         Returns:
             True if connection exceeds pool_recycle_seconds
         """
-        return self.age_seconds() >= self.pool_recycle_seconds
+        return self.age_seconds >= self.pool_recycle_seconds
 
     def mark_in_use(self) -> None:
         """Mark connection as in-use (acquired from pool)."""
@@ -228,7 +229,7 @@ class DBAPIConnection(BaseModel):
         return {
             "connection_id": self.connection_id,
             "state": self.state.value,
-            "age_seconds": round(self.age_seconds(), 2),
+            "age_seconds": round(self.age_seconds, 2),
             "should_recycle": self.should_recycle(),
             "total_queries": self.total_queries,
             "error_rate_percent": round(self.error_rate(), 2),

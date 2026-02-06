@@ -8,6 +8,16 @@ This document catalogs known limitations, workarounds, and behavior differences 
 
 ---
 
+## ✅ Resolved Limitations (v1.3.0)
+
+The 1.3.0 release (IRIS 2024.2+ compatibility) addresses several previously documented limitations. These items have therefore been removed from this list:
+
+- **Global boolean literals**: PostgreSQL `true`/`false` literals now map to IRIS-compatible values across the entire SQL pipeline.
+- **RETURNING emulation**: Multi-column `RETURNING`, `RETURNING *`, and `ON CONFLICT` paths are now emulated with supplemental metadata lookups and session-local logic.
+- **DEFAULT keyword handling**: Translator logic now consults IRIS metadata to resolve `DEFAULT` references so INSERT/UPDATE statements stay intact.
+
+---
+
 ## 🌐 Industry Comparison: PostgreSQL Wire Protocol Implementations
 
 Based on comprehensive research of 9 major implementations (November 2025):
