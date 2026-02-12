@@ -22,28 +22,45 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
-# Connection configuration
-PGWIRE_CONFIG = {
-    "host": "localhost",
-    "port": int(os.environ.get("PGPORT", 5432)),
-    "user": "test_user",
-    "password": "test",
-    "database": "USER",
-}
+os.environ["PGWIRE_USER"] = "test_user"
+os.environ["PGWIRE_PASSWORD"] = "test"
+
+
+def _asyncpg_params(pgwire_connection_params: dict[str, str | int]) -> dict[str, str | int]:
+    params = dict(pgwire_connection_params)
+    params["database"] = params.pop("dbname")
+    return params
 
 
 @pytest_asyncio.fixture
-async def conn():
+async def conn(pgwire_server, pgwire_connection_params):
     """Create async connection for each test"""
-    connection = await asyncpg.connect(**PGWIRE_CONFIG)
+    params = _asyncpg_params(pgwire_connection_params)
+    connection = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     yield connection
     await connection.close()
 
 
 @pytest_asyncio.fixture
-async def pool():
+async def pool(pgwire_server, pgwire_connection_params):
     """Create connection pool for pool-specific tests"""
-    pool = await asyncpg.create_pool(**PGWIRE_CONFIG, min_size=1, max_size=5)
+    params = _asyncpg_params(pgwire_connection_params)
+    pool = await asyncpg.create_pool(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        min_size=1,
+        max_size=5,
+    )
     yield pool
     await pool.close()
 

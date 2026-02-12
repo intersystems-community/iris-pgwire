@@ -8,31 +8,43 @@ This script uses asyncpg against a real PostgreSQL 16 server to observe:
 3. Whether asyncpg's validation behavior differs with real PostgreSQL
 """
 
-import asyncio
 import logging
+import os
 
 import asyncpg
+import pytest
+
+os.environ["PGWIRE_USER"] = "test_user"
+os.environ["PGWIRE_PASSWORD"] = "test"
 
 # Enable detailed asyncpg protocol logging
 logging.basicConfig(level=logging.DEBUG)
 asyncpg_logger = logging.getLogger("asyncpg")
 asyncpg_logger.setLevel(logging.DEBUG)
 
-# PostgreSQL connection config
-PG_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "user": "postgres",
-    "password": "test",
-    "database": "postgres",
-}
+
+def _asyncpg_connection_kwargs(
+    pgwire_connection_params: dict[str, str | int],
+) -> dict[str, str | int]:
+    params = dict(pgwire_connection_params)
+    params["database"] = params.pop("dbname")
+    return params
 
 
-async def test_untyped_parameter_with_integer():
+@pytest.mark.asyncio
+async def test_untyped_parameter_with_integer(pgwire_server, pgwire_connection_params):
     """Test: PostgreSQL with untyped parameter receiving integer value"""
     print("\n=== Test 1: Untyped parameter with integer ===")
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         # Prepare statement with $1 placeholder (untyped)
         stmt = await conn.prepare("SELECT $1 AS value")
@@ -51,15 +63,25 @@ async def test_untyped_parameter_with_integer():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
 
 
-async def test_untyped_parameter_with_string():
+@pytest.mark.asyncio
+async def test_untyped_parameter_with_string(pgwire_server, pgwire_connection_params):
     """Test: PostgreSQL with untyped parameter receiving string value"""
     print("\n=== Test 2: Untyped parameter with string ===")
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         stmt = await conn.prepare("SELECT $1 AS value")
         param_types = stmt.get_parameters()
@@ -70,15 +92,25 @@ async def test_untyped_parameter_with_string():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
 
 
-async def test_untyped_parameter_with_mixed_types():
+@pytest.mark.asyncio
+async def test_untyped_parameter_with_mixed_types(pgwire_server, pgwire_connection_params):
     """Test: PostgreSQL with multiple untyped parameters of different types"""
     print("\n=== Test 3: Multiple untyped parameters with mixed types ===")
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         stmt = await conn.prepare("SELECT $1 AS num, $2 AS text, $3 AS flag")
         param_types = stmt.get_parameters()
@@ -93,15 +125,25 @@ async def test_untyped_parameter_with_mixed_types():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
 
 
-async def test_typed_vs_untyped_parameter():
+@pytest.mark.asyncio
+async def test_typed_vs_untyped_parameter(pgwire_server, pgwire_connection_params):
     """Test: Compare behavior of typed vs untyped parameters"""
     print("\n=== Test 4: Typed vs Untyped comparison ===")
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         # Untyped parameter
         stmt1 = await conn.prepare("SELECT $1 AS value")
@@ -119,23 +161,6 @@ async def test_typed_vs_untyped_parameter():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
-
-
-async def main():
-    """Run all tests"""
-    print("Testing asyncpg against real PostgreSQL 16")
-    print("=" * 60)
-
-    await test_untyped_parameter_with_integer()
-    await test_untyped_parameter_with_string()
-    await test_untyped_parameter_with_mixed_types()
-    await test_typed_vs_untyped_parameter()
-
-    print("\n" + "=" * 60)
-    print("All tests complete!")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

@@ -211,112 +211,84 @@ def iris_container(pytestconfig):
         from iris_devtester import IRISContainer
         from iris_devtester.utils.password import unexpire_all_passwords
 
-        # Use IRISContainer to ensure it's running
-        logger.info("Ensuring IRIS container via iris-devtester", image=iris_image)
-
-        # Determine container type based on image if provided
-        from iris_devtester.ports.registry import PortRegistry
-
-        bind_embedded_port = os.environ.get("PGWIRE_BIND_EMBEDDED_PORT", "0") == "1"
-        embedded_port_env = int(os.environ.get("PGWIRE_EMBEDDED_PORT", "0"))
-        embedded_port = embedded_port_env or find_free_port(5435, 5499)
-        project_path = str(Path(__file__).resolve().parents[1])
-        preferred_port = int(os.environ.get("IRIS_TEST_PORT", "0")) or find_free_port(1973, 1999)
-        port_registry = PortRegistry(port_range=(preferred_port, preferred_port))
+        # ALWAYS attach to the dedicated iris-pgwire-test container
+        # Do NOT create containers - use idt to manage them
+        container_name = "iris-pgwire-test"
+        logger.info("Attaching to iris-pgwire-test container")
 
         try:
-            port_registry.release_port(project_path)
-        except Exception:
-            pass
-
-        if iris_image:
-            container_mgr = IRISContainer(
-                image=iris_image,
-                port_registry=port_registry,
-                project_path=project_path,
-                preferred_port=preferred_port,
-                username="_SYSTEM",
-                password="SYS",
-            )
-        else:
-            container_mgr = IRISContainer.community(
-                port_registry=port_registry,
-                project_path=project_path,
-                preferred_port=preferred_port,
-                username="_SYSTEM",
-                password="SYS",
-            )
-
-        try:
-            container_mgr.with_credentials("_SYSTEM", "SYS")
+            iris = IRISContainer.attach(container_name)
         except Exception as e:
-            logger.warning("Failed to preconfigure IRIS credentials", error=str(e))
+            pytest.fail(
+                f"Failed to attach to {container_name}. "
+                f"Create it first with: idt container up --name {container_name} --edition community\n"
+                f"Error: {e}"
+            )
 
-        # Expose embedded PGWire port for in-container server usage.
-        if bind_embedded_port:
-            os.environ.setdefault("PGWIRE_EMBEDDED_PORT", str(embedded_port))
-            try:
-                container_mgr.with_bind_ports(5432, embedded_port)
-            except Exception as e:
-                logger.warning("Failed to bind embedded PGWire port", error=str(e))
+        # Get port dynamically from idt
+        try:
+            port = iris.get_exposed_port(1972)
+            logger.info("Retrieved IRIS port from idt", port=port, container=container_name)
+        except Exception as e:
+            pytest.fail(f"Failed to get port from {container_name}: {e}")
 
-        with container_mgr as iris:
-            # iris-devtester handles health checks, password resets, and CallIn
-            logger.info("IRIS container ready via iris-devtester")
+        # Use the container directly (no context manager needed for attach)
+        # iris-devtester handles health checks, password resets, and CallIn
+        logger.info("IRIS container ready via iris-devtester")
 
-            # Ensure passwords are unexpired and reset if needed
-            try:
-                # Use the built-in method on the container if available
-                if hasattr(iris, "reset_password"):
-                    iris.reset_password("SuperUser", "SYS")
-                    iris.reset_password("_SYSTEM", "SYS")
+        # Ensure passwords are unexpired and reset if needed
+        try:
+            # Use the built-in method on the container if available
+            if hasattr(iris, "reset_password"):
+                iris.reset_password("SuperUser", "SYS")
+                iris.reset_password("_SYSTEM", "SYS")
 
-                unexpire_all_passwords(iris.get_container_name())
-                logger.info("Passwords managed successfully")
-            except Exception as e:
-                logger.warning("Failed to manage passwords", error=str(e))
+            unexpire_all_passwords(iris.get_container_name())
+            logger.info("Passwords managed successfully")
+        except Exception as e:
+            logger.warning("Failed to manage passwords", error=str(e))
 
-            # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
-            try:
-                from iris_devtester.config import IRISConfig
-                from iris_devtester.connections import get_connection
+        # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
+        try:
+            from iris_devtester.config import IRISConfig
+            from iris_devtester.connections import get_connection
 
-                config = iris.get_config()
-                for attempt in range(3):
-                    try:
-                        conn = get_connection(
-                            IRISConfig(
-                                host=config.host,
-                                port=config.port,
-                                namespace=config.namespace,
-                                username=config.username,
-                                password=config.password,
-                                container_name=iris.get_container_name(),
-                            )
+            config = iris.get_config()
+            for attempt in range(3):
+                try:
+                    conn = get_connection(
+                        IRISConfig(
+                            host=config.host,
+                            port=config.port,
+                            namespace=config.namespace,
+                            username=config.username,
+                            password=config.password,
+                            container_name=iris.get_container_name(),
                         )
-                        conn.close()
-                        break
-                    except Exception as e:
-                        logger.warning(
-                            "DBAPI verification failed",
-                            attempt=attempt + 1,
-                            error=str(e),
-                        )
-                        if hasattr(iris, "reset_password"):
-                            iris.reset_password("SuperUser", "SYS")
-                            iris.reset_password("_SYSTEM", "SYS")
-                        unexpire_all_passwords(iris.get_container_name())
-                        time.sleep(2)
-                else:
-                    pytest.fail("DBAPI verification failed after password remediation")
-            except Exception as e:
-                pytest.fail(f"DBAPI verification failed: {e}")
+                    )
+                    conn.close()
+                    break
+                except Exception as e:
+                    logger.warning(
+                        "DBAPI verification failed",
+                        attempt=attempt + 1,
+                        error=str(e),
+                    )
+                    if hasattr(iris, "reset_password"):
+                        iris.reset_password("SuperUser", "SYS")
+                        iris.reset_password("_SYSTEM", "SYS")
+                    unexpire_all_passwords(iris.get_container_name())
+                    time.sleep(2)
+            else:
+                pytest.fail("DBAPI verification failed after password remediation")
+        except Exception as e:
+            pytest.fail(f"DBAPI verification failed: {e}")
 
-            if iris_persist:
-                logger.info("IRIS container will PERSIST after tests")
-                iris.__exit__ = lambda exc_type, exc_val, exc_tb: None
+        if iris_persist:
+            logger.info("IRIS container will PERSIST after tests")
+            iris.__exit__ = lambda exc_type, exc_val, exc_tb: None
 
-            yield iris
+        yield iris
     except Exception as e:
         logger.error("Failed to manage IRIS container via iris-devtester", error=str(e))
         # Last resort: check if something is already running on the port
@@ -423,6 +395,94 @@ def pgwire_namespace(iris_container, iris_config, request):
             iris_container.delete_namespace(namespace)
         except Exception as e:
             logger.warning("Failed to delete test namespace", namespace=namespace, error=str(e))
+
+
+@pytest.fixture(scope="module")
+def provision_test_user(iris_config, pgwire_namespace):
+    """
+    Provision test_user with access to the test namespace.
+    Required for client compatibility tests that authenticate as test_user.
+    """
+    conn = None
+    try:
+        try:
+            import iris
+        except ImportError:
+            try:
+                import intersystems_iris as iris
+            except ImportError as exc:
+                raise ImportError("IRIS DBAPI not available") from exc
+
+        conn = iris.connect(
+            iris_config["host"],
+            iris_config["port"],
+            "%SYS",
+            iris_config.get("username", "_SYSTEM"),
+            iris_config.get("password", "SYS"),
+        )
+        iris_obj = iris.createIRIS(conn)
+
+        namespace_name = pgwire_namespace
+
+        exists = iris_obj.classMethodValue("Security.Users", "Exists", "test_user")
+        if exists:
+            iris_obj.classMethodValue("Security.Users", "Delete", "test_user")
+
+        status = iris_obj.classMethodValue(
+            "Security.Users",
+            "Create",
+            "test_user",
+            "%All",
+            "test",
+            "",
+            namespace_name,
+            "",
+            "",
+            False,
+            True,
+            "Provisioned for PGWire namespace",
+        )
+        if status != 1:
+            raise RuntimeError(f"Failed to create test_user: {status}")
+        print(f"Provisioning test_user for namespace={namespace_name}")
+        try:
+            iris_obj.classMethodValue(
+                "Security.Users",
+                "AddRoles",
+                "test_user",
+                f"%DB_{namespace_name}:%All",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to grant namespace role via Security.Users.AddRoles",
+                namespace=namespace_name,
+                error=str(exc),
+            )
+            cursor = None
+            try:
+                cursor = conn.cursor()
+                safe_namespace = namespace_name.replace('"', '""')
+                cursor.execute(f'GRANT ALL ON DATABASE "{safe_namespace}" TO test_user')
+            except Exception as grant_exc:
+                logger.warning(
+                    "Fallback grant via SQL failed",
+                    namespace=namespace_name,
+                    error=str(grant_exc),
+                )
+            finally:
+                if cursor is not None:
+                    cursor.close()
+
+        logger.info("test_user provisioned", namespace=namespace_name)
+    except Exception as exc:
+        pytest.skip(f"Failed to provision test_user: {exc}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    yield
 
 
 @pytest.fixture(scope="module")
@@ -559,7 +619,13 @@ def iris_fixture(iris_connection, iris_config, iris_container):
 
 
 @pytest.fixture(scope="module")
-def pgwire_server(iris_container, iris_config, pgwire_namespace, load_base_fixture):
+def pgwire_server(
+    iris_container,
+    iris_config,
+    pgwire_namespace,
+    load_base_fixture,
+    provision_test_user,
+):
     """
     Start PGWire server against real IRIS for testing module in a separate thread.
     This prevents deadlocks when synchronous pgwire_client fixtures block the main thread.

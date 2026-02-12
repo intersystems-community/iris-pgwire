@@ -6,24 +6,37 @@ This proves that the correct pattern for mixed-type parameters in asyncpg
 is to use explicit type casts in the SQL, not to rely on OID inference.
 """
 
-import asyncio
+import os
 
 import asyncpg
+import pytest
 
-PG_CONFIG = {
-    "host": "localhost",
-    "port": 5433,
-    "user": "postgres",
-    "password": "test",
-    "database": "postgres",
-}
+os.environ["PGWIRE_USER"] = "test_user"
+os.environ["PGWIRE_PASSWORD"] = "test"
 
 
-async def test_with_explicit_casts():
+def _asyncpg_connection_kwargs(
+    pgwire_connection_params: dict[str, str | int],
+) -> dict[str, str | int]:
+    params = dict(pgwire_connection_params)
+    params["database"] = params.pop("dbname")
+    return params
+
+
+@pytest.mark.asyncio
+async def test_with_explicit_casts(pgwire_server, pgwire_connection_params):
     """Test: Explicit type casts allow mixed-type parameters"""
     print("\n=== Test: Explicit type casts ===")
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         # WITH explicit casts - should work
         stmt = await conn.prepare("SELECT $1::int AS num, $2::text AS text, $3::bool AS flag")
@@ -38,15 +51,25 @@ async def test_with_explicit_casts():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
 
 
-async def test_without_casts_all_strings():
+@pytest.mark.asyncio
+async def test_without_casts_all_strings(pgwire_server, pgwire_connection_params):
     """Test: Without casts, must pass all parameters as strings"""
     print("\n=== Test: Without casts (all strings) ===")
 
-    conn = await asyncpg.connect(**PG_CONFIG)
+    params = _asyncpg_connection_kwargs(pgwire_connection_params)
+    conn = await asyncpg.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database=params["database"],
+        timeout=int(params.get("connect_timeout", 10)),
+    )
     try:
         # WITHOUT casts - must pass strings
         stmt = await conn.prepare("SELECT $1 AS num, $2 AS text, $3 AS flag")
@@ -61,20 +84,6 @@ async def test_without_casts_all_strings():
 
     except Exception as e:
         print(f"❌ Error: {type(e).__name__}: {e}")
+        raise
     finally:
         await conn.close()
-
-
-async def main():
-    print("Testing explicit type casts with PostgreSQL")
-    print("=" * 60)
-
-    await test_with_explicit_casts()
-    await test_without_casts_all_strings()
-
-    print("\n" + "=" * 60)
-    print("Conclusion: asyncpg REQUIRES explicit type casts for non-string parameters!")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
