@@ -70,7 +70,7 @@ def export_table(report: BenchmarkReport, output_dir: str = "benchmarks/results/
     filename = f"benchmark_{timestamp}.txt"
     filepath = output_path / filename
 
-    with open(filepath, 'w') as f:
+    with open(filepath, "w") as f:
         f.write(full_output)
 
     return full_output

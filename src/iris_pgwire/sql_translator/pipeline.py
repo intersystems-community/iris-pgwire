@@ -10,9 +10,9 @@ This orchestrates the various stages of SQL translation:
 6. Normalization (Identifiers, dates, booleans, enums)
 """
 
-import structlog
-from dataclasses import dataclass
 from typing import Any
+
+import structlog
 
 from .models import PerformanceStats, TranslationResult
 from .normalizer import SQLTranslator

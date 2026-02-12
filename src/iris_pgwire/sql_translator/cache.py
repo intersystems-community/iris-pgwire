@@ -289,9 +289,7 @@ class TranslationCache:
                 "constitutional_compliance": {
                     "sla_violations": self._sla_violations,
                     "max_lookup_time_ms": self._max_lookup_time_ms,
-                    "uptime_seconds": (
-                        datetime.now(UTC) - self._start_time
-                    ).total_seconds(),
+                    "uptime_seconds": (datetime.now(UTC) - self._start_time).total_seconds(),
                 },
                 "sample_keys": list(self._cache.keys())[:10],  # First 10 keys for debugging
             }

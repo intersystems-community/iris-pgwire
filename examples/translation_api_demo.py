@@ -29,7 +29,7 @@ async def demo_basic_translation():
             "sql": "SELECT TOP 10 * FROM users WHERE age > 21",
             "enable_caching": True,
             "enable_validation": True,
-            "validation_level": "semantic"
+            "validation_level": "semantic",
         }
 
         response = await client.post(f"{API_BASE_URL}/translate", json=request)
@@ -40,7 +40,7 @@ async def demo_basic_translation():
         print(f"✓ Performance: {result['performance_stats']['total_time_ms']:.2f}ms")
         print(f"✓ Constructs mapped: {len(result['construct_mappings'])}")
 
-        if result['warnings']:
+        if result["warnings"]:
             print(f"⚠ Warnings: {result['warnings']}")
 
         print()
@@ -61,7 +61,7 @@ async def demo_vector_translation():
                 ORDER BY similarity DESC
                 LIMIT 5
             """,
-            "enable_debug": True
+            "enable_debug": True,
         }
 
         response = await client.post(f"{API_BASE_URL}/translate", json=request)
@@ -72,8 +72,10 @@ async def demo_vector_translation():
         print("✓ Vector functions preserved: Yes")
         print(f"✓ Translation time: {result['performance_stats']['total_time_ms']:.2f}ms")
 
-        if result['debug_trace']:
-            print(f"✓ Debug trace available: {result['debug_trace']['parsing_steps']} parsing steps")
+        if result["debug_trace"]:
+            print(
+                f"✓ Debug trace available: {result['debug_trace']['parsing_steps']} parsing steps"
+            )
 
         print()
         return True
@@ -88,7 +90,7 @@ async def demo_batch_translation():
         "SELECT TOP 100 * FROM orders WHERE status = 'pending'",
         "SELECT customer_id, SUM(total) FROM orders GROUP BY customer_id",
         "SELECT * FROM products WHERE price > 100 ORDER BY price DESC",
-        "SELECT a.*, b.name FROM orders a JOIN customers b ON a.customer_id = b.id"
+        "SELECT a.*, b.name FROM orders a JOIN customers b ON a.customer_id = b.id",
     ]
 
     async with httpx.AsyncClient() as client:
@@ -132,11 +134,7 @@ async def demo_validation_levels():
 
     async with httpx.AsyncClient() as client:
         for level in validation_levels:
-            request = {
-                "sql": test_sql,
-                "enable_validation": True,
-                "validation_level": level
-            }
+            request = {"sql": test_sql, "enable_validation": True, "validation_level": level}
 
             response = await client.post(f"{API_BASE_URL}/translate", json=request)
             result = response.json()
@@ -179,14 +177,10 @@ async def demo_cache_management():
         print(f"  - Memory usage: {updated_stats['memory_usage_mb']:.2f}MB")
 
         # Selective cache invalidation
-        invalidate_request = {
-            "pattern": "SELECT%",
-            "confirm": True
-        }
+        invalidate_request = {"pattern": "SELECT%", "confirm": True}
 
         invalidate_response = await client.post(
-            f"{API_BASE_URL}/cache/invalidate",
-            json=invalidate_request
+            f"{API_BASE_URL}/cache/invalidate", json=invalidate_request
         )
         invalidate_result = invalidate_response.json()
 
@@ -220,8 +214,12 @@ async def demo_api_statistics():
         print(f"  - Average time: {stats['translator_stats']['average_translation_time_ms']:.2f}ms")
 
         print("\n✓ Constitutional Compliance:")
-        print(f"  - SLA requirement: {stats['constitutional_compliance']['api_sla_requirement_ms']}ms")
-        print(f"  - Compliance status: {stats['constitutional_compliance']['overall_compliance_status']}")
+        print(
+            f"  - SLA requirement: {stats['constitutional_compliance']['api_sla_requirement_ms']}ms"
+        )
+        print(
+            f"  - Compliance status: {stats['constitutional_compliance']['overall_compliance_status']}"
+        )
 
         # Health check
         health_response = await client.get(f"{API_BASE_URL}/health")
@@ -245,26 +243,22 @@ async def demo_error_handling():
     async with httpx.AsyncClient() as client:
         # Test various error conditions
         test_cases = [
-            {
-                "name": "Empty SQL",
-                "request": {"sql": ""},
-                "expected_status": 422
-            },
+            {"name": "Empty SQL", "request": {"sql": ""}, "expected_status": 422},
             {
                 "name": "Invalid SQL",
                 "request": {"sql": "SELECT FROM WHERE"},
-                "expected_status": 200  # Translation may succeed with warnings
+                "expected_status": 200,  # Translation may succeed with warnings
             },
             {
                 "name": "SQL too large",
                 "request": {"sql": "SELECT * FROM users" * 10000},
-                "expected_status": 400
+                "expected_status": 400,
             },
             {
                 "name": "Invalid validation level",
                 "request": {"sql": "SELECT 1", "validation_level": "invalid"},
-                "expected_status": 422
-            }
+                "expected_status": 422,
+            },
         ]
 
         for test in test_cases:
@@ -295,7 +289,7 @@ async def demo_integration_workflow():
         dashboard_queries = [
             "SELECT region, SUM(sales) FROM orders GROUP BY region",
             "SELECT product_id, COUNT(*) FROM orders WHERE status = 'completed' GROUP BY product_id",
-            "SELECT DATE(order_date), SUM(total) FROM orders GROUP BY DATE(order_date)"
+            "SELECT DATE(order_date), SUM(total) FROM orders GROUP BY DATE(order_date)",
         ]
 
         translated_queries = []
@@ -305,13 +299,13 @@ async def demo_integration_workflow():
                 "sql": sql,
                 "session_id": "dashboard_123",
                 "enable_caching": True,
-                "metadata": {"widget_id": f"widget_{i}"}
+                "metadata": {"widget_id": f"widget_{i}"},
             }
 
             response = await client.post(f"{API_BASE_URL}/translate", json=request)
             result = response.json()
 
-            translated_queries.append(result['translated_sql'])
+            translated_queries.append(result["translated_sql"])
 
             print(f"✓ Widget {i}:")
             print(f"  - Original: {sql[:60]}...")
@@ -360,7 +354,9 @@ async def start_api_server():
     except Exception as e:
         print(f"✗ Failed to start API server: {e}")
         print("\nAlternative: Start manually with:")
-        print("  uvicorn iris_pgwire.sql_translator.api:get_translation_api --host 0.0.0.0 --port 8000")
+        print(
+            "  uvicorn iris_pgwire.sql_translator.api:get_translation_api --host 0.0.0.0 --port 8000"
+        )
         return None
 
 

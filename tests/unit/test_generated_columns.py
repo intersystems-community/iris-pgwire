@@ -1,6 +1,7 @@
 import pytest
-from iris_pgwire.sql_translator.identifier_normalizer import IdentifierNormalizer
+
 from iris_pgwire.sql_translator.enum_registry import EnumTypeRegistry
+from iris_pgwire.sql_translator.identifier_normalizer import IdentifierNormalizer
 
 
 def test_generated_column_skip():

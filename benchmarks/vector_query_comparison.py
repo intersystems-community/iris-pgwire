@@ -21,6 +21,7 @@ import psycopg  # For PGWire and PostgreSQL
 # IRIS DBAPI test (if available)
 try:
     import iris
+
     IRIS_AVAILABLE = True
 except ImportError:
     IRIS_AVAILABLE = False
@@ -44,31 +45,39 @@ class BenchmarkResult:
         return {
             "avg_ms": statistics.mean(self.latencies),
             "p50_ms": statistics.median(self.latencies),
-            "p95_ms": statistics.quantiles(self.latencies, n=20)[18] if len(self.latencies) > 1 else self.latencies[0],
-            "p99_ms": statistics.quantiles(self.latencies, n=100)[98] if len(self.latencies) > 2 else max(self.latencies),
+            "p95_ms": (
+                statistics.quantiles(self.latencies, n=20)[18]
+                if len(self.latencies) > 1
+                else self.latencies[0]
+            ),
+            "p99_ms": (
+                statistics.quantiles(self.latencies, n=100)[98]
+                if len(self.latencies) > 2
+                else max(self.latencies)
+            ),
             "min_ms": min(self.latencies),
             "max_ms": max(self.latencies),
             "count": len(self.latencies),
-            "error_count": len(self.errors)
+            "error_count": len(self.errors),
         }
 
 
 def generate_vector(dimensions: int = 1024) -> list[float]:
     """Generate normalized random vector"""
     vec = [random.gauss(0, 1) for _ in range(dimensions)]
-    norm = sum(x*x for x in vec) ** 0.5
-    return [x/norm for x in vec]
+    norm = sum(x * x for x in vec) ** 0.5
+    return [x / norm for x in vec]
 
 
 def vector_to_base64(vec: list[float]) -> str:
     """Convert vector to base64 format for IRIS"""
-    vec_bytes = struct.pack(f'{len(vec)}f', *vec)
-    return 'base64:' + base64.b64encode(vec_bytes).decode('ascii')
+    vec_bytes = struct.pack(f"{len(vec)}f", *vec)
+    return "base64:" + base64.b64encode(vec_bytes).decode("ascii")
 
 
 def vector_to_string(vec: list[float]) -> str:
     """Convert vector to comma-separated string"""
-    return ','.join(map(str, vec))
+    return ",".join(map(str, vec))
 
 
 def benchmark_pgwire(iterations: int = 100, top_k: int = 5) -> BenchmarkResult:
@@ -77,11 +86,7 @@ def benchmark_pgwire(iterations: int = 100, top_k: int = 5) -> BenchmarkResult:
 
     try:
         conn = psycopg.connect(
-            host='127.0.0.1',
-            port=5432,
-            dbname='USER',
-            user='benchmark',
-            autocommit=True
+            host="127.0.0.1", port=5432, dbname="USER", user="benchmark", autocommit=True
         )
         cur = conn.cursor()
 
@@ -94,7 +99,7 @@ def benchmark_pgwire(iterations: int = 100, top_k: int = 5) -> BenchmarkResult:
                 # Standard PostgreSQL/pgvector syntax
                 cur.execute(
                     f"SELECT id FROM test_1024 ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s, FLOAT)) LIMIT {top_k}",
-                    (vec_b64,)
+                    (vec_b64,),
                 )
                 cur.fetchall()
                 elapsed_ms = (time.perf_counter() - start) * 1000
@@ -144,11 +149,11 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
 
     try:
         conn = psycopg.connect(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=5433,  # Assume PostgreSQL on different port
-            dbname='test',
-            user='postgres',
-            autocommit=True
+            dbname="test",
+            user="postgres",
+            autocommit=True,
         )
         cur = conn.cursor()
 
@@ -159,8 +164,7 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
             try:
                 # pgvector syntax
                 cur.execute(
-                    "SELECT id FROM test_vectors ORDER BY embedding <-> %s LIMIT %s",
-                    (vec, top_k)
+                    "SELECT id FROM test_vectors ORDER BY embedding <-> %s LIMIT %s", (vec, top_k)
                 )
                 cur.fetchall()
                 elapsed_ms = (time.perf_counter() - start) * 1000
@@ -177,14 +181,14 @@ def benchmark_postgresql(iterations: int = 100, top_k: int = 5) -> BenchmarkResu
 
 def print_comparison(results: list[BenchmarkResult]):
     """Print comparison table"""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("VECTOR QUERY BENCHMARK COMPARISON")
-    print("="*80)
+    print("=" * 80)
     print("\nTest Configuration:")
     print("  - Vector dimensions: 1024")
     print("  - Iterations per test: 100")
     print("  - Result set sizes: TOP 5, 10, 50")
-    print("\n" + "-"*80)
+    print("\n" + "-" * 80)
 
     for result in results:
         print(f"\n{result.name}")
@@ -203,10 +207,10 @@ def print_comparison(results: list[BenchmarkResult]):
             print(f"  📊 P99 latency: {stats['p99_ms']:.2f}ms")
             print(f"  📊 Min latency: {stats['min_ms']:.2f}ms")
             print(f"  📊 Max latency: {stats['max_ms']:.2f}ms")
-            if stats['error_count'] > 0:
+            if stats["error_count"] > 0:
                 print(f"  ⚠️  Errors: {stats['error_count']}")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
 
 
 def main():
@@ -240,7 +244,7 @@ def main():
     print("2. IRIS DBAPI: Requires safe pattern (string interpolation for TOP)")
     print("3. PostgreSQL: Baseline for comparison")
     print("\nSee docs/IRIS_DBAPI_LIMITATIONS_JIRA.md for detailed analysis")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":

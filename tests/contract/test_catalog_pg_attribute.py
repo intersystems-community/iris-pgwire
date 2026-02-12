@@ -5,6 +5,7 @@ Tests for PostgreSQL pg_attribute catalog emulation per pg_attribute_contract.md
 """
 
 import pytest
+
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 

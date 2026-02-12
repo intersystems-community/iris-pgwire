@@ -1,5 +1,4 @@
-
-path = 'docs/articles/developer-community-article.md'
+path = "docs/articles/developer-community-article.md"
 
 with open(path) as f:
     text = f.read()
@@ -142,6 +141,6 @@ new_specs = """├── 027-open-exchange/               # This publication!
 
 text = text.replace(old_specs, new_specs)
 
-with open(path, 'w') as f:
+with open(path, "w") as f:
     f.write(text)
 print("Updated article successfully.")

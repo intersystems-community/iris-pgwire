@@ -14,7 +14,7 @@ import struct
 import sys
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def normalize_vector(vec):
@@ -33,14 +33,14 @@ def generate_random_vector(dimensions=1024):
 
 def vector_to_base64(vec):
     """Convert vector to base64 format (psycopg2 encoding)"""
-    vec_bytes = struct.pack(f'{len(vec)}f', *vec)
-    return 'base64:' + base64.b64encode(vec_bytes).decode('ascii')
+    vec_bytes = struct.pack(f"{len(vec)}f", *vec)
+    return "base64:" + base64.b64encode(vec_bytes).decode("ascii")
 
 
 def main():
-    print("="*70)
+    print("=" * 70)
     print("Vector Optimizer Integration Test")
-    print("="*70)
+    print("=" * 70)
 
     try:
         from iris_pgwire.iris_executor import IRISExecutor
@@ -51,11 +51,11 @@ def main():
 
     # Create executor
     iris_config = {
-        'host': 'localhost',
-        'port': 1972,
-        'namespace': 'USER',
-        'username': '_SYSTEM',
-        'password': 'SYS'
+        "host": "localhost",
+        "port": 1972,
+        "namespace": "USER",
+        "username": "_SYSTEM",
+        "password": "SYS",
     }
     executor = IRISExecutor(iris_config=iris_config)
 
@@ -66,7 +66,9 @@ def main():
     print(f"   ✅ Generated 1024-dim vector (base64 length: {len(vec_b64)})")
 
     # Test query with vector parameter
-    sql = "SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC"
+    sql = (
+        "SELECT TOP 5 id FROM test_1024 ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC"
+    )
     params = [vec_b64]
 
     print("\n2. Testing optimizer integration...")
@@ -78,14 +80,14 @@ def main():
 
     async def test_execution():
         try:
-            result = await executor.execute_query(sql, params, session_id='test')
+            result = await executor.execute_query(sql, params, session_id="test")
             return result
         except Exception as e:
-            return {'error': str(e)}
+            return {"error": str(e)}
 
     result = asyncio.run(test_execution())
 
-    if 'error' in result:
+    if "error" in result:
         print(f"\n❌ Execution failed: {result['error']}")
         return False
 
@@ -104,33 +106,33 @@ def main():
 
     # Validation
     success = True
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("VALIDATION")
-    print("="*70)
+    print("=" * 70)
 
-    if result.get('success'):
+    if result.get("success"):
         print("✅ Query executed successfully")
     else:
         print("❌ Query execution failed")
         success = False
 
-    if result.get('row_count', 0) > 0:
+    if result.get("row_count", 0) > 0:
         print(f"✅ Results returned ({result['row_count']} rows)")
     else:
         print("❌ No results returned")
         success = False
 
-    if result.get('execution_time_ms', 9999) < 100:
+    if result.get("execution_time_ms", 9999) < 100:
         print(f"✅ Execution time acceptable ({result.get('execution_time_ms'):.2f}ms < 100ms)")
     else:
         print(f"⚠️  Execution time high ({result.get('execution_time_ms'):.2f}ms)")
 
-    if stats['total_optimizations'] > 0:
+    if stats["total_optimizations"] > 0:
         print(f"✅ Optimizer was invoked ({stats['total_optimizations']} times)")
     else:
         print("⚠️  Optimizer was not invoked")
 
-    print("="*70)
+    print("=" * 70)
     if success:
         print("✅ T020 SUCCESS: Vector optimizer E2E integration working!")
     else:
@@ -139,6 +141,6 @@ def main():
     return success
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)

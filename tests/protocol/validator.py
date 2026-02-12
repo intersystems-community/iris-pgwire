@@ -8,8 +8,8 @@ class ProtocolError(Exception):
 
 class StrictProtocolValidator:
     def __init__(self):
-        self.current_field_count: Optional[int] = None
-        self.messages: List[str] = []
+        self.current_field_count: int | None = None
+        self.messages: list[str] = []
 
     def validate(self, raw_bytes: bytes) -> None:
         offset = 0

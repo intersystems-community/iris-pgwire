@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 from .oid_generator import OIDGenerator
 
 

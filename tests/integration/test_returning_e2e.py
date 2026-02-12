@@ -1,6 +1,7 @@
-import pytest
-import psycopg
 import os
+
+import psycopg
+import pytest
 
 
 @pytest.mark.iris_integration

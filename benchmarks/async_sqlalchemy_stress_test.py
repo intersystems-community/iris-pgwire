@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 # Test configuration
 ITERATIONS = 10000  # Start smaller, increase for full stress test
-NAME_TPL = 'table1%06d'
+NAME_TPL = "table1%06d"
 
 # Connection strings
 IRIS_PSYCOPG_URL = "iris+psycopg://localhost:5432/USER"
@@ -35,9 +35,11 @@ PSYCOPG_DSN = "host=localhost port=5432 dbname=USER"
 metadata = MetaData()
 
 # Simple table for basic queries
-table1 = Table('sqlalchemy_stress_test', metadata,
-    Column('id', Integer, primary_key=True),
-    Column('name', String(16), nullable=False)
+table1 = Table(
+    "sqlalchemy_stress_test",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(16), nullable=False),
 )
 
 
@@ -64,12 +66,14 @@ async def prepare_simple_table():
     conn_raw = await psycopg.AsyncConnection.connect(PSYCOPG_DSN)
     try:
         await conn_raw.execute("DROP TABLE IF EXISTS sqlalchemy_stress_test")
-        await conn_raw.execute("""
+        await conn_raw.execute(
+            """
             CREATE TABLE sqlalchemy_stress_test (
                 id INTEGER GENERATED ALWAYS AS IDENTITY,
                 name VARCHAR(16) NOT NULL
             )
-        """)
+        """
+        )
         await conn_raw.commit()
     finally:
         await conn_raw.close()
@@ -79,9 +83,7 @@ async def prepare_simple_table():
 
     async with engine.begin() as conn:
         # Insert 100 test records using executemany (reduce for testing)
-        await conn.execute(table1.insert(), [
-            {'name': NAME_TPL % (i,)} for i in range(100)
-        ])
+        await conn.execute(table1.insert(), [{"name": NAME_TPL % (i,)} for i in range(100)])
 
     return engine
 
@@ -92,24 +94,32 @@ async def prepare_vector_table():
 
     try:
         # Create vector table
-        await conn.execute(text("""
+        await conn.execute(
+            text(
+                """
             DROP TABLE IF EXISTS sqlalchemy_vectors_stress
-        """))
+        """
+            )
+        )
 
-        await conn.execute(text("""
+        await conn.execute(
+            text(
+                """
             CREATE TABLE sqlalchemy_vectors_stress (
                 id INTEGER PRIMARY KEY,
                 embedding VECTOR(FLOAT, 128)
             )
-        """))
+        """
+            )
+        )
 
         # Insert 1000 random 128D vectors
         for i in range(1000):
             vector = [random() for _ in range(128)]
-            vector_str = '[' + ','.join(map(str, vector)) + ']'
+            vector_str = "[" + ",".join(map(str, vector)) + "]"
             await conn.execute(
                 text("INSERT INTO sqlalchemy_vectors_stress VALUES (:id, TO_VECTOR(:vec, FLOAT))"),
-                {"id": i, "vec": vector_str}
+                {"id": i, "vec": vector_str},
             )
 
         await conn.commit()
@@ -121,6 +131,7 @@ async def prepare_vector_table():
 # Test 1: Simple Queries - SQLAlchemy async
 # ==============================================================================
 
+
 async def test_sqlalchemy_simple_inline():
     """SQLAlchemy: inline query (rebuilds each time)"""
     engine = await prepare_simple_table()
@@ -130,9 +141,7 @@ async def test_sqlalchemy_simple_inline():
         t0 = time_ns()
         for _ in range(ITERATIONS):
             # Existing record
-            await conn.execute(
-                table1.select().where(table1.c.name == NAME_TPL % randint(0, 1000))
-            )
+            await conn.execute(table1.select().where(table1.c.name == NAME_TPL % randint(0, 1000)))
             # Non-existent record
             await conn.execute(
                 table1.select().where(table1.c.name == NAME_TPL % randint(1000, 2000))
@@ -150,14 +159,14 @@ async def test_sqlalchemy_simple_prepared():
 
     async with engine.connect() as conn:
         # Prepare statement once
-        stmt = table1.select().where(table1.c.name == bindparam('name'))
+        stmt = table1.select().where(table1.c.name == bindparam("name"))
 
         t0 = time_ns()
         for _ in range(ITERATIONS):
             # Existing record
-            await conn.execute(stmt, {'name': NAME_TPL % randint(0, 1000)})
+            await conn.execute(stmt, {"name": NAME_TPL % randint(0, 1000)})
             # Non-existent record
-            await conn.execute(stmt, {'name': NAME_TPL % randint(1000, 2000)})
+            await conn.execute(stmt, {"name": NAME_TPL % randint(1000, 2000)})
         times.append(time_ns() - t0)
 
     await engine.dispose()
@@ -168,6 +177,7 @@ async def test_sqlalchemy_simple_prepared():
 # Test 2: Simple Queries - Raw psycopg
 # ==============================================================================
 
+
 async def test_psycopg_simple_inline():
     """Raw psycopg: inline query"""
     conn = await psycopg.AsyncConnection.connect(PSYCOPG_DSN)
@@ -177,13 +187,13 @@ async def test_psycopg_simple_inline():
     for _ in range(ITERATIONS):
         # Existing record
         await conn.execute(
-            'SELECT id, name FROM sqlalchemy_stress_test WHERE name = %s',
-            (NAME_TPL % randint(0, 1000),)
+            "SELECT id, name FROM sqlalchemy_stress_test WHERE name = %s",
+            (NAME_TPL % randint(0, 1000),),
         )
         # Non-existent record
         await conn.execute(
-            'SELECT id, name FROM sqlalchemy_stress_test WHERE name = %s',
-            (NAME_TPL % randint(1000, 2000),)
+            "SELECT id, name FROM sqlalchemy_stress_test WHERE name = %s",
+            (NAME_TPL % randint(1000, 2000),),
         )
     times.append(time_ns() - t0)
 
@@ -197,7 +207,9 @@ async def test_psycopg_simple_prepared():
     times = []
 
     # Prepare statement
-    await conn.execute("PREPARE test_stmt AS SELECT id, name FROM sqlalchemy_stress_test WHERE name = $1")
+    await conn.execute(
+        "PREPARE test_stmt AS SELECT id, name FROM sqlalchemy_stress_test WHERE name = $1"
+    )
 
     t0 = time_ns()
     for _ in range(ITERATIONS):
@@ -215,6 +227,7 @@ async def test_psycopg_simple_prepared():
 # Test 3: Vector Queries - SQLAlchemy async
 # ==============================================================================
 
+
 async def test_sqlalchemy_vector_inline():
     """SQLAlchemy: vector similarity query (inline)"""
     await prepare_vector_table()
@@ -226,15 +239,19 @@ async def test_sqlalchemy_vector_inline():
         for _ in range(ITERATIONS // 10):  # Fewer iterations for vector queries
             # Random query vector
             query_vec = [random() for _ in range(128)]
-            query_str = '[' + ','.join(map(str, query_vec)) + ']'
+            query_str = "[" + ",".join(map(str, query_vec)) + "]"
 
             # Execute similarity query
-            await conn.execute(text(f"""
+            await conn.execute(
+                text(
+                    f"""
                 SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('{query_str}', FLOAT)) as score
                 FROM sqlalchemy_vectors_stress
                 ORDER BY score DESC
                 LIMIT 5
-            """))
+            """
+                )
+            )
         times.append(time_ns() - t0)
 
     await engine.dispose()
@@ -249,21 +266,23 @@ async def test_sqlalchemy_vector_prepared():
 
     async with engine.connect() as conn:
         # Prepare statement with parameter
-        stmt = text("""
+        stmt = text(
+            """
             SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(:query, FLOAT)) as score
             FROM sqlalchemy_vectors_stress
             ORDER BY score DESC
             LIMIT 5
-        """)
+        """
+        )
 
         t0 = time_ns()
         for _ in range(ITERATIONS // 10):  # Fewer iterations for vector queries
             # Random query vector
             query_vec = [random() for _ in range(128)]
-            query_str = '[' + ','.join(map(str, query_vec)) + ']'
+            query_str = "[" + ",".join(map(str, query_vec)) + "]"
 
             # Execute with parameter
-            await conn.execute(stmt, {'query': query_str})
+            await conn.execute(stmt, {"query": query_str})
         times.append(time_ns() - t0)
 
     await engine.dispose()
@@ -273,6 +292,7 @@ async def test_sqlalchemy_vector_prepared():
 # ==============================================================================
 # Main benchmark runner
 # ==============================================================================
+
 
 async def run_all_tests():
     """Run all benchmark tests"""
@@ -292,13 +312,17 @@ async def run_all_tests():
 
     print("  Running inline queries...", end=" ", flush=True)
     time_inline = await test_sqlalchemy_simple_inline()
-    print(f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS * 2))} per query")
+    print(
+        f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS * 2))} per query"
+    )
     print(f"                           ({format_qps(ITERATIONS * 2, time_inline)})")
     results.append(("SQLAlchemy inline", time_inline, ITERATIONS * 2))
 
     print("  Running prepared statements...", end=" ", flush=True)
     time_prepared = await test_sqlalchemy_simple_prepared()
-    print(f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS * 2))} per query")
+    print(
+        f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS * 2))} per query"
+    )
     print(f"                                ({format_qps(ITERATIONS * 2, time_prepared)})")
     results.append(("SQLAlchemy prepared", time_prepared, ITERATIONS * 2))
 
@@ -312,13 +336,17 @@ async def run_all_tests():
 
     print("  Running inline queries...", end=" ", flush=True)
     time_inline = await test_psycopg_simple_inline()
-    print(f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS * 2))} per query")
+    print(
+        f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS * 2))} per query"
+    )
     print(f"                           ({format_qps(ITERATIONS * 2, time_inline)})")
     results.append(("Psycopg inline", time_inline, ITERATIONS * 2))
 
     print("  Running prepared statements...", end=" ", flush=True)
     time_prepared = await test_psycopg_simple_prepared()
-    print(f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS * 2))} per query")
+    print(
+        f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS * 2))} per query"
+    )
     print(f"                                ({format_qps(ITERATIONS * 2, time_prepared)})")
     results.append(("Psycopg prepared", time_prepared, ITERATIONS * 2))
 
@@ -332,13 +360,17 @@ async def run_all_tests():
 
     print("  Running inline queries...", end=" ", flush=True)
     time_inline = await test_sqlalchemy_vector_inline()
-    print(f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS // 10))} per query")
+    print(
+        f"✓ {format_time(time_inline)} total, {format_time(time_inline / (ITERATIONS // 10))} per query"
+    )
     print(f"                           ({format_qps(ITERATIONS // 10, time_inline)})")
     results.append(("Vector inline", time_inline, ITERATIONS // 10))
 
     print("  Running prepared statements...", end=" ", flush=True)
     time_prepared = await test_sqlalchemy_vector_prepared()
-    print(f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS // 10))} per query")
+    print(
+        f"✓ {format_time(time_prepared)} total, {format_time(time_prepared / (ITERATIONS // 10))} per query"
+    )
     print(f"                                ({format_qps(ITERATIONS // 10, time_prepared)})")
     results.append(("Vector prepared", time_prepared, ITERATIONS // 10))
 
@@ -365,4 +397,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n\nError: {e}")
         import traceback
+
         traceback.print_exc()

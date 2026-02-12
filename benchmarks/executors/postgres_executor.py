@@ -18,7 +18,7 @@ class PostgresExecutor:
         port: int = 5433,
         database: str = "benchmark",
         username: str = "postgres",
-        password: str = "postgres"
+        password: str = "postgres",
     ):
         """
         Initialize PostgreSQL executor.
@@ -46,7 +46,7 @@ class PostgresExecutor:
                 dbname=self.database,
                 user=self.username,
                 password=self.password,
-                connect_timeout=10
+                connect_timeout=10,
             )
 
     def execute(self, query: str) -> Any:

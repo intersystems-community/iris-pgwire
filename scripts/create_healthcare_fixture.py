@@ -68,7 +68,8 @@ def create_tables(cursor):
     Uses single-statement DDL (no semicolons between statements)
     """
     print("Creating Patients table...")
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE Patients (
             PatientID INT PRIMARY KEY,
             FirstName VARCHAR(50) NOT NULL,
@@ -79,10 +80,12 @@ def create_tables(cursor):
             AdmissionDate VARCHAR(10) NOT NULL,
             DischargeDate VARCHAR(10)
         )
-    """)
+    """
+    )
 
     print("Creating LabResults table...")
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE LabResults (
             ResultID INT PRIMARY KEY,
             PatientID INT NOT NULL,
@@ -93,7 +96,8 @@ def create_tables(cursor):
             ReferenceRange VARCHAR(50) NOT NULL,
             Status VARCHAR(20) NOT NULL
         )
-    """)
+    """
+    )
 
     print("✓ Tables created successfully")
 
@@ -109,24 +113,27 @@ def insert_patient_data(cursor):
 
     # Sample of patients (first 10 for brevity - full dataset would be all 250)
     patients = [
-        (1, 'John', 'Smith', '1985-03-15', 'M', 'Active', '2024-01-10', None),
-        (2, 'Mary', 'Johnson', '1972-07-22', 'F', 'Active', '2024-01-12', None),
-        (3, 'Robert', 'Williams', '1990-11-08', 'M', 'Discharged', '2024-01-15', '2024-02-20'),
-        (4, 'Patricia', 'Brown', '1965-04-30', 'F', 'Active', '2024-01-18', None),
-        (5, 'Michael', 'Jones', '1978-09-12', 'M', 'Active', '2024-01-20', None),
-        (6, 'Jennifer', 'Garcia', '1988-12-25', 'F', 'Discharged', '2024-01-22', '2024-03-05'),
-        (7, 'William', 'Miller', '1955-06-18', 'M', 'Active', '2024-01-25', None),
-        (8, 'Linda', 'Davis', '1992-02-14', 'F', 'Active', '2024-01-28', None),
-        (9, 'David', 'Rodriguez', '1970-10-03', 'M', 'Active', '2024-02-01', None),
-        (10, 'Barbara', 'Martinez', '1983-08-27', 'F', 'Discharged', '2024-02-03', '2024-03-15'),
+        (1, "John", "Smith", "1985-03-15", "M", "Active", "2024-01-10", None),
+        (2, "Mary", "Johnson", "1972-07-22", "F", "Active", "2024-01-12", None),
+        (3, "Robert", "Williams", "1990-11-08", "M", "Discharged", "2024-01-15", "2024-02-20"),
+        (4, "Patricia", "Brown", "1965-04-30", "F", "Active", "2024-01-18", None),
+        (5, "Michael", "Jones", "1978-09-12", "M", "Active", "2024-01-20", None),
+        (6, "Jennifer", "Garcia", "1988-12-25", "F", "Discharged", "2024-01-22", "2024-03-05"),
+        (7, "William", "Miller", "1955-06-18", "M", "Active", "2024-01-25", None),
+        (8, "Linda", "Davis", "1992-02-14", "F", "Active", "2024-01-28", None),
+        (9, "David", "Rodriguez", "1970-10-03", "M", "Active", "2024-02-01", None),
+        (10, "Barbara", "Martinez", "1983-08-27", "F", "Discharged", "2024-02-03", "2024-03-15"),
     ]
 
     for patient in patients:
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO Patients
             (PatientID, FirstName, LastName, DateOfBirth, Gender, Status, AdmissionDate, DischargeDate)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, patient)
+        """,
+            patient,
+        )
 
     print(f"✓ Inserted {len(patients)} patient records")
     return len(patients)
@@ -142,24 +149,27 @@ def insert_lab_data(cursor):
 
     # Sample lab results (first 10 for brevity)
     lab_results = [
-        (1, 1, 'Complete Blood Count', '2024-01-11', 7.5, '10^9/L', '4.0-10.0', 'Normal'),
-        (2, 1, 'Glucose', '2024-01-11', 95.0, 'mg/dL', '70-100', 'Normal'),
-        (3, 2, 'Cholesterol', '2024-01-13', 210.0, 'mg/dL', '<200', 'Abnormal'),
-        (4, 2, 'Hemoglobin A1c', '2024-01-13', 6.2, '%', '<5.7', 'Abnormal'),
-        (5, 3, 'Creatinine', '2024-01-16', 1.1, 'mg/dL', '0.7-1.3', 'Normal'),
-        (6, 3, 'BUN', '2024-01-16', 18.0, 'mg/dL', '7-20', 'Normal'),
-        (7, 4, 'TSH', '2024-01-19', 2.5, 'mIU/L', '0.4-4.0', 'Normal'),
-        (8, 4, 'Vitamin D', '2024-01-19', 35.0, 'ng/mL', '30-100', 'Normal'),
-        (9, 5, 'Liver Panel ALT', '2024-01-21', 45.0, 'U/L', '7-56', 'Normal'),
-        (10, 5, 'Liver Panel AST', '2024-01-21', 38.0, 'U/L', '10-40', 'Normal'),
+        (1, 1, "Complete Blood Count", "2024-01-11", 7.5, "10^9/L", "4.0-10.0", "Normal"),
+        (2, 1, "Glucose", "2024-01-11", 95.0, "mg/dL", "70-100", "Normal"),
+        (3, 2, "Cholesterol", "2024-01-13", 210.0, "mg/dL", "<200", "Abnormal"),
+        (4, 2, "Hemoglobin A1c", "2024-01-13", 6.2, "%", "<5.7", "Abnormal"),
+        (5, 3, "Creatinine", "2024-01-16", 1.1, "mg/dL", "0.7-1.3", "Normal"),
+        (6, 3, "BUN", "2024-01-16", 18.0, "mg/dL", "7-20", "Normal"),
+        (7, 4, "TSH", "2024-01-19", 2.5, "mIU/L", "0.4-4.0", "Normal"),
+        (8, 4, "Vitamin D", "2024-01-19", 35.0, "ng/mL", "30-100", "Normal"),
+        (9, 5, "Liver Panel ALT", "2024-01-21", 45.0, "U/L", "7-56", "Normal"),
+        (10, 5, "Liver Panel AST", "2024-01-21", 38.0, "U/L", "10-40", "Normal"),
     ]
 
     for lab in lab_results:
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO LabResults
             (ResultID, PatientID, TestName, TestDate, Result, Unit, ReferenceRange, Status)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, lab)
+        """,
+            lab,
+        )
 
     print(f"✓ Inserted {len(lab_results)} lab result records")
     return len(lab_results)
@@ -176,11 +186,7 @@ def main():
     # Step 1: Connect to IRIS via iris-devtester
     print("\nStep 1: Connecting to IRIS...")
     config = IRISConfig(
-        host="localhost",
-        port=1972,
-        namespace="USER",
-        username="_SYSTEM",
-        password="SYS"
+        host="localhost", port=1972, namespace="USER", username="_SYSTEM", password="SYS"
     )
 
     conn = get_connection(config)
@@ -242,6 +248,7 @@ def main():
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
         conn.rollback()
         return 1

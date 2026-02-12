@@ -160,9 +160,9 @@ class TestCacheStatsEndpoint:
         for field_name, expected_type in expected_fields.items():
             value = getattr(stats, field_name)
             assert value is not None, f"Field {field_name} should not be None"
-            assert isinstance(value, expected_type), (
-                f"Field {field_name} should be {expected_type}, got {type(value)}"
-            )
+            assert isinstance(
+                value, expected_type
+            ), f"Field {field_name} should be {expected_type}, got {type(value)}"
 
     def test_cache_stats_constraints(self, cache):
         """Cache stats should respect contract constraints"""

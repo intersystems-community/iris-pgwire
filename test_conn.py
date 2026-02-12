@@ -1,5 +1,5 @@
+
 import psycopg
-import os
 
 conn_params = {
     "host": "localhost",

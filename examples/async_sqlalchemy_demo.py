@@ -26,7 +26,7 @@ async def demo_async_sqlalchemy():
         # Create async engine - IMPOSSIBLE with native IRIS drivers!
         engine = create_async_engine(
             "postgresql+asyncpg://test_user@127.0.0.1:5432/USER",
-            echo=False  # Set to True for SQL logging
+            echo=False,  # Set to True for SQL logging
         )
 
         print("✅ BREAKTHROUGH: Async SQLAlchemy engine created for IRIS!")
@@ -48,10 +48,7 @@ async def demo_async_sqlalchemy():
             print(f"✅ Async vector operation: {row[0][:50]}...")
 
             # Async parameterized queries
-            result = await conn.execute(
-                text("SELECT :x + :y as sum"),
-                {"x": 25, "y": 75}
-            )
+            result = await conn.execute(text("SELECT :x + :y as sum"), {"x": 25, "y": 75})
             row = result.fetchone()
             print(f"✅ Async parameterized query: {row[0]}")
 
@@ -68,6 +65,7 @@ async def demo_async_sqlalchemy():
         print(f"✗ Async SQLAlchemy demo failed: {e}\n")
         return False
 
+
 # Async DBAPI - Direct asyncpg access
 async def demo_async_dbapi():
     """Demo: Direct async DBAPI with asyncpg"""
@@ -77,12 +75,7 @@ async def demo_async_dbapi():
         import asyncpg
 
         # Direct async connection - IMPOSSIBLE with IRIS native drivers
-        conn = await asyncpg.connect(
-            host="127.0.0.1",
-            port=5432,
-            user="test_user",
-            database="USER"
-        )
+        conn = await asyncpg.connect(host="127.0.0.1", port=5432, user="test_user", database="USER")
 
         print("✅ Direct async DBAPI connection established")
 
@@ -106,6 +99,7 @@ async def demo_async_dbapi():
     except Exception as e:
         print(f"✗ Async DBAPI demo failed: {e}\n")
         return False
+
 
 # Async ORM Models - Modern Python patterns
 async def demo_async_orm():
@@ -132,8 +126,7 @@ async def demo_async_orm():
 
         # Async engine and session
         engine = create_async_engine(
-            "postgresql+asyncpg://test_user@127.0.0.1:5432/USER",
-            echo=False
+            "postgresql+asyncpg://test_user@127.0.0.1:5432/USER", echo=False
         )
         AsyncSession = async_sessionmaker(engine)
 
@@ -162,6 +155,7 @@ async def demo_async_orm():
         print(f"✗ Async ORM demo failed: {e}\n")
         return False
 
+
 # Concurrent async operations - MAJOR advantage
 async def demo_concurrent_async():
     """Demo: Concurrent async operations - impossible with sync IRIS drivers"""
@@ -173,10 +167,7 @@ async def demo_concurrent_async():
         async def async_worker(worker_id: int, query_count: int = 10) -> dict[str, Any]:
             """Async worker that performs multiple queries concurrently"""
             conn = await asyncpg.connect(
-                host="127.0.0.1",
-                port=5432,
-                user="test_user",
-                database="USER"
+                host="127.0.0.1", port=5432, user="test_user", database="USER"
             )
 
             start_time = time.time()
@@ -184,10 +175,7 @@ async def demo_concurrent_async():
 
             # Perform multiple async queries
             for i in range(query_count):
-                result = await conn.fetchval(
-                    "SELECT $1::int + $2::int as sum",
-                    worker_id, i
-                )
+                result = await conn.fetchval("SELECT $1::int + $2::int as sum", worker_id, i)
                 results.append(result)
 
             duration = time.time() - start_time
@@ -197,7 +185,7 @@ async def demo_concurrent_async():
                 "worker_id": worker_id,
                 "queries": len(results),
                 "duration": duration,
-                "results": results[:3]  # First 3 results
+                "results": results[:3],  # First 3 results
             }
 
         print("✅ Starting 10 concurrent async workers...")
@@ -227,6 +215,7 @@ async def demo_concurrent_async():
         print(f"✗ Concurrent async demo failed: {e}\n")
         return False
 
+
 # Async FastAPI integration
 async def demo_fastapi_integration():
     """Demo: FastAPI with async IRIS database operations"""
@@ -235,7 +224,8 @@ async def demo_fastapi_integration():
     try:
         # Simulate FastAPI app with async database operations
         print("✅ FastAPI Integration Pattern:")
-        print("""
+        print(
+            """
         from fastapi import FastAPI
         from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -270,7 +260,8 @@ async def demo_fastapi_integration():
                 ])
                 await session.commit()
                 return {"inserted": len(documents)}
-        """)
+        """
+        )
 
         print("✅ Key Benefits:")
         print("   • Non-blocking async I/O for high concurrency")
@@ -285,6 +276,7 @@ async def demo_fastapi_integration():
     except Exception as e:
         print(f"✗ FastAPI integration demo failed: {e}\n")
         return False
+
 
 # Performance comparison: Sync vs Async
 async def demo_performance_comparison():
@@ -301,10 +293,7 @@ async def demo_performance_comparison():
             start_time = time.time()
 
             with psycopg.connect(
-                host="127.0.0.1",
-                port=5432,
-                user="test_user",
-                dbname="USER"
+                host="127.0.0.1", port=5432, user="test_user", dbname="USER"
             ) as conn:
                 with conn.cursor() as cur:
                     for i in range(query_count):
@@ -318,10 +307,7 @@ async def demo_performance_comparison():
             start_time = time.time()
 
             conn = await asyncpg.connect(
-                host="127.0.0.1",
-                port=5432,
-                user="test_user",
-                database="USER"
+                host="127.0.0.1", port=5432, user="test_user", database="USER"
             )
 
             for i in range(query_count):
@@ -336,10 +322,7 @@ async def demo_performance_comparison():
 
             async def worker(worker_queries: int):
                 conn = await asyncpg.connect(
-                    host="127.0.0.1",
-                    port=5432,
-                    user="test_user",
-                    database="USER"
+                    host="127.0.0.1", port=5432, user="test_user", database="USER"
                 )
 
                 for i in range(worker_queries):
@@ -384,6 +367,7 @@ async def demo_performance_comparison():
     except Exception as e:
         print(f"✗ Performance comparison failed: {e}\n")
         return False
+
 
 # Main demo runner
 async def run_async_demos():
@@ -440,6 +424,7 @@ async def run_async_demos():
 
     print("\n💡 This transforms IRIS into a modern, async-capable database")
     print("   compatible with the entire PostgreSQL async ecosystem!")
+
 
 if __name__ == "__main__":
     # Make sure server is running

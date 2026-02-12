@@ -1,5 +1,6 @@
 import pytest
-from iris_pgwire.sql_translator.refiner import SQLRefiner, RefinerConfig
+
+from iris_pgwire.sql_translator.refiner import RefinerConfig, SQLRefiner
 
 
 class TestIRISCollationRefiner:

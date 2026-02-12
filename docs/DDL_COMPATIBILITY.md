@@ -46,7 +46,35 @@ PostgreSQL enum definitions are intercepted:
 If a `CREATE TABLE` statement is skipped or failed, any subsequent `CREATE INDEX` statement referencing that table will also be automatically skipped.
 - **Warning**: `[DDL-SKIP] Index on skipped table ignored`.
 
-### 8. Identifier Case Sensitivity
+### 8. UUID and JSON Native Types
+IRIS requires native class types for UUID and JSON columns in DDL:
+- **UUID**: Automatically translated to `%Library.UniqueIdentifier` in both CREATE TABLE and ALTER TABLE
+- **JSON/JSONB**: Automatically translated to `%Library.DynamicObject` in both CREATE TABLE and ALTER TABLE
+- **DEFAULT gen_random_uuid()**: Automatically **skipped** (IRIS doesn't support function calls in DEFAULT clauses)
+- **DEFAULT NOW()**: Automatically translated to `CURRENT_TIMESTAMP` (IRIS requirement)
+
+Example transformation:
+```sql
+-- Input (PostgreSQL)
+CREATE TABLE users (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    data jsonb NOT NULL,
+    created_at timestamp DEFAULT now()
+)
+
+-- Output (IRIS)
+CREATE TABLE users (
+    id %Library.UniqueIdentifier PRIMARY KEY NOT NULL,
+    data %Library.DynamicObject NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+```
+
+### 9. ALTER TABLE RENAME COLUMN
+IRIS does not support `ALTER TABLE ... RENAME COLUMN`. These statements are automatically **skipped**.
+- **Warning**: `IRIS does not support ALTER TABLE RENAME COLUMN`.
+
+### 10. Identifier Case Sensitivity
 InterSystems IRIS is case-sensitive for package (schema) names and class (table) names. `iris-pgwire` ensures compatibility by:
 - Always using `SQLUser` (exact case) for the target schema.
 - Preserving the exact casing and quoting of identifiers (e.g., `public."workflow"` is correctly translated to `SQLUser."workflow"`).

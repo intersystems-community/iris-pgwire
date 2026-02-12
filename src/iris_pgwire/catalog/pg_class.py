@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 from .oid_generator import OIDGenerator
 
 RelKind = Literal["r", "i", "S", "v", "m", "c", "f", "p"]

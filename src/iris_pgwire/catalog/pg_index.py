@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 from .oid_generator import OIDGenerator
 from .pg_class import PgClass
 

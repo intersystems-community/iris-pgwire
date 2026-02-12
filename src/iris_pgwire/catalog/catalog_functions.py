@@ -25,8 +25,9 @@ from typing import Any
 
 import structlog
 
-from ..type_mapping import TypeModifier, get_type_by_oid
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
+from ..type_mapping import TypeModifier, get_type_by_oid
 from .oid_generator import OIDGenerator
 
 logger = structlog.get_logger()

@@ -1,5 +1,7 @@
-import pytest
 import datetime as dt
+
+import pytest
+
 from iris_pgwire.dbapi_executor import DBAPIExecutor
 from iris_pgwire.models.backend_config import BackendConfig, BackendType
 

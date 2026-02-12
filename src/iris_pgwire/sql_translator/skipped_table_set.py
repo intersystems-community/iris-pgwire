@@ -7,7 +7,6 @@ Enables skipping dependent CREATE INDEX statements.
 """
 
 
-
 class SkippedTableSet:
     """
     Session-scoped set for skipped table names.

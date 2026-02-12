@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Drizzle ORM Migration Support**: Complete compatibility with Drizzle-style migrations including UUID/JSON handling, boolean defaults, and enum type mappings.
+- **Transaction Rollback Support**: Migrations now use explicit `START TRANSACTION` for proper rollback capability in IRIS.
+- **Enhanced DDL Translation**: 
+  - UUID columns automatically use `%Library.UniqueIdentifier` native type
+  - JSON/JSONB columns automatically use `%Library.DynamicObject` native type
+  - `DEFAULT gen_random_uuid()` automatically skipped (IRIS limitation)
+  - `DEFAULT NOW()` automatically converted to `CURRENT_TIMESTAMP`
+  - `ALTER TABLE RENAME COLUMN` marked as unsupported
+
+### Fixed
+- **UUID/JSON DDL Handling**: Both CREATE TABLE and ALTER TABLE now correctly use IRIS native types for UUID and JSON columns.
+- **Transaction Management**: Migration executor now disables auto-commit and uses explicit transaction control for reliable rollback.
+- **Test Infrastructure**: All 21 Drizzle migration tests now run against live IRIS (previously 8 were skipped).
+
 ## [1.3.0] - 2025-02-06
 
 ### Added

@@ -12,8 +12,8 @@ import random
 import re
 import subprocess
 import time
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from iris_devtester.config import IRISConfig
 from iris_devtester.connections import get_connection
@@ -144,9 +144,15 @@ def create_base_fixture(
 ) -> Path:
     """Create the base fixture from example and benchmark datasets."""
     repo_root = Path(__file__).resolve().parents[3]
-    schema_sql = repo_root / "examples" / "superset-iris-healthcare" / "data" / "init-healthcare-schema.sql"
-    patients_csv = repo_root / "examples" / "superset-iris-healthcare" / "data" / "patients-data.csv"
-    labresults_sql = repo_root / "examples" / "superset-iris-healthcare" / "data" / "labresults-data.sql"
+    schema_sql = (
+        repo_root / "examples" / "superset-iris-healthcare" / "data" / "init-healthcare-schema.sql"
+    )
+    patients_csv = (
+        repo_root / "examples" / "superset-iris-healthcare" / "data" / "patients-data.csv"
+    )
+    labresults_sql = (
+        repo_root / "examples" / "superset-iris-healthcare" / "data" / "labresults-data.sql"
+    )
 
     if not schema_sql.exists():
         raise FileNotFoundError(f"Schema file not found: {schema_sql}")

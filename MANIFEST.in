@@ -1,48 +1,39 @@
-# Include ONLY essential documentation and metadata
-include README.md
-include LICENSE
-include CHANGELOG.md
+# Include everything from the project root by default
+include *.in
+include *.json
+include *.key
+include *.md
+include *.py
+include *.sql
+include *.svg
+include *.txt
+include .bumpversion.cfg
+include pytest.ini
+include .bandit
+include .mcp.json
 
-# Include ONLY user-facing examples (NOT development scripts)
-include examples/BI_TOOLS_SETUP.md
-include examples/translation_api_demo.py
-include examples/*.py
+# Include important directories
+recursive-include docs *.md
+recursive-include docs *.yaml
+recursive-include examples *.bak
+recursive-include examples *.csv
+recursive-include examples *.js
+recursive-include examples *.json
+recursive-include examples *.md
+recursive-include examples *.prisma
+recursive-include examples *.py
+recursive-include examples *.sh
+recursive-include examples *.sql
+recursive-include examples *.yml
+recursive-include ipm *.cls
+recursive-include ipm *.txt
+recursive-include ipm *.xml
+recursive-include scripts *.md
+recursive-include scripts *.py
+recursive-include scripts *.sh
 
-# Include ONLY user-facing documentation (NOT specs/planning docs)
-include docs/TRANSLATION_API.md
-include docs/VECTOR_PARAMETER_BINDING.md
-include docs/DUAL_PATH_ARCHITECTURE.md
-include docs/HNSW_FINDINGS_*.md
-
-# Explicitly exclude all development/internal files
-exclude CLAUDE.md
-exclude PROGRESS.md
-exclude STATUS.md
-exclude TODO.md
-exclude TESTING.md
-exclude .gitignore
-exclude .gitlab-ci.yml
-exclude docker-compose*.yml
-exclude Dockerfile*
-exclude .dockerignore
-exclude merge.cpf
-exclude start-production.sh
-exclude test_performance_simple.py
-exclude uv.lock
-exclude iris_pgwire.json
-exclude *.cpf
-exclude *.sh
-
-# Exclude entire development directories
-prune .claude
-prune .specify
-prune .git
-prune .github
-prune tests
-prune benchmarks
-prune deployment
-prune docker
-prune specs
+# Include all source files
+recursive-include src *.py
 
 # Exclude build artifacts and cache
 global-exclude *.pyc
@@ -51,3 +42,14 @@ global-exclude __pycache__
 global-exclude .DS_Store
 global-exclude *.so
 global-exclude *.dylib
+
+# Exclude internal/git files
+exclude .gitignore
+exclude .gitlab-ci.yml
+exclude .dockerignore
+prune .git
+prune .github
+prune .claude
+prune .specify
+prune .opencode
+

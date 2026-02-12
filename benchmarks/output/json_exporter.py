@@ -39,7 +39,7 @@ def export_json(report: BenchmarkReport, output_dir: str = "benchmarks/results/j
     # Export to JSON
     json_data = report.to_json()
 
-    with open(filepath, 'w') as f:
+    with open(filepath, "w") as f:
         json.dump(json_data, f, indent=2)
 
     return str(filepath)

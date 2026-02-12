@@ -18,7 +18,7 @@ import sys
 import time
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def wait_for_port(host, port, timeout=30):
@@ -55,14 +55,14 @@ def generate_random_vector(dimensions=1024):
 
 def vector_to_base64(vec):
     """Convert vector to base64 format (psycopg2 encoding)"""
-    vec_bytes = struct.pack(f'{len(vec)}f', *vec)
-    return 'base64:' + base64.b64encode(vec_bytes).decode('ascii')
+    vec_bytes = struct.pack(f"{len(vec)}f", *vec)
+    return "base64:" + base64.b64encode(vec_bytes).decode("ascii")
 
 
 def main():
-    print("="*70)
+    print("=" * 70)
     print("E2E Integration & Benchmark Test")
-    print("="*70)
+    print("=" * 70)
 
     # Step 1: Start PGWire server
     print("\n1. Starting PGWire server...")
@@ -71,27 +71,29 @@ def main():
     test_port = 15432
 
     env = os.environ.copy()
-    env.update({
-        'PGWIRE_HOST': '127.0.0.1',
-        'PGWIRE_PORT': str(test_port),
-        'IRIS_HOST': 'localhost',
-        'IRIS_PORT': '1972',
-        'IRIS_USERNAME': '_SYSTEM',
-        'IRIS_PASSWORD': 'SYS',
-        'IRIS_NAMESPACE': 'USER',
-        'PGWIRE_DEBUG': 'false'
-    })
+    env.update(
+        {
+            "PGWIRE_HOST": "127.0.0.1",
+            "PGWIRE_PORT": str(test_port),
+            "IRIS_HOST": "localhost",
+            "IRIS_PORT": "1972",
+            "IRIS_USERNAME": "_SYSTEM",
+            "IRIS_PASSWORD": "SYS",
+            "IRIS_NAMESPACE": "USER",
+            "PGWIRE_DEBUG": "false",
+        }
+    )
 
     server_process = subprocess.Popen(
-        [sys.executable, '-m', 'iris_pgwire.server'],
+        [sys.executable, "-m", "iris_pgwire.server"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=os.path.join(os.path.dirname(__file__), '..')
+        cwd=os.path.join(os.path.dirname(__file__), ".."),
     )
 
     # Wait for server to start
-    if not wait_for_port('127.0.0.1', test_port, timeout=10):
+    if not wait_for_port("127.0.0.1", test_port, timeout=10):
         print("   ❌ Server failed to start!")
         server_process.kill()
         return False
@@ -105,17 +107,17 @@ def main():
             import psycopg2
         except ImportError:
             print("   ❌ psycopg2 not installed. Installing...")
-            subprocess.run([sys.executable, '-m', 'pip', 'install', 'psycopg2-binary'], check=True)
+            subprocess.run([sys.executable, "-m", "pip", "install", "psycopg2-binary"], check=True)
             import psycopg2
 
         try:
             conn = psycopg2.connect(
-                host='127.0.0.1',
+                host="127.0.0.1",
                 port=test_port,
-                database='USER',
-                user='_SYSTEM',
-                password='SYS',
-                connect_timeout=5
+                database="USER",
+                user="_SYSTEM",
+                password="SYS",
+                connect_timeout=5,
             )
             conn.autocommit = True
             print("   ✅ Connection established!")
@@ -134,11 +136,14 @@ def main():
         vec_b64 = vector_to_base64(vec)
 
         start = time.perf_counter()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC
             LIMIT 5
-        """, (vec_b64,))
+        """,
+            (vec_b64,),
+        )
         results = cur.fetchall()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -152,13 +157,16 @@ def main():
 
         # Test 2: JSON array vector
         print("   Test 2: JSON array vector query...")
-        vec_json = '[' + ','.join(str(v) for v in vec) + ']'
+        vec_json = "[" + ",".join(str(v) for v in vec) + "]"
 
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_COSINE(vec, TO_VECTOR(%s, FLOAT))
             LIMIT 5
-        """, (vec_json,))
+        """,
+            (vec_json,),
+        )
         results = cur.fetchall()
 
         if len(results) == 5:
@@ -171,11 +179,14 @@ def main():
         vec = generate_random_vector(1024)
         vec_b64 = vector_to_base64(vec)
 
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id FROM test_1024
             ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC
             LIMIT %s
-        """, (vec_b64, 10))
+        """,
+            (vec_b64, 10),
+        )
         results = cur.fetchall()
 
         if len(results) == 10:
@@ -191,11 +202,14 @@ def main():
         for _ in range(10):
             vec = generate_random_vector(1024)
             vec_b64 = vector_to_base64(vec)
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM test_1024
                 ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC
                 LIMIT 5
-            """, (vec_b64,))
+            """,
+                (vec_b64,),
+            )
             cur.fetchall()
 
         # Benchmark (50 queries)
@@ -206,11 +220,14 @@ def main():
             vec_b64 = vector_to_base64(vec)
 
             start = time.perf_counter()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM test_1024
                 ORDER BY VECTOR_DOT_PRODUCT(vec, TO_VECTOR(%s, FLOAT)) DESC
                 LIMIT 5
-            """, (vec_b64,))
+            """,
+                (vec_b64,),
+            )
             results = cur.fetchall()
             elapsed = (time.perf_counter() - start) * 1000
             times.append(elapsed)
@@ -228,9 +245,9 @@ def main():
         qps = 50 / (sum(times) / 1000)
 
         # Display results
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("BENCHMARK RESULTS - PGWire + Optimizer")
-        print("="*70)
+        print("=" * 70)
         print("\n📈 Latency Metrics:")
         print(f"   Avg:    {avg_ms:6.2f} ms")
         print(f"   Min:    {min_ms:6.2f} ms")
@@ -252,9 +269,9 @@ def main():
         print(f"   P95 Latency: {'✅ PASS' if p95_pass else '❌ FAIL'} ({p95_ms:.2f} ms)")
         print("   Throughput:  ⚠️  Sequential test (concurrent needed for realistic QPS)")
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print("COMPARISON vs DBAPI Baseline (40.61ms P95)")
-        print("="*70)
+        print("=" * 70)
 
         dbapi_p95 = 40.61  # From benchmark_iris_dbapi.py
         overhead_ms = p95_ms - dbapi_p95
@@ -284,6 +301,6 @@ def main():
             print("   ⚠️  Server killed (timeout)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)

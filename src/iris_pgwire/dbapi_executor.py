@@ -130,7 +130,7 @@ class DBAPIExecutor:
         if params is None:
             return None
 
-        if isinstance(params, (list, tuple)):
+        if isinstance(params, list | tuple):
             return [self._convert_value_for_iris(v) for v in params]
 
         return self._convert_value_for_iris(params)
@@ -438,7 +438,8 @@ class DBAPIExecutor:
                     connection,
                     plan,
                     params,
-                    original_sql,
+                    session_id=session_id,
+                    original_sql=original_sql,
                     override_operation="DELETE",
                     override_where=plan.where_clause,
                     override_where_params=self._extract_where_params(plan.where_clause, params),
@@ -471,7 +472,11 @@ class DBAPIExecutor:
                     row_count = len(rows)
                 else:
                     rows, columns = self._emulate_returning_sync(
-                        connection, plan, params, original_sql
+                        connection,
+                        plan,
+                        params,
+                        session_id=session_id,
+                        original_sql=original_sql,
                     )
                     row_count = len(rows)
             else:
@@ -521,7 +526,8 @@ class DBAPIExecutor:
             connection,
             plan,
             where_params,
-            original_sql,
+            session_id=session_id,
+            original_sql=original_sql,
             override_operation="UPDATE",
             override_where=where_clause,
             override_where_params=where_params,
@@ -1010,6 +1016,7 @@ class DBAPIExecutor:
         connection: Any,
         plan: ReturningPlan,
         params: list | tuple | None,
+        session_id: str | None = None,
         original_sql: str | None = None,
         override_operation: str | None = None,
         override_where: str | None = None,
@@ -1044,7 +1051,8 @@ class DBAPIExecutor:
                 processed: list[str] = []
                 for col in columns:
                     if re.match(r'^"?\w+"?$', col):
-                        processed.append(f'"{col.strip('"')}"')
+                        stripped_col = col.strip('"')
+                        processed.append(f'"{stripped_col}"')
                     else:
                         processed.append(col)
                 col_list = ", ".join(processed)

@@ -324,13 +324,11 @@ class TestInsertVectorOptimization:
         optimized_sql, params = optimize_vector_query(sql, None)
 
         # Raw literal MUST be wrapped with TO_VECTOR()
-        assert "TO_VECTOR('[0.1,0.2,0.3]'" in optimized_sql, (
-            f"Raw pgvector literal should be wrapped with TO_VECTOR. Got: {optimized_sql}"
-        )
+        assert (
+            "TO_VECTOR('[0.1,0.2,0.3]'" in optimized_sql
+        ), f"Raw pgvector literal should be wrapped with TO_VECTOR. Got: {optimized_sql}"
         # DOUBLE is the default type for pgvector-style literals
-        assert "DOUBLE)" in optimized_sql, (
-            f"TO_VECTOR should use DOUBLE type. Got: {optimized_sql}"
-        )
+        assert "DOUBLE)" in optimized_sql, f"TO_VECTOR should use DOUBLE type. Got: {optimized_sql}"
 
     def test_explicit_to_vector_insert_preserved(self):
         """
@@ -343,9 +341,9 @@ class TestInsertVectorOptimization:
         optimized_sql, params = optimize_vector_query(sql, None)
 
         # Should NOT double-wrap TO_VECTOR
-        assert optimized_sql.count("TO_VECTOR") == 1, (
-            f"TO_VECTOR should not be double-wrapped. Got: {optimized_sql}"
-        )
+        assert (
+            optimized_sql.count("TO_VECTOR") == 1
+        ), f"TO_VECTOR should not be double-wrapped. Got: {optimized_sql}"
         assert "TO_VECTOR('[0.1,0.2,0.3]', DOUBLE)" in optimized_sql
 
     def test_insert_without_vector_unchanged(self):
@@ -370,9 +368,9 @@ class TestInsertVectorOptimization:
 
         optimized_sql, params = optimize_vector_query(sql, None)
 
-        assert "TO_VECTOR('[0.4,0.5,0.6]'" in optimized_sql, (
-            f"Raw pgvector literal in UPDATE should be wrapped. Got: {optimized_sql}"
-        )
+        assert (
+            "TO_VECTOR('[0.4,0.5,0.6]'" in optimized_sql
+        ), f"Raw pgvector literal in UPDATE should be wrapped. Got: {optimized_sql}"
 
 
 if __name__ == "__main__":

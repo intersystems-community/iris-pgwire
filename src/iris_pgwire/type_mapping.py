@@ -26,11 +26,12 @@ logger = structlog.get_logger()
 @dataclass
 class TypeMapping:
     """Represents a mapping from IRIS type to PostgreSQL type."""
-    iris_type: str           # IRIS type name (e.g., 'INTEGER', 'VARCHAR')
-    pg_data_type: str        # SQL standard name (e.g., 'integer', 'character varying')
-    pg_udt_name: str         # PostgreSQL internal name (e.g., 'int4', 'varchar')
-    pg_type_oid: int = 0     # PostgreSQL type OID (0 = auto-detect)
-    description: str = ""    # Optional description
+
+    iris_type: str  # IRIS type name (e.g., 'INTEGER', 'VARCHAR')
+    pg_data_type: str  # SQL standard name (e.g., 'integer', 'character varying')
+    pg_udt_name: str  # PostgreSQL internal name (e.g., 'int4', 'varchar')
+    pg_type_oid: int = 0  # PostgreSQL type OID (0 = auto-detect)
+    description: str = ""  # Optional description
 
 
 # Default IRIS → PostgreSQL type mappings
@@ -40,54 +41,45 @@ class TypeMapping:
 # - node-postgres (uses type_oid)
 DEFAULT_TYPE_MAPPINGS: dict[str, tuple[str, str, int]] = {
     # Numeric types
-    'INTEGER': ('integer', 'int4', 23),
-    'BIGINT': ('bigint', 'int8', 20),
-    'SMALLINT': ('smallint', 'int2', 21),
-    'TINYINT': ('smallint', 'int2', 21),
-    'NUMERIC': ('numeric', 'numeric', 1700),
-    'DECIMAL': ('numeric', 'numeric', 1700),
-
+    "INTEGER": ("integer", "int4", 23),
+    "BIGINT": ("bigint", "int8", 20),
+    "SMALLINT": ("smallint", "int2", 21),
+    "TINYINT": ("smallint", "int2", 21),
+    "NUMERIC": ("numeric", "numeric", 1700),
+    "DECIMAL": ("numeric", "numeric", 1700),
     # Floating point
-    'DOUBLE': ('double precision', 'float8', 701),
-    'FLOAT': ('double precision', 'float8', 701),
-    'REAL': ('real', 'float4', 700),
-
+    "DOUBLE": ("double precision", "float8", 701),
+    "FLOAT": ("double precision", "float8", 701),
+    "REAL": ("real", "float4", 700),
     # Character types
-    'VARCHAR': ('character varying', 'varchar', 1043),
-    'CHAR': ('character', 'bpchar', 1042),
-    'TEXT': ('text', 'text', 25),
-    'LONGVARCHAR': ('text', 'text', 25),
-
+    "VARCHAR": ("character varying", "varchar", 1043),
+    "CHAR": ("character", "bpchar", 1042),
+    "TEXT": ("text", "text", 25),
+    "LONGVARCHAR": ("text", "text", 25),
     # Date/Time types
-    'DATE': ('date', 'date', 1082),
-    'TIME': ('time without time zone', 'time', 1083),
-    'TIMESTAMP': ('timestamp without time zone', 'timestamp', 1114),
-    'TIMESTAMPTZ': ('timestamp with time zone', 'timestamptz', 1184),
-
+    "DATE": ("date", "date", 1082),
+    "TIME": ("time without time zone", "time", 1083),
+    "TIMESTAMP": ("timestamp without time zone", "timestamp", 1114),
+    "TIMESTAMPTZ": ("timestamp with time zone", "timestamptz", 1184),
     # Boolean (IRIS uses BIT for boolean)
-    'BOOLEAN': ('boolean', 'bool', 16),
-    'BIT': ('boolean', 'bool', 16),
-
+    "BOOLEAN": ("boolean", "bool", 16),
+    "BIT": ("boolean", "bool", 16),
     # Binary types
-    'VARBINARY': ('bytea', 'bytea', 17),
-    'BINARY': ('bytea', 'bytea', 17),
-    'LONGVARBINARY': ('bytea', 'bytea', 17),
-
+    "VARBINARY": ("bytea", "bytea", 17),
+    "BINARY": ("bytea", "bytea", 17),
+    "LONGVARBINARY": ("bytea", "bytea", 17),
     # Auto-increment/Serial
-    'SERIAL': ('integer', 'int4', 23),
-    'BIGSERIAL': ('bigint', 'int8', 20),
-
+    "SERIAL": ("integer", "int4", 23),
+    "BIGSERIAL": ("bigint", "int8", 20),
     # JSON types
-    'JSON': ('json', 'json', 114),
-    'JSONB': ('jsonb', 'jsonb', 3802),
-
+    "JSON": ("json", "json", 114),
+    "JSONB": ("jsonb", "jsonb", 3802),
     # UUID
-    'UUID': ('uuid', 'uuid', 2950),
-    'UNIQUEIDENTIFIER': ('uuid', 'uuid', 2950),
-
+    "UUID": ("uuid", "uuid", 2950),
+    "UNIQUEIDENTIFIER": ("uuid", "uuid", 2950),
     # Vector types (IRIS-specific, mapped to pgvector extension type)
-    'VECTOR': ('vector', 'vector', 16388),
-    'EMBEDDING': ('vector', 'vector', 16388),
+    "VECTOR": ("vector", "vector", 16388),
+    "EMBEDDING": ("vector", "vector", 16388),
 }
 
 # Global type mapping registry
@@ -105,14 +97,11 @@ def get_type_mapping(iris_type: str) -> tuple[str, str, int]:
         Tuple of (pg_data_type, pg_udt_name, pg_type_oid)
         Returns ('text', 'text', 25) for unknown types
     """
-    return _type_mappings.get(iris_type.upper(), ('text', 'text', 25))
+    return _type_mappings.get(iris_type.upper(), ("text", "text", 25))
 
 
 def configure_type_mapping(
-    iris_type: str,
-    pg_data_type: str,
-    pg_udt_name: str,
-    pg_type_oid: int = 0
+    iris_type: str, pg_data_type: str, pg_udt_name: str, pg_type_oid: int = 0
 ) -> None:
     """
     Configure a custom type mapping.
@@ -160,15 +149,17 @@ def load_type_mappings_from_env() -> None:
     prefix = "PGWIRE_TYPE_MAP_"
     for key, value in os.environ.items():
         if key.startswith(prefix):
-            iris_type = key[len(prefix):]
+            iris_type = key[len(prefix) :]
             try:
-                parts = value.split(':')
+                parts = value.split(":")
                 if len(parts) >= 2:
                     pg_data_type = parts[0]
                     pg_udt_name = parts[1]
                     pg_type_oid = int(parts[2]) if len(parts) > 2 else 0
                     configure_type_mapping(iris_type, pg_data_type, pg_udt_name, pg_type_oid)
-                    logger.info(f"Loaded type mapping from env: {iris_type} → {pg_data_type}/{pg_udt_name}")
+                    logger.info(
+                        f"Loaded type mapping from env: {iris_type} → {pg_data_type}/{pg_udt_name}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to parse type mapping env var {key}={value}: {e}")
 
@@ -247,7 +238,7 @@ def dump_type_mappings_to_json(path: str | Path) -> None:
         }
     }
 
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         json.dump(config, f, indent=2)
 
     logger.info(f"Exported type mappings to {path}")
@@ -263,11 +254,13 @@ OID_TO_TYPE: dict[int, tuple[str, str]] = {
 }
 
 # Add PostgreSQL-specific types not in DEFAULT_TYPE_MAPPINGS
-OID_TO_TYPE.update({
-    1266: ('time with time zone', 'timetz'),      # TIMETZ
-    1560: ('bit', 'bit'),                         # BIT fixed-length
-    1562: ('bit varying', 'varbit'),              # BIT VARYING
-})
+OID_TO_TYPE.update(
+    {
+        1266: ("time with time zone", "timetz"),  # TIMETZ
+        1560: ("bit", "bit"),  # BIT fixed-length
+        1562: ("bit varying", "varbit"),  # BIT VARYING
+    }
+)
 
 
 def get_type_by_oid(type_oid: int) -> tuple[str, str] | None:

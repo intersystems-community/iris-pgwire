@@ -7,11 +7,11 @@ Provides translation, cache management, and diagnostic interfaces.
 Constitutional Compliance: High-performance API with sub-5ms response times.
 """
 
-import structlog
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, validator
 

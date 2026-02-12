@@ -23,10 +23,7 @@ class BIToolsDemo:
     async def setup_connection(self):
         """Setup PostgreSQL connection"""
         self.conn = await asyncpg.connect(
-            host='127.0.0.1',
-            port=5432,
-            user='test_user',
-            database='USER'
+            host="127.0.0.1", port=5432, user="test_user", database="USER"
         )
         print("✅ Connected to IRIS via PostgreSQL wire protocol")
 
@@ -38,7 +35,8 @@ class BIToolsDemo:
         print("\n📊 Creating business intelligence demo data...")
 
         # Sales data table
-        await self.conn.execute("""
+        await self.conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS sales_data (
                 id SERIAL PRIMARY KEY,
                 sale_date DATE,
@@ -53,10 +51,12 @@ class BIToolsDemo:
                 discount_percent DECIMAL(5,2),
                 customer_satisfaction DECIMAL(3,2)
             )
-        """)
+        """
+        )
 
         # Customer data table
-        await self.conn.execute("""
+        await self.conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS customer_data (
                 customer_id SERIAL PRIMARY KEY,
                 customer_name VARCHAR(100),
@@ -68,10 +68,12 @@ class BIToolsDemo:
                 acquisition_date DATE,
                 customer_lifetime_value DECIMAL(12,2)
             )
-        """)
+        """
+        )
 
         # Product performance with vectors
-        await self.conn.execute("""
+        await self.conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS product_analytics (
                 product_id SERIAL PRIMARY KEY,
                 product_name VARCHAR(100),
@@ -82,13 +84,20 @@ class BIToolsDemo:
                 market_position VARCHAR(20),
                 competitor_similarity DECIMAL(5,3)
             )
-        """)
+        """
+        )
 
         # Generate sample data
-        regions = ['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East & Africa']
-        categories = ['Software', 'Hardware', 'Services', 'Cloud Solutions', 'Analytics']
-        segments = ['Enterprise', 'SMB', 'Startup', 'Government', 'Education']
-        industries = ['Healthcare', 'Finance', 'Manufacturing', 'Retail', 'Technology']
+        regions = [
+            "North America",
+            "Europe",
+            "Asia Pacific",
+            "Latin America",
+            "Middle East & Africa",
+        ]
+        categories = ["Software", "Hardware", "Services", "Cloud Solutions", "Analytics"]
+        segments = ["Enterprise", "SMB", "Startup", "Government", "Education"]
+        industries = ["Healthcare", "Finance", "Manufacturing", "Retail", "Technology"]
 
         # Insert sales data
         sales_data = []
@@ -104,18 +113,31 @@ class BIToolsDemo:
             discount = random.uniform(0, 25)
             satisfaction = random.uniform(3.0, 5.0)
 
-            sales_data.append((
-                sale_date.date(), region, category, f"{category} Product {i%50}",
-                segment, f"Rep {i%20}", quantity, unit_price, total_amount,
-                discount, satisfaction
-            ))
+            sales_data.append(
+                (
+                    sale_date.date(),
+                    region,
+                    category,
+                    f"{category} Product {i%50}",
+                    segment,
+                    f"Rep {i%20}",
+                    quantity,
+                    unit_price,
+                    total_amount,
+                    discount,
+                    satisfaction,
+                )
+            )
 
-        await self.conn.executemany("""
+        await self.conn.executemany(
+            """
             INSERT INTO sales_data (sale_date, region, product_category, product_name,
                                   customer_segment, sales_rep, quantity, unit_price,
                                   total_amount, discount_percent, customer_satisfaction)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        """, sales_data)
+        """,
+            sales_data,
+        )
 
         # Insert customer data
         customer_data = []
@@ -125,18 +147,28 @@ class BIToolsDemo:
             employees = random.randint(10, 10000)
             clv = revenue * random.uniform(0.1, 0.5)
 
-            customer_data.append((
-                f"Customer {i}", f"Company {i}", random.choice(industries),
-                random.choice(['USA', 'UK', 'Germany', 'Japan', 'Canada', 'Australia']),
-                revenue, employees, acquisition.date(), clv
-            ))
+            customer_data.append(
+                (
+                    f"Customer {i}",
+                    f"Company {i}",
+                    random.choice(industries),
+                    random.choice(["USA", "UK", "Germany", "Japan", "Canada", "Australia"]),
+                    revenue,
+                    employees,
+                    acquisition.date(),
+                    clv,
+                )
+            )
 
-        await self.conn.executemany("""
+        await self.conn.executemany(
+            """
             INSERT INTO customer_data (customer_name, company, industry, country,
                                      annual_revenue, employee_count, acquisition_date,
                                      customer_lifetime_value)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        """, customer_data)
+        """,
+            customer_data,
+        )
 
         # Insert product analytics with vectors
         product_data = []
@@ -149,19 +181,27 @@ class BIToolsDemo:
             performance = random.uniform(0.1, 1.0)
             similarity = random.uniform(0.0, 1.0)
 
-            product_data.append((
-                f"Product {i}", random.choice(categories), launch.date(),
-                feature_vector, performance,
-                random.choice(['Leader', 'Challenger', 'Follower', 'Niche']),
-                similarity
-            ))
+            product_data.append(
+                (
+                    f"Product {i}",
+                    random.choice(categories),
+                    launch.date(),
+                    feature_vector,
+                    performance,
+                    random.choice(["Leader", "Challenger", "Follower", "Niche"]),
+                    similarity,
+                )
+            )
 
-        await self.conn.executemany("""
+        await self.conn.executemany(
+            """
             INSERT INTO product_analytics (product_name, category, launch_date,
                                          feature_vector, performance_score,
                                          market_position, competitor_similarity)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, product_data)
+        """,
+            product_data,
+        )
 
         print("✅ Business intelligence demo data created")
         self.demo_data_created = True
@@ -172,7 +212,8 @@ class BIToolsDemo:
         print("-" * 50)
 
         # Sales by region and time
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 region,
                 DATE_PART('year', sale_date) as year,
@@ -183,11 +224,13 @@ class BIToolsDemo:
             FROM sales_data
             GROUP BY region, year, month
             ORDER BY year, month, region
-        """)
+        """
+        )
         print(f"✓ Sales by Region/Time: {len(result)} data points")
 
         # Top products performance
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 product_category,
                 product_name,
@@ -199,11 +242,13 @@ class BIToolsDemo:
             GROUP BY product_category, product_name
             ORDER BY revenue DESC
             LIMIT 20
-        """)
+        """
+        )
         print(f"✓ Top Products Analysis: {len(result)} products")
 
         # Customer segment analysis
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 customer_segment,
                 AVG(total_amount) as avg_deal_size,
@@ -214,7 +259,8 @@ class BIToolsDemo:
             FROM sales_data
             GROUP BY customer_segment
             ORDER BY total_revenue DESC
-        """)
+        """
+        )
         print(f"✓ Customer Segment Analysis: {len(result)} segments")
 
     async def power_bi_style_queries(self):
@@ -223,7 +269,8 @@ class BIToolsDemo:
         print("-" * 50)
 
         # Year-over-year growth
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             WITH yearly_sales AS (
                 SELECT
                     DATE_PART('year', sale_date) as year,
@@ -243,11 +290,13 @@ class BIToolsDemo:
                 END as growth_percentage
             FROM yearly_sales
             ORDER BY year
-        """)
+        """
+        )
         print(f"✓ Year-over-Year Growth: {len(result)} years")
 
         # Sales rep performance ranking
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 sales_rep,
                 COUNT(*) as deals_closed,
@@ -259,11 +308,13 @@ class BIToolsDemo:
             FROM sales_data
             GROUP BY sales_rep
             ORDER BY total_revenue DESC
-        """)
+        """
+        )
         print(f"✓ Sales Rep Performance: {len(result)} representatives")
 
         # Customer lifetime value analysis
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 c.industry,
                 COUNT(*) as customer_count,
@@ -274,7 +325,8 @@ class BIToolsDemo:
             FROM customer_data c
             GROUP BY c.industry
             ORDER BY total_clv DESC
-        """)
+        """
+        )
         print(f"✓ Customer LTV Analysis: {len(result)} industries")
 
     async def qlik_style_queries(self):
@@ -283,7 +335,8 @@ class BIToolsDemo:
         print("-" * 50)
 
         # Dynamic filtering and associations
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 s.region,
                 s.product_category,
@@ -298,11 +351,13 @@ class BIToolsDemo:
             GROUP BY s.region, s.product_category, c.industry
             HAVING SUM(s.total_amount) > 10000
             ORDER BY revenue DESC
-        """)
+        """
+        )
         print(f"✓ Cross-dimensional Analysis: {len(result)} combinations")
 
         # Set analysis style queries
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             WITH high_performers AS (
                 SELECT sales_rep, SUM(total_amount) as total_sales
                 FROM sales_data
@@ -324,7 +379,8 @@ class BIToolsDemo:
             INNER JOIN high_performers hp ON s.sales_rep = hp.sales_rep
             GROUP BY s.product_category
             ORDER BY revenue_from_top_reps DESC
-        """)
+        """
+        )
         print(f"✓ Set Analysis (Top Performers): {len(result)} categories")
 
     async def vector_analytics_queries(self):
@@ -334,7 +390,8 @@ class BIToolsDemo:
 
         try:
             # Product similarity analysis
-            result = await self.conn.fetch("""
+            result = await self.conn.fetch(
+                """
                 SELECT
                     p1.product_name as product_a,
                     p2.product_name as product_b,
@@ -348,11 +405,13 @@ class BIToolsDemo:
                 AND p1.category = p2.category
                 ORDER BY similarity_score DESC
                 LIMIT 10
-            """)
+            """
+            )
             print(f"✓ Product Similarity Analysis: {len(result)} comparisons")
 
             # Market position clustering
-            result = await self.conn.fetch("""
+            result = await self.conn.fetch(
+                """
                 SELECT
                     market_position,
                     COUNT(*) as product_count,
@@ -364,7 +423,8 @@ class BIToolsDemo:
                 FROM product_analytics
                 GROUP BY market_position
                 ORDER BY avg_performance DESC
-            """)
+            """
+            )
             print(f"✓ Market Position Clustering: {len(result)} positions")
 
         except Exception as e:
@@ -377,16 +437,19 @@ class BIToolsDemo:
 
         try:
             # Create a simple ML model for sales prediction
-            await self.conn.execute("""
+            await self.conn.execute(
+                """
                 CREATE OR REPLACE MODEL sales_predictor
                 PREDICTING (total_amount)
                 FROM sales_data
-            """)
+            """
+            )
 
             await self.conn.execute("TRAIN MODEL sales_predictor")
 
             # Use ML predictions in BI queries
-            result = await self.conn.fetch("""
+            result = await self.conn.fetch(
+                """
                 SELECT
                     region,
                     product_category,
@@ -397,11 +460,13 @@ class BIToolsDemo:
                 GROUP BY region, product_category
                 HAVING COUNT(*) > 10
                 ORDER BY actual_avg_sales DESC
-            """)
+            """
+            )
             print(f"✓ ML-Enhanced Sales Analysis: {len(result)} segments")
 
             # Predictive customer segmentation
-            result = await self.conn.fetch("""
+            result = await self.conn.fetch(
+                """
                 SELECT
                     customer_segment,
                     AVG(PREDICT(sales_predictor)) as predicted_future_value,
@@ -410,7 +475,8 @@ class BIToolsDemo:
                 FROM sales_data
                 GROUP BY customer_segment
                 ORDER BY predicted_future_value DESC
-            """)
+            """
+            )
             print(f"✓ Predictive Customer Segmentation: {len(result)} segments")
 
         except Exception as e:
@@ -425,7 +491,8 @@ class BIToolsDemo:
 
         # Large aggregation query
         start = time.time()
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 region,
                 product_category,
@@ -441,13 +508,15 @@ class BIToolsDemo:
                 AVG(customer_satisfaction) as avg_satisfaction
             FROM sales_data
             GROUP BY region, product_category, customer_segment, year, month
-        """)
+        """
+        )
         duration = time.time() - start
         print(f"✓ Large Aggregation Query: {len(result)} groups in {duration:.2f}s")
 
         # Complex join performance
         start = time.time()
-        result = await self.conn.fetch("""
+        result = await self.conn.fetch(
+            """
             SELECT
                 s.region,
                 c.industry,
@@ -463,7 +532,8 @@ class BIToolsDemo:
             AND p.performance_score > 0.5
             GROUP BY s.region, c.industry, p.market_position
             LIMIT 100
-        """)
+        """
+        )
         duration = time.time() - start
         print(f"✓ Complex Multi-table Join: {len(result)} results in {duration:.2f}s")
 
@@ -491,22 +561,24 @@ class BIToolsDemo:
         print("✅ Enterprise-scale performance")
         print("\n🚀 IRIS data is now accessible to the entire BI ecosystem!")
 
+
 async def start_demo_server():
     """Start server for demo"""
     try:
         import sys
-        sys.path.append('src')
+
+        sys.path.append("src")
         from iris_pgwire.server import PGWireServer
 
         server = PGWireServer(
-            host='127.0.0.1',
+            host="127.0.0.1",
             port=5432,
-            iris_host='127.0.0.1',
+            iris_host="127.0.0.1",
             iris_port=1975,
-            iris_username='SuperUser',
-            iris_password='SYS',
-            iris_namespace='USER',
-            enable_ssl=False
+            iris_username="SuperUser",
+            iris_password="SYS",
+            iris_namespace="USER",
+            enable_ssl=False,
         )
 
         server_task = asyncio.create_task(server.start())
@@ -515,6 +587,7 @@ async def start_demo_server():
     except Exception as e:
         print(f"Server start failed: {e}")
         return None
+
 
 async def main():
     print("🔍 IRIS PostgreSQL Wire Protocol - BI Tools Demonstration")
@@ -530,6 +603,7 @@ async def main():
     finally:
         if server_task:
             server_task.cancel()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

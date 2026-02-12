@@ -42,14 +42,13 @@ class DatabaseSetup:
 
     def generate_vectors(self):
         """Generate test vectors (once, used for all databases)."""
-        print(f"🎲 Generating {self.dataset_size:,} test vectors ({self.dimensions}D)...", flush=True)
+        print(
+            f"🎲 Generating {self.dataset_size:,} test vectors ({self.dimensions}D)...", flush=True
+        )
         start = time.perf_counter()
 
         self.vectors = generate_test_vectors(
-            count=self.dataset_size,
-            dimensions=self.dimensions,
-            seed=self.seed,
-            normalize=True
+            count=self.dataset_size, dimensions=self.dimensions, seed=self.seed, normalize=True
         )
 
         elapsed = time.perf_counter() - start
@@ -62,7 +61,7 @@ class DatabaseSetup:
         port: int = 5433,
         database: str = "benchmark",
         username: str = "postgres",
-        password: str = "postgres"
+        password: str = "postgres",
     ) -> bool:
         """
         Setup PostgreSQL database with test data.
@@ -81,11 +80,7 @@ class DatabaseSetup:
 
         try:
             conn = psycopg.connect(
-                host=host,
-                port=port,
-                dbname=database,
-                user=username,
-                password=password
+                host=host, port=port, dbname=database, user=username, password=password
             )
 
             cursor = conn.cursor()
@@ -97,27 +92,34 @@ class DatabaseSetup:
 
             # Create main vectors table
             print(f"   Creating benchmark_vectors table (vector({self.dimensions}))...", flush=True)
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 CREATE TABLE benchmark_vectors (
                     id INTEGER PRIMARY KEY,
                     embedding vector({self.dimensions})
                 )
-            """)
+            """
+            )
 
             # Create metadata table for complex join queries
             print("   Creating benchmark_metadata table...", flush=True)
-            cursor.execute("""
+            cursor.execute(
+                """
                 CREATE TABLE benchmark_metadata (
                     vector_id INTEGER PRIMARY KEY REFERENCES benchmark_vectors(id),
                     label TEXT,
                     category TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """)
+            """
+            )
 
             # Insert vectors in batches
             batch_size = 1000
-            print(f"   Inserting {self.dataset_size:,} vectors (batch size: {batch_size})...", flush=True)
+            print(
+                f"   Inserting {self.dataset_size:,} vectors (batch size: {batch_size})...",
+                flush=True,
+            )
 
             start = time.perf_counter()
             for i in range(0, self.dataset_size, batch_size):
@@ -130,7 +132,9 @@ class DatabaseSetup:
                     values.append(f"({j}, '{vec_text}')")
 
                 # Execute batch insert
-                insert_sql = f"INSERT INTO benchmark_vectors (id, embedding) VALUES {','.join(values)}"
+                insert_sql = (
+                    f"INSERT INTO benchmark_vectors (id, embedding) VALUES {','.join(values)}"
+                )
                 cursor.execute(insert_sql)
 
                 # Insert corresponding metadata
@@ -151,17 +155,25 @@ class DatabaseSetup:
 
             # Create HNSW index (Constitutional Principle VI)
             if self.dataset_size >= 100000:
-                print("   Creating HNSW index (Constitutional Principle VI: ≥100K scale)...", flush=True)
+                print(
+                    "   Creating HNSW index (Constitutional Principle VI: ≥100K scale)...",
+                    flush=True,
+                )
                 start = time.perf_counter()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE INDEX benchmark_vectors_embedding_hnsw_idx
                     ON benchmark_vectors
                     USING hnsw (embedding vector_cosine_ops)
-                """)
+                """
+                )
                 elapsed = time.perf_counter() - start
                 print(f"   ✅ HNSW index created in {elapsed:.2f}s", flush=True)
             else:
-                print(f"   ⚠️  Dataset size ({self.dataset_size:,}) < 100K, skipping HNSW index", flush=True)
+                print(
+                    f"   ⚠️  Dataset size ({self.dataset_size:,}) < 100K, skipping HNSW index",
+                    flush=True,
+                )
 
             # Commit and verify
             conn.commit()
@@ -178,12 +190,7 @@ class DatabaseSetup:
             print(f"   ❌ PostgreSQL setup failed: {e}", flush=True)
             return False
 
-    def setup_iris_pgwire(
-        self,
-        host: str = None,
-        port: int = None,
-        database: str = "USER"
-    ) -> bool:
+    def setup_iris_pgwire(self, host: str = None, port: int = None, database: str = "USER") -> bool:
         """
         Setup IRIS via PGWire with test data.
 
@@ -206,12 +213,7 @@ class DatabaseSetup:
         print(f"\n📊 Setting up IRIS via PGWire ({host}:{port})...", flush=True)
 
         try:
-            conn = psycopg.connect(
-                host=host,
-                port=port,
-                dbname=database,
-                autocommit=True
-            )
+            conn = psycopg.connect(host=host, port=port, dbname=database, autocommit=True)
 
             cursor = conn.cursor()
 
@@ -221,17 +223,23 @@ class DatabaseSetup:
             cursor.execute("DROP TABLE IF EXISTS benchmark_vectors")
 
             # Create vectors table with IRIS VECTOR type
-            print(f"   Creating benchmark_vectors table (VECTOR(FLOAT, {self.dimensions}))...", flush=True)
-            cursor.execute(f"""
+            print(
+                f"   Creating benchmark_vectors table (VECTOR(FLOAT, {self.dimensions}))...",
+                flush=True,
+            )
+            cursor.execute(
+                f"""
                 CREATE TABLE benchmark_vectors (
                     id INTEGER PRIMARY KEY,
                     embedding VECTOR(FLOAT, {self.dimensions})
                 )
-            """)
+            """
+            )
 
             # Create metadata table
             print("   Creating benchmark_metadata table...", flush=True)
-            cursor.execute("""
+            cursor.execute(
+                """
                 CREATE TABLE benchmark_metadata (
                     vector_id INTEGER PRIMARY KEY,
                     label VARCHAR(255),
@@ -239,7 +247,8 @@ class DatabaseSetup:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT fk_vector FOREIGN KEY (vector_id) REFERENCES benchmark_vectors(id)
                 )
-            """)
+            """
+            )
 
             # Insert vectors (PGWire requires individual inserts, not batch)
             print(f"   Inserting {self.dataset_size:,} vectors (individual inserts)...", flush=True)
@@ -270,11 +279,13 @@ class DatabaseSetup:
             if self.dataset_size >= 100000:
                 print("   Creating HNSW index (Constitutional Principle VI)...", flush=True)
                 start = time.perf_counter()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE INDEX benchmark_vectors_embedding_hnsw_idx
                     ON benchmark_vectors(embedding)
                     AS HNSW(Distance='Cosine')
-                """)
+                """
+                )
                 elapsed = time.perf_counter() - start
                 print(f"   ✅ HNSW index created in {elapsed:.2f}s", flush=True)
 
@@ -291,12 +302,13 @@ class DatabaseSetup:
             # This releases IRIS table locks before DBAPI tries to connect
             print("   🔒 Releasing IRIS table locks (restarting PGWire)...", flush=True)
             import subprocess
+
             try:
                 subprocess.run(
                     ["docker", "restart", "pgwire-benchmark"],
                     capture_output=True,
                     check=True,
-                    timeout=10
+                    timeout=10,
                 )
                 time.sleep(3)  # Wait for PGWire to fully restart
             except Exception as e:
@@ -315,7 +327,7 @@ class DatabaseSetup:
         port: int = None,
         namespace: str = "USER",
         username: str = "_SYSTEM",
-        password: str = "SYS"
+        password: str = "SYS",
     ) -> bool:
         """
         Setup IRIS via DBAPI with test data.
@@ -344,11 +356,7 @@ class DatabaseSetup:
             print(f"\n📊 Setting up IRIS via DBAPI ({host}:{port})...", flush=True)
 
             conn = iris.connect(
-                hostname=host,
-                port=port,
-                namespace=namespace,
-                username=username,
-                password=password
+                hostname=host, port=port, namespace=namespace, username=username, password=password
             )
 
             cursor = conn.cursor()
@@ -370,7 +378,9 @@ class DatabaseSetup:
                 if vector_count == self.dataset_size and metadata_count == self.dataset_size:
                     print("   ✅ IRIS DBAPI using existing data from PGWire setup", flush=True)
                 else:
-                    raise ValueError(f"Data mismatch: expected {self.dataset_size} rows, found vectors={vector_count}, metadata={metadata_count}")
+                    raise ValueError(
+                        f"Data mismatch: expected {self.dataset_size} rows, found vectors={vector_count}, metadata={metadata_count}"
+                    )
 
             except Exception as e:
                 print(f"   ❌ Could not verify existing tables: {e}", flush=True)
@@ -394,9 +404,15 @@ def main():
     """CLI entry point for test data setup."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Setup identical test data across all three databases")
-    parser.add_argument("--dataset-size", type=int, default=100000, help="Number of vectors (default: 100000)")
-    parser.add_argument("--dimensions", type=int, default=1024, help="Vector dimensions (default: 1024)")
+    parser = argparse.ArgumentParser(
+        description="Setup identical test data across all three databases"
+    )
+    parser.add_argument(
+        "--dataset-size", type=int, default=100000, help="Number of vectors (default: 100000)"
+    )
+    parser.add_argument(
+        "--dimensions", type=int, default=1024, help="Vector dimensions (default: 1024)"
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--skip-postgres", action="store_true", help="Skip PostgreSQL setup")
     parser.add_argument("--skip-pgwire", action="store_true", help="Skip IRIS PGWire setup")
@@ -413,9 +429,7 @@ def main():
     print(flush=True)
 
     setup = DatabaseSetup(
-        dataset_size=args.dataset_size,
-        dimensions=args.dimensions,
-        seed=args.seed
+        dataset_size=args.dataset_size, dimensions=args.dimensions, seed=args.seed
     )
 
     # Generate vectors once
@@ -425,13 +439,13 @@ def main():
     results = {}
 
     if not args.skip_postgres:
-        results['postgresql'] = setup.setup_postgresql()
+        results["postgresql"] = setup.setup_postgresql()
 
     if not args.skip_pgwire:
-        results['iris_pgwire'] = setup.setup_iris_pgwire()
+        results["iris_pgwire"] = setup.setup_iris_pgwire()
 
     if not args.skip_dbapi:
-        results['iris_dbapi'] = setup.setup_iris_dbapi()
+        results["iris_dbapi"] = setup.setup_iris_dbapi()
 
     # Summary
     print("\n" + "=" * 70, flush=True)
@@ -446,7 +460,10 @@ def main():
 
     if all_success:
         print("\n✅ All databases setup successfully!", flush=True)
-        print(f"📊 Identical test data: {args.dataset_size:,} vectors ({args.dimensions}D)", flush=True)
+        print(
+            f"📊 Identical test data: {args.dataset_size:,} vectors ({args.dimensions}D)",
+            flush=True,
+        )
         return 0
     else:
         print("\n⚠️  Some databases failed setup - see errors above", flush=True)

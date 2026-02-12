@@ -72,9 +72,9 @@ class TestCacheInvalidateContract:
 
         invalidated_count = result.invalidated_count
         assert isinstance(invalidated_count, int), "invalidated_count should be integer"
-        assert invalidated_count == initial_count, (
-            f"Should invalidate all {initial_count} entries, got {invalidated_count}"
-        )
+        assert (
+            invalidated_count == initial_count
+        ), f"Should invalidate all {initial_count} entries, got {invalidated_count}"
 
         # Verify cache is now empty
         final_stats = populated_cache.get_stats()
@@ -102,9 +102,9 @@ class TestCacheInvalidateContract:
         final_stats = populated_cache.get_stats()
         final_count = final_stats.total_entries
         expected_remaining = initial_count - invalidated_count
-        assert final_count == expected_remaining, (
-            f"Should have {expected_remaining} entries remaining, got {final_count}"
-        )
+        assert (
+            final_count == expected_remaining
+        ), f"Should have {expected_remaining} entries remaining, got {final_count}"
 
     def test_invalidate_nonexistent_pattern(self, populated_cache):
         """Test invalidating with pattern that matches no entries"""
@@ -228,9 +228,9 @@ class TestCacheInvalidateIntegration:
 
         # Third translation - cache miss again
         result3 = translator.translate(ctx)
-        assert not result3.performance_stats.cache_hit, (
-            "Translation after invalidation should be cache miss"
-        )
+        assert (
+            not result3.performance_stats.cache_hit
+        ), "Translation after invalidation should be cache miss"
 
     def test_selective_invalidation_preserves_other_entries(self):
         """Test that pattern-based invalidation preserves non-matching entries"""
@@ -268,9 +268,9 @@ class TestCacheInvalidateIntegration:
         result3 = translator.translate(select_ctx)
         result4 = translator.translate(insert_ctx)
 
-        assert not result3.performance_stats.cache_hit, (
-            "SELECT should be cache miss after invalidation"
-        )
+        assert (
+            not result3.performance_stats.cache_hit
+        ), "SELECT should be cache miss after invalidation"
         assert result4.performance_stats.cache_hit, "INSERT should still be cached"
 
     def test_cache_invalidation_performance(self, populated_cache):
@@ -286,9 +286,9 @@ class TestCacheInvalidateIntegration:
         invalidation_time_ms = (time.perf_counter() - start_time) * 1000
 
         # Should complete quickly even with many entries
-        assert invalidation_time_ms < 100.0, (
-            f"Cache invalidation took {invalidation_time_ms}ms, should be < 100ms"
-        )
+        assert (
+            invalidation_time_ms < 100.0
+        ), f"Cache invalidation took {invalidation_time_ms}ms, should be < 100ms"
 
         # Verify all entries were invalidated
         invalidated_count = result.invalidated_count

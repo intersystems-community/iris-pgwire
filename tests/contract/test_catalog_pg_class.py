@@ -16,10 +16,9 @@ class TestPgClassTableEnumeration:
         When: Convert to pg_class row
         Then: Return PgClass with correct fields
         """
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
         from iris_pgwire.catalog.oid_generator import OIDGenerator
         from iris_pgwire.catalog.pg_class import PgClassEmulator
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
         oid_gen = OIDGenerator()
         emulator = PgClassEmulator(oid_gen)
@@ -36,9 +35,9 @@ class TestPgClassTableEnumeration:
 
     def test_get_by_oid(self):
         """Test lookup by OID."""
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
         from iris_pgwire.catalog.oid_generator import OIDGenerator
         from iris_pgwire.catalog.pg_class import PgClassEmulator
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
         oid_gen = OIDGenerator()
         emulator = PgClassEmulator(oid_gen)
@@ -59,9 +58,9 @@ class TestPgClassRelkindMapping:
 
     def test_relkind_base_table(self):
         """BASE TABLE -> 'r'"""
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
         from iris_pgwire.catalog.oid_generator import OIDGenerator
         from iris_pgwire.catalog.pg_class import PgClassEmulator
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
         emulator = PgClassEmulator(OIDGenerator())
         pg_class = emulator.from_iris_table("t", "BASE TABLE", IRIS_SCHEMA)
@@ -69,9 +68,9 @@ class TestPgClassRelkindMapping:
 
     def test_relkind_view(self):
         """VIEW -> 'v'"""
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
         from iris_pgwire.catalog.oid_generator import OIDGenerator
         from iris_pgwire.catalog.pg_class import PgClassEmulator
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
         emulator = PgClassEmulator(OIDGenerator())
         pg_class = emulator.from_iris_table("v", "VIEW", IRIS_SCHEMA)
@@ -79,9 +78,9 @@ class TestPgClassRelkindMapping:
 
     def test_relkind_index(self):
         """Test creating index entry."""
-        from iris_pgwire.schema_mapper import IRIS_SCHEMA
         from iris_pgwire.catalog.oid_generator import OIDGenerator
         from iris_pgwire.catalog.pg_class import PgClassEmulator
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
         emulator = PgClassEmulator(OIDGenerator())
         pg_class = emulator.create_index_entry(

@@ -68,12 +68,14 @@ class TestSchemaOutputTranslation:
         """Results should show 'public' instead of '{IRIS_SCHEMA}' in table_schema column."""
         cur = pgwire_connection.cursor()
         # Query all user tables - should return 'public' as table_schema
-        cur.execute("""
+        cur.execute(
+            """
             SELECT table_schema, table_name
             FROM information_schema.tables
             WHERE table_schema NOT LIKE '%'
             LIMIT 5
-        """)
+        """
+        )
         rows = cur.fetchall()
         # If there are user tables, their schema should be 'public'
         for row in rows:
@@ -95,12 +97,14 @@ class TestSchemaOutputTranslation:
     def test_system_schemas_unchanged(self, pgwire_connection):
         """System schemas like %SYS should remain unchanged."""
         cur = pgwire_connection.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT DISTINCT table_schema
             FROM information_schema.tables
             WHERE table_schema LIKE '%'
             LIMIT 5
-        """)
+        """
+        )
         rows = cur.fetchall()
         for row in rows:
             table_schema = row[0]

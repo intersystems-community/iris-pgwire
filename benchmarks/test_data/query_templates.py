@@ -16,6 +16,7 @@ from typing import Any
 
 class QueryCategory(Enum):
     """Query complexity categories per FR-002"""
+
     SIMPLE = "simple"
     VECTOR_SIMILARITY = "vector_similarity"
     COMPLEX_JOIN = "complex_join"
@@ -32,6 +33,7 @@ class QueryTemplate:
         template: SQL template (may differ by database method)
         description: Human-readable description
     """
+
     query_id: str
     category: QueryCategory
     description: str
@@ -50,7 +52,7 @@ SIMPLE_QUERIES = [
         description="Simple SELECT * with LIMIT",
         pgwire_template="SELECT * FROM benchmark_vectors LIMIT {limit}",
         postgres_template="SELECT * FROM benchmark_vectors LIMIT {limit}",
-        iris_template="SELECT TOP {limit} * FROM benchmark_vectors"
+        iris_template="SELECT TOP {limit} * FROM benchmark_vectors",
     ),
     QueryTemplate(
         query_id="simple_select_id",
@@ -58,7 +60,7 @@ SIMPLE_QUERIES = [
         description="Simple SELECT by ID",
         pgwire_template="SELECT * FROM benchmark_vectors WHERE id = {id}",
         postgres_template="SELECT * FROM benchmark_vectors WHERE id = {id}",
-        iris_template="SELECT * FROM benchmark_vectors WHERE id = {id}"
+        iris_template="SELECT * FROM benchmark_vectors WHERE id = {id}",
     ),
     QueryTemplate(
         query_id="simple_count",
@@ -66,7 +68,7 @@ SIMPLE_QUERIES = [
         description="Simple COUNT(*)",
         pgwire_template="SELECT COUNT(*) FROM benchmark_vectors",
         postgres_template="SELECT COUNT(*) FROM benchmark_vectors",
-        iris_template="SELECT COUNT(*) FROM benchmark_vectors"
+        iris_template="SELECT COUNT(*) FROM benchmark_vectors",
     ),
 ]
 
@@ -80,7 +82,7 @@ VECTOR_QUERIES = [
         description="Vector similarity with cosine distance",
         pgwire_template="SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
         postgres_template="SELECT id, embedding <=> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
-        iris_template="SELECT TOP {k} id, VECTOR_COSINE(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
+        iris_template="SELECT TOP {k} id, VECTOR_COSINE(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance",
     ),
     QueryTemplate(
         query_id="vector_l2_distance",
@@ -88,7 +90,7 @@ VECTOR_QUERIES = [
         description="Vector similarity with L2 distance",
         pgwire_template="SELECT id, VECTOR_L2(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
         postgres_template="SELECT id, embedding <-> '{vector}' AS distance FROM benchmark_vectors ORDER BY distance LIMIT {k}",
-        iris_template="SELECT TOP {k} id, VECTOR_L2(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance"
+        iris_template="SELECT TOP {k} id, VECTOR_L2(embedding, TO_VECTOR('{vector}', FLOAT)) AS distance FROM benchmark_vectors ORDER BY distance",
     ),
     QueryTemplate(
         query_id="vector_inner_product",
@@ -96,7 +98,7 @@ VECTOR_QUERIES = [
         description="Vector similarity with inner product",
         pgwire_template="SELECT id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT {k}",
         postgres_template="SELECT id, (embedding <#> '{vector}') * -1 AS similarity FROM benchmark_vectors ORDER BY similarity DESC LIMIT {k}",
-        iris_template="SELECT TOP {k} id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS similarity FROM benchmark_vectors ORDER BY similarity DESC"
+        iris_template="SELECT TOP {k} id, VECTOR_DOT_PRODUCT(embedding, TO_VECTOR('{vector}', FLOAT)) AS similarity FROM benchmark_vectors ORDER BY similarity DESC",
     ),
 ]
 
@@ -126,7 +128,7 @@ COMPLEX_QUERIES = [
             FROM benchmark_vectors v
             JOIN benchmark_metadata m ON v.id = m.vector_id
             WHERE m.label = '{label}'
-        """
+        """,
     ),
     QueryTemplate(
         query_id="vector_similarity_with_filter",
@@ -154,7 +156,7 @@ COMPLEX_QUERIES = [
             JOIN benchmark_metadata m ON v.id = m.vector_id
             WHERE m.category = '{category}'
             ORDER BY distance
-        """
+        """,
     ),
 ]
 

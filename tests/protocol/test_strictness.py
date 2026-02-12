@@ -1,15 +1,16 @@
-import sys
-import os
 import asyncio
+import os
 import struct
-import pytest
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
-from iris_pgwire.protocol import PGWireProtocol
 from iris_pgwire.iris_executor import IRISExecutor
-from tests.protocol.validator import StrictProtocolValidator, ProtocolError
+from iris_pgwire.protocol import PGWireProtocol
+from tests.protocol.validator import ProtocolError, StrictProtocolValidator
 
 
 class MockReader:

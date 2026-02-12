@@ -24,9 +24,8 @@ import psycopg
 import pytest
 import structlog
 
-import sys
-import os
 import iris_pgwire
+
 print(f"DIAGNOSTIC: sys.path = {sys.path}", file=sys.stderr)
 print(f"DIAGNOSTIC: iris_pgwire found at {iris_pgwire.__file__}", file=sys.stderr)
 
@@ -279,8 +278,8 @@ def iris_container(pytestconfig):
 
             # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
             try:
-                from iris_devtester.connections import get_connection
                 from iris_devtester.config import IRISConfig
+                from iris_devtester.connections import get_connection
 
                 config = iris.get_config()
                 for attempt in range(3):
@@ -743,6 +742,22 @@ def pgwire_client(pgwire_server, pgwire_connection_params):
                 logger.info("pgwire_client: Connection closed")
         except Exception as e:
             logger.warning("pgwire_client: Error closing connection", error=str(e))
+
+
+@pytest.fixture
+def sample_drizzle_migration() -> str:
+    """Provide a starter Drizzle CREATE TABLE statement for workflow."""
+
+    return (
+        "CREATE TABLE workflow ("
+        "\n    id text PRIMARY KEY,"
+        "\n    name text,"
+        "\n    user_id text,"
+        "\n    level integer,"
+        "\n    created_at timestamp,"
+        "\n    state text"
+        "\n)"
+    )
 
 
 # ============================================================================

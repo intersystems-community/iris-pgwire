@@ -181,24 +181,21 @@ def main():
     # Setup Path 1: PostgreSQL
     print("\n" + "=" * 60)
     postgres = PostgresExecutor(
-        host="localhost", port=5433,
-        username="postgres", password="postgres", database="benchmark"
+        host="localhost", port=5433, username="postgres", password="postgres", database="benchmark"
     )
     setup_postgres(postgres, vectors_by_dim)
 
     # Setup Path 2+3: IRIS (shared by DBAPI direct and PGWire-DBAPI)
     print("\n" + "=" * 60)
     iris_main = DbapiExecutor(
-        host="localhost", port=1974,
-        username="_SYSTEM", password="SYS", namespace="USER"
+        host="localhost", port=1974, username="_SYSTEM", password="SYS", namespace="USER"
     )
     setup_iris(iris_main, vectors_by_dim)
 
     # Setup Path 4: IRIS embedded (separate instance)
     print("\n" + "=" * 60)
     iris_embedded = DbapiExecutor(
-        host="localhost", port=1975,
-        username="_SYSTEM", password="SYS", namespace="USER"
+        host="localhost", port=1975, username="_SYSTEM", password="SYS", namespace="USER"
     )
     setup_iris(iris_embedded, vectors_by_dim)
 

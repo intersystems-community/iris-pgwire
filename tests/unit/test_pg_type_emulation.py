@@ -1,8 +1,10 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from iris_pgwire.catalog.catalog_router import CatalogRouter
-from iris_pgwire.catalog.pg_type import PgTypeEmulator
 from iris_pgwire.catalog.oid_generator import OIDGenerator
+from iris_pgwire.catalog.pg_type import PgTypeEmulator
 
 
 @pytest.mark.asyncio
