@@ -413,12 +413,30 @@ def provision_test_user(iris_config, pgwire_namespace):
             except ImportError as exc:
                 raise ImportError("IRIS DBAPI not available") from exc
 
+        # Always use _SYSTEM credentials for user provisioning
+        # iris_config may contain test_user credentials which don't have permission
+        host = iris_config["host"]
+        port = iris_config["port"]
+        username = "_SYSTEM"  # Force system credentials
+        password = "SYS"  # Force system password
+        print(
+            f"DEBUG: Connecting to IRIS: host={host}, port={port}, namespace=%SYS, username={username}"
+        )
+
         conn = iris.connect(
-            iris_config["host"],
-            iris_config["port"],
+            host,
+            port,
             "%SYS",
-            iris_config.get("username", "_SYSTEM"),
-            iris_config.get("password", "SYS"),
+            username,
+            password,
+        )
+
+        conn = iris.connect(
+            host,
+            port,
+            "%SYS",
+            username,
+            password,
         )
         iris_obj = iris.createIRIS(conn)
 
