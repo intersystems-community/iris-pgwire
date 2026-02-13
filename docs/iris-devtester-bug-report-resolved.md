@@ -1,3 +1,15 @@
+# [RESOLVED] Bug Report: IRIS Connection "Access Denied" in Fixture Context
+
+**Status**: ✅ RESOLVED in commit f085739
+
+**Root Cause**: Fixture was using credentials from `iris_config` which contained `test_user` credentials instead of `_SYSTEM`.
+
+**Fix**: Changed `provision_test_user` fixture to hardcode `_SYSTEM/SYS` credentials for user provisioning operations.
+
+---
+
+## Original Bug Report
+
 # Bug Report: IRIS Connection "Access Denied" in Fixture Context
 
 ## Environment

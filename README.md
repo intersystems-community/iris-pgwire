@@ -28,9 +28,15 @@
 ```bash
 git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
-docker-compose up -d
 
-# Test it works
+# Create persistent IRIS container (for development/testing)
+./scripts/create_persistent_container.sh
+
+# Start PGWire server
+export IRIS_HOST=localhost IRIS_PORT=21972 IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS IRIS_NAMESPACE=USER
+python -m iris_pgwire.server
+
+# Test it works (in another terminal)
 psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 ```
 
@@ -250,8 +256,11 @@ cd iris-pgwire
 # Install development dependencies
 uv sync --frozen
 
-# Start development environment
-docker-compose up -d
+# Create persistent IRIS test container
+./scripts/create_persistent_container.sh
+
+# Run tests (automatically starts PGWire server via fixtures)
+pytest tests/
 
 # Run tests
 pytest -v

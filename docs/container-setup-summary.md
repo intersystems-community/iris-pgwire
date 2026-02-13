@@ -48,23 +48,22 @@ container = IRISContainer.community(
 )
 ```
 
-### Test Infrastructure Status
-Client compatibility tests (`tests/client_compatibility/python/`) have issues:
-- Tests don't request `pgwire_server` fixture
-- Hardcoded to connect to localhost:5432
-- Require the PGWire server to be running separately
+### Test Infrastructure Status - ✅ COMPLETE
+Client compatibility tests (`tests/client_compatibility/python/`) now fully integrated:
+- ✅ Tests use `pgwire_server` fixture (starts PGWire on port 5434)
+- ✅ Dynamic connection via `pgwire_connection_params` fixture
+- ✅ `provision_test_user` fixture creates test_user per namespace
+- ✅ All tests use iris-devtester fixtures (no manual setup)
+- ✅ Verified working with iris-devtester 1.12.1
 
-This is a separate issue from container management and needs investigation of:
-1. Why tests don't use fixtures properly
-2. Whether there's missing test infrastructure
-3. How the PGWire server should be started for these tests
+**Key Implementation Detail**: The `provision_test_user` fixture uses hardcoded `_SYSTEM/SYS` credentials for user provisioning, not the credentials from `iris_config` (which may contain test_user credentials that lack provisioning permissions).
 
 ## 📋 Next Steps
 
-To run tests successfully:
-1. ✅ IRIS container is running (iris-pgwire-test on port 21972)
-2. ❌ Need to start PGWire server (or fix tests to use pgwire_server fixture)
-3. ❌ Tests need to use dynamic port/config instead of hardcoded values
+All major work complete! Optional enhancements:
+- Run full test suite to identify any slow tests
+- Add pytest markers for test categorization
+- Update remaining docs (CONTRIBUTING, etc.)
 
 ## 🎯 Usage
 

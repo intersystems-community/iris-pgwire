@@ -52,32 +52,49 @@ Each client should be tested for:
 
 ## Test Environment
 
-**IRIS PGWire Server**:
+**IRIS Container** (iris-devtester managed):
 - Host: localhost
-- Port: 5432
-- Database: USER
-- Username: test_user
-- Password: (varies by test)
+- Port: 21972 (host) → 1972 (container)
+- Container: iris-pgwire-test
+- Credentials: _SYSTEM / SYS
 
-**Docker Setup**:
+**PGWire Server** (started automatically by pytest fixtures):
+- Host: localhost
+- Port: 5434 (default, configurable via `PGWIRE_PORT`)
+- Database: USER (or test-specific namespace)
+- Username: test_user (provisioned automatically)
+- Password: test
+
+**Setup**:
 ```bash
-# Start IRIS and PGWire server
-docker-compose up -d
+# Create persistent IRIS container (one-time)
+./scripts/create_persistent_container.sh
 
-# Verify server is running
-psql -h localhost -p 5432 -U test_user -d USER -c "SELECT 1"
+# Install dependencies
+pip install -e ".[test]"
 ```
 
 ## Running Tests
 
-### JDBC (Java)
+### Python Tests
 ```bash
-cd tests/client_compatibility/jdbc
-./gradlew test
+# Run all Python client compatibility tests
+pytest tests/client_compatibility/python/ -v
+
+# Run specific test file
+pytest tests/client_compatibility/python/test_psycopg_basic.py -v
+
+# Run specific test
+pytest tests/client_compatibility/python/test_psycopg_basic.py::TestPsycopgBasicConnection::test_connection_establishment -v
 ```
 
-### Npgsql (.NET)
-```bash
+**Note**: Tests use iris-devtester fixtures that automatically:
+1. Attach to the iris-pgwire-test container
+2. Start the PGWire server on port 5434
+3. Provision test_user with namespace access
+4. Provide dynamic connection parameters
+
+No manual docker-compose or PGWire server startup required!
 cd tests/client_compatibility/dotnet
 dotnet test
 ```
