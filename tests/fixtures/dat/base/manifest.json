@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "schema_version": "1.0",
   "description": "Base schema + rows from examples/superset-iris-healthcare and benchmarks",
-  "created_at": "2026-01-25T21:30:39.211538+00:00Z",
+  "created_at": "2026-02-18T19:23:33.978230+00:00Z",
   "iris_version": "unknown",
-  "namespace": "FIXTURE_6559B0CF",
+  "namespace": "FIXTURE_4249DBF0",
   "dat_file": "IRIS.DAT",
-  "checksum": "sha256:9f07629e631ba3473a33b350b81dc9bbdd79d29b27888055cbe8fb71648651c2",
+  "checksum": "sha256:dcc00201a449521cf35482861709a353b2b1f23a310e862db72f8bfbc0f35e34",
   "tables": [
     {
       "name": "SQLUser.LabResults",

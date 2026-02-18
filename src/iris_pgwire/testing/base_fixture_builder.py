@@ -10,15 +10,12 @@ import csv
 import json
 import random
 import re
-import subprocess
-import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from iris_devtester.config import IRISConfig
 from iris_devtester.connections import get_connection
 from iris_devtester.fixtures.creator import FixtureCreator
-from iris_devtester.utils.password import unexpire_all_passwords
 
 
 def ensure_base_fixture(
@@ -59,78 +56,19 @@ def restore_fixture(
     validate: bool = True,
 ) -> None:
     """
-    Restore a DAT fixture into a target namespace with optional verification.
+    Restore a fixture into a target namespace using iris-devtester's FixtureLoader.
+
+    The fixture must be in the current iris-devtester format (globals.gof + manifest.json).
+    Legacy fixtures with only IRIS.DAT are not supported.
     """
-    manifest_path = fixture_dir / "manifest.json"
-    dat_file_path = fixture_dir / "IRIS.DAT"
-    if not manifest_path.exists() or not dat_file_path.exists():
-        raise FileNotFoundError(f"Fixture files missing in {fixture_dir}")
+    from iris_devtester.fixtures.loader import FixtureLoader
 
-    manifest = json.loads(manifest_path.read_text())
-    table_names = [t["name"] for t in manifest.get("tables", [])]
-
-    container_name = container.get_container_name()
-    container_dat_path = f"/tmp/RESTORE_{target_namespace}.DAT"
-
-    refresh_script = f"""
- Set nsName = "{target_namespace}"
- If ##class(Config.Namespaces).Exists(nsName,.obj) Do ##class(Config.Namespaces).Delete(nsName)
- If ##class(Config.Databases).Exists(nsName,.obj) Do ##class(Config.Databases).Delete(nsName)
-"""
-
-    subprocess.run(
-        ["docker", "cp", str(dat_file_path), f"{container_name}:{container_dat_path}"],
-        check=True,
-        capture_output=True,
-        text=True,
+    loader = FixtureLoader(container=container)
+    loader.load_fixture(
+        fixture_path=str(fixture_dir),
+        target_namespace=target_namespace,
+        validate_checksum=False,
     )
-
-    objectscript = f"""
- {refresh_script}
- Set sc = ##class(SYS.Database).RestoreNamespace("{target_namespace}", "{container_dat_path}")
- If $$$ISOK(sc) Write "SUCCESS" Else Write "FAILED:",$System.Status.GetErrorText(sc)
- Halt
- """
-    result = subprocess.run(
-        ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "%SYS"],
-        input=objectscript.encode("utf-8"),
-        capture_output=True,
-        timeout=60,
-        check=False,
-    )
-
-    stdout = result.stdout.decode("utf-8", errors="replace")
-    if "SUCCESS" not in stdout:
-        raise RuntimeError(f"Fixture restore failed: {stdout}")
-
-    unexpire_all_passwords(container_name, timeout=60)
-    time.sleep(2)
-
-    if not validate:
-        return
-
-    config = container.get_config()
-    conn = get_connection(
-        IRISConfig(
-            host=config.host,
-            port=config.port,
-            namespace=target_namespace,
-            username=config.username,
-            password=config.password,
-            container_name=container_name,
-        )
-    )
-    try:
-        cursor = conn.cursor()
-        for table_name in table_names:
-            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-            cursor.fetchone()
-    finally:
-        try:
-            cursor.close()
-        except Exception:
-            pass
-        conn.close()
 
 
 def create_base_fixture(

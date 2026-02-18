@@ -1792,9 +1792,14 @@ class PGWireProtocol:
 
                             # Parse IRIS timestamp string
                             if isinstance(value, str):
-                                timestamp_obj = datetime.datetime.strptime(
-                                    value, "%Y-%m-%d %H:%M:%S"
-                                )
+                                for _fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                                    try:
+                                        timestamp_obj = datetime.datetime.strptime(value, _fmt)
+                                        break
+                                    except ValueError:
+                                        continue
+                                else:
+                                    raise ValueError(f"Cannot parse timestamp string: {value!r}")
                             elif isinstance(value, datetime.datetime):
                                 timestamp_obj = value
                             else:
@@ -2977,7 +2982,14 @@ class PGWireProtocol:
 
                 if has_returning and not (is_select or is_show):
                     columns_info, resolved = await self._resolve_returning_columns(plan)
-                    if resolved and columns_info:
+                    # Only send RowDescription if schema lookup succeeded for all columns.
+                    # Defer to Execute-phase if any column still has OID 25 (text fallback).
+                    all_typed = (
+                        resolved
+                        and columns_info
+                        and all(col.get("type_oid", 25) != 25 for col in columns_info)
+                    )
+                    if all_typed:
                         await self.send_row_description(columns_info)
                         stmt["needs_row_description"] = False
                         logger.info(
@@ -2988,8 +3000,8 @@ class PGWireProtocol:
                         )
                     else:
                         stmt["needs_row_description"] = True
-                        logger.warning(
-                            "🔍 Describe Statement: RETURNING * unresolved, deferring to Execute",
+                        logger.info(
+                            "🔍 Describe Statement: RETURNING type lookup incomplete, deferring to Execute",
                             connection_id=self.connection_id,
                             statement_name=name,
                             plan_table=plan.table,
@@ -3121,7 +3133,18 @@ class PGWireProtocol:
                     try:
                         if has_returning and not is_select:
                             columns_info, resolved = await self._resolve_returning_columns(plan)
-                            if resolved and columns_info:
+                            # Only send RowDescription during Describe if schema lookup
+                            # succeeded for all columns (OIDs are not generic TEXT=25).
+                            # If any column has OID 25 (text fallback), defer to Execute
+                            # so the Execute-phase result (which has the real data) can
+                            # send a RowDescription with correct OIDs. This prevents
+                            # psycopg from using the wrong Describe-phase OID to decode values.
+                            all_typed = (
+                                resolved
+                                and columns_info
+                                and all(col.get("type_oid", 25) != 25 for col in columns_info)
+                            )
+                            if all_typed:
                                 logger.info(
                                     "🔍 Describe Portal: Sending synthetic RowDescription for RETURNING",
                                     connection_id=self.connection_id,
@@ -3135,9 +3158,11 @@ class PGWireProtocol:
                                 return
 
                             logger.info(
-                                "🔍 Describe Portal: RETURNING * unresolved, deferring to Execute",
+                                "🔍 Describe Portal: RETURNING type lookup incomplete, deferring to Execute",
                                 connection_id=self.connection_id,
                                 portal_name=name,
+                                resolved=resolved,
+                                columns_info=columns_info,
                             )
                             portal["needs_row_description"] = True
                             await self.send_no_data()
@@ -3188,12 +3213,12 @@ class PGWireProtocol:
             expanded = await self._expand_returning_star_columns(plan)
             if not expanded:
                 return None, False
-            return self._build_returning_column_info(expanded, plan), True
+            return await self._build_returning_column_info(expanded, plan), True
 
         columns = plan.columns if isinstance(plan.columns, list) else [plan.columns]
-        return self._build_returning_column_info(columns, plan), True
+        return await self._build_returning_column_info(columns, plan), True
 
-    def _build_returning_column_info(
+    async def _build_returning_column_info(
         self, column_names: list[str], plan: ReturningPlan
     ) -> list[dict[str, Any]]:
         columns_info: list[dict[str, Any]] = []
@@ -3209,10 +3234,28 @@ class PGWireProtocol:
             else:
                 label = str(label).lower()
 
+            # Look up column type from schema so RowDescription OID is correct.
+            # This is critical for Extended Protocol: psycopg uses the Describe-phase
+            # RowDescription OID to decode values — if we send OID 25 (text) here,
+            # psycopg will decode TIMESTAMP values as plain strings even when the
+            # Execute-phase result correctly marks them as OID 1114.
+            type_oid = 25  # Default to TEXT
+            if plan.table and hasattr(self.iris_executor, "_get_column_type_from_schema"):
+                try:
+                    looked_up = await asyncio.to_thread(
+                        self.iris_executor._get_column_type_from_schema,
+                        plan.table,
+                        label,
+                    )
+                    if looked_up is not None:
+                        type_oid = looked_up
+                except Exception:
+                    pass  # Fall back to TEXT (25)
+
             columns_info.append(
                 {
                     "name": label,
-                    "type_oid": 25,
+                    "type_oid": type_oid,
                     "type_size": -1,
                     "type_modifier": -1,
                     "format_code": 0,
