@@ -339,9 +339,12 @@ def iris_config(iris_container) -> dict[str, Any]:
                 logger.warning("Failed to get config from iris-devtester container", error=str(e))
 
         # Fallback/Direct access to iris_container attributes
-        if hasattr(iris_container, "username"):
+        # Only use attribute-based username/password if get_config() didn't already set them.
+        # iris_container.username/password are iris-devtester internal credentials ("test"/"test")
+        # which do NOT exist as IRIS security users and must NOT override _SYSTEM from get_config().
+        if not config_from_devtester and hasattr(iris_container, "username"):
             config_dict["username"] = iris_container.username
-        if hasattr(iris_container, "password"):
+        if not config_from_devtester and hasattr(iris_container, "password"):
             config_dict["password"] = iris_container.password
         if not config_from_devtester and hasattr(iris_container, "get_container_host_ip"):
             config_dict["host"] = iris_container.get_container_host_ip()
@@ -526,13 +529,12 @@ def load_base_fixture(iris_container, base_dat_fixture, pgwire_namespace):
 
 
 @pytest.fixture
-def iris_connection(iris_container, iris_config):
+def iris_connection(iris_container, iris_config, pgwire_namespace):
     """
-    Provide a DBAPI connection to IRIS with auto-remediation.
-    Uses iris-devtester's high-level container connection method which handles:
-    - Auto-retry on transient failures
-    - Password change requirement (proactive reset)
-    - CallIn service enablement
+    Provide a DBAPI connection to IRIS in the test namespace (pgwire_namespace).
+
+    Tests use iris_connection to set up tables and data directly via DBAPI,
+    then query via pgwire_client. Both must operate in the same namespace.
     """
     if not HAS_DEVTESTER or not iris_container:
         # Fallback to standard DBAPI connection if devtester not available
@@ -555,9 +557,17 @@ def iris_connection(iris_container, iris_config):
         return
 
     try:
-        # Use IRISContainer.get_connection() which is the intended "high-level" API
-        # It handles proactive password reset and CallIn enablement.
-        conn = iris_container.get_connection()
+        # Connect to the pgwire_namespace so tables created here are visible
+        # to the PGWire server which also operates in pgwire_namespace.
+        import iris as iris_module
+
+        conn = iris_module.connect(
+            iris_config["host"],
+            iris_config["port"],
+            pgwire_namespace,
+            iris_config["username"],
+            iris_config["password"],
+        )
         logger.info("IRIS connection established via iris-devtester high-level API")
         yield conn
         # Let iris-devtester manage the connection lifecycle if needed,

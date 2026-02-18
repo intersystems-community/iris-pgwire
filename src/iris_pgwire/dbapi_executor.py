@@ -23,6 +23,10 @@ import structlog
 
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
+from iris_pgwire.iris_executor import (  # noqa: F401 — shared constants
+    POSIXTIME_MAX,
+    POSIXTIME_OFFSET,
+)
 from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
@@ -137,16 +141,35 @@ class DBAPIExecutor:
 
     def _convert_value_for_iris(self, value: Any) -> Any:
         """Helper to convert a single value."""
-        if isinstance(value, str):
+        if isinstance(value, dt.datetime):
+            # datetime MUST be checked before date (datetime is a subclass of date)
+            if value.tzinfo is not None:
+                value = value.astimezone(dt.UTC).replace(tzinfo=None)
+            return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+        elif isinstance(value, dt.date):
+            return value.strftime("%Y-%m-%d")
+        elif isinstance(value, str):
             # Check for ISO 8601 timestamp: 2026-01-29T21:27:38.111Z
-            # or 2026-01-29T21:27:38.111+00:00
+            # or 2026-01-29T21:27:38.111+05:30
             # IRIS rejects the 'T' and 'Z' or offset in %PosixTime/TIMESTAMP
             ts_match = re.match(
-                r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?(\d{2})?)?$",
+                r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+                r"(Z|([+-])(\d{2}):?(\d{2}))?$",
                 value,
             )
             if ts_match:
-                return f"{ts_match.group(1)} {ts_match.group(2)}"
+                date_part, time_part = ts_match.group(1), ts_match.group(2)
+                tz_sign, tz_hh, tz_mm = ts_match.group(4), ts_match.group(5), ts_match.group(6)
+                if tz_sign and tz_hh:
+                    # Non-UTC offset: convert to UTC
+                    offset_mins = (int(tz_hh) * 60 + int(tz_mm or 0)) * (
+                        1 if tz_sign == "+" else -1
+                    )
+                    fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in time_part else "%Y-%m-%d %H:%M:%S"
+                    naive = dt.datetime.strptime(f"{date_part} {time_part}", fmt)
+                    utc = naive - dt.timedelta(minutes=offset_mins)
+                    return utc.strftime(fmt)
+                return f"{date_part} {time_part}"
         return value
 
     async def execute_query(

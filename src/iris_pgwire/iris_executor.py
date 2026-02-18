@@ -503,15 +503,11 @@ class IRISExecutor:
         elif isinstance(value, dt.date):
             return 1082
         elif isinstance(value, str):
-            # Check for UUID pattern
-            uuid_pattern = (
-                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-            )
-            if re.match(uuid_pattern, value):
-                return 2950  # UUID
-
-            # Explicitly return VARCHAR (1043) for all other strings
-            # Feature 036 fix: Avoid mapping to INT4 or other types even if numeric
+            # Explicitly return VARCHAR (1043) for all strings.
+            # Feature 036 fix: Avoid mapping to INT4 or other types even if numeric.
+            # UUID detection removed: a UUID-looking string in a VARCHAR column should
+            # remain VARCHAR. The correct UUID OID comes from _get_column_type_from_schema
+            # when the column is declared as UUID type in the schema.
             return 1043  # VARCHAR
         else:
             return 1043  # Default to VARCHAR
@@ -525,9 +521,11 @@ class IRISExecutor:
             return None
 
         # OID 1114 = TIMESTAMP
+        # PostgreSQL text wire format for TIMESTAMP is "YYYY-MM-DD HH:MM:SS.ffffff"
+        # (space separator, no trailing Z/timezone — psycopg TimestampLoader requires this)
         if type_oid == 1114:
             if isinstance(value, int):
-                # Convert IRIS/PostgreSQL microsecond integer to ISO8601 string
+                # Convert IRIS/PostgreSQL microsecond integer to PostgreSQL text format
                 try:
                     if value >= POSIXTIME_OFFSET:
                         # IRIS POSIXTIME (microseconds since 1970-01-01)
@@ -539,12 +537,33 @@ class IRISExecutor:
                         epoch = dt.datetime(2000, 1, 1)
                         ts_obj = epoch + dt.timedelta(microseconds=value)
 
-                    # Return ISO8601 string preferred by node-postgres and other clients
-                    return ts_obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    # PostgreSQL wire text format: space separator, no timezone suffix
+                    return ts_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
                 except Exception:
                     return value
             elif isinstance(value, dt.datetime):
-                return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+            elif isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    # POSIXTIME encoded as digit string — correct formula (NOT // 10**9)
+                    unix_us = int(stripped) - POSIXTIME_OFFSET
+                    ts_obj = dt.datetime(1970, 1, 1) + dt.timedelta(microseconds=unix_us)
+                    return ts_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
+                else:
+                    # Pre-decoded datetime string from IRIS driver — parse and reformat
+                    for fmt in (
+                        "%Y-%m-%d %H:%M:%S.%f",
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S.%f",
+                        "%Y-%m-%dT%H:%M:%S",
+                    ):
+                        try:
+                            ts_obj = dt.datetime.strptime(stripped.rstrip("Z"), fmt)
+                            return ts_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
+                        except ValueError:
+                            continue
+                    return value  # unrecognised format — pass through unchanged
 
         # OID 1082 = DATE
         if type_oid == 1082 and isinstance(value, int):
@@ -756,7 +775,14 @@ class IRISExecutor:
 
         new_params = list(params)
         for i, param in enumerate(new_params):
-            if isinstance(param, int) and MIN_TIMESTAMP < param < MAX_TIMESTAMP:
+            if isinstance(param, dt.datetime):
+                # datetime MUST be checked before date (datetime is a subclass of date)
+                if param.tzinfo is not None:
+                    param = param.astimezone(dt.UTC).replace(tzinfo=None)
+                new_params[i] = param.strftime("%Y-%m-%d %H:%M:%S.%f")
+            elif isinstance(param, dt.date):
+                new_params[i] = param.strftime("%Y-%m-%d")
+            elif isinstance(param, int) and MIN_TIMESTAMP < param < MAX_TIMESTAMP:
                 # PostgreSQL timestamp in microseconds
                 try:
                     timestamp_obj = PG_EPOCH + dt.timedelta(microseconds=param)
@@ -778,11 +804,24 @@ class IRISExecutor:
                 # FR-004: Normalize ISO 8601 timestamp strings for IRIS
                 # Handles: YYYY-MM-DD[T ]HH:MM:SS[.fff][Z|[+-]HH:MM]
                 ts_match = re.match(
-                    r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:?(\d{2})?)?$",
+                    r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+                    r"(Z|([+-])(\d{2}):?(\d{2}))?$",
                     param,
                 )
                 if ts_match:
-                    new_params[i] = f"{ts_match.group(1)} {ts_match.group(2)}"
+                    date_part, time_part = ts_match.group(1), ts_match.group(2)
+                    tz_sign, tz_hh, tz_mm = ts_match.group(4), ts_match.group(5), ts_match.group(6)
+                    if tz_sign and tz_hh:
+                        # Non-UTC offset: convert to UTC
+                        offset_mins = (int(tz_hh) * 60 + int(tz_mm or 0)) * (
+                            1 if tz_sign == "+" else -1
+                        )
+                        fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in time_part else "%Y-%m-%d %H:%M:%S"
+                        naive = dt.datetime.strptime(f"{date_part} {time_part}", fmt)
+                        utc = naive - dt.timedelta(minutes=offset_mins)
+                        new_params[i] = utc.strftime(fmt)
+                    else:
+                        new_params[i] = f"{date_part} {time_part}"
                     logger.debug(
                         "Normalized ISO timestamp parameter",
                         original=param,
@@ -1870,6 +1909,12 @@ class IRISExecutor:
 
             # Build/Fix metadata
             if meta is None or not any("type_oid" in c for c in meta if isinstance(c, dict)):
+                # cursor_meta holds the raw cursor.description from _fetch_results.
+                # It is a sequence of 7-tuples: (name, type_code, ...).
+                # Use type_code via _iris_type_to_pg_oid as a reliable fallback
+                # before _infer_type_from_value, which can misidentify value types
+                # (e.g. IRIS returning "12345" as int for a VARCHAR column).
+                cursor_meta = meta  # raw cursor.description before we rebuild it
                 column_defs = plan.column_meta or []
                 if column_defs:
                     new_meta = []
@@ -1878,6 +1923,11 @@ class IRISExecutor:
                         col_oid = self._get_column_type_from_schema(
                             table, col_name, session_id=session_id
                         )
+                        if col_oid is None and cursor_meta and idx < len(cursor_meta):
+                            # Use IRIS cursor type_code (element [1] of description tuple)
+                            type_code = cursor_meta[idx][1] if len(cursor_meta[idx]) > 1 else None
+                            if type_code is not None:
+                                col_oid = self._iris_type_to_pg_oid(type_code)
                         if col_oid is None and rows and idx < len(rows[0]):
                             col_oid = self._infer_type_from_value(rows[0][idx], col_name)
                         new_meta.append(
@@ -1906,8 +1956,13 @@ class IRISExecutor:
                         col_oid = self._get_column_type_from_schema(
                             table, col_name, session_id=session_id
                         )
+                        if col_oid is None and cursor_meta and i < len(cursor_meta):
+                            # Use IRIS cursor type_code (element [1] of description tuple)
+                            type_code = cursor_meta[i][1] if len(cursor_meta[i]) > 1 else None
+                            if type_code is not None:
+                                col_oid = self._iris_type_to_pg_oid(type_code)
                         if col_oid is None and rows:
-                            # Fallback to inference from value
+                            # Last resort: infer from value
                             col_oid = self._infer_type_from_value(rows[0][i], col_name)
 
                         new_meta.append(
@@ -3934,6 +3989,14 @@ class IRISExecutor:
                 12: 1043,  # varchar
                 16: 16,  # bool
                 17: 17,  # bytea
+                # Standard JDBC type codes (IRIS also returns these)
+                91: 1082,  # JDBC DATE → pg date
+                92: 1083,  # JDBC TIME → pg time
+                93: 1114,  # JDBC TIMESTAMP → pg timestamp
+                # IRIS extended type codes (returned for TIMESTAMP/POSIXTIME columns)
+                1091: 1082,  # IRIS extended DATE → pg date
+                1092: 1083,  # IRIS extended TIME → pg time
+                1093: 1114,  # IRIS extended TIMESTAMP → pg timestamp
             }
             return int_type_mapping.get(iris_type, 1043)  # Default to VARCHAR
 
