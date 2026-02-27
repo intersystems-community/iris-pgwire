@@ -1,0 +1,35 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+        name: Detect private keys
+
+  - repo: local
+    hooks:
+      - id: block-sensitive-files
+        name: Block sensitive files (license keys, certs, credentials)
+        language: fail
+        files: >
+          (?x)(
+            \.key$|
+            \.pem$|
+            \.p12$|
+            \.pfx$|
+            \.jks$|
+            \.keystore$|
+            \.cer$|
+            \.crt$|
+            iris\.key|
+            (^|/)\.env$|
+            (^|/)\.env\..+|
+            (^|/)secrets\.(json|yaml|yml|toml|ini|cfg)$|
+            credentials\.json|
+            service_account.*\.json
+          )
+        exclude: >
+          (?x)^(
+            tests/client_compatibility/.*/vendor/.*
+          )$
+        entry: "BLOCKED: Sensitive file detected. Remove this file and add it to .gitignore before committing."
+

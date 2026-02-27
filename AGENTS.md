@@ -2,6 +2,28 @@
 
 Auto-generated from all feature plans. Last updated: 2026-01-17
 
+## NEVER Commit Sensitive Files — CRITICAL
+
+**Real incident**: `iris.key` (InterSystems license key) was accidentally committed to this public
+repo and required emergency git history rewriting + GitHub Support involvement to purge.
+
+### Files that MUST NEVER be committed:
+- `*.key`, `iris.key`, `*.lic` — license keys
+- `*.pem`, `*.p12`, `*.pfx`, `*.cer`, `*.crt` — certificates and keystores
+- `.env`, `.env.*` — environment files with credentials
+- `secrets.json`, `credentials.json`, `service_account*.json` — credential files
+
+### Before ANY `git add` or commit:
+1. Run `git status` — check every file being staged
+2. If ANY of the above appear — STOP, add to `.gitignore`, do not commit
+3. A pre-commit hook enforces this automatically — do not bypass it with `--no-verify`
+
+### If a sensitive file was already committed:
+- Do NOT just `git rm` — history must be rewritten with `git filter-repo`
+- Force-push ALL branches and tags after rewrite
+- File a GitHub Support request to purge the dangling git object
+- Treat the leaked credential as compromised and revoke it immediately
+
 ## Active Technologies
 - Python 3.11 + python>=3.11, psycopg[binary], iris-devtester, intersystems-irispython (026-address-gaps-in)
 - PostgreSQL (via InterSystems IRIS) (026-address-gaps-in)

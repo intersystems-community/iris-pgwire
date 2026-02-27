@@ -465,7 +465,7 @@ Write ##class(%IRIS.Wallet).GetSecret("test-secret")
 
 # 3. Verify secret exists
 Set rs = ##class(%SQL.Statement).%ExecDirect(,
-  "SELECT SecretName FROM %IRIS.Wallet_Secrets WHERE SecretName = 'test-secret'")
+  "SELECT SecretName FROM %IRIS.Wallet_Secrets WHERE SecretName = 'test-secret'")  # pragma: allowlist secret
 Write rs.%Next()  ; Should return 1
 
 # 4. Clean up
