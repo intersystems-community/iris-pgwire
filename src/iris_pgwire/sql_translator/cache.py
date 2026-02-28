@@ -8,6 +8,7 @@ Constitutional Compliance: Sub-millisecond cache operations supporting 5ms SLA.
 """
 
 import hashlib
+import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -170,6 +171,25 @@ class TranslationCache:
                 if timer.elapsed_ms > 1.0:  # 1ms threshold for cache operations
                     self._sla_violations += 1
 
+    def _invalidate_all_entries(self) -> int:
+        """Helper to remove all cache entries"""
+        count = len(self._cache)
+        self._cache.clear()
+        return count
+
+    def _invalidate_with_pattern(self, pattern: str) -> int:
+        """Helper to remove entries matching a pattern"""
+        keys_to_remove = [
+            key
+            for key, entry in self._cache.items()
+            if self._matches_pattern(entry.original_sql, pattern)
+        ]
+
+        for key in keys_to_remove:
+            del self._cache[key]
+
+        return len(keys_to_remove)
+
     def invalidate(self, pattern: str | None = None) -> InvalidationResult:
         """
         Invalidate cache entries
@@ -183,24 +203,10 @@ class TranslationCache:
         """
         with PerformanceTimer():
             with self._lock:
-                len(self._cache)
-
                 if pattern is None:
-                    # Invalidate all entries
-                    invalidated_count = len(self._cache)
-                    self._cache.clear()
+                    invalidated_count = self._invalidate_all_entries()
                 else:
-                    # Selective invalidation based on pattern
-                    keys_to_remove = []
-
-                    for key, entry in self._cache.items():
-                        if self._matches_pattern(entry.original_sql, pattern):
-                            keys_to_remove.append(key)
-
-                    for key in keys_to_remove:
-                        del self._cache[key]
-
-                    invalidated_count = len(keys_to_remove)
+                    invalidated_count = self._invalidate_with_pattern(pattern)
 
                 self._metrics.invalidations += invalidated_count
                 self._update_memory_usage()
@@ -445,9 +451,6 @@ class CacheKeyGenerator:
         Returns:
             Normalized SQL
         """
-        # Remove extra whitespace and normalize case for keywords
-        import re
-
         # Remove comments
         sql = re.sub(r"--.*?\n", "\n", sql)
         sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.DOTALL)

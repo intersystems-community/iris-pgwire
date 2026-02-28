@@ -16,6 +16,7 @@ from typing import Any
 
 import structlog
 
+from ._noop_cursor import NoopCursor
 from .catalog import CatalogRouter  # Feature: Consolidated catalog emulation
 from .conversions import (
     BulkInsertJob,
@@ -572,6 +573,138 @@ class IRISExecutor:
 
         return value
 
+    def _postprocess_rows(self, rows: list[list], columns: list[dict[str, Any]]) -> None:
+        """
+        Post-process result rows in-place: POSIXTIME detection, value serialization,
+        and DATE format conversion. Shared by embedded and external execution paths.
+        """
+        if not rows or not columns:
+            return
+
+        PG_EPOCH = dt.date(2000, 1, 1)
+        column_type_oids = [col["type_oid"] for col in columns]
+
+        for row_idx, row in enumerate(rows):
+            for col_idx, value in enumerate(row):
+                if col_idx >= len(column_type_oids):
+                    continue
+
+                type_oid = column_type_oids[col_idx]
+
+                # Detect POSIXTIME masquerading as INT4/INT8
+                if type_oid in (20, 23) and isinstance(value, int):
+                    if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
+                        type_oid = 1114
+                        if row_idx == 0:
+                            columns[col_idx]["type_oid"] = 1114
+
+                # Robust serialization (TIMESTAMP, etc.)
+                rows[row_idx][col_idx] = self._serialize_value(rows[row_idx][col_idx], type_oid)
+                value = rows[row_idx][col_idx]
+
+                # DATE conversion: IRIS ISO string → PG days since 2000-01-01
+                if type_oid == 1082 and value is not None:
+                    try:
+                        if isinstance(value, str):
+                            date_obj = dt.datetime.strptime(value, "%Y-%m-%d").date()
+                            rows[row_idx][col_idx] = (date_obj - PG_EPOCH).days
+                        elif isinstance(value, int):
+                            rows[row_idx][col_idx] = self._convert_iris_horolog_date_to_pg(value)
+                    except Exception as date_err:
+                        logger.warning(
+                            "Failed to convert date value",
+                            row=row_idx,
+                            col=col_idx,
+                            value=value,
+                            error=str(date_err),
+                        )
+
+    def _prepare_sql(
+        self,
+        sql: str,
+        params: list | None,
+        execution_path: str,
+        session_id: str | None = None,
+    ) -> tuple[str, list | None, "ReturningPlan", float]:
+        """
+        Shared pre-execution pipeline (steps 1–7) used by both embedded and external paths.
+
+        Returns:
+            (optimized_sql, optimized_params, returning_plan, optimization_time_ms)
+        """
+        # 1. Transaction Translation
+        translated = self.transaction_translator.translate_transaction_command(sql)
+
+        # 2. SQL Normalization
+        optimized_sql = self._get_normalized_sql(translated, execution_path=execution_path)
+
+        # Log SLA violations
+        norm_metrics = self.sql_translator.get_normalization_metrics()
+        if norm_metrics["sla_violated"]:
+            logger.warning(
+                "SQL normalization exceeded 5ms SLA",
+                normalization_time_ms=norm_metrics["normalization_time_ms"],
+                session_id=session_id,
+            )
+
+        # 3. Parameter Normalization
+        optimized_params = self._normalize_parameters(params)
+
+        # 4. Vector Optimization
+        t_opt_start = time.perf_counter()
+        try:
+            from .vector_optimizer import optimize_vector_query
+
+            new_sql, new_params = optimize_vector_query(optimized_sql, optimized_params)
+            if new_sql != optimized_sql or new_params != optimized_params:
+                logger.debug(
+                    "Vector optimization applied",
+                    params_before=len(optimized_params) if optimized_params else 0,
+                    params_after=len(new_params) if new_params else 0,
+                    session_id=session_id,
+                )
+                optimized_sql = new_sql
+                optimized_params = new_params
+        except ImportError:
+            pass
+        except Exception as opt_error:
+            logger.warning(
+                "Vector optimization failed, using normalized query",
+                error=str(opt_error),
+                session_id=session_id,
+            )
+        t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
+
+        # 5. RETURNING / ON CONFLICT parsing
+        plan = ReturningPlan.from_sql(
+            optimized_sql,
+            metadata_cache=self.metadata_cache,
+            executor=self,
+        )
+        if plan.has_returning:
+            logger.info(
+                "RETURNING clause detected - will emulate",
+                operation=plan.operation,
+                table=plan.table,
+                columns=plan.columns,
+                session_id=session_id,
+            )
+        optimized_sql = plan.stripped_sql
+
+        # 6. Semicolon Stripping
+        optimized_sql = optimized_sql.strip().rstrip(";")
+
+        # 7. Schema Translation
+        sql_upper = sql.upper()
+        if (
+            '"public"' in sql_upper
+            and not sql_upper.startswith("CREATE")
+            and not sql_upper.startswith("ALTER")
+        ):
+            optimized_sql = self._get_normalized_sql(sql, execution_path=execution_path)
+
+        return optimized_sql, optimized_params, plan, t_opt_elapsed
+
     def _split_sql_statements(self, sql: str) -> list[str]:
         """
         Split SQL string into individual statements, handling semicolons properly.
@@ -628,23 +761,6 @@ class IRISExecutor:
         except Exception as e:
             logger.error("IRIS connection test failed", error=str(e))
             raise ConnectionError(f"Cannot connect to IRIS: {e}")
-
-    async def _test_embedded_connection(self):
-        """Test IRIS embedded Python connection"""
-
-        def _sync_test(captured_self, captured_iris):
-            if captured_iris is None:
-                return False
-            # Simple test query
-            result = captured_iris.sql.exec("SELECT 1 as test_column").fetch()
-            return result[0]["test_column"] == 1
-
-        iris = self._import_iris()
-
-        # Run in thread to avoid blocking asyncio loop
-        result = await asyncio.to_thread(_sync_test, self, iris)
-        if not result:
-            raise RuntimeError("IRIS embedded test query failed")
 
     async def _test_external_connection(self):
         """Test external IRIS connection using intersystems driver"""
@@ -1543,25 +1659,7 @@ class IRISExecutor:
             or (sql_stripped.startswith("--") and "\n" not in sql_stripped)
             or (sql_stripped.startswith("/*") and sql_stripped.endswith("*/"))
         ):
-
-            class SkipCursor:
-                def __init__(self):
-                    self.description = None
-                    self.rowcount = 0
-
-                def close(self):
-                    pass
-
-                def fetchall(self):
-                    return []
-
-                def fetchone(self):
-                    return None
-
-                def __iter__(self):
-                    return iter([])
-
-            return SkipCursor()
+            return NoopCursor()
 
         # CRITICAL FIX: Strip trailing semicolon for ALL execution paths
         # IRIS SQL engine often fails if a semicolon is present at the end of DDL
@@ -1623,25 +1721,7 @@ class IRISExecutor:
         except Exception as e:
             result = self.ddl_handler.handle(sql, e)
             if result.success and result.skipped:
-                # Return a dummy cursor object that has a None description
-                class DummyCursor:
-                    def __init__(self):
-                        self.description = None
-                        self.rowcount = 0
-
-                    def close(self):
-                        pass
-
-                    def fetchall(self):
-                        return []
-
-                    def fetchone(self):
-                        return None
-
-                    def __iter__(self):
-                        return iter([])
-
-                return DummyCursor()
+                return NoopCursor()
             raise e
 
     def _parse_returning_clause(
@@ -2076,6 +2156,136 @@ class IRISExecutor:
         )
         return rows, meta
 
+    def _close_cursor_if_possible(self, cursor: Any) -> None:
+        """Safely close a cursor-like resource without raising."""
+        if cursor and hasattr(cursor, "close"):
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def _execute_embedded_statement_sequence(
+        self, statements: list[str], params: list | None, session_id: str | None
+    ) -> Any:
+        """Execute statement sequence for embedded mode and return the final cursor."""
+        if not statements:
+            return NoopCursor()
+
+        if len(statements) > 1:
+            logger.info(
+                "Executing multiple statements",
+                statement_count=len(statements),
+                session_id=session_id,
+            )
+
+        for stmt in statements[:-1]:
+            tmp_result = self._safe_execute(stmt, None, is_embedded=True, session_id=session_id)
+            self._close_cursor_if_possible(tmp_result)
+
+        return self._safe_execute(statements[-1], params, is_embedded=True, session_id=session_id)
+
+    def _resolve_embedded_returning_result(
+        self,
+        result: Any,
+        plan: ReturningPlan,
+        delete_rows: list[Any],
+        delete_meta: Any,
+        params: list | None,
+        session_id: str | None,
+        original_sql: str | None,
+    ) -> Any:
+        if not plan.has_returning or not plan.columns:
+            return result
+
+        if plan.operation == "DELETE":
+            return MockResult(delete_rows, delete_meta)
+
+        rows, meta = self._emulate_returning(
+            plan,
+            params=params,
+            is_embedded=True,
+            session_id=session_id,
+            original_sql=original_sql,
+        )
+        return MockResult(rows, meta)
+
+    def _materialize_embedded_result(
+        self,
+        result: Any,
+        optimized_sql: str,
+        optimized_sql_upper: str,
+        sql: str,
+        session_id: str | None,
+    ) -> tuple[list[list[Any]], list[dict[str, Any]]]:
+        rows: list[list[Any]] = []
+        columns: list[dict[str, Any]] = []
+
+        meta = getattr(result, "_meta", None)
+        if meta:
+            for col_info in meta:
+                iris_col_name = col_info.get("name", "")
+                iris_type = col_info.get("type", "VARCHAR")
+                precomputed_oid = col_info.get("type_oid")
+                normalized_name = self._normalize_iris_column_name(
+                    iris_col_name, optimized_sql, iris_type
+                )
+                type_oid = (
+                    precomputed_oid
+                    if precomputed_oid is not None
+                    else self._iris_type_to_pg_oid(iris_type)
+                )
+
+                if iris_type == 2:
+                    if (
+                        "AS INTEGER" in optimized_sql_upper or "AS INT" in optimized_sql_upper
+                    ) and type_oid != 23:
+                        type_oid = 23
+                    elif (
+                        "AS NUMERIC" not in optimized_sql_upper
+                        and "AS DECIMAL" not in optimized_sql_upper
+                        and type_oid not in (701, 23)
+                    ):
+                        type_oid = 701
+
+                if "CURRENT_TIMESTAMP" in optimized_sql_upper and type_oid in (25, 1043):
+                    type_oid = 1114
+
+                columns.append(
+                    {
+                        "name": normalized_name,
+                        "type_oid": type_oid,
+                        "type_size": col_info.get("size", -1),
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    }
+                )
+
+        try:
+            for row in result:
+                if isinstance(row, list | tuple):
+                    normalized_row = [self._normalize_iris_null(value) for value in row]
+                    rows.append(normalized_row)
+                else:
+                    normalized_value = self._normalize_iris_null(row)
+                    rows.append([normalized_value])
+        except Exception as fetch_error:
+            logger.warning(
+                "Error fetching IRIS result rows",
+                error=str(fetch_error),
+                session_id=session_id,
+            )
+
+        if not columns:
+            if rows:
+                columns = self._discover_metadata(
+                    sql, session_id, expected_count=len(rows[0]), rows=rows
+                )
+            elif optimized_sql_upper.startswith("SELECT"):
+                columns = self._discover_metadata(sql, session_id)
+
+        self._postprocess_rows(rows, columns)
+        return rows, columns
+
     async def _execute_embedded_async(
         self, sql: str, params: list | None = None, session_id: str | None = None
     ) -> dict[str, Any]:
@@ -2086,13 +2296,6 @@ class IRISExecutor:
             sql = captured_sql
             params = captured_params
             session_id = captured_session_id
-            optimized_sql = sql
-            optimized_params = params
-            sql_upper = sql.upper()
-            sql_upper_check = sql.upper()
-            optimized_sql_upper = sql_upper
-            optimized_sql_upper_check = sql_upper_check
-            optimized_sql_upper_stripped = sql_upper.strip()
 
             iris = self._import_iris()
             if not iris:
@@ -2144,149 +2347,18 @@ class IRISExecutor:
                 # Get or create connection
                 self._get_iris_connection()
 
-                # 1. Transaction Translation
-                transaction_translated_sql = (
-                    self.transaction_translator.translate_transaction_command(sql)
+                # Steps 1-7: Shared pre-execution pipeline
+                optimized_sql, optimized_params, plan, t_opt_elapsed = self._prepare_sql(
+                    sql, params, execution_path="direct", session_id=session_id
                 )
-
-                # 2. SQL Normalization
-                normalized_sql = self._get_normalized_sql(
-                    transaction_translated_sql, execution_path="direct"
-                )
-                optimized_sql = normalized_sql
-
-                # Log transaction translation metrics
-                txn_metrics = self.transaction_translator.get_translation_metrics()
-                logger.info(
-                    "Transaction verb translation applied",
-                    total_translations=txn_metrics["total_translations"],
-                    avg_time_ms=txn_metrics["avg_translation_time_ms"],
-                    sla_violations=txn_metrics["sla_violations"],
-                    sql_original_preview=sql[:100],
-                    sql_translated_preview=transaction_translated_sql[:100],
-                    session_id=session_id,
-                )
-
-                # Log normalization metrics
-                norm_metrics = self.sql_translator.get_normalization_metrics()
-                logger.info(
-                    "SQL normalization applied",
-                    identifiers_normalized=norm_metrics["identifier_count"],
-                    dates_translated=norm_metrics["date_literal_count"],
-                    normalization_time_ms=norm_metrics["normalization_time_ms"],
-                    sla_violated=norm_metrics["sla_violated"],
-                    sql_before_preview=transaction_translated_sql[:100],
-                    sql_after_preview=normalized_sql[:100],
-                    session_id=session_id,
-                )
-
-                if norm_metrics["sla_violated"]:
-                    logger.warning(
-                        "SQL normalization exceeded 5ms SLA",
-                        normalization_time_ms=norm_metrics["normalization_time_ms"],
-                        session_id=session_id,
-                    )
-
-                # 3. Parameter Normalization
-                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
-                optimized_params = self._normalize_parameters(params)
-
-                # 4. Vector Optimization
-                # Apply vector query optimization (convert parameterized vectors to literals)
-                optimization_applied = False
-                t_opt_start = time.perf_counter()
-
-                try:
-                    from .vector_optimizer import optimize_vector_query
-
-                    logger.debug(
-                        "Vector optimizer: checking query",
-                        sql_preview=optimized_sql[:200],
-                        param_count=len(optimized_params) if optimized_params else 0,
-                        session_id=session_id,
-                    )
-
-                    # CRITICAL: Pass currently optimized_sql and optimized_params
-                    new_sql, new_params = optimize_vector_query(optimized_sql, optimized_params)
-
-                    optimization_applied = (new_sql != optimized_sql) or (
-                        new_params != optimized_params
-                    )
-
-                    if optimization_applied:
-                        logger.info(
-                            "Vector optimization applied",
-                            sql_changed=(new_sql != optimized_sql),
-                            params_changed=(new_params != optimized_params),
-                            params_before=len(optimized_params) if optimized_params else 0,
-                            params_after=len(new_params) if new_params else 0,
-                            optimized_sql_preview=new_sql[:200],
-                            session_id=session_id,
-                        )
-                        optimized_sql = new_sql
-                        optimized_params = new_params
-                    else:
-                        logger.debug(
-                            "Vector optimization not applicable",
-                            reason="No vector patterns found or params unchanged",
-                            session_id=session_id,
-                        )
-
-                except ImportError as e:
-                    logger.warning(
-                        "Vector optimizer not available", error=str(e), session_id=session_id
-                    )
-                except Exception as opt_error:
-                    logger.warning(
-                        "Vector optimization failed, using normalized query",
-                        error=str(opt_error),
-                        session_id=session_id,
-                    )
-
-                # PROFILING: Optimization complete
-                t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
-
-                # 5. RETURNING / ON CONFLICT parsing (IRIS doesn't support it natively)
-                plan = ReturningPlan.from_sql(
-                    optimized_sql,
-                    metadata_cache=self.metadata_cache,
-                    executor=self,
-                )
+                optimized_sql_upper = optimized_sql.upper()
                 returning_operation = plan.operation
                 returning_table = plan.table
                 returning_columns = plan.columns
-                if plan.has_returning:
-                    logger.info(
-                        "RETURNING clause detected - will emulate",
-                        operation=returning_operation,
-                        table=returning_table,
-                        columns=returning_columns,
-                        session_id=session_id,
-                    )
-                optimized_sql = plan.stripped_sql
-
-                # 6. Semicolon Stripping
-                # CRITICAL: Strip trailing semicolon
-                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
-                optimized_sql = optimized_sql.strip().rstrip(";")
-
-                # 7. Schema Translation
-                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
-                if (
-                    '"public"' in optimized_sql_upper_check
-                    and not optimized_sql_upper_check.startswith("CREATE")
-                    and not optimized_sql_upper_check.startswith("ALTER")
-                ):
-                    optimized_sql = self._get_normalized_sql(sql, execution_path="embedded")
-                    logger.info(
-                        f"Schema translation applied: public -> {IRIS_SCHEMA}",
-                        original_sql=optimized_sql[:100],
-                    )
 
                 # POSTGRESQL COMPATIBILITY: Handle SHOW commands that IRIS doesn't support
                 # Intercept and return fake results for PostgreSQL compatibility
-                if optimized_sql_upper_stripped.startswith("SHOW "):
+                if optimized_sql.upper().strip().startswith("SHOW "):
                     logger.info(
                         "Intercepting SHOW command (PostgreSQL compatibility shim)",
                         sql=optimized_sql[:100],
@@ -2314,16 +2386,6 @@ class IRISExecutor:
                     "Executing IRIS query",
                     sql_preview=optimized_sql[:200],
                     param_count=len(optimized_params) if optimized_params else 0,
-                    optimization_applied=optimization_applied,
-                    session_id=session_id,
-                )
-
-                # Log the actual SQL being sent to IRIS for debugging
-                logger.info(
-                    "About to execute iris.sql.exec",
-                    sql=optimized_sql[:1000],  # Log first 1000 chars
-                    sql_ends_with_semicolon=optimized_sql.rstrip().endswith(";"),
-                    has_params=optimized_params is not None and len(optimized_params) > 0,
                     session_id=session_id,
                 )
 
@@ -2346,61 +2408,20 @@ class IRISExecutor:
                             session_id=session_id,
                         )
 
-                # CRITICAL FIX: Split SQL by semicolons to handle multiple statements
-                # IRIS iris.sql.exec() cannot handle "STMT1; STMT2" in a single call
                 statements = self._split_sql_statements(optimized_sql)
+                result = self._execute_embedded_statement_sequence(
+                    statements, optimized_params, session_id
+                )
 
-                if len(statements) > 1:
-                    logger.info(
-                        "Executing multiple statements",
-                        statement_count=len(statements),
-                        session_id=session_id,
-                    )
-
-                    # Execute all statements except the last (don't capture results)
-                    for stmt in statements[:-1]:
-                        logger.debug(
-                            f"Executing intermediate statement: {stmt[:80]}...",
-                            session_id=session_id,
-                        )
-                        tmp_result = self._safe_execute(
-                            stmt, None, is_embedded=True, session_id=session_id
-                        )
-                        if tmp_result and hasattr(tmp_result, "close"):
-                            try:
-                                tmp_result.close()
-                            except Exception:
-                                pass
-
-                    # Execute last statement and capture results
-                    last_stmt = statements[-1]
-                    logger.debug(
-                        f"Executing final statement: {last_stmt[:80]}...", session_id=session_id
-                    )
-                    result = self._safe_execute(
-                        last_stmt, optimized_params, is_embedded=True, session_id=session_id
-                    )
-                else:
-                    # Single statement - execute normally
-                    result = self._safe_execute(
-                        optimized_sql, optimized_params, is_embedded=True, session_id=session_id
-                    )
-
-                # RETURNING emulation: After INSERT/UPDATE/DELETE, fetch the affected row(s)
-                if plan.has_returning and plan.columns:
-                    if plan.operation == "DELETE":
-                        # Use pre-captured rows for DELETE
-                        result = MockResult(delete_returning_rows, delete_returning_meta)
-                    else:
-                        # Emulate for INSERT/UPDATE - pass original SQL for UUID extraction
-                        rows, meta = self._emulate_returning(
-                            plan,
-                            optimized_params,
-                            is_embedded=True,
-                            session_id=session_id,
-                            original_sql=sql,  # Pass original SQL for UUID extraction
-                        )
-                        result = MockResult(rows, meta)
+                result = self._resolve_embedded_returning_result(
+                    result,
+                    plan,
+                    delete_returning_rows,
+                    delete_returning_meta,
+                    optimized_params,
+                    session_id,
+                    sql,
+                )
 
                 t_iris_elapsed = (time.perf_counter() - t_iris_start) * 1000
                 execution_time = (time.perf_counter() - start_time) * 1000
@@ -2408,184 +2429,10 @@ class IRISExecutor:
                 # PROFILING: Result processing timing
                 t_fetch_start = time.perf_counter()
 
-                # Fetch all results
-                rows = []
-                columns = []
-
-                # Get column metadata if available
-                if hasattr(result, "_meta") and result._meta:
-                    for col_info in result._meta:
-                        # Get original IRIS column name
-                        iris_col_name = col_info.get("name", "")
-                        iris_type = col_info.get("type", "VARCHAR")
-                        precomputed_oid = col_info.get("type_oid")
-
-                        # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
-                        col_name = self._normalize_iris_column_name(
-                            iris_col_name, optimized_sql, iris_type
-                        )
-
-                        # Get PostgreSQL type OID
-                        if precomputed_oid is not None:
-                            type_oid = precomputed_oid
-                        else:
-                            type_oid = self._iris_type_to_pg_oid(iris_type)
-
-                        # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
-
-                        if iris_type == 2:
-                            # Check for explicit casts
-                            if (
-                                "AS INTEGER" in optimized_sql_upper
-                                or "AS INT" in optimized_sql_upper
-                            ):
-                                # Already handled by asyncpg CAST INTEGER fix - don't override
-                                pass
-                            elif (
-                                "AS NUMERIC" not in optimized_sql_upper
-                                and "AS DECIMAL" not in optimized_sql_upper
-                            ):
-                                # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
-                                logger.info(
-                                    "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
-                                    column_name=col_name,
-                                    original_oid=type_oid,
-                                    reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
-                                )
-                                type_oid = 701  # FLOAT8
-
-                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 25 (TEXT) in IRIS
-                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                        if "CURRENT_TIMESTAMP" in optimized_sql_upper and type_oid == 25:
-                            logger.info(
-                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
-                                column_name=col_name,
-                                original_oid=type_oid,
-                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
-                            )
-                            type_oid = 1114  # TIMESTAMP
-
-                        # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
-                        # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                        if "CURRENT_TIMESTAMP" in optimized_sql_upper_check and type_oid == 1043:
-                            logger.info(
-                                "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
-                                column_name=col_name,
-                                original_oid=type_oid,
-                                reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
-                            )
-                            type_oid = 1114  # TIMESTAMP
-
-                        columns.append(
-                            {
-                                "name": col_name,
-                                "type_oid": type_oid,
-                                "type_size": col_info.get("size", -1),
-                                "type_modifier": -1,
-                                "format_code": 0,  # Text format
-                            }
-                        )
-
-                # Fetch rows
-                try:
-                    for row in result:
-                        if isinstance(row, list | tuple):
-                            # Normalize IRIS NULL representations to Python None
-                            normalized_row = [self._normalize_iris_null(value) for value in row]
-                            rows.append(normalized_row)
-                        else:
-                            # Single value result
-                            normalized_value = self._normalize_iris_null(row)
-                            rows.append([normalized_value])
-                except Exception as fetch_error:
-                    logger.warning(
-                        "Error fetching IRIS result rows",
-                        error=str(fetch_error),
-                        session_id=session_id,
-                    )
-
-                # Layer 1-3: Column metadata discovery if missing
-                if not columns:
-                    if rows:
-                        columns = self._discover_metadata(
-                            sql, session_id, expected_count=len(rows[0]), rows=rows
-                        )
-                    elif optimized_sql_upper.startswith("SELECT"):
-                        columns = self._discover_metadata(sql, session_id)
-
-                # PROFILING: Fetch complete
+                rows, columns = self._materialize_embedded_result(
+                    result, optimized_sql, optimized_sql_upper, sql, session_id
+                )
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
-
-                # CRITICAL: Convert IRIS date format to PostgreSQL format
-                # IRIS returns dates as ISO strings (e.g., '2024-01-15')
-                # PostgreSQL wire protocol expects dates as INTEGER days since 2000-01-01
-                # This conversion MUST happen before returning results to clients
-                if rows and columns:
-                    # PostgreSQL J2000 epoch: 2000-01-01
-                    PG_EPOCH = dt.date(2000, 1, 1)
-
-                    # Build type_oid lookup by column index
-                    column_type_oids = [col["type_oid"] for col in columns]
-
-                    # Convert and serialize values in-place
-                    for row_idx, row in enumerate(rows):
-                        for col_idx, value in enumerate(row):
-                            if col_idx < len(column_type_oids):
-                                type_oid = column_type_oids[col_idx]
-
-                                if type_oid in (20, 23) and isinstance(value, int):
-                                    if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
-                                        type_oid = 1114
-                                        if row_idx == 0:
-                                            columns[col_idx]["type_oid"] = 1114
-
-                                # Robust serialization (TIMESTAMP, etc.)
-                                rows[row_idx][col_idx] = self._serialize_value(
-                                    rows[row_idx][col_idx], type_oid
-                                )
-                                value = rows[row_idx][col_idx]
-
-                                # OID 1082 = DATE type
-                                if type_oid == 1082 and value is not None:
-                                    try:
-                                        # IRIS returns dates as ISO strings (YYYY-MM-DD)
-                                        if isinstance(value, str):
-                                            # Parse ISO date string
-                                            date_obj = dt.datetime.strptime(
-                                                value, "%Y-%m-%d"
-                                            ).date()
-                                            # Convert to PostgreSQL days since 2000-01-01
-                                            pg_days = (date_obj - PG_EPOCH).days
-                                            rows[row_idx][col_idx] = pg_days
-                                            logger.debug(
-                                                "Converted date string to PostgreSQL format",
-                                                row=row_idx,
-                                                col=col_idx,
-                                                iris_string=value,
-                                                pg_days=pg_days,
-                                                date_obj=str(date_obj),
-                                            )
-                                        # Handle integer Horolog format (if IRIS returns raw days)
-                                        elif isinstance(value, int):
-                                            pg_date = self._convert_iris_horolog_date_to_pg(value)
-                                            rows[row_idx][col_idx] = pg_date
-                                            logger.debug(
-                                                "Converted Horolog date to PostgreSQL format",
-                                                row=row_idx,
-                                                col=col_idx,
-                                                iris_horolog=value,
-                                                pg_days=pg_date,
-                                            )
-                                    except Exception as date_err:
-                                        logger.warning(
-                                            "Failed to convert date value",
-                                            row=row_idx,
-                                            col=col_idx,
-                                            value=value,
-                                            value_type=type(value),
-                                            error=str(date_err),
-                                        )
-                                        # Keep original value if conversion fails
 
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
@@ -2931,6 +2778,105 @@ class IRISExecutor:
             )
         return columns
 
+    def _materialize_external_result(
+        self,
+        cursor: Any,
+        optimized_sql: str,
+        optimized_sql_upper: str,
+        sql: str,
+        session_id: str | None,
+    ) -> tuple[list[list[Any]], list[dict[str, Any]]]:
+        if not cursor:
+            return [], []
+
+        rows: list[list[Any]] = []
+        columns: list[dict[str, Any]] = []
+
+        description = getattr(cursor, "_meta", None) or getattr(cursor, "description", None)
+        if description:
+            for desc in description:
+                if isinstance(desc, dict):
+                    iris_col_name = desc.get("name", "")
+                    iris_type = desc.get("iris_type", desc.get("type", "VARCHAR"))
+                    precomputed_oid = desc.get("type_oid")
+                    type_size = desc.get("size", -1)
+                else:
+                    iris_col_name = desc[0]
+                    iris_type = desc[1] if len(desc) > 1 else "VARCHAR"
+                    precomputed_oid = None
+                    type_size = desc[2] if len(desc) > 2 else -1
+
+                col_name = self._normalize_iris_column_name(iris_col_name, optimized_sql, iris_type)
+                type_oid = (
+                    precomputed_oid
+                    if precomputed_oid is not None
+                    else self._iris_type_to_pg_oid(iris_type)
+                )
+
+                if iris_type == 2:
+                    if (
+                        "AS INTEGER" in optimized_sql_upper or "AS INT" in optimized_sql_upper
+                    ) and type_oid != 23:
+                        type_oid = 23
+                    elif (
+                        "AS NUMERIC" not in optimized_sql_upper
+                        and "AS DECIMAL" not in optimized_sql_upper
+                        and type_oid not in (701, 23)
+                    ):
+                        type_oid = 701
+
+                if "CURRENT_TIMESTAMP" in optimized_sql_upper and type_oid == 1043:
+                    type_oid = 1114
+
+                columns.append(
+                    {
+                        "name": col_name,
+                        "type_oid": type_oid,
+                        "type_size": type_size,
+                        "type_modifier": -1,
+                        "format_code": 0,
+                    }
+                )
+
+        try:
+            results = cursor.fetchall() if hasattr(cursor, "fetchall") else []
+            for row in results:
+                if isinstance(row, list | tuple):
+                    processed_row = list(row)
+                    for i, val in enumerate(processed_row):
+                        if i < len(columns):
+                            oid = columns[i]["type_oid"]
+                            if oid in (20, 21, 23, 26) and val is not None:
+                                try:
+                                    processed_row[i] = int(val)
+                                except (ValueError, TypeError):
+                                    pass
+                            elif oid in (700, 701) and val is not None:
+                                try:
+                                    processed_row[i] = float(val)
+                                except (ValueError, TypeError):
+                                    pass
+                    rows.append(processed_row)
+                else:
+                    rows.append([row])
+        except Exception as fetch_error:
+            logger.warning(
+                "Failed to fetch external IRIS results",
+                error=str(fetch_error),
+                session_id=session_id,
+            )
+
+        if not columns:
+            if rows:
+                columns = self._discover_metadata(
+                    sql, session_id, expected_count=len(rows[0]), rows=rows
+                )
+            elif optimized_sql_upper.startswith("SELECT"):
+                columns = self._discover_metadata(sql, session_id)
+
+        self._postprocess_rows(rows, columns)
+        return rows, columns
+
     async def _execute_external_async(
         self, sql: str, params: list | None = None, session_id: str | None = None
     ) -> dict[str, Any]:
@@ -2943,12 +2889,6 @@ class IRISExecutor:
             sql = captured_sql
             params = captured_params
             session_id = captured_session_id
-            optimized_sql = sql
-            optimized_params = params
-            sql_upper_check = sql.upper()
-
-            # Initialize optimized derived variables at the top to avoid UnboundLocalError
-            optimized_sql_upper_check = sql_upper_check
 
             conn = None
             cursor = None
@@ -2957,147 +2897,11 @@ class IRISExecutor:
                 # PROFILING: Track detailed timing
                 t_start_total = time.perf_counter()
 
-                # Use intersystems-irispython driver
-
-                # 1. Transaction Translation
-                transaction_translated_sql = (
-                    self.transaction_translator.translate_transaction_command(sql)
+                # Steps 1-7: Shared pre-execution pipeline
+                optimized_sql, optimized_params, plan, t_opt_elapsed = self._prepare_sql(
+                    sql, params, execution_path="external", session_id=session_id
                 )
-
-                # 2. SQL Normalization
-                normalized_sql = self._get_normalized_sql(
-                    transaction_translated_sql, execution_path="external"
-                )
-                optimized_sql = normalized_sql
-
-                # Log transaction translation metrics (external mode)
-                txn_metrics = self.transaction_translator.get_translation_metrics()
-                logger.debug(
-                    "Transaction verb translation applied (external mode)",
-                    total_translations=txn_metrics["total_translations"],
-                    avg_time_ms=txn_metrics["avg_translation_time_ms"],
-                    sla_violations=txn_metrics["sla_violations"],
-                    sql_original_preview=sql[:100],
-                    sql_translated_preview=transaction_translated_sql[:100],
-                    session_id=session_id,
-                )
-
-                # Log normalization metrics
-                norm_metrics = self.sql_translator.get_normalization_metrics()
-                logger.debug(
-                    "SQL normalization applied (external mode)",
-                    identifiers_normalized=norm_metrics["identifier_count"],
-                    dates_translated=norm_metrics["date_literal_count"],
-                    normalization_time_ms=norm_metrics["normalization_time_ms"],
-                    sla_violated=norm_metrics["sla_violated"],
-                    sql_before_preview=transaction_translated_sql[:100],
-                    sql_after_preview=normalized_sql[:100],
-                    session_id=session_id,
-                )
-
-                if norm_metrics["sla_violated"]:
-                    logger.warning(
-                        "SQL normalization exceeded 5ms SLA (external mode)",
-                        normalization_time_ms=norm_metrics["normalization_time_ms"],
-                        session_id=session_id,
-                    )
-
-                # 3. Parameter Normalization
-                # CRITICAL: Normalize parameters for IRIS compatibility (timestamps, lists, etc.)
-                optimized_params = self._normalize_parameters(params)
-
-                # 4. Vector Optimization
-                # Apply vector query optimization (convert parameterized vectors to literals)
-                optimization_applied = False
-                t_opt_start = time.perf_counter()
-
-                try:
-                    from .vector_optimizer import optimize_vector_query
-
-                    logger.debug(
-                        "Vector optimizer: checking query (external mode)",
-                        sql_preview=optimized_sql[:200],
-                        param_count=len(optimized_params) if optimized_params else 0,
-                        session_id=session_id,
-                    )
-
-                    # CRITICAL: Pass currently optimized_sql and optimized_params
-                    new_sql, new_params = optimize_vector_query(optimized_sql, optimized_params)
-
-                    optimization_applied = (new_sql != optimized_sql) or (
-                        new_params != optimized_params
-                    )
-
-                    if optimization_applied:
-                        logger.debug(
-                            "Vector optimization applied (external mode)",
-                            sql_changed=(new_sql != optimized_sql),
-                            params_changed=(new_params != optimized_params),
-                            params_before=len(optimized_params) if optimized_params else 0,
-                            params_after=len(new_params) if new_params else 0,
-                            optimized_sql_preview=new_sql[:200],
-                            session_id=session_id,
-                        )
-                        optimized_sql = new_sql
-                        optimized_params = new_params
-                    else:
-                        logger.debug(
-                            "Vector optimization not applicable (external mode)",
-                            reason="No vector patterns found or params unchanged",
-                            session_id=session_id,
-                        )
-
-                except ImportError as e:
-                    logger.warning(
-                        "Vector optimizer not available (external mode)",
-                        error=str(e),
-                        session_id=session_id,
-                    )
-                except Exception as opt_error:
-                    logger.warning(
-                        "Vector optimization failed, using normalized query (external mode)",
-                        error=str(opt_error),
-                        session_id=session_id,
-                    )
-
-                # PROFILING: Optimization complete
-                t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
-
-                # 5. RETURNING / ON CONFLICT parsing (IRIS doesn't support these natively)
-                plan = ReturningPlan.from_sql(
-                    optimized_sql,
-                    metadata_cache=self.metadata_cache,
-                    executor=self,
-                )
-                returning_operation = plan.operation
-
-                if plan.has_returning:
-                    logger.info(
-                        "RETURNING clause detected - will emulate (external mode)",
-                        operation=plan.operation,
-                        table=plan.table,
-                        columns=plan.columns,
-                        session_id=session_id,
-                    )
-
-                # 6. Semicolon Stripping
-                # CRITICAL: Strip trailing semicolon
-                # IRIS cannot handle "SELECT ... WHERE id = ?;" (fails with SQLCODE=-52)
-                optimized_sql = plan.stripped_sql.strip().rstrip(";")
-
-                # 7. Schema Translation
-                # CRITICAL: Translate PostgreSQL schema names to IRIS schema names
-                # Prisma/Drizzle send: "public"."tablename" but IRIS needs: {IRIS_SCHEMA}.TABLENAME
-                if (
-                    '"public"' in optimized_sql_upper_check
-                    and not optimized_sql_upper_check.startswith("CREATE")
-                    and not optimized_sql_upper_check.startswith("ALTER")
-                ):
-                    optimized_sql = self._get_normalized_sql(sql, execution_path="external")
-                    logger.info(
-                        f"Schema translation applied (external): public -> {IRIS_SCHEMA}",
-                        original_sql=optimized_sql[:100],
-                    )
+                optimized_sql_upper = optimized_sql.upper()
 
                 # Pre-process parameters to convert lists to IRIS vector strings
                 # This ensures the DBAPI driver doesn't convert them to {...} format
@@ -3226,207 +3030,10 @@ class IRISExecutor:
 
                 # PROFILING: Result processing timing
                 t_fetch_start = time.perf_counter()
-
-                # Process results
-                rows = []
-                columns = []
-
-                # Get column information
-                if cursor.description:
-                    for desc in cursor.description:
-                        # Get original IRIS column name and type
-                        if isinstance(desc, dict):
-                            iris_col_name = desc.get("name", "")
-                            iris_type = desc.get("iris_type", "VARCHAR")
-                            precomputed_oid = desc.get("type_oid")
-                        else:
-                            iris_col_name = desc[0]
-                            iris_type = desc[1] if len(desc) > 1 else "VARCHAR"
-                            precomputed_oid = None
-
-                        # CRITICAL: Normalize IRIS column names to PostgreSQL conventions
-                        # IRIS generates HostVar_1, Expression_1, Aggregate_1 for unnamed columns
-                        # PostgreSQL uses ?column?, type names (int4), or function names (count)
-                        col_name = self._normalize_iris_column_name(
-                            iris_col_name, optimized_sql, iris_type
-                        )
-
-                        # DEBUG: Log IRIS type for arithmetic expressions (external mode)
-                        logger.info(
-                            "🔍 IRIS metadata type discovery (EXTERNAL MODE)",
-                            original_column_name=iris_col_name,
-                            normalized_column_name=col_name,
-                            iris_type=iris_type,
-                            desc=desc,
-                            sql_preview=optimized_sql[:200],
-                        )
-
-                        if precomputed_oid is not None:
-                            type_oid = precomputed_oid
-                        else:
-                            # CRITICAL FIX: IRIS type code 2 means NUMERIC, but for decimal literals
-                            # like 3.14, we want FLOAT8 so node-postgres returns a number, not a string.
-                            # Override to FLOAT8 UNLESS explicitly cast to NUMERIC/DECIMAL or INTEGER
-                            type_oid = self._iris_type_to_pg_oid(iris_type)
-
-                            optimized_sql_upper_check = optimized_sql.upper()
-
-                            if iris_type == 2:
-                                # Check for explicit casts
-                                if (
-                                    "AS INTEGER" in optimized_sql_upper_check
-                                    or "AS INT" in optimized_sql_upper_check
-                                ):
-                                    # CAST(? AS INTEGER) - override to INT4
-                                    logger.info(
-                                        "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 23 (INT4)",
-                                        column_name=col_name,
-                                        original_oid=type_oid,
-                                        reason="SQL contains CAST to INTEGER",
-                                    )
-                                    type_oid = 23  # INT4
-                                elif (
-                                    "AS NUMERIC" not in optimized_sql_upper_check
-                                    and "AS DECIMAL" not in optimized_sql_upper_check
-                                ):
-                                    # No explicit NUMERIC/DECIMAL cast → make it FLOAT8
-                                    logger.info(
-                                        "🔧 OVERRIDING IRIS type code 2 (NUMERIC) → OID 701 (FLOAT8)",
-                                        column_name=col_name,
-                                        original_oid=type_oid,
-                                        reason="Decimal literal without explicit NUMERIC/DECIMAL cast",
-                                    )
-                                    type_oid = 701  # FLOAT8
-
-                            # CRITICAL FIX: CURRENT_TIMESTAMP returns type 1043 (VARCHAR) in IRIS
-                            # but should be type 1114 (TIMESTAMP) for Npgsql compatibility
-                            if (
-                                "CURRENT_TIMESTAMP" in optimized_sql_upper_check
-                                and type_oid == 1043
-                            ):
-                                logger.info(
-                                    "🔧 OVERRIDING CURRENT_TIMESTAMP type OID 1043 (VARCHAR) → 1114 (TIMESTAMP)",
-                                    column_name=col_name,
-                                    original_oid=type_oid,
-                                    reason="CURRENT_TIMESTAMP function should return TIMESTAMP type",
-                                )
-                                type_oid = 1114  # TIMESTAMP
-
-                        columns.append(
-                            {
-                                "name": col_name,
-                                "type_oid": type_oid,
-                                "type_size": (
-                                    desc[2] if not isinstance(desc, dict) and len(desc) > 2 else -1
-                                ),
-                                "type_modifier": -1,
-                                "format_code": 0,  # Text format
-                            }
-                        )
-
-                if (sql.upper().strip().startswith("SELECT") or returning_operation) and columns:
-                    try:
-                        results = cursor.fetchall()
-
-                        for row in results:
-                            if isinstance(row, list | tuple):
-                                # Convert row to list and handle type-specific conversions
-                                processed_row = list(row)
-                                for i, val in enumerate(processed_row):
-                                    if i < len(columns):
-                                        oid = columns[i]["type_oid"]
-                                        if oid in (20, 21, 23, 26) and val is not None:
-                                            try:
-                                                processed_row[i] = int(val)
-                                            except (ValueError, TypeError):
-                                                pass
-                                        elif oid in (700, 701) and val is not None:
-                                            try:
-                                                processed_row[i] = float(val)
-                                            except (ValueError, TypeError):
-                                                pass
-                                rows.append(processed_row)
-                            else:
-                                # Single value result
-                                rows.append([row])
-                    except Exception as fetch_error:
-                        logger.warning(
-                            "Failed to fetch external IRIS results",
-                            error=str(fetch_error),
-                            session_id=session_id,
-                        )
-
-                # PROFILING: Fetch complete
+                rows, columns = self._materialize_external_result(
+                    cursor, optimized_sql, optimized_sql_upper, sql, session_id
+                )
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
-
-                # CRITICAL: Convert IRIS date format to PostgreSQL format (EXTERNAL MODE)
-                # Same conversion logic as embedded mode
-                if rows and columns:
-                    # PostgreSQL J2000 epoch: 2000-01-01
-                    PG_EPOCH = dt.date(2000, 1, 1)
-
-                    # Build type_oid lookup by column index
-                    column_type_oids = [col["type_oid"] for col in columns]
-
-                    # Convert and serialize values in-place
-                    for row_idx, row in enumerate(rows):
-                        for col_idx, value in enumerate(row):
-                            if col_idx < len(column_type_oids):
-                                type_oid = column_type_oids[col_idx]
-
-                                if type_oid in (20, 23) and isinstance(value, int):
-                                    if POSIXTIME_OFFSET <= value <= POSIXTIME_MAX:
-                                        type_oid = 1114
-                                        if row_idx == 0:
-                                            columns[col_idx]["type_oid"] = 1114
-
-                                # Robust serialization (TIMESTAMP, etc.)
-                                rows[row_idx][col_idx] = self._serialize_value(
-                                    rows[row_idx][col_idx], type_oid
-                                )
-                                value = rows[row_idx][col_idx]
-
-                                # OID 1082 = DATE type
-                                if type_oid == 1082 and value is not None:
-                                    try:
-                                        # IRIS returns dates as ISO strings (YYYY-MM-DD)
-                                        if isinstance(value, str):
-                                            # Parse ISO date string
-                                            date_obj = dt.datetime.strptime(
-                                                value, "%Y-%m-%d"
-                                            ).date()
-                                            # Convert to PostgreSQL days since 2000-01-01
-                                            pg_days = (date_obj - PG_EPOCH).days
-                                            rows[row_idx][col_idx] = pg_days
-                                            logger.debug(
-                                                "Converted date string to PostgreSQL format (external)",
-                                                row=row_idx,
-                                                col=col_idx,
-                                                iris_string=value,
-                                                pg_days=pg_days,
-                                                date_obj=str(date_obj),
-                                            )
-                                        # Handle integer Horolog format (if IRIS returns raw days)
-                                        elif isinstance(value, int):
-                                            pg_date = self._convert_iris_horolog_date_to_pg(value)
-                                            rows[row_idx][col_idx] = pg_date
-                                            logger.debug(
-                                                "Converted Horolog date to PostgreSQL format (external)",
-                                                row=row_idx,
-                                                col=col_idx,
-                                                iris_horolog=value,
-                                                pg_days=pg_date,
-                                            )
-                                    except Exception as date_err:
-                                        logger.warning(
-                                            "Failed to convert date value (external mode)",
-                                            row=row_idx,
-                                            col=col_idx,
-                                            value=value,
-                                            value_type=type(value),
-                                            error=str(date_err),
-                                        )
-                                        # Keep original value if conversion fails
 
                 t_total_elapsed = (time.perf_counter() - t_start_total) * 1000
 
@@ -4389,115 +3996,3 @@ class IRISExecutor:
             "vector_support": self.vector_support,
             "protocol_version": "3.0",
         }
-
-    # P5: Vector/Embedding Support
-
-    def get_vector_functions(self) -> dict[str, str]:
-        """
-        Get pgvector-compatible function mappings to IRIS vector functions
-
-        Maps PostgreSQL/pgvector syntax to IRIS VECTOR functions
-        """
-        return {
-            # Distance functions (pgvector compatibility)
-            "vector_cosine_distance": "VECTOR_COSINE",
-            "cosine_distance": "VECTOR_COSINE",
-            "euclidean_distance": "VECTOR_DOT_PRODUCT",  # IRIS equivalent
-            "inner_product": "VECTOR_DOT_PRODUCT",
-            # Vector operations
-            "vector_dims": "VECTOR_DIM",
-            "vector_norm": "VECTOR_NORM",
-            # IRIS-specific vector functions
-            "to_vector": "TO_VECTOR",
-            "vector_dot_product": "VECTOR_DOT_PRODUCT",
-            "vector_cosine": "VECTOR_COSINE",
-        }
-
-    def translate_vector_query(self, sql: str) -> str:
-        """
-        P5: Translate pgvector syntax to IRIS VECTOR syntax
-
-        Converts PostgreSQL/pgvector queries to use IRIS vector functions
-        """
-        try:
-            vector_functions = self.get_vector_functions()
-            translated_sql = sql
-
-            # Replace pgvector operators with IRIS functions
-            # <-> operator (cosine distance) -> VECTOR_COSINE
-            if "<->" in translated_sql:
-                # Pattern: column <-> '[1,2,3]' becomes VECTOR_COSINE(column, TO_VECTOR('[1,2,3]'))
-                import re
-
-                pattern = r"([\w\.]+)\s*<->\s*([^\s]+)"
-
-                def replace_cosine(match):
-                    col, vec = match.groups()
-                    return f"VECTOR_COSINE({col}, TO_VECTOR({vec}))"
-
-                translated_sql = re.sub(pattern, replace_cosine, translated_sql)
-
-            # <#> operator (negative inner product) -> -VECTOR_DOT_PRODUCT
-            if "<#>" in translated_sql:
-                import re
-
-                pattern = r"([\w\.]+)\s*<#>\s*([^\s]+)"
-
-                def replace_inner_product(match):
-                    col, vec = match.groups()
-                    return f"(-VECTOR_DOT_PRODUCT({col}, TO_VECTOR({vec})))"
-
-                translated_sql = re.sub(pattern, replace_inner_product, translated_sql)
-
-            # <=> operator (cosine distance) -> VECTOR_COSINE
-            if "<=>" in translated_sql:
-                import re
-
-                pattern = r"([\w\.]+)\s*<=>\s*([^\s]+)"
-
-                def replace_cosine_distance(match):
-                    col, vec = match.groups()
-                    return f"VECTOR_COSINE({col}, TO_VECTOR({vec}))"
-
-                translated_sql = re.sub(pattern, replace_cosine_distance, translated_sql)
-
-            # Replace function names
-            for pg_func, iris_func in vector_functions.items():
-                translated_sql = translated_sql.replace(pg_func, iris_func)
-
-            return translated_sql
-
-        except Exception as e:
-            logger.warning("Vector query translation failed", error=str(e), sql=sql[:100])
-            return sql  # Return original if translation fails
-
-    def _convert_params_for_iris(self, params: Any) -> Any:
-        """
-        Convert parameters to IRIS-compatible formats.
-        Specifically handles ISO 8601 timestamps.
-        """
-        if params is None:
-            return None
-
-        if isinstance(params, list | tuple):
-            return [self._convert_value_for_iris(v) for v in params]
-
-        return self._convert_value_for_iris(params)
-
-    def _convert_value_for_iris(self, value: Any) -> Any:
-        """Helper to convert a single value."""
-        if isinstance(value, str):
-            # Check for ISO 8601 timestamp: 2026-01-29T21:27:38.111Z
-            # or 2026-01-29T21:27:38.111+00:00
-            # IRIS rejects the 'T' and 'Z' or offset in %PosixTime/TIMESTAMP
-            if len(value) >= 19 and value[10] == "T":
-                # Replace 'T' with space
-                converted = value.replace("T", " ")
-                # Remove 'Z' if present
-                if converted.endswith("Z"):
-                    converted = converted[:-1]
-                # Remove timezone offset if present (e.g., +00:00)
-                if "+" in converted:
-                    converted = converted.split("+")[0]
-                return converted
-        return value

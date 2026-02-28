@@ -12,6 +12,7 @@ This module implements fixtures from specs/017-correct-testing-framework/:
 """
 
 import asyncio
+import threading
 import os
 import socket
 import subprocess
@@ -378,7 +379,7 @@ def base_dat_fixture(iris_container, dat_fixture_root):
     return ensure_base_fixture(container=iris_container, fixture_root=dat_fixture_root)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def pgwire_namespace(iris_container, iris_config, request):
     """
     Create a unique namespace per module for isolation.
@@ -394,13 +395,19 @@ def pgwire_namespace(iris_container, iris_config, request):
     try:
         yield namespace
     finally:
-        try:
-            iris_container.delete_namespace(namespace)
-        except Exception as e:
-            logger.warning("Failed to delete test namespace", namespace=namespace, error=str(e))
+        # Run deletion in a background thread so teardown never blocks pytest
+        def _delete():
+            try:
+                iris_container.delete_namespace(namespace)
+            except Exception as e:
+                logger.warning("Failed to delete test namespace", namespace=namespace, error=str(e))
+
+        t = threading.Thread(target=_delete, daemon=True)
+        t.start()
+        t.join(timeout=5)  # wait at most 5s, then let daemon clean up
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def provision_test_user(iris_config, pgwire_namespace):
     """
     Provision test_user with access to the test namespace.
@@ -506,7 +513,7 @@ def provision_test_user(iris_config, pgwire_namespace):
     yield
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def load_base_fixture(iris_container, base_dat_fixture, pgwire_namespace):
     """
     Load the base DAT fixture into the module namespace.
@@ -646,7 +653,7 @@ def iris_fixture(iris_connection, iris_config, iris_container):
         pytest.fail(f"Fixture initialization failed: {e}")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def pgwire_server(
     iris_container,
     iris_config,
@@ -672,30 +679,22 @@ def pgwire_server(
         iris_password=iris_config["password"],
         iris_namespace=pgwire_namespace,
         enable_ssl=False,
+        connection_pool_size=20,
+        connection_pool_timeout=10.0,
     )
 
-    stop_event = threading.Event()
+    loop = asyncio.new_event_loop()
 
     def run_server():
-        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-
-        async def start_and_wait():
-            await server.start()
-            # server.start() calls serve_forever(), so we wait for stop_event
-            while not stop_event.is_set():
-                await asyncio.sleep(0.1)
-            await server.stop()
-
-        try:
-            loop.run_until_complete(start_and_wait())
-        finally:
-            loop.close()
+        loop.run_until_complete(server.start())
+        loop.run_forever()
+        loop.close()
 
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
 
-    # Wait for server to be ready using active polling
+    # Wait for server to be ready
     logger.info("Waiting for PGWire server to be ready...")
     start_wait = time.perf_counter()
     server_port = server.port
@@ -705,15 +704,15 @@ def pgwire_server(
             break
         time.sleep(0.5)
     else:
-        stop_event.set()
+        loop.call_soon_threadsafe(loop.stop)
         pytest.fail("PGWire server failed to start in separate thread")
 
     yield server
 
-    # Cleanup
+    # Stop the loop — daemon thread exits on its own, no join needed
     logger.info("Shutting down PGWire server thread")
-    stop_event.set()
-    server_thread.join(timeout=5)
+    loop.call_soon_threadsafe(loop.stop)
+    server_thread.join(timeout=3)
 
 
 @pytest.fixture

@@ -100,7 +100,6 @@ class SemanticValidator:
         Returns:
             Validation result with issues and recommendations
         """
-        # Feature 036: Add skip logic for CHECK constraints
         if re.search(r"\bADD\s+CONSTRAINT\b.*\bCHECK\s*\(", context.translated_sql, re.IGNORECASE):
             return ValidationResult(
                 success=True,
@@ -110,51 +109,17 @@ class SemanticValidator:
             )
 
         with PerformanceTimer() as timer:
-            issues: list[ValidationIssue] = []
-            recommendations: list[str] = []
-
             try:
-                # Basic syntax validation
-                syntax_issues = self._validate_syntax(context)
-                issues.extend(syntax_issues)
-
-                # Structure comparison
-                structure_issues = self._validate_structure(context)
-                issues.extend(structure_issues)
-
-                # Semantic analysis
-                if self.validation_level in [
-                    ValidationLevel.SEMANTIC,
-                    ValidationLevel.STRICT,
-                    ValidationLevel.EXHAUSTIVE,
-                ]:
-                    semantic_issues = self._validate_semantics(context)
-                    issues.extend(semantic_issues)
-
-                # Constitutional compliance checks
-                if self.validation_level in [ValidationLevel.STRICT, ValidationLevel.EXHAUSTIVE]:
-                    compliance_issues = self._validate_constitutional_compliance(context)
-                    issues.extend(compliance_issues)
-
-                # Performance impact assessment
-                if context.include_performance:
-                    perf_recommendations = self._assess_performance_impact(context)
-                    recommendations.extend(perf_recommendations)
-
-                # Generate overall validation result
+                issues, recommendations = self._execute_validation_checks(context)
                 success = not any(issue.severity == IssueSeverity.ERROR for issue in issues)
                 confidence = self._calculate_confidence(issues, context)
-
-                # Update performance metrics
                 self._update_metrics(timer.elapsed_ms, success)
-
                 return ValidationResult(
                     success=success,
                     confidence=confidence,
                     issues=issues,
                     recommendations=recommendations,
                 )
-
             except Exception as e:
                 self.logger.error(f"Validation failed: {e}")
                 return ValidationResult(
@@ -220,55 +185,90 @@ class SemanticValidator:
         Returns:
             Equivalence comparison report
         """
-        equivalence_score = 1.0
-        differences = []
-        similarities = []
+        differences: list[str] = []
+        similarities: list[str] = []
 
-        # Compare query types
-        if original_analysis.query_type != translated_analysis.query_type:
-            differences.append(
-                f"Query type mismatch: {original_analysis.query_type} vs {translated_analysis.query_type}"
-            )
-            equivalence_score -= 0.3
-        else:
-            similarities.append(f"Query type matches: {original_analysis.query_type}")
-
-        # Compare table references
-        table_overlap = original_analysis.tables_referenced & translated_analysis.tables_referenced
-        table_diff = original_analysis.tables_referenced ^ translated_analysis.tables_referenced
-
-        if table_diff:
-            differences.append(f"Table reference differences: {table_diff}")
-            equivalence_score -= 0.2 * (
-                len(table_diff) / max(len(original_analysis.tables_referenced), 1)
-            )
-
-        if table_overlap:
-            similarities.append(f"Common table references: {table_overlap}")
-
-        # Compare complexity
-        complexity_diff = abs(
-            original_analysis.complexity_score - translated_analysis.complexity_score
+        score = 1.0
+        score = self._compare_query_type(
+            score, differences, similarities, original_analysis, translated_analysis
         )
-        if complexity_diff > 0.2:
-            differences.append(f"Significant complexity difference: {complexity_diff:.2f}")
-            equivalence_score -= min(complexity_diff * 0.1, 0.2)
-        else:
-            similarities.append(
-                f"Similar complexity: {original_analysis.complexity_score:.2f} vs {translated_analysis.complexity_score:.2f}"
-            )
+        score = self._compare_table_references(
+            score, differences, similarities, original_analysis, translated_analysis
+        )
+        score = self._compare_complexity(
+            score, differences, similarities, original_analysis, translated_analysis
+        )
 
-        # Calculate final equivalence
-        is_equivalent = equivalence_score >= 0.8  # 80% threshold for equivalence
+        is_equivalent = score >= 0.8
 
         return QueryEquivalenceReport(
             is_equivalent=is_equivalent,
-            equivalence_score=equivalence_score,
+            equivalence_score=score,
             differences=differences,
             similarities=similarities,
             original_complexity=original_analysis.complexity_score,
             translated_complexity=translated_analysis.complexity_score,
         )
+
+    def _compare_query_type(
+        self,
+        score: float,
+        differences: list[str],
+        similarities: list[str],
+        original_analysis: QueryAnalysis,
+        translated_analysis: QueryAnalysis,
+    ) -> float:
+        if original_analysis.query_type != translated_analysis.query_type:
+            differences.append(
+                f"Query type mismatch: {original_analysis.query_type} vs {translated_analysis.query_type}"
+            )
+            return score - 0.3
+
+        similarities.append(f"Query type matches: {original_analysis.query_type}")
+        return score
+
+    def _compare_table_references(
+        self,
+        score: float,
+        differences: list[str],
+        similarities: list[str],
+        original_analysis: QueryAnalysis,
+        translated_analysis: QueryAnalysis,
+    ) -> float:
+        table_overlap = original_analysis.tables_referenced & translated_analysis.tables_referenced
+        table_diff = original_analysis.tables_referenced ^ translated_analysis.tables_referenced
+
+        if table_diff:
+            differences.append(f"Table reference differences: {table_diff}")
+            penalty = 0.2 * (len(table_diff) / max(len(original_analysis.tables_referenced), 1))
+            score -= penalty
+
+        if table_overlap:
+            similarities.append(f"Common table references: {table_overlap}")
+
+        return score
+
+    def _compare_complexity(
+        self,
+        score: float,
+        differences: list[str],
+        similarities: list[str],
+        original_analysis: QueryAnalysis,
+        translated_analysis: QueryAnalysis,
+    ) -> float:
+        complexity_diff = abs(
+            original_analysis.complexity_score - translated_analysis.complexity_score
+        )
+
+        if complexity_diff > 0.2:
+            differences.append(f"Significant complexity difference: {complexity_diff:.2f}")
+            score -= min(complexity_diff * 0.1, 0.2)
+        else:
+            similarities.append(
+                f"Similar complexity: {original_analysis.complexity_score:.2f} vs {translated_analysis.complexity_score:.2f}"
+            )
+
+        return score
 
     def get_validation_stats(self) -> dict[str, Any]:
         """
@@ -341,6 +341,38 @@ class SemanticValidator:
             "ARRAY",
             "LIKE",
             "POSITION",
+        }
+
+    def _execute_validation_checks(
+        self, context: ValidationContext
+    ) -> tuple[list[ValidationIssue], list[str]]:
+        issues: list[ValidationIssue] = []
+        recommendations: list[str] = []
+        issues.extend(self._validate_syntax(context))
+        issues.extend(self._validate_structure(context))
+
+        if self._should_run_semantic_validation():
+            issues.extend(self._validate_semantics(context))
+
+        if self._should_run_constitutional_checks():
+            issues.extend(self._validate_constitutional_compliance(context))
+
+        if context.include_performance:
+            recommendations.extend(self._assess_performance_impact(context))
+
+        return issues, recommendations
+
+    def _should_run_semantic_validation(self) -> bool:
+        return self.validation_level in {
+            ValidationLevel.SEMANTIC,
+            ValidationLevel.STRICT,
+            ValidationLevel.EXHAUSTIVE,
+        }
+
+    def _should_run_constitutional_checks(self) -> bool:
+        return self.validation_level in {
+            ValidationLevel.STRICT,
+            ValidationLevel.EXHAUSTIVE,
         }
 
     def _validate_syntax(self, context: ValidationContext) -> list[ValidationIssue]:
@@ -632,14 +664,18 @@ class SemanticValidator:
 
     def _check_basic_sql_structure(self, sql: str) -> bool:
         """Check basic SQL structure validity"""
-        sql_upper = sql.upper().strip()
+        sql_stripped = sql.strip()
+        if not sql_stripped:
+            return False
+
+        sql_upper = sql_stripped.upper()
 
         # Must start with valid SQL keyword
         valid_starts = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH"]
         starts_valid = any(sql_upper.startswith(start) for start in valid_starts)
 
-        # Must not have obvious syntax errors
-        has_semicolon_middle = ";" in sql[:-1]  # Semicolon not at end
+        # Must not have semicolons in the middle (only at end)
+        has_semicolon_middle = ";" in sql_stripped[:-1]
 
         return starts_valid and not has_semicolon_middle
 

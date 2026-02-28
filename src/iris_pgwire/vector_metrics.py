@@ -6,6 +6,7 @@ Provides metrics export and alerting for constitutional SLA compliance monitorin
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,58 +47,99 @@ class VectorMetricsCollector:
         self.alerts: list[SLAAlert] = []
         self.alert_callbacks = []
 
+    def _create_alert(
+        self,
+        stats: dict[str, Any],
+        violation_type: str,
+        severity: str,
+        message: str,
+    ) -> SLAAlert:
+        """Create an SLA alert and log it at the appropriate level."""
+        alert = SLAAlert(
+            timestamp=time.time(),
+            violation_type=violation_type,
+            severity=severity,
+            message=message,
+            metrics=stats,
+        )
+        if severity == "critical":
+            logger.error(f"🚨 {message}")
+        else:
+            logger.warning(f"⚠️ {message}")
+        return alert
+
+    def _evaluate_threshold_alerts(
+        self,
+        stats: dict[str, Any],
+        value: float,
+        violation_type: str,
+        thresholds: tuple[tuple[str, float, str, Callable[[float, float], bool]], ...],
+    ) -> list[SLAAlert]:
+        for severity, threshold, template, comparator in thresholds:
+            if comparator(value, threshold):
+                message = template.format(value=value, threshold=threshold)
+                return [self._create_alert(stats, violation_type, severity, message)]
+        return []
+
+    def _append_metric(
+        self,
+        metrics: list[str],
+        metric_name: str,
+        help_text: str,
+        metric_type: str,
+        value: Any,
+    ) -> None:
+        metrics.append(f"# HELP {metric_name} {help_text}")
+        metrics.append(f"# TYPE {metric_name} {metric_type}")
+        metrics.append(f"{metric_name} {value}")
+
     def check_sla_compliance(self, stats: dict[str, Any]) -> list[SLAAlert]:
         """Check SLA compliance and generate alerts if needed"""
         alerts = []
-        current_time = time.time()
 
-        # Check compliance rate
-        compliance_rate = stats.get("sla_compliance_rate", 100.0)
-        if compliance_rate < self.SLA_COMPLIANCE_CRITICAL_THRESHOLD:
-            alert = SLAAlert(
-                timestamp=current_time,
-                violation_type="performance",
-                severity="critical",
-                message=f"CRITICAL: SLA compliance rate {compliance_rate}% below threshold {self.SLA_COMPLIANCE_CRITICAL_THRESHOLD}%",
-                metrics=stats,
+        alerts.extend(
+            self._evaluate_threshold_alerts(
+                stats,
+                stats.get("sla_compliance_rate", 100.0),
+                "performance",
+                (
+                    (
+                        "critical",
+                        self.SLA_COMPLIANCE_CRITICAL_THRESHOLD,
+                        "CRITICAL: SLA compliance rate {value}% below threshold {threshold}%",
+                        lambda value, threshold: value < threshold,
+                    ),
+                    (
+                        "warning",
+                        self.SLA_COMPLIANCE_WARNING_THRESHOLD,
+                        "WARNING: SLA compliance rate {value}% below threshold {threshold}%",
+                        lambda value, threshold: value < threshold,
+                    ),
+                ),
             )
-            alerts.append(alert)
-            logger.error(f"🚨 {alert.message}")
+        )
 
-        elif compliance_rate < self.SLA_COMPLIANCE_WARNING_THRESHOLD:
-            alert = SLAAlert(
-                timestamp=current_time,
-                violation_type="performance",
-                severity="warning",
-                message=f"WARNING: SLA compliance rate {compliance_rate}% below threshold {self.SLA_COMPLIANCE_WARNING_THRESHOLD}%",
-                metrics=stats,
+        alerts.extend(
+            self._evaluate_threshold_alerts(
+                stats,
+                stats.get("avg_transformation_time_ms", 0),
+                "performance",
+                (
+                    (
+                        "critical",
+                        self.TRANSFORMATION_TIME_CRITICAL_MS,
+                        "CRITICAL: Average transformation time {value}ms exceeds SLA {threshold}ms",
+                        lambda value, threshold: value > threshold,
+                    ),
+                    (
+                        "warning",
+                        self.TRANSFORMATION_TIME_WARNING_MS,
+                        "WARNING: Average transformation time {value}ms approaching SLA limit {threshold}ms",
+                        lambda value, threshold: value > threshold,
+                    ),
+                ),
             )
-            alerts.append(alert)
-            logger.warning(f"⚠️ {alert.message}")
-
-        # Check average transformation time
-        avg_time = stats.get("avg_transformation_time_ms", 0)
-        if avg_time > self.TRANSFORMATION_TIME_CRITICAL_MS:
-            alert = SLAAlert(
-                timestamp=current_time,
-                violation_type="performance",
-                severity="critical",
-                message=f"CRITICAL: Average transformation time {avg_time}ms exceeds SLA {self.TRANSFORMATION_TIME_CRITICAL_MS}ms",
-                metrics=stats,
-            )
-            alerts.append(alert)
-            logger.error(f"🚨 {alert.message}")
-
-        elif avg_time > self.TRANSFORMATION_TIME_WARNING_MS:
-            alert = SLAAlert(
-                timestamp=current_time,
-                violation_type="performance",
-                severity="warning",
-                message=f"WARNING: Average transformation time {avg_time}ms approaching SLA limit {self.TRANSFORMATION_TIME_CRITICAL_MS}ms",
-                metrics=stats,
-            )
-            alerts.append(alert)
-            logger.warning(f"⚠️ {alert.message}")
+        )
 
         # Store alerts
         self.alerts.extend(alerts)
@@ -114,42 +156,41 @@ class VectorMetricsCollector:
 
     def export_prometheus_metrics(self, stats: dict[str, Any]) -> str:
         """Export metrics in Prometheus format"""
-        metrics = []
-
-        # Counter metrics
-        metrics.append(
-            "# HELP vector_optimizer_total_optimizations Total number of vector query optimizations"
+        metrics: list[str] = []
+        self._append_metric(
+            metrics,
+            "vector_optimizer_total_optimizations",
+            "Total number of vector query optimizations",
+            "counter",
+            stats.get("total_optimizations", 0),
         )
-        metrics.append("# TYPE vector_optimizer_total_optimizations counter")
-        metrics.append(
-            f"vector_optimizer_total_optimizations {stats.get('total_optimizations', 0)}"
+        self._append_metric(
+            metrics,
+            "vector_optimizer_sla_violations",
+            "Total number of SLA violations",
+            "counter",
+            stats.get("sla_violations", 0),
         )
-
-        metrics.append("# HELP vector_optimizer_sla_violations Total number of SLA violations")
-        metrics.append("# TYPE vector_optimizer_sla_violations counter")
-        metrics.append(f"vector_optimizer_sla_violations {stats.get('sla_violations', 0)}")
-
-        # Gauge metrics
-        metrics.append("# HELP vector_optimizer_sla_compliance_rate SLA compliance rate percentage")
-        metrics.append("# TYPE vector_optimizer_sla_compliance_rate gauge")
-        metrics.append(
-            f"vector_optimizer_sla_compliance_rate {stats.get('sla_compliance_rate', 100.0)}"
+        self._append_metric(
+            metrics,
+            "vector_optimizer_sla_compliance_rate",
+            "SLA compliance rate percentage",
+            "gauge",
+            stats.get("sla_compliance_rate", 100.0),
         )
-
-        metrics.append(
-            "# HELP vector_optimizer_avg_transformation_time_ms Average transformation time in milliseconds"
+        self._append_metric(
+            metrics,
+            "vector_optimizer_avg_transformation_time_ms",
+            "Average transformation time in milliseconds",
+            "gauge",
+            stats.get("avg_transformation_time_ms", 0),
         )
-        metrics.append("# TYPE vector_optimizer_avg_transformation_time_ms gauge")
-        metrics.append(
-            f"vector_optimizer_avg_transformation_time_ms {stats.get('avg_transformation_time_ms', 0)}"
-        )
-
-        metrics.append(
-            "# HELP vector_optimizer_max_transformation_time_ms Maximum transformation time in milliseconds"
-        )
-        metrics.append("# TYPE vector_optimizer_max_transformation_time_ms gauge")
-        metrics.append(
-            f"vector_optimizer_max_transformation_time_ms {stats.get('max_transformation_time_ms', 0)}"
+        self._append_metric(
+            metrics,
+            "vector_optimizer_max_transformation_time_ms",
+            "Maximum transformation time in milliseconds",
+            "gauge",
+            stats.get("max_transformation_time_ms", 0),
         )
 
         return "\n".join(metrics)

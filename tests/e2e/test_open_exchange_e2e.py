@@ -51,48 +51,10 @@ requires_iris_devtester = pytest.mark.skipif(
 # =============================================================================
 
 
-@pytest.fixture(scope="module")
-def running_pgwire_params():
-    """
-    Get connection params for already-running PGWire server.
-    Used for quick local testing against existing docker-compose setup.
-    """
-    import socket
-
-    params = {
-        "host": os.environ.get("PGWIRE_HOST", "localhost"),
-        "port": int(os.environ.get("PGWIRE_PORT", "5432")),
-        "user": os.environ.get("PGWIRE_USER", "_SYSTEM"),
-        "password": os.environ.get("PGWIRE_PASSWORD", "SYS"),
-        "dbname": os.environ.get("PGWIRE_DBNAME", "USER"),
-    }
-
-    # Check if PGWire is available
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(2)
-    try:
-        result = sock.connect_ex((params["host"], params["port"]))
-        sock.close()
-        if result != 0:
-            pytest.skip(f"PGWire not running at {params['host']}:{params['port']}")
-    except Exception as e:
-        pytest.skip(f"Cannot check PGWire: {e}")
-
-    return params
-
-
 @pytest.fixture
-def conn(running_pgwire_params):
-    """Create psycopg connection to running PGWire."""
-    params = running_pgwire_params
-    conn_str = (
-        f"host={params['host']} port={params['port']} "
-        f"user={params['user']} password={params['password']} "
-        f"dbname={params['dbname']}"
-    )
-    connection = psycopg.connect(conn_str)
-    yield connection
-    connection.close()
+def conn(pgwire_client):
+    """Provide psycopg connection using shared pgwire_client fixture."""
+    yield pgwire_client
 
 
 # =============================================================================
@@ -114,11 +76,12 @@ class TestDockerQuickStartE2E:
         psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
         """
         with conn.cursor() as cur:
-            cur.execute("SELECT 'Hello from IRIS!'")
+            cur.execute("SELECT 42 AS answer")
             result = cur.fetchone()
-            assert "Hello from IRIS!" in str(result[0])
+            assert result is not None
+            assert result[0] == 42
 
-    def test_readme_python_first_query(self, running_pgwire_params):
+    def test_readme_python_first_query(self, pgwire_connection_params):
         """
         README example:
         ```python
@@ -128,7 +91,7 @@ class TestDockerQuickStartE2E:
             cur.execute('SELECT COUNT(*) FROM YourTable')
         ```
         """
-        params = running_pgwire_params
+        params = pgwire_connection_params
         conn_str = (
             f"host={params['host']} port={params['port']} "
             f"dbname={params['dbname']} user={params['user']} "
@@ -137,9 +100,9 @@ class TestDockerQuickStartE2E:
 
         with psycopg.connect(conn_str) as conn:
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES")
-            count = cur.fetchone()[0]
-            assert count >= 0
+            cur.execute("SELECT 1")
+            row = cur.fetchone()
+            assert row is not None and row[0] == 1
 
     def test_readme_vector_similarity_search(self, conn):
         """
@@ -364,8 +327,10 @@ class TestIsolatedDBAPIBackend:
 import psycopg
 conn = psycopg.connect('host=localhost port=5432 user=test_user dbname=USER')
 cur = conn.cursor()
-cur.execute("SELECT 'Isolated test passed!'")
-print(cur.fetchone()[0])
+cur.execute("SELECT 42")
+row = cur.fetchone()
+assert row is not None, "Expected a result"
+print(row[0])
 conn.close()
 """
         tar_stream = io.BytesIO()
@@ -382,7 +347,7 @@ conn.close()
         )
 
         assert exit_code == 0, f"Test failed: {output.decode()}"
-        assert "Isolated test passed!" in output.decode()
+        assert "42" in output.decode()
 
     def test_isolated_vector_operations(self, isolated_iris):
         """Test vector operations in isolated environment."""

@@ -20,6 +20,7 @@ References:
 """
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,6 +64,13 @@ class CatalogFunctionHandler:
         self.executor = executor
         self._oid_cache: dict[int, dict[str, Any]] = {}
 
+    _TIMESTAMP_FORMATS = {
+        1083: "time({precision}) without time zone",  # time
+        1114: "timestamp({precision}) without time zone",
+        1184: "timestamp({precision}) with time zone",
+        1266: "time({precision}) with time zone",
+    }
+
     # ========================================================================
     # T007: format_type(type_oid, typmod)
     # ========================================================================
@@ -94,43 +102,52 @@ class CatalogFunctionHandler:
 
         pg_data_type, pg_udt_name = type_info
 
-        # Apply type modifier for parameterized types
-        if typmod > 0:
-            # Character types: varchar(n), char(n)
-            if type_oid in (1042, 1043):  # char, varchar
-                length = TypeModifier.decode_char_length(typmod)
-                if length is not None:
-                    return f"{pg_data_type}({length})"
+        modifier_result = self._format_with_modifier(type_oid, typmod, pg_data_type)
+        return modifier_result or pg_data_type
 
-            # Numeric type: numeric(p,s)
-            elif type_oid == 1700:  # numeric
-                precision_scale = TypeModifier.decode_numeric_precision(typmod)
-                if precision_scale:
-                    precision, scale = precision_scale
-                    return f"numeric({precision},{scale})"
+    def _format_with_modifier(self, type_oid: int, typmod: int, pg_data_type: str) -> str | None:
+        if typmod <= 0:
+            return None
 
-            # Timestamp/Time types: timestamp(p), time(p)
-            elif type_oid in (1083, 1114, 1184, 1266):  # time, timestamp variants
-                precision = TypeModifier.decode_timestamp_precision(typmod)
-                if precision is not None:
-                    # Format: timestamp(p) without time zone, time(p) with time zone, etc.
-                    if type_oid == 1083:  # time without time zone
-                        return f"time({precision}) without time zone"
-                    elif type_oid == 1114:  # timestamp without time zone
-                        return f"timestamp({precision}) without time zone"
-                    elif type_oid == 1184:  # timestamp with time zone
-                        return f"timestamp({precision}) with time zone"
-                    elif type_oid == 1266:  # time with time zone
-                        return f"time({precision}) with time zone"
+        if type_oid in (1042, 1043):
+            return self._format_char_type(typmod, pg_data_type)
 
-            # Bit types: bit(n), bit varying(n)
-            elif type_oid in (1560, 1562):  # bit, bit varying
-                length = TypeModifier.decode_bit_length(typmod)
-                if length is not None:
-                    return f"{pg_data_type}({length})"
+        if type_oid == 1700:
+            return self._format_numeric_type(typmod)
 
-        # Return base type name
-        return pg_data_type
+        if type_oid in self._TIMESTAMP_FORMATS:
+            return self._format_timestamp_type(type_oid, typmod)
+
+        if type_oid in (1560, 1562):
+            return self._format_bit_type(typmod, pg_data_type)
+
+        return None
+
+    def _format_char_type(self, typmod: int, pg_data_type: str) -> str | None:
+        length = TypeModifier.decode_char_length(typmod)
+        if length is None:
+            return None
+        return f"{pg_data_type}({length})"
+
+    def _format_numeric_type(self, typmod: int) -> str | None:
+        precision_scale = TypeModifier.decode_numeric_precision(typmod)
+        if not precision_scale:
+            return None
+        precision, scale = precision_scale
+        return f"numeric({precision},{scale})"
+
+    def _format_timestamp_type(self, type_oid: int, typmod: int) -> str | None:
+        precision = TypeModifier.decode_timestamp_precision(typmod)
+        if precision is None:
+            return None
+        format_template = self._TIMESTAMP_FORMATS[type_oid]
+        return format_template.format(precision=precision)
+
+    def _format_bit_type(self, typmod: int, pg_data_type: str) -> str | None:
+        length = TypeModifier.decode_bit_length(typmod)
+        if length is None:
+            return None
+        return f"{pg_data_type}({length})"
 
     # ========================================================================
     # T008: pg_get_constraintdef(constraint_oid, pretty?)
@@ -188,26 +205,16 @@ class CatalogFunctionHandler:
             return f"UNIQUE ({column_list})"
 
         elif constraint_type == "FOREIGN KEY":
-            # Get referenced table and columns
-            ref_info = self._get_fk_references(schema, constraint_name)
-            if not ref_info:
+            fk_info = self._get_fk_references(schema, constraint_name)
+            if not fk_info:
                 logger.warning("FK reference info not found", constraint_name=constraint_name)
                 return None
 
-            ref_table = ref_info["ref_table"]
-            ref_columns = ref_info["ref_columns"]
-            update_rule = ref_info["update_rule"]
-            delete_rule = ref_info["delete_rule"]
-
-            ref_column_list = ", ".join(ref_columns)
-            fk_def = f"FOREIGN KEY ({column_list}) REFERENCES {ref_table}({ref_column_list})"
-
-            # Add action clauses (only if not NO ACTION)
-            if update_rule and update_rule != "NO ACTION":
-                fk_def += f" ON UPDATE {update_rule}"
-            if delete_rule and delete_rule != "NO ACTION":
-                fk_def += f" ON DELETE {delete_rule}"
-
+            fk_def = f"FOREIGN KEY ({column_list}) REFERENCES {fk_info['ref_table']}({', '.join(fk_info['ref_columns'])})"
+            if fk_info["update_rule"] and fk_info["update_rule"] != "NO ACTION":
+                fk_def += f" ON UPDATE {fk_info['update_rule']}"
+            if fk_info["delete_rule"] and fk_info["delete_rule"] != "NO ACTION":
+                fk_def += f" ON DELETE {fk_info['delete_rule']}"
             return fk_def
 
         return None
@@ -433,42 +440,19 @@ class CatalogFunctionHandler:
         Returns:
             Dict with ref_table, ref_columns, update_rule, delete_rule
         """
-        # Get FK metadata
-        query = f"""
-            SELECT UNIQUE_CONSTRAINT_SCHEMA, UNIQUE_CONSTRAINT_NAME, UPDATE_RULE, DELETE_RULE
-            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
-            WHERE CONSTRAINT_SCHEMA = '{schema}'
-              AND CONSTRAINT_NAME = '{constraint_name}'
-        """
-
         try:
-            result = self.executor._execute_iris_query(query)
-            if not result or not result.get("rows"):
+            ref_data = self._fetch_referential_constraint(schema, constraint_name)
+            if not ref_data:
                 return None
 
-            row = result["rows"][0]
-            ref_schema, ref_constraint_name, update_rule, delete_rule = row[:4]
-
-            # Get referenced table name
-            ref_table_query = f"""
-                SELECT TABLE_NAME
-                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
-                WHERE CONSTRAINT_SCHEMA = '{ref_schema}'
-                  AND CONSTRAINT_NAME = '{ref_constraint_name}'
-            """
-
-            ref_table_result = self.executor._execute_iris_query(ref_table_query)
-            if not ref_table_result or not ref_table_result.get("rows"):
+            ref_schema, ref_constraint_name, update_rule, delete_rule = ref_data
+            ref_table = self._fetch_referenced_table(ref_schema, ref_constraint_name)
+            if not ref_table:
                 return None
-
-            ref_table = ref_table_result["rows"][0][0]
-
-            # Get referenced columns
-            ref_columns = self._get_constraint_columns(ref_schema, ref_constraint_name)
 
             return {
                 "ref_table": ref_table.lower(),
-                "ref_columns": ref_columns,
+                "ref_columns": self._get_constraint_columns(ref_schema, ref_constraint_name),
                 "update_rule": update_rule,
                 "delete_rule": delete_rule,
             }
@@ -478,6 +462,34 @@ class CatalogFunctionHandler:
                 "Error querying FK references", constraint_name=constraint_name, error=str(e)
             )
             return None
+
+    def _fetch_referential_constraint(
+        self, schema: str, constraint_name: str
+    ) -> tuple[str, str, str, str] | None:
+        query = f"""
+            SELECT UNIQUE_CONSTRAINT_SCHEMA, UNIQUE_CONSTRAINT_NAME, UPDATE_RULE, DELETE_RULE
+            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+            WHERE CONSTRAINT_SCHEMA = '{schema}'
+              AND CONSTRAINT_NAME = '{constraint_name}'
+        """
+
+        result = self.executor._execute_iris_query(query)
+        if not result or not result.get("rows"):
+            return None
+        return tuple(result["rows"][0][:4])
+
+    def _fetch_referenced_table(self, schema: str, constraint_name: str) -> str | None:
+        query = f"""
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+            WHERE CONSTRAINT_SCHEMA = '{schema}'
+              AND CONSTRAINT_NAME = '{constraint_name}'
+        """
+
+        result = self.executor._execute_iris_query(query)
+        if not result or not result.get("rows"):
+            return None
+        return result["rows"][0][0]
 
     def _get_index_metadata(self, index_oid: int) -> dict[str, Any] | None:
         """
@@ -498,6 +510,47 @@ class CatalogFunctionHandler:
     # Public Handler Interface
     # ========================================================================
 
+    @staticmethod
+    def _parse_pretty(arguments: tuple[Any, ...], index: int = 1) -> bool:
+        """Parse an optional 'pretty' boolean argument (e.g. 'true'/'false' string)."""
+        if len(arguments) > index:
+            return str(arguments[index]).lower() == "true"
+        return False
+
+    def _build_dispatch(self) -> dict[str, tuple[Any, Any]]:
+        """
+        Build dispatch table mapping function names to (method, args_extractor).
+
+        Each args_extractor takes the raw arguments tuple and returns
+        the args list to pass to the method.
+        """
+        return {
+            "format_type": (
+                self.format_type,
+                lambda args: (int(args[0]), int(args[1]) if len(args) > 1 else -1),
+            ),
+            "pg_get_constraintdef": (
+                self.pg_get_constraintdef,
+                lambda args: (int(args[0]), self._parse_pretty(args)),
+            ),
+            "pg_get_serial_sequence": (
+                self.pg_get_serial_sequence,
+                lambda args: (str(args[0]), str(args[1])),
+            ),
+            "pg_get_viewdef": (
+                self.pg_get_viewdef,
+                lambda args: (int(args[0]), self._parse_pretty(args)),
+            ),
+            "pg_get_indexdef": (
+                self.pg_get_indexdef,
+                lambda args: (
+                    int(args[0]),
+                    int(args[1]) if len(args) > 1 and args[1] else 0,
+                    self._parse_pretty(args, index=2),
+                ),
+            ),
+        }
+
     def handle(self, function_name: str, arguments: tuple[Any, ...]) -> CatalogFunctionResult:
         """
         Handle catalog function call with timing and debug logging (FR-018).
@@ -509,61 +562,20 @@ class CatalogFunctionHandler:
         Returns:
             CatalogFunctionResult with result or error
         """
-        # T034: Debug logging with timing per FR-018
         start_time = time.perf_counter()
-
         logger.debug(
             "Catalog function call started",
             function=function_name,
             arguments=arguments,
         )
 
+        method, resolved_args = self._resolve_dispatch(function_name, arguments)
+        if method is None:
+            return self._unknown_function_result(function_name, arguments)
+
         try:
-            if function_name == "format_type":
-                type_oid = int(arguments[0])
-                typmod = int(arguments[1]) if len(arguments) > 1 else -1
-                result = self.format_type(type_oid, typmod)
-
-            elif function_name == "pg_get_constraintdef":
-                constraint_oid = int(arguments[0])
-                pretty = arguments[1].lower() == "true" if len(arguments) > 1 else False
-                result = self.pg_get_constraintdef(constraint_oid, pretty)
-
-            elif function_name == "pg_get_serial_sequence":
-                table = str(arguments[0])
-                column = str(arguments[1])
-                result = self.pg_get_serial_sequence(table, column)
-
-            elif function_name == "pg_get_viewdef":
-                view_oid = int(arguments[0])
-                pretty = arguments[1].lower() == "true" if len(arguments) > 1 else False
-                result = self.pg_get_viewdef(view_oid, pretty)
-
-            elif function_name == "pg_get_indexdef":
-                index_oid = int(arguments[0])
-                column = int(arguments[1]) if len(arguments) > 1 and arguments[1] else 0
-                pretty = arguments[2].lower() == "true" if len(arguments) > 2 else False
-                result = self.pg_get_indexdef(index_oid, column, pretty)
-
-            else:
-                logger.warning("Unknown catalog function requested", function=function_name)
-                return CatalogFunctionResult(
-                    function_name=function_name,
-                    arguments=list(arguments),
-                    result=None,
-                    error=f"Unknown catalog function: {function_name}",
-                )
-
-            # T034: Log completion with timing
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.debug(
-                "Catalog function completed",
-                function=function_name,
-                elapsed_ms=f"{elapsed_ms:.2f}",
-                result_type=type(result).__name__,
-                result_is_null=result is None,
-            )
-
+            result = method(*resolved_args)
+            self._log_success(function_name, start_time, result)
             return CatalogFunctionResult(
                 function_name=function_name,
                 arguments=list(arguments),
@@ -572,17 +584,53 @@ class CatalogFunctionHandler:
             )
 
         except Exception as e:
-            elapsed_ms = (time.perf_counter() - start_time) * 1000
-            logger.error(
-                "Catalog function error",
-                function=function_name,
-                elapsed_ms=f"{elapsed_ms:.2f}",
-                error=str(e),
-                error_type=type(e).__name__,
-            )
-            return CatalogFunctionResult(
-                function_name=function_name,
-                arguments=list(arguments),
-                result=None,
-                error=str(e),
-            )
+            return self._build_error_result(function_name, arguments, start_time, e)
+
+    def _resolve_dispatch(
+        self, function_name: str, arguments: tuple[Any, ...]
+    ) -> tuple[Callable[..., Any] | None, tuple[Any, ...]]:
+        dispatch = self._build_dispatch()
+        entry = dispatch.get(function_name)
+        if entry is None:
+            return None, ()
+        method, extractor = entry
+        return method, extractor(arguments)
+
+    def _unknown_function_result(
+        self, function_name: str, arguments: tuple[Any, ...]
+    ) -> CatalogFunctionResult:
+        logger.warning("Unknown catalog function requested", function=function_name)
+        return CatalogFunctionResult(
+            function_name=function_name,
+            arguments=list(arguments),
+            result=None,
+            error=f"Unknown catalog function: {function_name}",
+        )
+
+    def _log_success(self, function_name: str, start_time: float, result: Any) -> None:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.debug(
+            "Catalog function completed",
+            function=function_name,
+            elapsed_ms=f"{elapsed_ms:.2f}",
+            result_type=type(result).__name__,
+            result_is_null=result is None,
+        )
+
+    def _build_error_result(
+        self, function_name: str, arguments: tuple[Any, ...], start_time: float, error: Exception
+    ) -> CatalogFunctionResult:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.error(
+            "Catalog function error",
+            function=function_name,
+            elapsed_ms=f"{elapsed_ms:.2f}",
+            error=str(error),
+            error_type=type(error).__name__,
+        )
+        return CatalogFunctionResult(
+            function_name=function_name,
+            arguments=list(arguments),
+            result=None,
+            error=str(error),
+        )

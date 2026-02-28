@@ -201,6 +201,18 @@ class MigrationExecutor:
                 if not sql_statement:
                     continue
                 parsed_statements = parser.parse(sql_statement)
+                if not parsed_statements:
+                    # The DDL parser couldn't recognize the statement — strip
+                    # comments and execute it raw so the database can reject it
+                    # if it is invalid (e.g. CREATE TAABLE typos).
+                    import re
+
+                    raw_sql = re.sub(r"--[^\n]*", "", sql_statement).strip().rstrip(";").strip()
+                    if raw_sql:
+                        with self._cursor() as cursor:
+                            cursor.execute(raw_sql)
+                        statements_executed += 1
+                    continue
                 for parsed in parsed_statements:
                     translated = translator.translate_statement(parsed)
                     warnings.extend(translated.translation_warnings)

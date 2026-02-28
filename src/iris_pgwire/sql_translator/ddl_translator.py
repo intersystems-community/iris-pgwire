@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-print("🔥 DDLTranslator module loaded from SOURCE at import time")
-
 from dataclasses import dataclass, field, replace
-from typing import Any, TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from ..config import DDLTranslationConfig
 from .reserved_words import ReservedWordChecker
-
 
 if TYPE_CHECKING:
     from .constraint_translator import ConstraintTranslator
@@ -36,18 +33,18 @@ class DDLStatement:
 
     raw_sql: str
     statement_type: str
-    translated_sql: Optional[str] = None
-    schema_name: Optional[str] = None
-    table_name: Optional[str] = None
-    operation: Optional[str] = None
-    operation_details: Optional[dict[str, Any]] = None
-    index_name: Optional[str] = None
-    index_definition: Optional["IndexDefinition"] = None
-    columns: Tuple["ColumnDefinition", ...] = field(default_factory=tuple)
-    constraints: Tuple["ConstraintDefinition", ...] = field(default_factory=tuple)
-    translation_warnings: Tuple[str, ...] = field(default_factory=tuple)
+    translated_sql: str | None = None
+    schema_name: str | None = None
+    table_name: str | None = None
+    operation: str | None = None
+    operation_details: dict[str, Any] | None = None
+    index_name: str | None = None
+    index_definition: IndexDefinition | None = None
+    columns: tuple[ColumnDefinition, ...] = field(default_factory=tuple)
+    constraints: tuple[ConstraintDefinition, ...] = field(default_factory=tuple)
+    translation_warnings: tuple[str, ...] = field(default_factory=tuple)
     is_translatable: bool = True
-    skip_reason: Optional[str] = None
+    skip_reason: str | None = None
 
 
 class DDLTranslator:
@@ -57,8 +54,8 @@ class DDLTranslator:
         self,
         config: DDLTranslationConfig | None = None,
         reserved_checker: ReservedWordChecker | None = None,
-        type_translator: "TypeTranslator | None" = None,
-        constraint_translator: "ConstraintTranslator | None" = None,
+        type_translator: TypeTranslator | None = None,
+        constraint_translator: ConstraintTranslator | None = None,
     ) -> None:
         self._config = config or DDLTranslationConfig()
         self._reserved_checker = reserved_checker or ReservedWordChecker()
@@ -334,8 +331,8 @@ class DDLTranslator:
         return " ".join(parts)
 
     def _build_table_identifier(
-        self, schema_name: Optional[str], table_name: Optional[str]
-    ) -> Optional[str]:
+        self, schema_name: str | None, table_name: str | None
+    ) -> str | None:
         quoted_table = self._quote_identifier(table_name)
         if not quoted_table:
             return None
@@ -344,7 +341,7 @@ class DDLTranslator:
             return f"{quoted_schema}.{quoted_table}"
         return quoted_table
 
-    def _quote_identifier(self, identifier: Optional[str]) -> Optional[str]:
+    def _quote_identifier(self, identifier: str | None) -> str | None:
         if identifier is None:
             return None
         normalized = identifier.strip()
@@ -357,12 +354,12 @@ class DDLTranslator:
             return normalized
         return self._reserved_checker.quote_if_needed(normalized)
 
-    def _load_type_translator(self, use_alter_table_syntax: bool = False) -> "TypeTranslator":
+    def _load_type_translator(self, use_alter_table_syntax: bool = False) -> TypeTranslator:
         from .type_translator import TypeTranslator
 
         return TypeTranslator(use_alter_table_syntax=use_alter_table_syntax)
 
-    def _load_constraint_translator(self) -> "ConstraintTranslator":
+    def _load_constraint_translator(self) -> ConstraintTranslator:
         from .constraint_translator import ConstraintTranslator
 
         return ConstraintTranslator()

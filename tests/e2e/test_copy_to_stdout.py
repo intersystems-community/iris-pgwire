@@ -18,6 +18,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("cleanup_test_tables")
+
 
 @pytest.mark.e2e
 def test_copy_250_patients_to_stdout(psql_command, patients_csv_file):

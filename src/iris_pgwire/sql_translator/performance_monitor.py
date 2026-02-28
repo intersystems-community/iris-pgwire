@@ -7,6 +7,7 @@ real-time metrics collection, and constitutional compliance reporting.
 Constitutional Compliance: Sub-5ms translation SLA with detailed monitoring.
 """
 
+import json
 import os
 import statistics
 import threading
@@ -15,7 +16,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 # Global switch for performance monitoring
 MONITOR_ENABLED = os.getenv("IRIS_PGWIRE_PERF_MONITOR", "false").lower() == "true"
@@ -140,47 +141,25 @@ class ConstitutionalReport:
 
 
 class PerformanceMonitor:
-    """
-    Performance monitor with constitutional SLA enforcement
-
-    Features:
-    - Real-time performance metric collection
-    - 5ms SLA enforcement and violation tracking
-    - Component-level performance analysis
-    - Constitutional compliance reporting
-    - Automatic alerting for SLA violations
-    - Historical performance trend analysis
-    """
+    """Performance monitoring with constitutional SLA enforcement."""
 
     def __init__(self, sla_threshold_ms: float = 5.0, history_size: int = 10000):
-        """
-        Initialize performance monitor
-
-        Args:
-            sla_threshold_ms: SLA threshold in milliseconds (constitutional requirement: 5ms)
-            history_size: Number of metrics to keep in memory
-        """
         self.sla_threshold_ms = sla_threshold_ms
         self.history_size = history_size
 
-        # Thread-safe metric storage
         self._lock = threading.RLock()
         self._metrics: deque[PerformanceMetric] = deque(maxlen=history_size)
-        self._violations: deque[SLAViolation] = deque(maxlen=1000)  # Keep last 1000 violations
-
-        # Component-specific tracking
+        self._violations: deque[SLAViolation] = deque(maxlen=1000)
         self._component_metrics: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=1000))
         self._component_violations: dict[str, int] = defaultdict(int)
 
-        # Real-time statistics
         self._total_operations = 0
         self._total_violations = 0
         self._consecutive_violations = 0
         self._start_time = datetime.now(UTC)
 
-        # Alert thresholds
-        self.warning_threshold_ms = sla_threshold_ms * 0.8  # 80% of SLA
-        self.critical_violation_threshold = 5  # Consecutive violations before critical
+        self.warning_threshold_ms = sla_threshold_ms * 0.8
+        self.critical_violation_threshold = 5
 
     def record_metric(
         self,
@@ -191,62 +170,64 @@ class PerformanceMonitor:
         trace_id: str | None = None,
         **metadata,
     ) -> SLAViolation | None:
-        """
-        Record a performance metric
-
-        Args:
-            metric_type: Type of metric being recorded
-            value_ms: Metric value in milliseconds
-            component: Component that generated the metric
-            session_id: Optional session identifier
-            trace_id: Optional trace identifier
-            **metadata: Additional metric metadata
-
-        Returns:
-            SLA violation record if threshold exceeded, None otherwise
-        """
         if not MONITOR_ENABLED:
             return None
 
-        timestamp = datetime.now(UTC)
+        metric = PerformanceMetric(
+            metric_type=self._resolve_metric_type(metric_type),
+            value_ms=value_ms,
+            timestamp=datetime.now(UTC),
+            component=component,
+            session_id=session_id,
+            trace_id=trace_id,
+            metadata=metadata,
+        )
 
         with self._lock:
-            # Create metric record
-            metric = PerformanceMetric(
-                metric_type=metric_type,
-                value_ms=value_ms,
-                timestamp=timestamp,
-                component=component,
-                session_id=session_id,
-                trace_id=trace_id,
-                metadata=metadata,
-            )
-
-            # Store metric
-            self._metrics.append(metric)
-            self._component_metrics[component].append(value_ms)
-            self._total_operations += 1
-
-            # Check SLA compliance
-            violation = None
-            if value_ms > self.sla_threshold_ms:
-                violation = self._record_sla_violation(metric)
-                if HAS_PROMETHEUS:
-                    SLA_VIOLATIONS.labels(component=component, severity=violation.severity).inc()
-
-            if HAS_PROMETHEUS:
-                if metric_type == MetricType.TRANSLATION_TIME:
-                    TRANSLATION_LATENCY.labels(component=component).observe(value_ms)
-                elif metric_type == MetricType.BULK_INSERT_THROUGHPUT:
-                    BULK_INSERT_THROUGHPUT.observe(value_ms)
-
-            # Update consecutive violation tracking
-            if violation:
-                self._consecutive_violations += 1
-            else:
-                self._consecutive_violations = 0
-
+            self._append_metric(metric)
+            violation = self._evaluate_metric(metric)
             return violation
+
+    def _append_metric(self, metric: PerformanceMetric) -> None:
+        self._metrics.append(metric)
+        self._component_metrics[metric.component].append(metric.value_ms)
+        self._total_operations += 1
+
+    def _evaluate_metric(self, metric: PerformanceMetric) -> SLAViolation | None:
+        violation = None
+
+        if metric.value_ms > self.sla_threshold_ms:
+            violation = self._record_sla_violation(metric)
+            self._consecutive_violations += 1
+            self._publish_violation(metric.component, violation.severity)
+        else:
+            self._consecutive_violations = 0
+
+        self._observe_prometheus(metric)
+        return violation
+
+    def _observe_prometheus(self, metric: PerformanceMetric) -> None:
+        if not HAS_PROMETHEUS:
+            return
+
+        metric_type = metric.metric_type
+        if metric_type == MetricType.TRANSLATION_TIME:
+            TRANSLATION_LATENCY.labels(component=metric.component).observe(metric.value_ms)
+        elif metric_type == MetricType.BULK_INSERT_THROUGHPUT:
+            BULK_INSERT_THROUGHPUT.observe(metric.value_ms)
+
+    def _publish_violation(self, component: str, severity: str) -> None:
+        if not HAS_PROMETHEUS:
+            return
+        SLA_VIOLATIONS.labels(component=component, severity=severity).inc()
+
+    def _resolve_metric_type(self, metric_type: MetricType | str) -> MetricType:
+        if isinstance(metric_type, MetricType):
+            return metric_type
+        try:
+            return MetricType(metric_type)
+        except ValueError:
+            return MetricType.TRANSLATION_TIME
 
     def _record_sla_violation(self, metric: PerformanceMetric) -> SLAViolation:
         """Record an SLA violation"""
@@ -254,11 +235,11 @@ class PerformanceMonitor:
 
         # Determine severity
         if self._consecutive_violations >= self.critical_violation_threshold:
-            severity: Literal["critical", "major", "minor"] = "critical"
+            severity = "critical"
         elif violation_amount > self.sla_threshold_ms:  # More than double the SLA
-            severity: Literal["critical", "major", "minor"] = "major"
+            severity = "major"
         else:
-            severity: Literal["critical", "major", "minor"] = "minor"
+            severity = "minor"
 
         violation = SLAViolation(
             violation_id=f"v_{int(time.time() * 1000)}_{self._total_violations}",
@@ -320,62 +301,16 @@ class PerformanceMonitor:
             )
 
     def get_constitutional_report(self) -> ConstitutionalReport:
-        """
-        Generate comprehensive constitutional compliance report
-
-        Returns:
-            Constitutional compliance report with detailed metrics
-        """
         with self._lock:
-            # Calculate overall compliance
-            compliance_rate = max(
-                0.0, 1.0 - (self._total_violations / max(self._total_operations, 1))
-            )
-            violation_rate = self._total_violations / max(self._total_operations, 1)
-
-            # Determine overall status
-            if self._consecutive_violations >= self.critical_violation_threshold:
-                status = SLAStatus.CRITICAL
-            elif self._total_violations > 0:
-                if compliance_rate < 0.95:  # Less than 95% compliance
-                    status = SLAStatus.VIOLATION
-                else:
-                    status = SLAStatus.WARNING
-            else:
-                status = SLAStatus.COMPLIANT
-
-            # Get component compliance
-            component_compliance = {}
-            for component in self._component_metrics:
-                stats = self.get_component_stats(component)
-                if stats:
-                    component_compliance[component] = stats
-
-            # Get recent violations (last 10)
-            recent_violations = list(self._violations)[-10:] if self._violations else []
-
-            # Calculate performance metrics
+            compliance_rate, violation_rate, status = self._summarize_compliance()
+            component_compliance = self._collect_component_compliance()
             all_times = [m.value_ms for m in self._metrics]
-            performance_metrics = {}
-            if all_times:
-                performance_metrics = {
-                    "total_operations": self._total_operations,
-                    "avg_time_ms": statistics.mean(all_times),
-                    "min_time_ms": min(all_times),
-                    "max_time_ms": max(all_times),
-                    "p50_time_ms": statistics.median(all_times),
-                    "p95_time_ms": self._percentile(all_times, 0.95),
-                    "p99_time_ms": self._percentile(all_times, 0.99),
-                    "uptime_seconds": (datetime.now(UTC) - self._start_time).total_seconds(),
-                }
-
-            # Generate recommendations
+            performance_metrics = self._build_performance_metrics(all_times)
             recommendations = self._generate_recommendations(
                 status, compliance_rate, component_compliance
             )
-
-            # Count critical violations
-            critical_violations = sum(1 for v in self._violations if v.severity == "critical")
+            recent_violations = self._recent_violations_snapshot()
+            critical_violations = self._count_critical_violations()
 
             return ConstitutionalReport(
                 overall_compliance_rate=compliance_rate,
@@ -391,6 +326,54 @@ class PerformanceMonitor:
                 report_timestamp=datetime.now(UTC),
             )
 
+    def _summarize_compliance(self) -> tuple[float, float, SLAStatus]:
+        total_ops = max(self._total_operations, 1)
+        compliance_rate = max(0.0, 1.0 - (self._total_violations / total_ops))
+        violation_rate = self._total_violations / total_ops
+        status = self._determine_status(compliance_rate)
+        return compliance_rate, violation_rate, status
+
+    def _determine_status(self, compliance_rate: float) -> SLAStatus:
+        if self._consecutive_violations >= self.critical_violation_threshold:
+            return SLAStatus.CRITICAL
+        if self._total_violations > 0:
+            return SLAStatus.VIOLATION if compliance_rate < 0.95 else SLAStatus.WARNING
+        return SLAStatus.COMPLIANT
+
+    def _collect_component_compliance(self) -> dict[str, ComponentStats]:
+        component_compliance: dict[str, ComponentStats] = {}
+        for component in self._component_metrics:
+            stats = self.get_component_stats(component)
+            if stats:
+                component_compliance[component] = stats
+        return component_compliance
+
+    def _build_performance_metrics(self, values: list[float]) -> dict[str, Any]:
+        if not values:
+            return {}
+        return {
+            "total_operations": self._total_operations,
+            "avg_time_ms": statistics.mean(values),
+            "min_time_ms": min(values),
+            "max_time_ms": max(values),
+            "p50_time_ms": statistics.median(values),
+            "p95_time_ms": self._percentile(values, 0.95),
+            "p99_time_ms": self._percentile(values, 0.99),
+            "uptime_seconds": (datetime.now(UTC) - self._start_time).total_seconds(),
+        }
+
+    def _recent_violations_snapshot(self, limit: int = 10) -> list[SLAViolation]:
+        return list(self._violations)[-limit:]
+
+    def _count_critical_violations(self) -> int:
+        return sum(1 for violation in self._violations if violation.severity == "critical")
+
+    def _recent_metrics_snapshot(self, limit: int | None = None) -> list[PerformanceMetric]:
+        metrics = list(self._metrics)
+        if limit is None:
+            return metrics
+        return metrics[-limit:]
+
     def get_real_time_status(self) -> dict[str, Any]:
         """
         Get real-time performance status
@@ -400,7 +383,7 @@ class PerformanceMonitor:
         """
         with self._lock:
             # Get recent metrics (last 100)
-            recent_metrics = list(self._metrics)[-100:] if self._metrics else []
+            recent_metrics = self._recent_metrics_snapshot(100)
             recent_times = [m.value_ms for m in recent_metrics]
 
             # Calculate current performance
@@ -476,8 +459,6 @@ class PerformanceMonitor:
         """
         with self._lock:
             if format_type.lower() == "json":
-                import json
-
                 metrics_data = {
                     "constitutional_report": self.get_constitutional_report().__dict__,
                     "real_time_status": self.get_real_time_status(),
@@ -493,7 +474,7 @@ class PerformanceMonitor:
             elif format_type.lower() == "csv":
                 # Simple CSV export of recent metrics
                 csv_lines = ["timestamp,component,metric_type,value_ms,sla_violation"]
-                for metric in list(self._metrics)[-1000:]:  # Last 1000 metrics
+                for metric in self._recent_metrics_snapshot(1000):
                     violation = "yes" if metric.value_ms > self.sla_threshold_ms else "no"
                     csv_lines.append(
                         f"{metric.timestamp.isoformat()},{metric.component},"

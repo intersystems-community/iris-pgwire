@@ -37,6 +37,8 @@ repo and required emergency git history rewriting + GitHub Support involvement t
 - Python 3.11+ + `pydantic`, `structlog`, `intersystems-irispython` (038-fix-attribute-error)
 - Python 3.11+ + `intersystems-irispython`, `psycopg[binary]`, `iris-devtester`, `structlog` (040-fix-posixtime-timestamp)
 - InterSystems IRIS (via embedded Python and DBAPI pool) (040-fix-posixtime-timestamp)
+- Python 3.11+ + intersystems-irispython, psycopg[binary], iris-devtester, structlog, pydantic (041-code-simplification)
+- N/A (refactoring only) (041-code-simplification)
 
 - Python 3.11+ + `iris-devtester`, `intersystems-irispython`, `psycopg[binary]` (033-devtester-skills)
 
@@ -56,9 +58,9 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11+: Follow standard conventions
 
 ## Recent Changes
+- 041-code-simplification: Added Python 3.11+ + intersystems-irispython, psycopg[binary], iris-devtester, structlog, pydantic
 - 040-fix-posixtime-timestamp: Added Python 3.11+ + `intersystems-irispython`, `psycopg[binary]`, `iris-devtester`, `structlog`
 - 038-fix-attribute-error: Added Python 3.11+ + `pydantic`, `structlog`, `intersystems-irispython`
-- 037-pg-type-catalog: Added Python 3.11+ + `intersystems-irispython`, `psycopg[binary]`, `pydantic`, `structlog`
 
 
 <!-- MANUAL ADDITIONS START -->

@@ -138,7 +138,7 @@ def patients_csv_file(test_data_dir):
     return csv_file
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def cleanup_test_tables(psql_command):
     """
     Clean up test tables before and after each test.
@@ -155,9 +155,10 @@ def cleanup_test_tables(psql_command):
 
 
 def _cleanup(psql_command):
-    """Helper to drop test tables."""
-    # Drop Patients table if exists (ignore errors)
-    try:
-        psql_command("DROP TABLE IF EXISTS Patients", expect_success=False)
-    except Exception:
-        pass  # Ignore cleanup errors
+    """Helper to drop test tables in FK-safe order."""
+    # Drop child tables before parent tables to avoid FK constraint errors
+    for table in ["LabResults", "Patients"]:
+        try:
+            psql_command(f"DROP TABLE IF EXISTS {table}", expect_success=False)
+        except Exception:
+            pass  # Ignore cleanup errors

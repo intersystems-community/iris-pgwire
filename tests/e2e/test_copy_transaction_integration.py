@@ -18,6 +18,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("cleanup_test_tables")
+
 
 @pytest.mark.e2e
 def test_copy_from_stdin_with_commit(psql_command, patients_csv_file):

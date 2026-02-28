@@ -12,6 +12,7 @@ import logging
 import os
 import ssl
 import sys
+from typing import Any
 
 import structlog
 
@@ -205,6 +206,7 @@ class PGWireServer:
         logger.info("Client connection established", connection_id=connection_id)
         self.active_connections.add(writer)
 
+        protocol = None
         try:
             # Create protocol handler for this connection
             protocol = PGWireProtocol(
@@ -283,55 +285,50 @@ class PGWireServer:
             logger.info("PGWire server stopped", connections_closed=len(self.active_connections))
 
 
+def _gather_main_config() -> dict[str, Any]:
+    """Read server configuration from environment variables."""
+    return {
+        "host": os.getenv("PGWIRE_HOST", "0.0.0.0"),
+        "port": int(os.getenv("PGWIRE_PORT", "5432")),
+        "iris_host": os.getenv("IRIS_HOST", "localhost"),
+        "iris_port": int(os.getenv("IRIS_PORT", "1972")),
+        "iris_username": os.getenv("IRIS_USERNAME", "_SYSTEM"),
+        "iris_password": os.getenv("IRIS_PASSWORD", "SYS"),
+        "iris_namespace": os.getenv("IRIS_NAMESPACE", "USER"),
+        "enable_ssl": os.getenv("PGWIRE_SSL_ENABLED", "false").lower() == "true",
+        "ssl_cert_path": os.getenv("PGWIRE_SSL_CERT"),
+        "ssl_key_path": os.getenv("PGWIRE_SSL_KEY"),
+        "connection_pool_size": int(os.getenv("PGWIRE_POOL_SIZE", "10")),
+        "connection_pool_timeout": float(os.getenv("PGWIRE_POOL_TIMEOUT", "5.0")),
+        "enable_query_cache": os.getenv("PGWIRE_QUERY_CACHE_ENABLED", "true").lower() == "true",
+        "query_cache_size": int(os.getenv("PGWIRE_QUERY_CACHE_SIZE", "1000")),
+        "debug": os.getenv("PGWIRE_DEBUG", "false").lower() == "true",
+    }
+
+
 async def main():
     """Main entry point for the PGWire server"""
 
-    if "iris" in sys.modules:
-        print(f"DEBUG: iris module already in sys.modules: {sys.modules['iris']}", flush=True)
-        print(f"DEBUG: iris module dir: {dir(sys.modules['iris'])}", flush=True)
-    else:
-        print("DEBUG: iris module NOT in sys.modules at start of main", flush=True)
+    config = _gather_main_config()
 
-    # Read configuration from environment
-    host = os.getenv("PGWIRE_HOST", "0.0.0.0")
-    port = int(os.getenv("PGWIRE_PORT", "5432"))
-
-    iris_host = os.getenv("IRIS_HOST", "localhost")
-    iris_port = int(os.getenv("IRIS_PORT", "1972"))
-    iris_username = os.getenv("IRIS_USERNAME", "_SYSTEM")
-    iris_password = os.getenv("IRIS_PASSWORD", "SYS")
-    iris_namespace = os.getenv("IRIS_NAMESPACE", "USER")
-
-    enable_ssl = os.getenv("PGWIRE_SSL_ENABLED", "false").lower() == "true"
-    ssl_cert_path = os.getenv("PGWIRE_SSL_CERT")
-    ssl_key_path = os.getenv("PGWIRE_SSL_KEY")
-
-    connection_pool_size = int(os.getenv("PGWIRE_POOL_SIZE", "10"))
-    connection_pool_timeout = float(os.getenv("PGWIRE_POOL_TIMEOUT", "5.0"))
-    enable_query_cache = os.getenv("PGWIRE_QUERY_CACHE_ENABLED", "true").lower() == "true"
-    query_cache_size = int(os.getenv("PGWIRE_QUERY_CACHE_SIZE", "1000"))
-
-    debug = os.getenv("PGWIRE_DEBUG", "false").lower() == "true"
-
-    if debug:
+    if config["debug"]:
         logging.basicConfig(level=logging.DEBUG)
 
-    # Create and start server
     server = PGWireServer(
-        host=host,
-        port=port,
-        iris_host=iris_host,
-        iris_port=iris_port,
-        iris_username=iris_username,
-        iris_password=iris_password,
-        iris_namespace=iris_namespace,
-        enable_ssl=enable_ssl,
-        ssl_cert_path=ssl_cert_path,
-        ssl_key_path=ssl_key_path,
-        connection_pool_size=connection_pool_size,
-        connection_pool_timeout=connection_pool_timeout,
-        enable_query_cache=enable_query_cache,
-        query_cache_size=query_cache_size,
+        host=config["host"],
+        port=config["port"],
+        iris_host=config["iris_host"],
+        iris_port=config["iris_port"],
+        iris_username=config["iris_username"],
+        iris_password=config["iris_password"],
+        iris_namespace=config["iris_namespace"],
+        enable_ssl=config["enable_ssl"],
+        ssl_cert_path=config["ssl_cert_path"],
+        ssl_key_path=config["ssl_key_path"],
+        connection_pool_size=config["connection_pool_size"],
+        connection_pool_timeout=config["connection_pool_timeout"],
+        enable_query_cache=config["enable_query_cache"],
+        query_cache_size=config["query_cache_size"],
     )
 
     try:

@@ -49,6 +49,9 @@ class PgAttrdefEmulator:
         self._by_table: dict[int, list[PgAttrdef]] = {}
         self._by_column: dict[tuple[int, int], PgAttrdef] = {}
 
+    _IDENTITY_KEYWORDS = ("$IDENTITY", "IDENTITY")
+    _TIMESTAMP_KEYWORDS = ("CURRENT_TIMESTAMP", "NOW()", "GETDATE()", "SYSDATE")
+
     def from_iris_default(
         self,
         table_name: str,
@@ -104,21 +107,17 @@ class PgAttrdefEmulator:
         Returns:
             PostgreSQL-formatted default expression
         """
-        if iris_default is None:
+        if not iris_default:
             return ""
 
-        upper_default = iris_default.upper().strip()
+        cleaned = iris_default.strip()
+        upper_default = cleaned.upper()
 
-        # Handle IRIS auto-increment ($IDENTITY)
-        if "$IDENTITY" in upper_default or "IDENTITY" in upper_default:
-            # Generate PostgreSQL nextval() expression
+        if any(keyword in upper_default for keyword in self._IDENTITY_KEYWORDS):
             seq_name = f"{table_name}_{column_name}_seq"
             return f"nextval('{seq_name}'::regclass)"
 
-        # Handle timestamp defaults
-        if any(
-            ts in upper_default for ts in ["CURRENT_TIMESTAMP", "NOW()", "GETDATE()", "SYSDATE"]
-        ):
+        if any(keyword in upper_default for keyword in self._TIMESTAMP_KEYWORDS):
             return "CURRENT_TIMESTAMP"
 
         if "CURRENT_DATE" in upper_default:
@@ -127,29 +126,24 @@ class PgAttrdefEmulator:
         if "CURRENT_TIME" in upper_default:
             return "CURRENT_TIME"
 
-        # Handle NULL default
         if upper_default == "NULL":
             return "NULL"
 
-        # String literals - ensure proper quoting
-        if iris_default.startswith("'") and iris_default.endswith("'"):
-            return iris_default
+        if cleaned.startswith("'") and cleaned.endswith("'"):
+            return cleaned
 
-        # Numeric literals - check before booleans since 0/1 are valid numbers
         try:
-            float(iris_default)
-            return iris_default
+            float(cleaned)
+            return cleaned
         except ValueError:
             pass
 
-        # Handle boolean defaults (only quoted strings, not bare 0/1)
         if upper_default in ("TRUE", "'1'"):
             return "true"
         if upper_default in ("FALSE", "'0'"):
             return "false"
 
-        # Default: return as-is (may be function call or expression)
-        return iris_default
+        return cleaned
 
     def add_default(self, attrdef: PgAttrdef) -> None:
         """

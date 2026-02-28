@@ -16,7 +16,7 @@ class IndexValidator:
         r'^(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*))*$'
     )
 
-    def validate_index(self, definition: "IndexDefinition", original_sql: str) -> None:
+    def validate_index(self, definition: IndexDefinition, original_sql: str) -> None:
         if definition.where_clause:
             self._raise_error(
                 "IRIS does not support partial indexes",

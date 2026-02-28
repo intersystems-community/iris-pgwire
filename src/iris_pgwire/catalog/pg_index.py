@@ -154,15 +154,34 @@ class PgIndexEmulator:
         index_oid = self.oid_gen.get_index_oid(index_name, schema)
         namespace_oid = self.oid_gen.get_namespace_oid("public")
 
-        # Create pg_class entry for the index
-        index_class = PgClass(
+        index_class = self._build_index_class(
+            index_oid=index_oid,
+            index_name=index_name,
+            namespace_oid=namespace_oid,
+            column_count=len(column_positions),
+        )
+
+        pg_index = self._build_index_entry(
+            index_oid=index_oid,
+            table_oid=table_oid,
+            column_positions=column_positions,
+            is_unique=is_unique,
+            is_primary=is_primary,
+        )
+
+        return index_class, pg_index
+
+    def _build_index_class(
+        self, index_oid: int, index_name: str, namespace_oid: int, column_count: int
+    ) -> PgClass:
+        return PgClass(
             oid=index_oid,
             relname=index_name.lower(),
             relnamespace=namespace_oid,
             reltype=0,
             reloftype=0,
             relowner=10,
-            relam=403,  # btree access method
+            relam=403,
             relfilenode=index_oid,
             reltablespace=0,
             relpages=1,
@@ -172,8 +191,8 @@ class PgIndexEmulator:
             relhasindex=False,
             relisshared=False,
             relpersistence="p",
-            relkind="i",  # index
-            relnatts=len(column_positions),
+            relkind="i",
+            relnatts=column_count,
             relchecks=0,
             relhasrules=False,
             relhastriggers=False,
@@ -190,8 +209,15 @@ class PgIndexEmulator:
             reloptions=None,
         )
 
-        # Create pg_index entry
-        pg_index = PgIndex(
+    def _build_index_entry(
+        self,
+        index_oid: int,
+        table_oid: int,
+        column_positions: list[int],
+        is_unique: bool,
+        is_primary: bool,
+    ) -> PgIndex:
+        return PgIndex(
             indexrelid=index_oid,
             indrelid=table_oid,
             indnatts=len(column_positions),
@@ -208,13 +234,11 @@ class PgIndexEmulator:
             indisreplident=False,
             indkey=column_positions,
             indcollation=[0] * len(column_positions),
-            indclass=[1978] * len(column_positions),  # int4_ops
+            indclass=[1978] * len(column_positions),
             indoption=[0] * len(column_positions),
             indexprs=None,
             indpred=None,
         )
-
-        return index_class, pg_index
 
     def add_index(self, index_class: PgClass, pg_index: PgIndex) -> None:
         """

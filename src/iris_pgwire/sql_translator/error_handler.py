@@ -15,9 +15,9 @@ from typing import Any
 
 from .models import (
     IssueSeverity,
-    ParsedConstruct,
     PerformanceTimer,
 )
+from .parser import ParsedConstruct
 
 
 class ErrorStrategy(Enum):
@@ -170,18 +170,18 @@ class IRISErrorHandler:
         self, construct: ParsedConstruct, sql: str
     ) -> UnsupportedConstruct | None:
         """Check if a parsed construct is supported"""
-        construct_name = construct.construct_name.upper()
+        construct_name = construct.original_text.upper()
 
         # Check against known unsupported constructs
         if construct_name in self.unsupported_functions:
             reason_info = self.unsupported_functions[construct_name]
             return UnsupportedConstruct(
                 construct_name=construct_name,
-                construct_type=construct.construct_type,
+                construct_type=construct.construct_type.value,
                 reason=reason_info["reason"],
                 original_fragment=construct.original_text,
-                position_start=construct.position_start,
-                position_end=construct.position_end,
+                position_start=construct.location.column,
+                position_end=construct.location.column + construct.location.length,
                 severity=reason_info["severity"],
                 suggested_alternative=reason_info.get("alternative"),
                 documentation_link=reason_info.get("docs"),
@@ -192,11 +192,11 @@ class IRISErrorHandler:
         if construct_name in self.licensing_dependent:
             return UnsupportedConstruct(
                 construct_name=construct_name,
-                construct_type=construct.construct_type,
+                construct_type=construct.construct_type.value,
                 reason=UnsupportedReason.LICENSING,
                 original_fragment=construct.original_text,
-                position_start=construct.position_start,
-                position_end=construct.position_end,
+                position_start=construct.location.column,
+                position_end=construct.location.column + construct.location.length,
                 severity=IssueSeverity.WARNING,
                 suggested_alternative="Verify IRIS licensing for this feature",
                 workaround="Contact InterSystems for licensing information",
@@ -374,24 +374,9 @@ class IRISErrorHandler:
         fallback_used = False
 
         for construct in unsupported_constructs:
-            # Choose strategy based on construct characteristics
-            if construct.reason == UnsupportedReason.DATA_INTEGRITY:
-                # Critical - fail for data integrity risks
-                errors.append(f"Critical: {construct.construct_name} poses data integrity risk")
-            elif construct.severity == IssueSeverity.ERROR:
-                # Try substitution first
-                fallback = self._get_fallback_mapping(construct)
-                if fallback:
-                    modified_sql = modified_sql.replace(construct.original_fragment, fallback)
-                    warnings.append(f"Substituted {construct.construct_name} with {fallback}")
-                    fallback_used = True
-                    self._fallback_count += 1
-                else:
-                    errors.append(f"No safe alternative for {construct.construct_name}")
-            else:
-                # Warning level - passthrough with warning
-                warnings.append(f"Unsupported construct passed through: {construct.construct_name}")
-                self._passthrough_count += 1
+            modified_sql, fallback_used = self._process_hybrid_construct(
+                construct, modified_sql, warnings, errors, fallback_used
+            )
 
         success = len(errors) == 0
 
@@ -405,6 +390,34 @@ class IRISErrorHandler:
             strategy_applied=ErrorStrategy.HYBRID,
             processing_time_ms=0.0,
         )
+
+    def _process_hybrid_construct(
+        self,
+        construct: UnsupportedConstruct,
+        modified_sql: str,
+        warnings: list[str],
+        errors: list[str],
+        fallback_used: bool,
+    ) -> tuple[str, bool]:
+        """Handle a single construct using the hybrid strategy"""
+        if construct.reason == UnsupportedReason.DATA_INTEGRITY:
+            errors.append(f"Critical: {construct.construct_name} poses data integrity risk")
+            return modified_sql, fallback_used
+
+        if construct.severity == IssueSeverity.ERROR:
+            fallback = self._get_fallback_mapping(construct)
+            if fallback:
+                modified_sql = modified_sql.replace(construct.original_fragment, fallback)
+                warnings.append(f"Substituted {construct.construct_name} with {fallback}")
+                fallback_used = True
+                self._fallback_count += 1
+            else:
+                errors.append(f"No safe alternative for {construct.construct_name}")
+            return modified_sql, fallback_used
+
+        warnings.append(f"Unsupported construct passed through: {construct.construct_name}")
+        self._passthrough_count += 1
+        return modified_sql, fallback_used
 
     def _get_fallback_mapping(self, construct: UnsupportedConstruct) -> str | None:
         """Get fallback mapping for unsupported construct"""

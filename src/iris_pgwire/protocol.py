@@ -217,7 +217,7 @@ class PGWireProtocol:
                 "protocol_handler",
                 session_id=session_id,
                 trace_id=f"conn_{self.connection_id}",
-            ) as tracker:
+            ) as _tracker:
                 final_sql, _, result = self.iris_executor.sql_pipeline.process(
                     original_sql, session_id=session_id, executor=self.iris_executor
                 )
@@ -1303,38 +1303,14 @@ class PGWireProtocol:
             if query.upper().strip().startswith("CREATE TABLE"):
                 logger.warning(f"FULL CREATE TABLE SQL (length={len(query)}): {query}")
 
-            # Handle transaction commands first (no IRIS execution needed)
             query_upper = query.upper().strip()
-            if query_upper in ("BEGIN", "START TRANSACTION"):
-                await self.iris_executor.begin_transaction(session_id=self.connection_id)
-                await self.send_transaction_response("BEGIN", send_ready=send_ready)
+            if await self._maybe_handle_transaction_command(query_upper, send_ready):
                 return
-            elif query_upper in ("COMMIT", "END"):
-                await self.iris_executor.commit_transaction(session_id=self.connection_id)
-                await self.send_transaction_response("COMMIT", send_ready=send_ready)
+            if await self._maybe_handle_deallocate_command(query_upper, send_ready):
                 return
-            elif query_upper == "ROLLBACK":
-                await self.iris_executor.rollback_transaction(session_id=self.connection_id)
-                await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
+            if await self._maybe_handle_set_or_reset_command(query_upper, send_ready):
                 return
-
-            # Handle DEALLOCATE commands (PostgreSQL prepared statement cleanup)
-            # IRIS doesn't support DEALLOCATE, so we silently succeed
-            if query_upper.startswith("DEALLOCATE"):
-                await self.send_deallocate_response(query_upper, send_ready=send_ready)
-                return
-
-            # Handle PostgreSQL SET commands (runtime parameter configuration)
-            # IRIS uses different SET syntax (requires OPTION keyword),
-            # so we intercept PostgreSQL-specific SET commands and silently succeed
-            if query_upper.startswith("SET ") or query_upper.startswith("RESET "):
-                await self.handle_set_command(query_upper, send_ready=send_ready)
-                return
-
-            # Handle PostgreSQL UNLISTEN and CLOSE ALL commands
-            # IRIS doesn't support these, so we silently succeed
-            if query_upper.startswith("UNLISTEN") or query_upper.startswith("CLOSE ALL"):
-                await self.send_postgresql_command_response(query_upper, send_ready=send_ready)
+            if await self._maybe_handle_postgresql_command(query_upper, send_ready):
                 return
 
             # P6: Handle COPY commands
@@ -1420,6 +1396,39 @@ class PGWireProtocol:
             if send_ready:
                 await self.send_ready_for_query()
 
+    async def _maybe_handle_transaction_command(self, query_upper: str, send_ready: bool) -> bool:
+        if query_upper in ("BEGIN", "START TRANSACTION"):
+            await self.iris_executor.begin_transaction(session_id=self.connection_id)
+            await self.send_transaction_response("BEGIN", send_ready=send_ready)
+            return True
+        elif query_upper in ("COMMIT", "END"):
+            await self.iris_executor.commit_transaction(session_id=self.connection_id)
+            await self.send_transaction_response("COMMIT", send_ready=send_ready)
+            return True
+        elif query_upper == "ROLLBACK":
+            await self.iris_executor.rollback_transaction(session_id=self.connection_id)
+            await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
+            return True
+        return False
+
+    async def _maybe_handle_deallocate_command(self, query_upper: str, send_ready: bool) -> bool:
+        if query_upper.startswith("DEALLOCATE"):
+            await self.send_deallocate_response(query_upper, send_ready=send_ready)
+            return True
+        return False
+
+    async def _maybe_handle_set_or_reset_command(self, query_upper: str, send_ready: bool) -> bool:
+        if query_upper.startswith("SET ") or query_upper.startswith("RESET "):
+            await self.handle_set_command(query_upper, send_ready=send_ready)
+            return True
+        return False
+
+    async def _maybe_handle_postgresql_command(self, query_upper: str, send_ready: bool) -> bool:
+        if query_upper.startswith("UNLISTEN") or query_upper.startswith("CLOSE ALL"):
+            await self.send_postgresql_command_response(query_upper, send_ready=send_ready)
+            return True
+        return False
+
     async def send_query_result(
         self,
         result: dict[str, Any],
@@ -1460,60 +1469,18 @@ class PGWireProtocol:
                 columns_sample=columns[:3] if columns else None,
             )
 
-            # Send RowDescription for SELECT queries (ALWAYS, even if empty result set)
-            # PostgreSQL protocol requires RowDescription for all SELECT queries
-            if columns and send_row_description:
-                logger.info(
-                    "🔵 STEP 1: About to send RowDescription",
-                    connection_id=self.connection_id,
-                    column_count=len(columns),
-                    row_count=len(rows),
-                    result_formats=result_formats,
-                )
-                await self.send_row_description(columns, result_formats=result_formats, rows=rows)
-                logger.info("🔵 STEP 2: RowDescription sent", connection_id=self.connection_id)
-            elif columns and not send_row_description:
-                logger.info(
-                    "🔵 STEP 1 (SKIPPED): RowDescription already sent by Describe",
-                    connection_id=self.connection_id,
-                    column_count=len(columns),
-                )
-
-            # Send DataRows if we have any rows
-            if rows and columns:
-                logger.info(
-                    "🔵 STEP 2: About to send DataRows",
-                    connection_id=self.connection_id,
-                    row_count=len(rows),
-                )
-                await self.send_data_rows_with_backpressure(rows, columns)
-                logger.info("🔵 STEP 3: DataRows sent", connection_id=self.connection_id)
-
-            # Send CommandComplete
-            if command.upper() == "SELECT":
-                tag = f"SELECT {row_count}\x00".encode()
-            else:
-                tag = f"{command} {row_count}\x00".encode()
-
-            cmd_complete_length = 4 + len(tag)
-            cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
-            logger.info(
-                "🔵 STEP 4: About to send CommandComplete",
-                connection_id=self.connection_id,
-                tag=tag.decode("utf-8", errors="replace").rstrip("\x00"),
+            await self._maybe_send_row_description(
+                columns, rows, result_formats, send_row_description
             )
-            self.writer.write(cmd_complete)
-            await self.writer.drain()
-            logger.info(
-                "🔵 STEP 5: CommandComplete sent and drained", connection_id=self.connection_id
-            )
+            await self._maybe_send_data_rows(rows, columns)
+            await self._send_command_complete(command, row_count)
 
             # CRITICAL: For Extended Protocol, give time for Sync message to arrive
             # Without this, rapid return to message loop can miss the Sync message
             if not send_ready:
-                import asyncio
-
-                await asyncio.sleep(0.001)  # 1ms grace period for Sync to arrive
+                await asyncio.sleep(
+                    0.001
+                )  # 1ms grace period for Sync to arrive (allows Sync to be enqueued)
 
             # Send ReadyForQuery ONLY for Simple Query Protocol
             # Extended Protocol (Parse/Bind/Execute/Sync) will send it in Sync handler
@@ -1534,11 +1501,67 @@ class PGWireProtocol:
             )
             raise
 
-    async def send_row_description(
+    async def _maybe_send_row_description(
         self,
         columns: list[dict[str, Any]],
-        result_formats: list[int] = None,
-        rows: list[list[Any]] = None,
+        rows: list[list[Any]],
+        result_formats: list[int] | None,
+        send_row_description: bool,
+    ):
+        if not columns:
+            return
+
+        if send_row_description:
+            logger.info(
+                "🔵 STEP 1: About to send RowDescription",
+                connection_id=self.connection_id,
+                column_count=len(columns),
+                row_count=len(rows),
+                result_formats=result_formats,
+            )
+            await self.send_row_description(columns, result_formats=result_formats, rows=rows)
+            logger.info("🔵 STEP 2: RowDescription sent", connection_id=self.connection_id)
+        else:
+            logger.info(
+                "🔵 STEP 1 (SKIPPED): RowDescription already sent by Describe",
+                connection_id=self.connection_id,
+                column_count=len(columns),
+            )
+
+    async def _maybe_send_data_rows(self, rows: list[list[Any]], columns: list[dict[str, Any]]):
+        if not (rows and columns):
+            return
+
+        logger.info(
+            "🔵 STEP 2: About to send DataRows",
+            connection_id=self.connection_id,
+            row_count=len(rows),
+        )
+        await self.send_data_rows_with_backpressure(rows, columns)
+        logger.info("🔵 STEP 3: DataRows sent", connection_id=self.connection_id)
+
+    async def _send_command_complete(self, command: str, row_count: int):
+        if command.upper() == "SELECT":
+            tag = f"SELECT {row_count}\x00".encode()
+        else:
+            tag = f"{command} {row_count}\x00".encode()
+
+        cmd_complete_length = 4 + len(tag)
+        cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
+        logger.info(
+            "🔵 STEP 4: About to send CommandComplete",
+            connection_id=self.connection_id,
+            tag=tag.decode("utf-8", errors="replace").rstrip("\x00"),
+        )
+        self.writer.write(cmd_complete)
+        await self.writer.drain()
+        logger.info("🔵 STEP 5: CommandComplete sent and drained", connection_id=self.connection_id)
+
+    async def send_row_description(
+        self,
+        columns: list[dict[str, Any]] | None,
+        result_formats: list[int] | None = None,
+        rows: list[list[Any]] | None = None,
     ):
         """Send RowDescription message for query columns
 
@@ -1549,6 +1572,7 @@ class PGWireProtocol:
                            If None or empty, defaults to text format (0) for all columns
             rows: Optional sample data rows to ensure field count consistency
         """
+        columns = columns or []
         field_count = len(columns)
 
         if rows and len(rows) > 0:
@@ -1565,7 +1589,7 @@ class PGWireProtocol:
         logger.info(
             "🔴 SEND_ROW_DESCRIPTION CALLED",
             field_count=field_count,
-            columns=columns[:2],
+            columns=(columns or [])[:2],
             result_formats=result_formats,
         )
 
@@ -1573,109 +1597,14 @@ class PGWireProtocol:
         if field_count < 0 or field_count > 65535:
             raise ValueError(f"Invalid field count: {field_count}")
 
-        row_desc_data = struct.pack(
-            "!cIH", MSG_ROW_DESCRIPTION, 0, field_count
-        )  # Length will be updated
-
-        # Get type mappings from IRIS executor (fallback if columns don't have OID info)
+        row_desc_data = struct.pack("!cIH", MSG_ROW_DESCRIPTION, 0, field_count)
         type_mappings = self.iris_executor.get_iris_type_mapping()
-
-        # Normalize result_formats for easier access
-        if result_formats is None:
-            result_formats = []
+        normalized_formats = result_formats or []
 
         for i in range(field_count):
-            if i < len(columns):
-                col = columns[i]
-            else:
-                # Padding for mismatch - ensure protocol consistency even if metadata is missing
-                col = {
-                    "name": f"column{i + 1}",
-                    "type_oid": 25,
-                    "type_size": -1,
-                    "type_modifier": -1,
-                }
-
-            name = col.get("name", "unknown")
-            # CRITICAL: Lowercase column names for PostgreSQL compatibility
-            # PostgreSQL clients expect lowercase unless explicitly quoted
-            if isinstance(name, str):
-                name = name.lower()
-
-            # CRITICAL FIX: Use type_oid, type_size, type_modifier if already present
-            # (IRIS executor may have already done the type mapping)
-            if "type_oid" in col:
-                # Use pre-computed PostgreSQL type info from executor
-                type_oid = col["type_oid"]
-                # Handle None values from executor - struct.pack requires integers
-                type_size = col.get("type_size") or -1
-                type_modifier = col.get("type_modifier") or -1
-
-                logger.info(
-                    "🟢 Using pre-computed type info from executor",
-                    name=name,
-                    type_oid=type_oid,
-                    type_size=type_size,
-                )
-            else:
-                # Fallback: Map IRIS type to PostgreSQL type
-                iris_type = col.get("type", "VARCHAR").upper()
-                pg_type = type_mappings.get(iris_type, type_mappings["VARCHAR"])
-
-                type_oid = pg_type["oid"]
-                type_size = pg_type["typlen"]
-                type_modifier = -1
-
-                logger.warning(
-                    "⚠️ Falling back to type mapping",
-                    name=name,
-                    iris_type=iris_type,
-                    mapped_oid=type_oid,
-                )
-
-            # CRITICAL FIX: Determine format_code from result_formats (from Bind message)
-            # PostgreSQL protocol: format_code MUST match the format used in DataRow
-            # 0 = text format, 1 = binary format
-            if not result_formats:
-                # No format codes specified - default to text (0) for all columns
-                format_code = 0
-            elif len(result_formats) == 1:
-                # Single format code applies to all columns
-                format_code = result_formats[0]
-            elif i < len(result_formats):
-                # Per-column format code
-                format_code = result_formats[i]
-            else:
-                # Fallback to text if not enough format codes
-                format_code = 0
-
-            logger.info(
-                "🔵 Format code determined",
-                column_index=i,
-                column_name=name,
-                format_code=format_code,
-                format_type="binary" if format_code == 1 else "text",
+            field_name, field_info = self._build_row_description_field(
+                columns or [], i, type_mappings, normalized_formats
             )
-
-            field_name = name.encode("utf-8") + b"\x00"
-            field_info = struct.pack(
-                "!IHIhiH",
-                0,  # table_oid
-                0,  # column_attr_number
-                type_oid,  # type_oid ('I' - 32-bit unsigned)
-                type_size,  # type_size ('h' - 16-bit signed, allows -1)
-                type_modifier,  # type_modifier ('i' - 32-bit signed)
-                format_code,
-            )  # format_code ('H' - 16-bit unsigned)
-
-            logger.info(
-                "🔵 Field info packed",
-                name=name,
-                field_name_length=len(field_name),
-                field_info_length=len(field_info),
-                field_info_hex=field_info.hex(),
-            )
-
             row_desc_data += field_name + field_info
 
         # Update length
@@ -1704,6 +1633,90 @@ class PGWireProtocol:
             connection_id=self.connection_id,
         )
 
+    def _build_row_description_field(
+        self,
+        columns: list[dict[str, Any]],
+        index: int,
+        type_mappings: dict[str, dict[str, int]],
+        result_formats: list[int],
+    ) -> tuple[bytes, bytes]:
+        if index < len(columns):
+            col = columns[index]
+        else:
+            col = {
+                "name": f"column{index + 1}",
+                "type_oid": 25,
+                "type_size": -1,
+                "type_modifier": -1,
+            }
+
+        name = col.get("name", f"column{index + 1}")
+        if not isinstance(name, str):
+            name = str(name)
+        name = name.lower()
+
+        if "type_oid" in col:
+            type_oid = col["type_oid"]
+            type_size = col.get("type_size") or -1
+            type_modifier = col.get("type_modifier") or -1
+            logger.info(
+                "🟢 Using pre-computed type info from executor",
+                name=name,
+                type_oid=type_oid,
+                type_size=type_size,
+            )
+        else:
+            iris_type = col.get("type", "VARCHAR").upper()
+            pg_type = type_mappings.get(iris_type, type_mappings["VARCHAR"])
+            type_oid = pg_type["oid"]
+            type_size = pg_type["typlen"]
+            type_modifier = -1
+            logger.warning(
+                "⚠️ Falling back to type mapping",
+                name=name,
+                iris_type=iris_type,
+                mapped_oid=type_oid,
+            )
+
+        format_code = self._determine_row_description_format_code(result_formats, index)
+        logger.info(
+            "🔵 Format code determined",
+            column_index=index,
+            column_name=name,
+            format_code=format_code,
+            format_type="binary" if format_code == 1 else "text",
+        )
+
+        field_name = name.encode("utf-8") + b"\x00"
+        field_info = struct.pack(
+            "!IHIhiH",
+            0,  # table_oid
+            0,  # column_attr_number
+            type_oid,  # type_oid
+            type_size,  # type_size
+            type_modifier,  # type_modifier
+            format_code,
+        )
+
+        logger.info(
+            "🔵 Field info packed",
+            name=name,
+            field_name_length=len(field_name),
+            field_info_length=len(field_info),
+            field_info_hex=field_info.hex(),
+        )
+
+        return field_name, field_info
+
+    def _determine_row_description_format_code(self, result_formats: list[int], index: int) -> int:
+        if not result_formats:
+            return 0
+        if len(result_formats) == 1:
+            return result_formats[0]
+        if index < len(result_formats):
+            return result_formats[index]
+        return 0
+
     async def send_data_row(self, row: list[Any], columns: list[dict[str, Any]]):
         """Send DataRow message for a single row"""
         field_count = len(columns)
@@ -1729,203 +1742,8 @@ class PGWireProtocol:
                 # NULL value
                 data_row_data += struct.pack("!I", 0xFFFFFFFF)  # -1 indicates NULL
             else:
-                # Determine format code for this column
-                # If result_formats is empty, default to text (0)
-                # If single format, apply to all columns
-                # If per-column formats, use specific format for this column
-                result_formats = getattr(self, "_current_result_formats", [])
-                if not result_formats:
-                    format_code = 0  # Default to text
-                elif len(result_formats) == 1:
-                    format_code = result_formats[0]  # Single format for all columns
-                elif i < len(result_formats):
-                    format_code = result_formats[i]  # Per-column format
-                else:
-                    format_code = 0  # Fallback to text
-
-                if format_code == 0:
-                    # Text format - use PostgreSQL text conventions
-                    type_oid = col.get("type_oid", 25)
-
-                    # Special handling for boolean - PostgreSQL uses 't'/'f', not 'True'/'False' or '1'/'0'
-                    if type_oid == 16:  # BOOL
-                        if value in (1, "1", True, "t", "true", "TRUE"):
-                            value_str = "t"
-                        elif value in (0, "0", False, "f", "false", "FALSE"):
-                            value_str = "f"
-                        else:
-                            value_str = "t" if value else "f"
-                    else:
-                        value_str = str(value)
-
-                    value_bytes = value_str.encode("utf-8")
-                    data_row_data += struct.pack("!I", len(value_bytes)) + value_bytes
-                elif format_code == 1:
-                    # Binary format - encode based on PostgreSQL type OID
-                    type_oid = col.get("type_oid", 25)  # Default to TEXT (25)
-
-                    try:
-                        if type_oid == 23:  # INT4
-                            binary_data = struct.pack("!i", int(value))
-                        elif type_oid == 21:  # INT2 (smallint)
-                            binary_data = struct.pack("!h", int(value))
-                        elif type_oid == 20:  # INT8 (bigint)
-                            binary_data = struct.pack("!q", int(value))
-                        elif type_oid == 700:  # FLOAT4
-                            binary_data = struct.pack("!f", float(value))
-                        elif type_oid == 701:  # FLOAT8 (double)
-                            binary_data = struct.pack("!d", float(value))
-                        elif type_oid == 26:  # OID (4-byte unsigned int)
-                            binary_data = struct.pack("!I", int(value))
-                        elif type_oid == 19:  # NAME (63-byte string, encode as text)
-                            binary_data = str(value).encode("utf-8")
-                        elif type_oid == 16:  # BOOL
-                            binary_data = struct.pack("!?", bool(value))
-                        elif type_oid == 1082:  # DATE
-                            # PostgreSQL DATE binary format: 4-byte signed integer (days since 2000-01-01)
-                            # Value should already be converted from IRIS format in iris_executor.py
-                            binary_data = struct.pack("!i", int(value))
-                        elif type_oid == 1114:  # TIMESTAMP (without timezone)
-                            # PostgreSQL TIMESTAMP binary format: 8-byte signed integer (microseconds since 2000-01-01 00:00:00)
-                            # IRIS returns timestamps as strings like '2025-11-14 20:57:57'
-                            import datetime
-
-                            # Parse IRIS timestamp string
-                            if isinstance(value, str):
-                                for _fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-                                    try:
-                                        timestamp_obj = datetime.datetime.strptime(value, _fmt)
-                                        break
-                                    except ValueError:
-                                        continue
-                                else:
-                                    raise ValueError(f"Cannot parse timestamp string: {value!r}")
-                            elif isinstance(value, datetime.datetime):
-                                timestamp_obj = value
-                            else:
-                                raise ValueError(f"Unexpected timestamp value type: {type(value)}")
-
-                            # PostgreSQL J2000 epoch: 2000-01-01 00:00:00
-                            PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
-
-                            # Calculate microseconds since J2000 epoch
-                            delta = timestamp_obj - PG_EPOCH
-                            microseconds = int(delta.total_seconds() * 1_000_000)
-
-                            # Pack as 8-byte signed integer
-                            binary_data = struct.pack("!q", microseconds)
-                        elif type_oid == 1700:  # NUMERIC/DECIMAL
-                            # PostgreSQL NUMERIC binary format:
-                            # https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/numeric.c
-                            # struct NumericData {
-                            #     int16 ndigits;  // number of base-10000 digits
-                            #     int16 weight;   // weight of first digit (10000^weight)
-                            #     int16 sign;     // 0x0000=positive, 0x4000=negative, 0xC000=NaN
-                            #     int16 dscale;   // display scale (digits after decimal point)
-                            #     int16 digits[]; // base-10000 digits
-                            # }
-                            from decimal import Decimal
-
-                            if isinstance(value, Decimal):
-                                # Convert Decimal to PostgreSQL binary NUMERIC format
-                                dec_str = str(value)
-                                is_negative = dec_str.startswith("-")
-                                dec_str = dec_str.lstrip("-")
-
-                                # Split into integer and fractional parts
-                                if "." in dec_str:
-                                    int_part, frac_part = dec_str.split(".")
-                                    dscale = len(frac_part)
-                                else:
-                                    int_part = dec_str
-                                    frac_part = ""
-                                    dscale = 0
-
-                                # PostgreSQL NUMERIC splits digits at decimal point
-                                # Integer part: pad left, fractional part: pad right
-                                # Example: 3.14 → int_part='3' frac_part='14'
-                                #   int groups: ['0003'] → [3]
-                                #   frac groups: ['1400'] → [1400]
-                                #   combined: [3, 1400] with weight=0
-
-                                # Process integer part (pad on LEFT to make groups of 4)
-                                if int_part == "0" or not int_part:
-                                    int_groups = []
-                                    int_weight = -1
-                                else:
-                                    int_padding = (4 - len(int_part) % 4) % 4
-                                    int_padded = "0" * int_padding + int_part
-                                    int_groups = []
-                                    for i in range(0, len(int_padded), 4):
-                                        int_groups.append(int(int_padded[i : i + 4]))
-                                    # Remove leading zeros
-                                    while int_groups and int_groups[0] == 0:
-                                        int_groups.pop(0)
-                                    int_weight = len(int_groups) - 1
-
-                                # Process fractional part (pad on RIGHT to make groups of 4)
-                                if frac_part:
-                                    frac_padding = (4 - len(frac_part) % 4) % 4
-                                    frac_padded = frac_part + "0" * frac_padding
-                                    frac_groups = []
-                                    for i in range(0, len(frac_padded), 4):
-                                        frac_groups.append(int(frac_padded[i : i + 4]))
-                                    # Remove trailing zeros
-                                    while frac_groups and frac_groups[-1] == 0:
-                                        frac_groups.pop()
-                                else:
-                                    frac_groups = []
-
-                                # Combine integer and fractional parts
-                                digits_10000 = int_groups + frac_groups
-                                weight = int_weight if int_groups else -len(frac_groups)
-
-                                ndigits = len(digits_10000)
-                                sign = 0x4000 if is_negative else 0x0000
-
-                                # Pack into PostgreSQL binary format
-                                binary_data = struct.pack("!hhhh", ndigits, weight, sign, dscale)
-                                for digit in digits_10000:
-                                    binary_data += struct.pack("!H", digit)
-                            else:
-                                # Fallback for non-Decimal values
-                                binary_data = str(value).encode("utf-8")
-                        else:
-                            # Fallback to text for unknown types
-                            binary_data = str(value).encode("utf-8")
-
-                        data_row_data += struct.pack("!I", len(binary_data)) + binary_data
-
-                        logger.debug(
-                            "Binary encoded column",
-                            column_index=i,
-                            type_oid=type_oid,
-                            value=value,
-                            binary_length=len(binary_data),
-                        )
-
-                    except (ValueError, struct.error) as e:
-                        # If binary encoding fails, fallback to text
-                        logger.warning(
-                            "Binary encoding failed, falling back to text",
-                            column_index=i,
-                            type_oid=type_oid,
-                            value=value,
-                            error=str(e),
-                        )
-                        value_str = str(value)
-                        value_bytes = value_str.encode("utf-8")
-                        data_row_data += struct.pack("!I", len(value_bytes)) + value_bytes
-                else:
-                    # Unknown format code - default to text
-                    logger.warning(
-                        "Unknown format code, defaulting to text",
-                        format_code=format_code,
-                        column_index=i,
-                    )
-                    value_str = str(value)
-                    value_bytes = value_str.encode("utf-8")
-                    data_row_data += struct.pack("!I", len(value_bytes)) + value_bytes
+                format_code = self._get_data_row_format_code(i)
+                data_row_data += self._serialize_column_value(value, col, format_code, i)
 
         # Update length
         total_length = len(data_row_data) - 1  # Subtract the message type byte
@@ -1941,6 +1759,159 @@ class PGWireProtocol:
 
         self.writer.write(data_row_data)
         await self.writer.drain()
+
+    def _get_data_row_format_code(self, index: int) -> int:
+        result_formats = getattr(self, "_current_result_formats", [])
+        if not result_formats:
+            return 0
+        if len(result_formats) == 1:
+            return result_formats[0]
+        if index < len(result_formats):
+            return result_formats[index]
+        return 0
+
+    def _serialize_column_value(
+        self, value: Any, col: dict[str, Any], format_code: int, column_index: int
+    ) -> bytes:
+        if format_code == 0:
+            type_oid = col.get("type_oid", 25)
+            value_str = self._format_text_value(value, type_oid)
+            value_bytes = value_str.encode("utf-8")
+            return struct.pack("!I", len(value_bytes)) + value_bytes
+
+        if format_code == 1:
+            type_oid = col.get("type_oid", 25)
+            binary_data = self._encode_binary_column_value(type_oid, value, column_index)
+            return struct.pack("!I", len(binary_data)) + binary_data
+
+        logger.warning(
+            "Unknown format code, defaulting to text",
+            format_code=format_code,
+            column_index=column_index,
+        )
+        value_bytes = str(value).encode("utf-8")
+        return struct.pack("!I", len(value_bytes)) + value_bytes
+
+    def _format_text_value(self, value: Any, type_oid: int) -> str:
+        if type_oid == 16:
+            if value in (1, "1", True, "t", "true", "TRUE"):
+                return "t"
+            if value in (0, "0", False, "f", "false", "FALSE"):
+                return "f"
+            return "t" if value else "f"
+        return str(value)
+
+    def _encode_binary_column_value(self, type_oid: int, value: Any, column_index: int) -> bytes:
+        try:
+            if type_oid == 23:  # INT4
+                binary_data = struct.pack("!i", int(value))
+            elif type_oid == 21:  # INT2
+                binary_data = struct.pack("!h", int(value))
+            elif type_oid == 20:  # INT8
+                binary_data = struct.pack("!q", int(value))
+            elif type_oid == 700:
+                binary_data = struct.pack("!f", float(value))
+            elif type_oid == 701:
+                binary_data = struct.pack("!d", float(value))
+            elif type_oid == 26:
+                binary_data = struct.pack("!I", int(value))
+            elif type_oid == 19:
+                binary_data = str(value).encode("utf-8")
+            elif type_oid == 16:
+                binary_data = struct.pack("!?", bool(value))
+            elif type_oid == 1082:
+                binary_data = struct.pack("!i", int(value))
+            elif type_oid in (1114, 1184):
+                import datetime
+
+                if isinstance(value, str):
+                    for _fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+                        try:
+                            timestamp_obj = datetime.datetime.strptime(value, _fmt)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        raise ValueError(f"Cannot parse timestamp string: {value!r}")
+                elif isinstance(value, datetime.datetime):
+                    timestamp_obj = value
+                else:
+                    raise ValueError(f"Unexpected timestamp value type: {type(value)}")
+
+                PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
+                delta = timestamp_obj - PG_EPOCH
+                microseconds = int(delta.total_seconds() * 1_000_000)
+                binary_data = struct.pack("!q", microseconds)
+            elif type_oid == 1700:
+                from decimal import Decimal
+
+                if isinstance(value, Decimal):
+                    dec_str = str(value)
+                    is_negative = dec_str.startswith("-")
+                    dec_str = dec_str.lstrip("-")
+
+                    if "." in dec_str:
+                        int_part, frac_part = dec_str.split(".")
+                        dscale = len(frac_part)
+                    else:
+                        int_part = dec_str
+                        frac_part = ""
+                        dscale = 0
+
+                    if int_part == "0" or not int_part:
+                        int_groups = []
+                        int_weight = -1
+                    else:
+                        int_padding = (4 - len(int_part) % 4) % 4
+                        int_padded = "0" * int_padding + int_part
+                        int_groups = [
+                            int(int_padded[i : i + 4]) for i in range(0, len(int_padded), 4)
+                        ]
+                        while int_groups and int_groups[0] == 0:
+                            int_groups.pop(0)
+                        int_weight = len(int_groups) - 1
+
+                    if frac_part:
+                        frac_padding = (4 - len(frac_part) % 4) % 4
+                        frac_padded = frac_part + "0" * frac_padding
+                        frac_groups = [
+                            int(frac_padded[i : i + 4]) for i in range(0, len(frac_padded), 4)
+                        ]
+                        while frac_groups and frac_groups[-1] == 0:
+                            frac_groups.pop()
+                    else:
+                        frac_groups = []
+
+                    digits_10000 = int_groups + frac_groups
+                    weight = int_weight if int_groups else -len(frac_groups)
+                    ndigits = len(digits_10000)
+                    sign = 0x4000 if is_negative else 0x0000
+
+                    binary_data = struct.pack("!hhhh", ndigits, weight, sign, dscale)
+                    for digit in digits_10000:
+                        binary_data += struct.pack("!H", digit)
+                else:
+                    binary_data = str(value).encode("utf-8")
+            else:
+                binary_data = str(value).encode("utf-8")
+
+            logger.debug(
+                "Binary encoded column",
+                column_index=column_index,
+                type_oid=type_oid,
+                value=value,
+                binary_length=len(binary_data),
+            )
+            return binary_data
+        except (ValueError, struct.error) as e:
+            logger.warning(
+                "Binary encoding failed, falling back to text",
+                column_index=column_index,
+                type_oid=type_oid,
+                value=value,
+                error=str(e),
+            )
+            return str(value).encode("utf-8")
 
     async def send_simple_query_response(self):
         """Send a simple 'SELECT 1' response for P0 testing (legacy)"""
@@ -3687,159 +3658,13 @@ class PGWireProtocol:
             Typed value (int, float, str, or list) suitable for IRIS parameter binding
         """
         try:
-            if len(data) < 12:
-                # Not an array, might be a simple type
-                # Decode based on parameter type OID OR data length
-                if param_type_oid == 21 and len(data) == 2:  # int2 (smallint)
-                    value = struct.unpack("!h", data)[0]  # Big-endian signed short
-                    return value  # Return actual int, not string
-                elif param_type_oid == 23 and len(data) == 4:  # int4
-                    value = struct.unpack("!i", data)[0]  # Big-endian signed int
-                    return value  # Return actual int, not string
-                elif param_type_oid == 20 and len(data) == 8:  # int8 (bigint)
-                    value = struct.unpack("!q", data)[0]  # Big-endian signed long
-                    return value  # Return actual int, not string
-                elif param_type_oid == 700 and len(data) == 4:  # float4 explicit
-                    value = struct.unpack("!f", data)[0]  # Big-endian float
-                    return value  # Return actual float, not string
-                elif param_type_oid == 701 and len(data) == 8:  # float8 explicit
-                    value = struct.unpack("!d", data)[0]  # Big-endian double
-                    return value  # Return actual float, not string
-                elif param_type_oid == 16 and len(data) == 1:  # bool
-                    # PostgreSQL boolean binary format: 1 byte (0x00 = False, 0x01 = True)
-                    value = data[0] != 0
-                    # Convert to IRIS BIT representation (1 or 0)
-                    return 1 if value else 0
-                elif param_type_oid == 1082 and len(data) == 4:  # DATE
-                    # PostgreSQL DATE binary format: 4-byte signed integer (days since 2000-01-01)
-                    # IRIS expects dates as ISO 8601 strings (YYYY-MM-DD)
-                    import datetime
-
-                    pg_days = struct.unpack("!i", data)[0]
-                    PG_EPOCH = datetime.date(2000, 1, 1)
-                    date_obj = PG_EPOCH + datetime.timedelta(days=pg_days)
-                    return date_obj.strftime("%Y-%m-%d")  # Convert to ISO string for IRIS
-                elif param_type_oid == 1114 and len(data) == 8:  # TIMESTAMP (without timezone)
-                    # PostgreSQL TIMESTAMP binary format: 8-byte signed integer (microseconds since 2000-01-01)
-                    # IRIS expects timestamps as ISO 8601 strings (YYYY-MM-DD HH:MM:SS.ffffff)
-                    import datetime
-
-                    pg_microseconds = struct.unpack("!q", data)[0]
-                    PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
-                    timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
-                    return timestamp_obj.strftime(
-                        "%Y-%m-%d %H:%M:%S.%f"
-                    )  # Convert to ISO string for IRIS
-                elif param_type_oid == 1184 and len(data) == 8:  # TIMESTAMPTZ (with timezone)
-                    # Same as TIMESTAMP but with timezone - PostgreSQL stores as UTC microseconds
-                    import datetime
-
-                    pg_microseconds = struct.unpack("!q", data)[0]
-                    PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
-                    timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
-                    return timestamp_obj.strftime(
-                        "%Y-%m-%d %H:%M:%S.%f"
-                    )  # Convert to ISO string for IRIS
-                # Fallback: Infer type from data length when OID not specified
-                elif len(data) == 1:
-                    # Could be boolean - treat as boolean
-                    value = data[0] != 0
-                    return 1 if value else 0
-                elif len(data) == 2:
-                    # Assume int2 (smallint)
-                    value = struct.unpack("!h", data)[0]
-                    return value
-                elif len(data) == 4:
-                    # Assume int4 (psycopg may not specify OID for integers)
-                    value = struct.unpack("!i", data)[0]
-                    return value
-                elif len(data) == 8:
-                    # Assume int8 (prefer int over float for 8-byte values)
-                    value = struct.unpack("!q", data)[0]
-                    return value
-                else:
-                    # Unknown format, return as text
-                    return data.decode("utf-8", errors="replace")
-
-            # Parse array header
-            pos = 0
-            ndim = struct.unpack("!I", data[pos : pos + 4])[0]
-            pos += 4
-            struct.unpack("!I", data[pos : pos + 4])[0]
-            pos += 4
-            element_oid = struct.unpack("!I", data[pos : pos + 4])[0]
-            pos += 4
-
-            if ndim == 0:
-                # Empty array
-                return "[]"
-
-            # Parse dimension info
-            dimensions = []
-            for _ in range(ndim):
-                if pos + 8 > len(data):
-                    raise ValueError(f"Truncated dimension info for parameter {param_index}")
-                dim_size = struct.unpack("!I", data[pos : pos + 4])[0]
-                pos += 4
-                struct.unpack("!I", data[pos : pos + 4])[0]
-                pos += 4
-                dimensions.append(dim_size)
-
-            # Parse elements
-            total_elements = 1
-            for dim in dimensions:
-                total_elements *= dim
-
-            elements = []
-            for i in range(total_elements):
-                if pos + 4 > len(data):
-                    raise ValueError(
-                        f"Truncated element length for parameter {param_index}, element {i}"
-                    )
-                elem_len = struct.unpack("!I", data[pos : pos + 4])[0]
-                pos += 4
-
-                if elem_len == 0xFFFFFFFF:
-                    # NULL element
-                    elements.append("NULL")
-                else:
-                    if pos + elem_len > len(data):
-                        raise ValueError(
-                            f"Truncated element data for parameter {param_index}, element {i}"
-                        )
-                    elem_data = data[pos : pos + elem_len]
-                    pos += elem_len
-
-                    # Decode based on element OID
-                    if element_oid == 700:  # float4
-                        value = struct.unpack("!f", elem_data)[0]
-                        elements.append(str(value))
-                    elif element_oid == 701:  # float8 (double)
-                        value = struct.unpack("!d", elem_data)[0]
-                        elements.append(str(value))
-                    elif element_oid == 23:  # int4
-                        value = struct.unpack("!i", elem_data)[0]
-                        elements.append(str(value))
-                    elif element_oid == 20:  # int8 (bigint)
-                        value = struct.unpack("!q", elem_data)[0]
-                        elements.append(str(value))
-                    else:
-                        # Unknown type, try as text
-                        elements.append(elem_data.decode("utf-8", errors="replace"))
-
-            # Format as IRIS vector: [v1,v2,v3,...]
-            vector_text = "[" + ",".join(elements) + "]"
-
-            logger.debug(
-                "Decoded binary vector parameter",
-                param_index=param_index,
-                dimensions=dimensions,
-                element_count=len(elements),
-                element_oid=element_oid,
-                vector_length=len(vector_text),
+            handled, value = self._try_decode_simple_binary_parameter(
+                data, param_index, param_type_oid
             )
+            if handled:
+                return value
 
-            return vector_text
+            return self._decode_array_binary_parameter(data, param_index)
 
         except Exception as e:
             logger.error(
@@ -3848,8 +3673,125 @@ class PGWireProtocol:
                 error=str(e),
                 data_length=len(data),
             )
-            # Fallback: try to decode as text
             return data.decode("utf-8", errors="replace")
+
+    def _try_decode_simple_binary_parameter(
+        self, data: bytes, param_index: int, param_type_oid: int
+    ) -> tuple[bool, Any]:
+        if len(data) < 12:
+            if param_type_oid == 21 and len(data) == 2:
+                return True, struct.unpack("!h", data)[0]
+            if param_type_oid == 23 and len(data) == 4:
+                return True, struct.unpack("!i", data)[0]
+            if param_type_oid == 20 and len(data) == 8:
+                return True, struct.unpack("!q", data)[0]
+            if param_type_oid == 700 and len(data) == 4:
+                return True, struct.unpack("!f", data)[0]
+            if param_type_oid == 701 and len(data) == 8:
+                return True, struct.unpack("!d", data)[0]
+            if param_type_oid == 16 and len(data) == 1:
+                return True, 1 if data[0] != 0 else 0
+            if param_type_oid == 1082 and len(data) == 4:
+                import datetime
+
+                pg_days = struct.unpack("!i", data)[0]
+                PG_EPOCH = datetime.date(2000, 1, 1)
+                date_obj = PG_EPOCH + datetime.timedelta(days=pg_days)
+                return True, date_obj.strftime("%Y-%m-%d")
+            if param_type_oid in (1114, 1184) and len(data) == 8:
+                import datetime
+
+                pg_microseconds = struct.unpack("!q", data)[0]
+                PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
+                timestamp_obj = PG_EPOCH + datetime.timedelta(microseconds=pg_microseconds)
+                return True, timestamp_obj.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+            if len(data) == 1:
+                return True, 1 if data[0] != 0 else 0
+            if len(data) == 2:
+                return True, struct.unpack("!h", data)[0]
+            if len(data) == 4:
+                return True, struct.unpack("!i", data)[0]
+            if len(data) == 8:
+                return True, struct.unpack("!q", data)[0]
+
+            return True, data.decode("utf-8", errors="replace")
+
+        return False, None
+
+    def _decode_array_binary_parameter(self, data: bytes, param_index: int) -> str:
+        pos = 0
+        ndim = struct.unpack("!I", data[pos : pos + 4])[0]
+        pos += 4
+        struct.unpack("!I", data[pos : pos + 4])[0]
+        pos += 4
+        element_oid = struct.unpack("!I", data[pos : pos + 4])[0]
+        pos += 4
+
+        if ndim == 0:
+            return "[]"
+
+        dimensions: list[int] = []
+        for _ in range(ndim):
+            if pos + 8 > len(data):
+                raise ValueError(f"Truncated dimension info for parameter {param_index}")
+            dim_size = struct.unpack("!I", data[pos : pos + 4])[0]
+            pos += 4
+            struct.unpack("!I", data[pos : pos + 4])[0]
+            pos += 4
+            dimensions.append(dim_size)
+
+        total_elements = 1
+        for dim in dimensions:
+            total_elements *= dim
+
+        elements = []
+        for element_index in range(total_elements):
+            if pos + 4 > len(data):
+                raise ValueError(
+                    f"Truncated element length for parameter {param_index}, element {element_index}"
+                )
+            elem_len = struct.unpack("!I", data[pos : pos + 4])[0]
+            pos += 4
+
+            if elem_len == 0xFFFFFFFF:
+                elements.append("NULL")
+                continue
+
+            if pos + elem_len > len(data):
+                raise ValueError(
+                    f"Truncated element data for parameter {param_index}, element {element_index}"
+                )
+            elem_data = data[pos : pos + elem_len]
+            pos += elem_len
+
+            if element_oid == 700:
+                value = struct.unpack("!f", elem_data)[0]
+                elements.append(str(value))
+            elif element_oid == 701:
+                value = struct.unpack("!d", elem_data)[0]
+                elements.append(str(value))
+            elif element_oid == 23:
+                value = struct.unpack("!i", elem_data)[0]
+                elements.append(str(value))
+            elif element_oid == 20:
+                value = struct.unpack("!q", elem_data)[0]
+                elements.append(str(value))
+            else:
+                elements.append(elem_data.decode("utf-8", errors="replace"))
+
+        vector_text = "[" + ",".join(elements) + "]"
+
+        logger.debug(
+            "Decoded binary vector parameter",
+            param_index=param_index,
+            dimensions=dimensions,
+            element_count=len(elements),
+            element_oid=element_oid,
+            vector_length=len(vector_text),
+        )
+
+        return vector_text
 
     # P4: Query Cancellation Methods
 

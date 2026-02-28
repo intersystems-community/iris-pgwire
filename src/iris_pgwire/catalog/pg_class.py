@@ -90,6 +90,65 @@ class PgClassEmulator:
         self._by_name: dict[str, PgClass] = {}
         self._by_oid: dict[int, PgClass] = {}
 
+    def _build_pg_class(
+        self,
+        oid: int,
+        relname: str,
+        relam: int = 0,
+        relkind: RelKind = "r",
+        relnatts: int = 0,
+        relreplident: str = "d",
+    ) -> PgClass:
+        """
+        Build a PgClass with common defaults and the given overrides.
+
+        Args:
+            oid: Relation OID
+            relname: Relation name (lowercase)
+            relam: Access method OID (0 for tables, 403 for btree indexes)
+            relkind: Relation kind ('r' table, 'v' view, 'i' index, etc.)
+            relnatts: Number of user columns
+            relreplident: Replica identity ('d' default, 'n' nothing)
+
+        Returns:
+            PgClass instance with common defaults
+        """
+        namespace_oid = self.oid_gen.get_namespace_oid("public")
+        return PgClass(
+            oid=oid,
+            relname=relname,
+            relnamespace=namespace_oid,
+            reltype=0,
+            reloftype=0,
+            relowner=10,  # postgres superuser
+            relam=relam,
+            relfilenode=oid,
+            reltablespace=0,
+            relpages=1,
+            reltuples=0,
+            relallvisible=0,
+            reltoastrelid=0,
+            relhasindex=False,
+            relisshared=False,
+            relpersistence="p",
+            relkind=relkind,
+            relnatts=relnatts,
+            relchecks=0,
+            relhasrules=False,
+            relhastriggers=False,
+            relhassubclass=False,
+            relrowsecurity=False,
+            relforcerowsecurity=False,
+            relispopulated=True,
+            relreplident=relreplident,
+            relispartition=False,
+            relrewrite=0,
+            relfrozenxid=0,
+            relminmxid=0,
+            relacl=None,
+            reloptions=None,
+        )
+
     def from_iris_table(
         self, table_name: str, table_type: str, schema: str = IRIS_SCHEMA
     ) -> PgClass:
@@ -104,47 +163,9 @@ class PgClassEmulator:
         Returns:
             PgClass instance
         """
-        # Determine relkind from TABLE_TYPE
         relkind: RelKind = "r" if table_type == "BASE TABLE" else "v"
-
         table_oid = self.oid_gen.get_table_oid(table_name, schema)
-
-        namespace_oid = self.oid_gen.get_namespace_oid("public")
-
-        return PgClass(
-            oid=table_oid,
-            relname=table_name.lower(),  # PostgreSQL uses lowercase
-            relnamespace=namespace_oid,
-            reltype=0,  # No row type
-            reloftype=0,
-            relowner=10,  # postgres superuser
-            relam=0,  # No access method for tables
-            relfilenode=table_oid,  # Use OID as filenode
-            reltablespace=0,  # Default tablespace
-            relpages=1,  # Estimate
-            reltuples=0,  # Unknown
-            relallvisible=0,
-            reltoastrelid=0,  # No TOAST
-            relhasindex=False,  # Will be updated
-            relisshared=False,
-            relpersistence="p",  # Permanent
-            relkind=relkind,
-            relnatts=0,  # Will be updated
-            relchecks=0,
-            relhasrules=False,
-            relhastriggers=False,
-            relhassubclass=False,
-            relrowsecurity=False,
-            relforcerowsecurity=False,
-            relispopulated=True,
-            relreplident="d",  # Default
-            relispartition=False,
-            relrewrite=0,
-            relfrozenxid=0,
-            relminmxid=0,
-            relacl=None,
-            reloptions=None,
-        )
+        return self._build_relation(relname=table_name, oid=table_oid, relkind=relkind)
 
     def create_index_entry(
         self,
@@ -166,42 +187,32 @@ class PgClassEmulator:
             PgClass for index
         """
         index_oid = self.oid_gen.get_index_oid(index_name, schema)
-
-        namespace_oid = self.oid_gen.get_namespace_oid("public")
-
-        return PgClass(
+        return self._build_relation(
+            relname=f"{table_name}_{index_name}_idx",
             oid=index_oid,
-            relname=f"{table_name.lower()}_{index_name.lower()}_idx",
-            relnamespace=namespace_oid,
-            reltype=0,
-            reloftype=0,
-            relowner=10,
-            relam=403,  # btree access method
-            relfilenode=index_oid,
-            reltablespace=0,
-            relpages=1,
-            reltuples=0,
-            relallvisible=0,
-            reltoastrelid=0,
-            relhasindex=False,
-            relisshared=False,
-            relpersistence="p",
-            relkind="i",  # index
+            relam=403,
+            relkind="i",
             relnatts=num_columns,
-            relchecks=0,
-            relhasrules=False,
-            relhastriggers=False,
-            relhassubclass=False,
-            relrowsecurity=False,
-            relforcerowsecurity=False,
-            relispopulated=True,
             relreplident="n",
-            relispartition=False,
-            relrewrite=0,
-            relfrozenxid=0,
-            relminmxid=0,
-            relacl=None,
-            reloptions=None,
+        )
+
+    def _build_relation(
+        self,
+        relname: str,
+        oid: int,
+        *,
+        relam: int = 0,
+        relkind: RelKind = "r",
+        relnatts: int = 0,
+        relreplident: str = "d",
+    ) -> PgClass:
+        return self._build_pg_class(
+            oid=oid,
+            relname=relname.lower(),
+            relam=relam,
+            relkind=relkind,
+            relnatts=relnatts,
+            relreplident=relreplident,
         )
 
     def add_table(self, pg_class: PgClass) -> None:

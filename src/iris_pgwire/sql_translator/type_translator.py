@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 from .ddl_parser import ColumnDefinition
 from .ddl_translator import DDLTranslationError
@@ -14,11 +13,11 @@ class TypeMappingEntry:
     pg_type: str
     iris_type: str
     requires_precision: bool = False
-    max_precision: Optional[int] = None
-    max_scale: Optional[int] = None
+    max_precision: int | None = None
+    max_scale: int | None = None
 
 
-DDL_TYPE_MAPPINGS: Dict[str, TypeMappingEntry] = {
+DDL_TYPE_MAPPINGS: dict[str, TypeMappingEntry] = {
     "text": TypeMappingEntry("text", "VARCHAR(32767)", False),
     "boolean": TypeMappingEntry("boolean", "BIT", False),
     "uuid": TypeMappingEntry("uuid", "UUID", False),
@@ -62,7 +61,7 @@ DDL_TYPE_MAPPINGS: Dict[str, TypeMappingEntry] = {
 
 IDENTITY_TYPES = {"serial", "smallserial", "bigserial"}
 
-TYPE_PRECISION_LIMITS: Dict[str, Dict[str, int]] = {
+TYPE_PRECISION_LIMITS: dict[str, dict[str, int]] = {
     "NUMERIC": {"max_precision": 38, "max_scale": 19},
     "VARCHAR": {"max_length": 32767},
     "CHAR": {"max_length": 32767},
@@ -154,7 +153,7 @@ class TypeTranslator:
             normalized = normalized[:paren_idx]
         return normalized.strip()
 
-    def _extract_precision(self, pg_type: str) -> Tuple[Optional[int], Optional[int]]:
+    def _extract_precision(self, pg_type: str) -> tuple[int | None, int | None]:
         start = pg_type.find("(")
         end = pg_type.find(")", start + 1)
         if start == -1 or end == -1:
@@ -168,8 +167,8 @@ class TypeTranslator:
         if not parts:
             return (None, None)
 
-        precision: Optional[int] = None
-        scale: Optional[int] = None
+        precision: int | None = None
+        scale: int | None = None
 
         # Handle VARCHAR(*) - map "*" to maximum length
         if parts[0] == "*":
@@ -192,7 +191,7 @@ class TypeTranslator:
         self,
         iris_type: str,
         precision: int,
-        scale: Optional[int],
+        scale: int | None,
         original_sql: str,
     ) -> None:
         if iris_type == "NUMERIC":

@@ -7,11 +7,14 @@ contract specifications and supporting constitutional performance requirements.
 Constitutional Compliance: All models enforce 5ms SLA and provide debug tracing.
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 class ConstructType(Enum):
@@ -113,14 +116,14 @@ class PerformanceStats:
 
         # Constitutional requirement: 5ms SLA compliance check
         if self.translation_time_ms > 5.0:
-            # Log SLA violation for constitutional monitoring
-            import logging
+            self._log_sla_violation()
 
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                f"Constitutional SLA violation: Translation took {self.translation_time_ms}ms, "
-                f"exceeds 5ms requirement"
-            )
+    def _log_sla_violation(self):
+        """Log SLA violations for translation operations"""
+        _logger.warning(
+            "Constitutional SLA violation: Translation took %.2fms, exceeds 5ms requirement",
+            self.translation_time_ms,
+        )
 
     @property
     def is_sla_compliant(self) -> bool:
@@ -324,10 +327,12 @@ class ValidationResult:
 class QueryEquivalenceReport:
     """Report on query equivalence between original and translated SQL"""
 
-    equivalent: bool
-    confidence: float
+    is_equivalent: bool
+    equivalence_score: float
     differences: list[str] = field(default_factory=list)
-    analysis: str | None = None
+    similarities: list[str] = field(default_factory=list)
+    original_complexity: float = 0.0
+    translated_complexity: float = 0.0
 
 
 @dataclass
@@ -344,11 +349,6 @@ class TranslationResult:
     debug_trace: DebugTrace | None = None
     validation_result: ValidationResult | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self):
-        """Validate translation result"""
-        # Allow empty SQL for error cases or empty input
-        pass
 
     def add_warning(self, message: str):
         """Add a warning to the result"""

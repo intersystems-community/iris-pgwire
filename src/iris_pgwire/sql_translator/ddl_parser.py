@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import sqlparse
 from sqlparse.sql import Identifier, Parenthesis, Statement, Token
@@ -30,7 +30,7 @@ class ColumnDefinition:
     pg_type: str
     iris_type: str
     nullable: bool
-    default: Optional[str]
+    default: str | None
     is_primary_key: bool
 
 
@@ -39,10 +39,10 @@ class ConstraintDefinition:
     """Structured information about a table constraint."""
 
     constraint_type: ConstraintType
-    columns: Tuple[str, ...]
-    references: Optional[str] = None
-    on_delete: Optional[str] = None
-    on_update: Optional[str] = None
+    columns: tuple[str, ...]
+    references: str | None = None
+    on_delete: str | None = None
+    on_update: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,10 +51,10 @@ class IndexDefinition:
 
     name: str
     table: str
-    columns: Tuple[str, ...]
+    columns: tuple[str, ...]
     unique: bool
-    where_clause: Optional[str] = None
-    include_columns: Optional[Tuple[str, ...]] = None
+    where_clause: str | None = None
+    include_columns: tuple[str, ...] | None = None
 
 
 class DDLParser:
@@ -72,11 +72,16 @@ class DDLParser:
         "CONSTRAINT",
     }
 
-    def parse(self, sql: str) -> List[DDLStatement]:
+    def parse(self, sql: str) -> list[DDLStatement]:
         """Return CREATE TABLE statements parsed into DDLStatement objects."""
 
+        # Strip single-line SQL comments (-- ...) before parsing.
+        # sqlparse wraps leading comments into ttype=None tokens which confuse
+        # the DDL keyword detection logic in _is_create_table and friends.
+        sql = re.sub(r"--[^\n]*", "", sql)
+
         statements = sqlparse.parse(sql)
-        result: List[DDLStatement] = []
+        result: list[DDLStatement] = []
         for stmt in statements:
             if self._is_create_table(stmt):
                 schema_name, table_name = self._extract_table_name(stmt)
@@ -105,7 +110,7 @@ class DDLParser:
                 result.append(self._parse_drop_table(stmt))
         return result
 
-    def _non_whitespace_tokens(self, stmt: Statement) -> List[Token]:
+    def _non_whitespace_tokens(self, stmt: Statement) -> list[Token]:
         return [token for token in stmt.tokens if not token.is_whitespace]
 
     def _is_create_table(self, stmt: Statement) -> bool:
@@ -132,7 +137,7 @@ class DDLParser:
             sqlparse.tokens.Keyword, "TABLE"
         )
 
-    def _extract_table_name(self, stmt: Statement) -> Tuple[Optional[str], Optional[str]]:
+    def _extract_table_name(self, stmt: Statement) -> tuple[str | None, str | None]:
         seen_table = False
         for token in stmt.tokens:
             if token.is_whitespace or token.ttype in {sqlparse.tokens.Newline}:
@@ -156,7 +161,7 @@ class DDLParser:
 
     def _extract_clause_after_table(self, stmt: Statement) -> str:
         tokens = self._non_whitespace_tokens(stmt)
-        clause_parts: List[str] = []
+        clause_parts: list[str] = []
         seen_table = False
         table_ident_found = False
 
@@ -184,9 +189,9 @@ class DDLParser:
         clause = " ".join(part.strip() for part in clause_parts if part and not part.isspace())
         return clause.strip()
 
-    def _split_qualified_identifier(self, identifier: str) -> Tuple[Optional[str], Optional[str]]:
-        parts: List[str] = []
-        buffer: List[str] = []
+    def _split_qualified_identifier(self, identifier: str) -> tuple[str | None, str | None]:
+        parts: list[str] = []
+        buffer: list[str] = []
         in_double = False
         for char in identifier:
             if char == '"':
@@ -210,7 +215,7 @@ class DDLParser:
 
     def _parse_columns_and_constraints(
         self, stmt: Statement
-    ) -> Tuple[List[ColumnDefinition], List[ConstraintDefinition]]:
+    ) -> tuple[list[ColumnDefinition], list[ConstraintDefinition]]:
         parenthesis = next((token for token in stmt.tokens if isinstance(token, Parenthesis)), None)
         if parenthesis is None:
             return [], []
@@ -218,8 +223,8 @@ class DDLParser:
         if content.startswith("(") and content.endswith(")"):
             content = content[1:-1]
         entries = self._split_definitions(content)
-        columns: List[ColumnDefinition] = []
-        constraints: List[ConstraintDefinition] = []
+        columns: list[ColumnDefinition] = []
+        constraints: list[ConstraintDefinition] = []
         for entry in entries:
             normalized = entry.strip()
             if not normalized:
@@ -237,42 +242,11 @@ class DDLParser:
         schema_name, table_name = self._extract_table_name(statement)
         clause = (self._extract_clause_after_table(statement) or "").strip()
         operation = self._determine_alter_operation(clause)
-        details: Dict[str, Any] = {"clause": clause} if clause else {}
-        warnings: List[str] = []
-        columns: List[ColumnDefinition] = []
-        is_translatable = True
-
-        if operation == "ADD_COLUMN":
-            column_definition = self._parse_alter_add_column_clause(clause)
-            if column_definition:
-                columns.append(column_definition)
-                details["column_definition"] = column_definition
-            else:
-                warnings.append("Could not parse ALTER TABLE ADD COLUMN clause")
-                is_translatable = False
-        elif operation == "DROP_COLUMN":
-            column_name = self._parse_alter_drop_column_clause(clause)
-            if column_name:
-                details["column_name"] = column_name
-            else:
-                warnings.append("Could not parse ALTER TABLE DROP COLUMN clause")
-                is_translatable = False
-        elif operation == "RENAME_COLUMN":
-            rename_result = self._parse_alter_rename_column_clause(clause)
-            if rename_result:
-                old_name, new_name = rename_result
-                details["old_column"] = old_name
-                details["new_column"] = new_name
-            else:
-                warnings.append("Could not parse ALTER TABLE RENAME COLUMN clause")
-                is_translatable = False
-        else:
-            if clause:
-                warnings.append(f"Unsupported ALTER TABLE operation: {operation or clause}".strip())
-            else:
-                warnings.append("ALTER TABLE clause missing")
-            is_translatable = False
-
+        details, columns, warnings, is_translatable = self._handle_alter_operation(
+            clause, operation
+        )
+        if clause:
+            details = details or {"clause": clause}
         operation_details = details or None
         return DDLStatement(
             raw_sql=str(statement).strip(),
@@ -286,6 +260,58 @@ class DDLParser:
             is_translatable=is_translatable,
         )
 
+    def _handle_alter_operation(
+        self,
+        clause: str,
+        operation: str | None,
+    ) -> tuple[dict[str, Any] | None, list[ColumnDefinition], list[str], bool]:
+        handlers = {
+            "ADD_COLUMN": self._handle_alter_add_column_operation,
+            "DROP_COLUMN": self._handle_alter_drop_column_operation,
+            "RENAME_COLUMN": self._handle_alter_rename_column_operation,
+        }
+        if not operation:
+            return self._handle_unsupported_alter(clause, operation)
+        handler = handlers.get(operation)
+        if handler:
+            return handler(clause)
+        return self._handle_unsupported_alter(clause, operation)
+
+    def _handle_alter_add_column_operation(
+        self, clause: str
+    ) -> tuple[dict[str, Any] | None, list[ColumnDefinition], list[str], bool]:
+        column_definition = self._parse_alter_add_column_clause(clause)
+        if not column_definition:
+            return None, [], ["Could not parse ALTER TABLE ADD COLUMN clause"], False
+        return {"column_definition": column_definition}, [column_definition], [], True
+
+    def _handle_alter_drop_column_operation(
+        self, clause: str
+    ) -> tuple[dict[str, Any] | None, list[ColumnDefinition], list[str], bool]:
+        column_name = self._parse_alter_drop_column_clause(clause)
+        if not column_name:
+            return None, [], ["Could not parse ALTER TABLE DROP COLUMN clause"], False
+        return {"column_name": column_name}, [], [], True
+
+    def _handle_alter_rename_column_operation(
+        self, clause: str
+    ) -> tuple[dict[str, Any] | None, list[ColumnDefinition], list[str], bool]:
+        rename_result = self._parse_alter_rename_column_clause(clause)
+        if not rename_result:
+            return None, [], ["Could not parse ALTER TABLE RENAME COLUMN clause"], False
+        old_name, new_name = rename_result
+        return {"old_column": old_name, "new_column": new_name}, [], [], True
+
+    def _handle_unsupported_alter(
+        self, clause: str, operation: str | None
+    ) -> tuple[dict[str, Any] | None, list[ColumnDefinition], list[str], bool]:
+        warnings: list[str] = []
+        if clause:
+            warnings.append(f"Unsupported ALTER TABLE operation: {operation or clause}".strip())
+        else:
+            warnings.append("ALTER TABLE clause missing")
+        return None, [], warnings, False
+
     def _parse_drop_table(self, statement: Statement) -> DDLStatement:
         schema_name, table_name = self._extract_table_name(statement)
         clause = self._extract_clause_after_table(statement)
@@ -296,7 +322,7 @@ class DDLParser:
             schema_name=schema_name,
             table_name=table_name,
             operation="DROP_TABLE",
-            operation_details=clause or None,
+            operation_details={"clause": clause} if clause else None,
             translation_warnings=warnings,
             is_translatable=False,
         )
@@ -359,7 +385,7 @@ class DDLParser:
     def _parse_drop_index(self, stmt: Statement) -> DDLStatement:
         raise NotImplementedError("DROP INDEX parsing is not implemented yet")
 
-    def _determine_alter_operation(self, clause: str) -> Optional[str]:
+    def _determine_alter_operation(self, clause: str) -> str | None:
         normalized = clause.upper()
         for keyword, label in [
             ("ADD COLUMN", "ADD_COLUMN"),
@@ -377,7 +403,7 @@ class DDLParser:
         start = definition.upper().find("PRIMARY KEY")
         open_paren = definition.find("(", start)
         close_paren = definition.rfind(")")
-        column_names: Tuple[str, ...]
+        column_names: tuple[str, ...]
         if open_paren == -1 or close_paren == -1 or close_paren < open_paren:
             column_names = ()
         else:
@@ -389,9 +415,9 @@ class DDLParser:
             columns=column_names,
         )
 
-    def _split_definitions(self, content: str) -> List[str]:
-        segments: List[str] = []
-        buffer: List[str] = []
+    def _split_definitions(self, content: str) -> list[str]:
+        segments: list[str] = []
+        buffer: list[str] = []
         depth = 0
         in_single = False
         in_double = False
@@ -451,84 +477,8 @@ class DDLParser:
         if not tokens:
             raise ValueError("Empty column definition")
         column_name = tokens[0].value
-        pg_type_parts: List[str] = []
-        idx = 1
-        while idx < len(tokens):
-            token = tokens[idx]
-            if token.ttype is sqlparse.tokens.Keyword:
-                token_upper = token.value.upper()
-                # Check if ANY clause keyword is present in this token
-                # (handles compound keywords like "PRIMARY KEY", "NOT NULL")
-                if any(kw in token_upper for kw in self._CLAUSE_KEYWORDS):
-                    break
-            pg_type_parts.append(token.value)
-            idx += 1
-        pg_type = " ".join(pg_type_parts).strip()
-        nullable = True
-        default: Optional[str] = None
-        is_primary_key = False
-        while idx < len(tokens):
-            token = tokens[idx]
-            if token.ttype is sqlparse.tokens.Keyword:
-                keyword = token.value.upper()
-                # Handle compound "NOT NULL" or separate "NOT" "NULL"
-                if "NOT NULL" in keyword or keyword == "NOT":
-                    if "NOT NULL" in keyword:
-                        # Compound token like "NOT NULL"
-                        nullable = False
-                        idx += 1
-                        continue
-                    else:
-                        # Separate tokens "NOT" followed by "NULL"
-                        next_token = self._peek_token(tokens, idx + 1)
-                        if next_token and next_token.match(sqlparse.tokens.Keyword, "NULL"):
-                            nullable = False
-                            idx += 2
-                            continue
-                if keyword == "DEFAULT":
-                    idx += 1
-                    default_tokens: List[str] = []
-                    depth = 0
-                    while idx < len(tokens):
-                        inner = tokens[idx]
-                        if inner.value == "(":
-                            depth += 1
-                        elif inner.value == ")":
-                            if depth <= 0:
-                                break
-                            depth -= 1
-                        upper_inner = inner.value.upper()
-                        if (
-                            depth == 0
-                            and inner.ttype is sqlparse.tokens.Keyword
-                            and upper_inner in self._CLAUSE_KEYWORDS
-                        ):
-                            break
-                        if depth == 0 and inner.value == ",":
-                            break
-                        default_tokens.append(inner.value)
-                        idx += 1
-                    default_value = " ".join(default_tokens).strip()
-                    if default_value:
-                        default = self._normalize_default_expression(default_value)
-                    continue
-                # Handle compound "PRIMARY KEY" or separate "PRIMARY" "KEY"
-                if "PRIMARY KEY" in keyword or keyword == "PRIMARY":
-                    if "PRIMARY KEY" in keyword:
-                        # Compound token like "PRIMARY KEY"
-                        is_primary_key = True
-                        nullable = False
-                        idx += 1
-                        continue
-                    else:
-                        # Separate tokens "PRIMARY" followed by "KEY"
-                        next_token = self._peek_token(tokens, idx + 1)
-                        if next_token and next_token.match(sqlparse.tokens.Keyword, "KEY"):
-                            is_primary_key = True
-                            nullable = False
-                            idx += 2
-                            continue
-            idx += 1
+        pg_type, idx = self._collect_column_type_tokens(tokens, 1)
+        nullable, default, is_primary_key = self._parse_column_constraints(tokens, idx)
         return ColumnDefinition(
             name=column_name,
             pg_type=pg_type,
@@ -538,7 +488,91 @@ class DDLParser:
             is_primary_key=is_primary_key,
         )
 
-    def _parse_alter_add_column_clause(self, clause: str) -> Optional[ColumnDefinition]:
+    def _collect_column_type_tokens(self, tokens: list[Token], start_idx: int) -> tuple[str, int]:
+        parts: list[str] = []
+        idx = start_idx
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token.ttype is sqlparse.tokens.Keyword:
+                token_upper = token.value.upper()
+                if any(kw in token_upper for kw in self._CLAUSE_KEYWORDS):
+                    break
+            parts.append(token.value)
+            idx += 1
+        return " ".join(parts).strip(), idx
+
+    def _parse_column_constraints(
+        self, tokens: list[Token], start_idx: int
+    ) -> tuple[bool, str | None, bool]:
+        nullable = True
+        default: str | None = None
+        is_primary_key = False
+        idx = start_idx
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token.ttype is sqlparse.tokens.Keyword:
+                keyword = token.value.upper()
+                if "NOT NULL" in keyword or keyword == "NOT":
+                    idx = self._consume_not_null_clause(tokens, idx)
+                    nullable = False
+                    continue
+                if keyword == "DEFAULT":
+                    default_value, idx = self._extract_default_clause(tokens, idx + 1)
+                    if default_value:
+                        default = self._normalize_default_expression(default_value)
+                    continue
+                if "PRIMARY KEY" in keyword or keyword == "PRIMARY":
+                    idx = self._consume_primary_clause(tokens, idx)
+                    is_primary_key = True
+                    nullable = False
+                    continue
+            idx += 1
+        return nullable, default, is_primary_key
+
+    def _consume_not_null_clause(self, tokens: list[Token], idx: int) -> int:
+        keyword = tokens[idx].value.upper()
+        if "NOT NULL" in keyword:
+            return idx + 1
+        next_token = self._peek_token(tokens, idx + 1)
+        if next_token and next_token.match(sqlparse.tokens.Keyword, "NULL"):
+            return idx + 2
+        return idx + 1
+
+    def _consume_primary_clause(self, tokens: list[Token], idx: int) -> int:
+        keyword = tokens[idx].value.upper()
+        if "PRIMARY KEY" in keyword:
+            return idx + 1
+        next_token = self._peek_token(tokens, idx + 1)
+        if next_token and next_token.match(sqlparse.tokens.Keyword, "KEY"):
+            return idx + 2
+        return idx + 1
+
+    def _extract_default_clause(self, tokens: list[Token], start_idx: int) -> tuple[str, int]:
+        default_tokens: list[str] = []
+        depth = 0
+        idx = start_idx
+        while idx < len(tokens):
+            inner = tokens[idx]
+            if inner.value == "(":
+                depth += 1
+            elif inner.value == ")":
+                if depth <= 0:
+                    break
+                depth -= 1
+            upper_inner = inner.value.upper()
+            if (
+                depth == 0
+                and inner.ttype is sqlparse.tokens.Keyword
+                and upper_inner in self._CLAUSE_KEYWORDS
+            ):
+                break
+            if depth == 0 and inner.value == ",":
+                break
+            default_tokens.append(inner.value)
+            idx += 1
+        return " ".join(default_tokens).strip(), idx
+
+    def _parse_alter_add_column_clause(self, clause: str) -> ColumnDefinition | None:
         body = self._extract_clause_after_keyword(clause, "ADD COLUMN")
         if not body:
             return None
@@ -548,7 +582,7 @@ class DDLParser:
             return None
         return self._parse_column_definition(body)
 
-    def _parse_alter_drop_column_clause(self, clause: str) -> Optional[str]:
+    def _parse_alter_drop_column_clause(self, clause: str) -> str | None:
         body = self._extract_clause_after_keyword(clause, "DROP COLUMN")
         if not body:
             return None
@@ -560,7 +594,7 @@ class DDLParser:
         tokens = [token for token in parsed[0].tokens if not token.is_whitespace]
         return self._collect_first_identifier_value(tokens)
 
-    def _parse_alter_rename_column_clause(self, clause: str) -> Optional[Tuple[str, str]]:
+    def _parse_alter_rename_column_clause(self, clause: str) -> tuple[str, str] | None:
         body = self._extract_clause_after_keyword(clause, "RENAME COLUMN")
         if not body:
             return None
@@ -569,7 +603,7 @@ class DDLParser:
         if not parsed:
             return None
         tokens = [token for token in parsed[0].tokens if not token.is_whitespace]
-        identifier_values: List[str] = []
+        identifier_values: list[str] = []
         for token in tokens:
             if token.match(sqlparse.tokens.Keyword, "TO"):
                 continue
@@ -607,19 +641,19 @@ class DDLParser:
             return normalized[len(prefix) :].strip()
         return clause
 
-    def _collect_first_identifier_value(self, tokens: List[Token]) -> Optional[str]:
+    def _collect_first_identifier_value(self, tokens: list[Token]) -> str | None:
         for token in tokens:
             value = self._identifier_value(token)
             if value:
                 return value
         return None
 
-    def _identifier_value(self, token: Token) -> Optional[str]:
+    def _identifier_value(self, token: Token) -> str | None:
         if isinstance(token, Identifier):
             return token.value
         if token.ttype in {sqlparse.tokens.Name, sqlparse.tokens.Name.Builtin}:
             return token.value
         return None
 
-    def _peek_token(self, tokens: List[Token], idx: int) -> Optional[Token]:
+    def _peek_token(self, tokens: list[Token], idx: int) -> Token | None:
         return tokens[idx] if idx < len(tokens) else None

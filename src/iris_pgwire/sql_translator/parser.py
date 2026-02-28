@@ -14,6 +14,7 @@ from typing import Any
 import sqlparse
 from sqlparse import tokens as T
 
+from .mappings.datatypes import get_datatype_registry
 from .models import (
     ConstructType,
     DebugTrace,
@@ -42,6 +43,15 @@ class IRISSQLParser:
         self._function_patterns = self._compile_function_patterns()
         self._construct_patterns = self._compile_construct_patterns()
         self._system_function_patterns = self._compile_system_function_patterns()
+
+    _DOCUMENT_FILTER_FUNCTIONS = {
+        "JSON_EXTRACT",
+        "JSON_ARRAY_LENGTH",
+        "JSON_ARRAY_ELEMENTS",
+        "JSON_EXISTS",
+        "JSON_QUERY",
+        "JSON_VALUE",
+    }
 
     def _compile_function_patterns(self) -> dict[str, re.Pattern]:
         """Compile regex patterns for IRIS function detection"""
@@ -167,11 +177,10 @@ class IRISSQLParser:
             Tuple of (parsed_constructs, debug_trace)
         """
         debug_trace = DebugTrace() if debug_mode else None
-        constructs = []
+        constructs: list[ParsedConstruct] = []
 
         try:
             with PerformanceTimer() as timer:
-                # Step 1: Basic SQL parsing with sqlparse
                 if debug_trace:
                     debug_trace.add_parsing_step(
                         "basic_parsing", sql, sql, 0.0, input_length=len(sql)
@@ -182,24 +191,16 @@ class IRISSQLParser:
                 if not parsed_statements:
                     return constructs, debug_trace
 
-                # Step 2: Identify IRIS functions
-                constructs.extend(self._identify_functions(sql, debug_trace))
-
-                # Step 3: Identify IRIS system functions
-                constructs.extend(self._identify_system_functions(sql, debug_trace))
-
-                # Step 4: Identify IRIS SQL constructs
-                constructs.extend(self._identify_sql_constructs(sql, debug_trace))
-
-                # Step 5: Identify data types
-                constructs.extend(self._identify_data_types(sql, debug_trace))
-
-                # Step 6: Validate parsing completeness
+                constructs = self._collect_constructs(sql, debug_trace)
                 self._validate_parsing(sql, constructs, debug_trace)
 
             if debug_trace:
                 debug_trace.add_parsing_step(
-                    "parsing_complete", sql, sql, timer.elapsed_ms, constructs_found=len(constructs)
+                    "parsing_complete",
+                    sql,
+                    sql,
+                    timer.elapsed_ms,
+                    constructs_found=len(constructs),
                 )
 
         except Exception as e:
@@ -212,94 +213,133 @@ class IRISSQLParser:
 
         return constructs, debug_trace
 
+    def _collect_constructs(
+        self, sql: str, debug_trace: DebugTrace | None
+    ) -> list[ParsedConstruct]:
+        constructs: list[ParsedConstruct] = []
+        detectors = [
+            self._identify_functions,
+            self._identify_system_functions,
+            self._identify_sql_constructs,
+            self._identify_data_types,
+        ]
+        for detector in detectors:
+            constructs.extend(detector(sql, debug_trace))
+        return constructs
+
     def _identify_functions(
         self, sql: str, debug_trace: DebugTrace | None
     ) -> list[ParsedConstruct]:
         """Identify IRIS functions in SQL"""
-        constructs = []
-
+        constructs: list[ParsedConstruct] = []
         for func_name, pattern in self._function_patterns.items():
-            matches = pattern.finditer(sql)
-
-            for match in matches:
-                location = self._create_source_location(sql, match)
-                parameters = self._parse_function_parameters(match.group(1))
-
-                # Determine construct type based on function name
-                # JSON functions that are document operations should be DOCUMENT_FILTER
-                document_filter_functions = {
-                    "JSON_EXTRACT",
-                    "JSON_ARRAY_LENGTH",
-                    "JSON_ARRAY_ELEMENTS",
-                    "JSON_EXISTS",
-                    "JSON_QUERY",
-                    "JSON_VALUE",
-                }
-
-                if func_name in document_filter_functions:
-                    construct_type = ConstructType.DOCUMENT_FILTER
-                elif func_name.startswith("JSON_"):
-                    construct_type = ConstructType.JSON_FUNCTION
-                else:
-                    construct_type = ConstructType.FUNCTION
-
-                construct = ParsedConstruct(
-                    construct_type=construct_type,
-                    original_text=match.group(0),
-                    location=location,
-                    parameters=parameters,
-                    metadata={"function_name": func_name, "parameter_count": len(parameters)},
-                )
-                constructs.append(construct)
-
-                if debug_trace:
-                    debug_trace.add_parsing_step(
-                        f"function_detected_{func_name}",
-                        match.group(0),
-                        match.group(0),
-                        0.1,
-                        function_name=func_name,
-                        parameter_count=len(parameters),
-                    )
-
+            constructs.extend(self._build_function_constructs(func_name, pattern, sql, debug_trace))
         return constructs
+
+    def _build_function_constructs(
+        self,
+        func_name: str,
+        pattern: re.Pattern,
+        sql: str,
+        debug_trace: DebugTrace | None,
+    ) -> list[ParsedConstruct]:
+        constructs: list[ParsedConstruct] = []
+        matches = pattern.finditer(sql)
+        for match in matches:
+            location = self._create_source_location(sql, match)
+            parameters = self._parse_function_parameters(match.group(1))
+            construct_type = self._select_function_construct_type(func_name)
+            construct = ParsedConstruct(
+                construct_type=construct_type,
+                original_text=match.group(0),
+                location=location,
+                parameters=parameters,
+                metadata={
+                    "function_name": func_name,
+                    "parameter_count": len(parameters),
+                },
+            )
+            constructs.append(construct)
+            self._log_function_detection(construct, func_name, debug_trace)
+        return constructs
+
+    def _select_function_construct_type(self, func_name: str) -> ConstructType:
+        if func_name in self._DOCUMENT_FILTER_FUNCTIONS:
+            return ConstructType.DOCUMENT_FILTER
+        if func_name.startswith("JSON_"):
+            return ConstructType.JSON_FUNCTION
+        return ConstructType.FUNCTION
+
+    def _log_function_detection(
+        self,
+        construct: ParsedConstruct,
+        func_name: str,
+        debug_trace: DebugTrace | None,
+    ) -> None:
+        if not debug_trace:
+            return
+        debug_trace.add_parsing_step(
+            f"function_detected_{func_name}",
+            construct.original_text,
+            construct.original_text,
+            0.1,
+            function_name=func_name,
+            parameter_count=len(construct.parameters),
+        )
 
     def _identify_system_functions(
         self, sql: str, debug_trace: DebugTrace | None
     ) -> list[ParsedConstruct]:
         """Identify IRIS system functions in SQL"""
-        constructs = []
-
+        constructs: list[ParsedConstruct] = []
         for func_name, pattern in self._system_function_patterns.items():
-            matches = pattern.finditer(sql)
-
-            for match in matches:
-                location = self._create_source_location(sql, match)
-                parameters = self._parse_function_parameters(match.group(1))
-
-                construct = ParsedConstruct(
-                    construct_type=ConstructType.SYSTEM_FUNCTION,
-                    original_text=match.group(0),
-                    location=location,
-                    parameters=parameters,
-                    metadata={
-                        "system_function_name": func_name,
-                        "parameter_count": len(parameters),
-                    },
-                )
-                constructs.append(construct)
-
-                if debug_trace:
-                    debug_trace.add_parsing_step(
-                        f"system_function_detected_{func_name.replace('.', '_')}",
-                        match.group(0),
-                        match.group(0),
-                        0.1,
-                        system_function_name=func_name,
-                        parameter_count=len(parameters),
-                    )
-
+            constructs.extend(
+                self._build_system_function_constructs(func_name, pattern, sql, debug_trace)
+            )
         return constructs
+
+    def _build_system_function_constructs(
+        self,
+        func_name: str,
+        pattern: re.Pattern,
+        sql: str,
+        debug_trace: DebugTrace | None,
+    ) -> list[ParsedConstruct]:
+        constructs: list[ParsedConstruct] = []
+        matches = pattern.finditer(sql)
+        for match in matches:
+            location = self._create_source_location(sql, match)
+            parameters = self._parse_function_parameters(match.group(1))
+            construct = ParsedConstruct(
+                construct_type=ConstructType.SYSTEM_FUNCTION,
+                original_text=match.group(0),
+                location=location,
+                parameters=parameters,
+                metadata={
+                    "system_function_name": func_name,
+                    "parameter_count": len(parameters),
+                },
+            )
+            constructs.append(construct)
+            self._log_system_function_detection(construct, func_name, debug_trace)
+        return constructs
+
+    def _log_system_function_detection(
+        self,
+        construct: ParsedConstruct,
+        func_name: str,
+        debug_trace: DebugTrace | None,
+    ) -> None:
+        if not debug_trace:
+            return
+        debug_trace.add_parsing_step(
+            f"system_function_detected_{func_name.replace('.', '_')}",
+            construct.original_text,
+            construct.original_text,
+            0.1,
+            system_function_name=func_name,
+            parameter_count=len(construct.parameters),
+        )
 
     def _identify_sql_constructs(
         self, sql: str, debug_trace: DebugTrace | None
@@ -347,61 +387,60 @@ class IRISSQLParser:
     ) -> list[ParsedConstruct]:
         """Identify IRIS data types in SQL"""
         constructs = []
+        constructs.extend(self._identify_iris_types(sql, debug_trace))
+        constructs.extend(self._identify_standard_types(sql, debug_trace))
+        return constructs
 
-        # Look for IRIS-specific data types (starting with %)
-        iris_type_pattern = self._construct_patterns["IRIS_TYPES"]
-        matches = iris_type_pattern.finditer(sql)
-
-        for match in matches:
+    def _identify_iris_types(
+        self, sql: str, debug_trace: DebugTrace | None
+    ) -> list[ParsedConstruct]:
+        """Identify IRIS-specific data types (starting with %)"""
+        constructs = []
+        for match in self._construct_patterns["IRIS_TYPES"].finditer(sql):
             type_text = match.group(0)
-
-            # Skip if it's already identified as a function
             if any(
                 type_text.upper().endswith(f) for f in ["(", "SQLUPPER", "SQLLOWER", "SQLSTRING"]
             ):
                 continue
-
-            # Check if it looks like a data type
-            if self._is_iris_data_type(type_text):
-                location = self._create_source_location(sql, match)
-
-                construct = ParsedConstruct(
+            if not self._is_iris_data_type(type_text):
+                continue
+            location = self._create_source_location(sql, match)
+            constructs.append(
+                ParsedConstruct(
                     construct_type=ConstructType.DATA_TYPE,
                     original_text=type_text,
                     location=location,
                     parameters=[],
                     metadata={"type_name": type_text, "iris_specific": True},
                 )
-                constructs.append(construct)
+            )
+            if debug_trace:
+                debug_trace.add_parsing_step(
+                    f"datatype_detected_{type_text}",
+                    type_text,
+                    type_text,
+                    0.1,
+                    type_name=type_text,
+                )
+        return constructs
 
-                if debug_trace:
-                    debug_trace.add_parsing_step(
-                        f"datatype_detected_{type_text}",
-                        type_text,
-                        type_text,
-                        0.1,
-                        type_name=type_text,
-                    )
-
-        # Also look for standard SQL types that need translation to PostgreSQL
-        standard_types_pattern = re.compile(
+    def _identify_standard_types(
+        self, sql: str, debug_trace: DebugTrace | None
+    ) -> list[ParsedConstruct]:
+        """Identify standard SQL types that need translation to PostgreSQL"""
+        constructs = []
+        pattern = re.compile(
             r"\b(LONGVARCHAR|LONGVARBINARY|VARBINARY|CLOB|BLOB|TINYINT|REAL|DOUBLE)\b",
             re.IGNORECASE,
         )
-
-        for match in standard_types_pattern.finditer(sql):
+        registry = get_datatype_registry()
+        for match in pattern.finditer(sql):
             type_text = match.group(0).upper()
-
-            # Check if this type has a mapping in the datatype registry
-            # Import here to avoid circular imports
-            from .mappings.datatypes import get_datatype_registry
-
-            registry = get_datatype_registry()
-
-            if registry.has_mapping(type_text):
-                location = self._create_source_location(sql, match)
-
-                construct = ParsedConstruct(
+            if not registry.has_mapping(type_text):
+                continue
+            location = self._create_source_location(sql, match)
+            constructs.append(
+                ParsedConstruct(
                     construct_type=ConstructType.DATA_TYPE,
                     original_text=type_text,
                     location=location,
@@ -412,18 +451,16 @@ class IRISSQLParser:
                         "standard_sql_type": True,
                     },
                 )
-                constructs.append(construct)
-
-                if debug_trace:
-                    debug_trace.add_parsing_step(
-                        f"standard_datatype_detected_{type_text}",
-                        type_text,
-                        type_text,
-                        0.1,
-                        type_name=type_text,
-                        standard_sql_type=True,
-                    )
-
+            )
+            if debug_trace:
+                debug_trace.add_parsing_step(
+                    f"standard_datatype_detected_{type_text}",
+                    type_text,
+                    type_text,
+                    0.1,
+                    type_name=type_text,
+                    standard_sql_type=True,
+                )
         return constructs
 
     def _create_source_location(self, sql: str, match: re.Match) -> SourceLocation:
@@ -465,18 +502,19 @@ class IRISSQLParser:
 
         return parameters
 
+    _CONSTRUCT_TYPE_MAP: dict[str, ConstructType] = {
+        "DECODE": ConstructType.FUNCTION,
+        "IIF": ConstructType.FUNCTION,
+        "MINUS": ConstructType.SYNTAX,
+        "INDEX_IF_NOT_EXISTS": ConstructType.SYNTAX,
+        "ROWNUM": ConstructType.SYNTAX,
+    }
+
     def _determine_construct_type(self, construct_name: str) -> ConstructType:
         """Determine construct type from construct name"""
         if construct_name.startswith("TOP"):
             return ConstructType.SYNTAX
-        elif construct_name in ["DECODE", "IIF"]:
-            return ConstructType.FUNCTION
-        elif construct_name in ["MINUS", "INDEX_IF_NOT_EXISTS"]:
-            return ConstructType.SYNTAX
-        elif construct_name == "ROWNUM":
-            return ConstructType.SYNTAX
-        else:
-            return ConstructType.UNKNOWN
+        return self._CONSTRUCT_TYPE_MAP.get(construct_name, ConstructType.UNKNOWN)
 
     def _is_iris_data_type(self, type_text: str) -> bool:
         """Check if text represents an IRIS data type"""

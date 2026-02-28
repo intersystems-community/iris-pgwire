@@ -15,7 +15,7 @@ import structlog
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, validator
 
-from .models import PerformanceTimer
+from .models import PerformanceTimer, TranslationResult
 from .translator import IRISSQLTranslator, TranslationContext, get_translator
 from .validator import ValidationLevel
 
@@ -161,48 +161,14 @@ class SQLTranslationAPI:
             try:
                 self._request_count += 1
 
-                # Validate request
                 self._validate_translation_request(request)
-
-                # Create translation context
-                validation_level = ValidationLevel(request.validation_level)
-                context = TranslationContext(
-                    original_sql=request.sql,
-                    session_id=request.session_id,
-                    parameters=request.parameters,
-                    enable_caching=request.enable_caching,
-                    enable_validation=request.enable_validation,
-                    enable_debug=request.enable_debug,
-                    validation_level=validation_level,
-                    metadata=request.metadata or {},
-                )
-
-                # Perform translation
+                context = self._build_translation_context(request)
                 result = self.translator.translate(context)
 
-                # Constitutional compliance check
-                if timer.elapsed_ms > 5.0:  # 5ms SLA
-                    self._sla_violations += 1
-                    self.logger.warning(f"Translation API exceeded 5ms SLA: {timer.elapsed_ms}ms")
+                elapsed_ms = timer.elapsed_ms
+                self._record_sla_violation(elapsed_ms)
 
-                # Build response
-                response = TranslationResponse(
-                    success=result.success,
-                    original_sql=result.original_sql,
-                    translated_sql=result.translated_sql,
-                    construct_mappings=[asdict(mapping) for mapping in result.construct_mappings],
-                    performance_stats=asdict(result.performance_stats),
-                    warnings=result.warnings,
-                    validation_result=(
-                        asdict(result.validation_result) if result.validation_result else None
-                    ),
-                    debug_trace=(
-                        self._format_debug_trace(result.debug_trace) if result.debug_trace else None
-                    ),
-                    timestamp=datetime.now(UTC).isoformat(),
-                )
-
-                return response
+                return self._build_translation_response(result, request)
 
             except ValueError as e:
                 self._error_count += 1
@@ -226,9 +192,8 @@ class SQLTranslationAPI:
             Cache statistics response
         """
         try:
-            cache_stats = self.translator.cache.get_stats() if self.translator.cache else None
-
-            if cache_stats is None:
+            cache = self.translator.cache
+            if cache is None:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail=self._create_error_response(
@@ -236,8 +201,8 @@ class SQLTranslationAPI:
                     ),
                 )
 
-            # Get detailed cache info for constitutional compliance
-            cache_info = self.translator.cache.get_cache_info()
+            cache_stats = cache.get_stats()
+            cache_info = cache.get_cache_info()
 
             return CacheStatsResponse(
                 total_entries=cache_stats.total_entries,
@@ -351,6 +316,45 @@ class SQLTranslationAPI:
             raise ValueError("Unbalanced single quotes in SQL")
         if double_quotes % 2 != 0:
             raise ValueError("Unbalanced double quotes in SQL")
+
+    def _build_translation_context(self, request: TranslationRequest) -> TranslationContext:
+        """Create translation context from API request"""
+        return TranslationContext(
+            original_sql=request.sql,
+            session_id=request.session_id,
+            parameters=request.parameters,
+            enable_caching=request.enable_caching,
+            enable_validation=request.enable_validation,
+            enable_debug=request.enable_debug,
+            validation_level=ValidationLevel(request.validation_level),
+            metadata=request.metadata or {},
+        )
+
+    def _record_sla_violation(self, elapsed_ms: float) -> None:
+        """Record SLA violations for translation API"""
+        if elapsed_ms > 5.0:
+            self._sla_violations += 1
+            self.logger.warning(f"Translation API exceeded 5ms SLA: {elapsed_ms}ms")
+
+    def _build_translation_response(
+        self, result: TranslationResult, request: TranslationRequest
+    ) -> TranslationResponse:
+        """Build API response for translation results"""
+        return TranslationResponse(
+            success=result.is_successful,
+            original_sql=request.sql,
+            translated_sql=result.translated_sql,
+            construct_mappings=[asdict(mapping) for mapping in result.construct_mappings],
+            performance_stats=asdict(result.performance_stats),
+            warnings=result.warnings,
+            validation_result=(
+                asdict(result.validation_result) if result.validation_result else None
+            ),
+            debug_trace=(
+                self._format_debug_trace(result.debug_trace) if result.debug_trace else None
+            ),
+            timestamp=datetime.now(UTC).isoformat(),
+        )
 
     def _format_debug_trace(self, debug_trace) -> dict[str, Any] | None:
         """Format debug trace for API response"""

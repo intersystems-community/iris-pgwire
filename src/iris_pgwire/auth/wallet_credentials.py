@@ -1,33 +1,10 @@
-"""
-IRIS Wallet Credentials Management
-
-This module implements encrypted credential storage and retrieval using IRIS Wallet
-(stored in IRISSECURITY database). It provides dual-purpose credential management
-for both user passwords and OAuth client secrets.
-
-Architecture:
-    PGWire → WalletCredentials → IRIS Wallet (%IRIS.Wallet) → IRISSECURITY Database
-
-Key Features:
-    - User password storage and retrieval (key: pgwire-user-{username})
-    - OAuth client secret retrieval (key: pgwire-oauth-client)
-    - Password authentication fallback chain (FR-021)
-    - Audit trail with accessed_at timestamps (FR-022)
-
-Constitutional Requirements:
-    - Uses iris.cls('%IRIS.Wallet') for IRIS integration (Principle IV)
-    - Uses asyncio.to_thread() for non-blocking execution
-    - Clear error messages for fallback handling (FR-021)
-    - Admin-only password storage (FR-023)
-
-Feature: 024-research-and-implement (Authentication Bridge)
-Phase: 3.4 (Core Implementation) - Phase 4 integration
-"""
+"""IRIS Wallet encrypted credential storage for passwords and OAuth client secrets."""
 
 import asyncio
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import NoReturn
 
 import structlog
 
@@ -100,6 +77,35 @@ class WalletCredentials:
             audit_enabled=audit_enabled,
         )
 
+    def _wrap_wallet_exception(
+        self,
+        exc: Exception,
+        error_cls: type[Exception],
+        log_event: str,
+        message: str,
+        re_raise: tuple[type[Exception], ...] = (),
+        **log_context: str,
+    ) -> NoReturn:
+        if isinstance(exc, (error_cls,) + re_raise):
+            raise exc
+
+        logger.error(log_event, error=str(exc), **log_context)
+        raise error_cls(f"{message}: {exc}") from exc
+
+    def _retrieve_wallet_secret_sync(self, wallet_key: str) -> str | None:
+        import iris
+
+        wallet = iris.cls("%IRIS.Wallet")
+        return wallet.GetSecret(wallet_key)
+
+    def _store_wallet_secret_sync(self, wallet_key: str, secret_value: str) -> None:
+        import iris
+
+        wallet = iris.cls("%IRIS.Wallet")
+        result = wallet.SetSecret(wallet_key, secret_value)
+        if not result:
+            raise WalletAPIError("Wallet SetSecret() returned failure")
+
     async def get_password_from_wallet(self, username: str) -> str:
         """
         Retrieve user password from IRIS Wallet.
@@ -132,63 +138,31 @@ class WalletCredentials:
         )
 
         try:
-            # Execute Wallet retrieval in thread pool (blocking IRIS call)
-            def _iris_wallet_retrieval():
-                """Execute IRIS Wallet GetSecret() (blocking)"""
-                try:
-                    import iris
-
-                    # Get IRIS Wallet instance
-                    wallet = iris.cls("%IRIS.Wallet")
-
-                    # Retrieve secret from Wallet
-                    # %IRIS.Wallet.GetSecret(key) -> decrypted value or None
-                    secret_value = wallet.GetSecret(wallet_key)
-
-                    if secret_value is None:
-                        # Secret not found - trigger fallback (FR-021)
-                        raise WalletSecretNotFoundError(
-                            f"Password not found in Wallet for user '{username}'. "
-                            f"Falling back to password authentication."
-                        )
-
-                    return secret_value
-
-                except WalletSecretNotFoundError:
-                    # Re-raise to trigger fallback
-                    raise
-                except Exception as e:
-                    logger.error(
-                        "iris_wallet_retrieval_failed",
-                        username=username,
-                        error=str(e),
-                    )
-                    raise WalletAPIError(f"IRIS Wallet API error: {e}")
-
-            # Execute in thread pool
-            password = await asyncio.to_thread(_iris_wallet_retrieval)
-
-            # Update audit trail (FR-022)
-            if self.config.audit_enabled:
-                await self._update_accessed_at(wallet_key)
-
-            logger.info(
-                "wallet_password_retrieval_success",
-                username=username,
-            )
-
-            return password
-
-        except (WalletSecretNotFoundError, WalletAPIError):
-            # Re-raise Wallet errors as-is
-            raise
+            password = await asyncio.to_thread(self._retrieve_wallet_secret_sync, wallet_key)
         except Exception as e:
-            logger.error(
+            self._wrap_wallet_exception(
+                e,
+                WalletAPIError,
                 "wallet_password_retrieval_error",
+                "Unexpected error during Wallet retrieval",
                 username=username,
-                error=str(e),
             )
-            raise WalletAPIError(f"Unexpected error during Wallet retrieval: {e}")
+
+        if password is None:
+            raise WalletSecretNotFoundError(
+                f"Password not found in Wallet for user '{username}'. "
+                "Falling back to password authentication."
+            )
+
+        if self.config.audit_enabled:
+            await self._update_accessed_at(wallet_key)
+
+        logger.info(
+            "wallet_password_retrieval_success",
+            username=username,
+        )
+
+        return password
 
     async def set_password_in_wallet(self, username: str, password: str) -> None:
         """
@@ -221,49 +195,21 @@ class WalletCredentials:
         )
 
         try:
-            # Execute Wallet storage in thread pool (blocking IRIS call)
-            def _iris_wallet_storage():
-                """Execute IRIS Wallet SetSecret() (blocking)"""
-                try:
-                    import iris
-
-                    # Get IRIS Wallet instance
-                    wallet = iris.cls("%IRIS.Wallet")
-
-                    # Store secret in Wallet (encrypted)
-                    # %IRIS.Wallet.SetSecret(key, value) -> success/failure
-                    result = wallet.SetSecret(wallet_key, password)
-
-                    if not result:
-                        raise WalletAPIError("Wallet SetSecret() returned failure")
-
-                    return True
-
-                except Exception as e:
-                    logger.error(
-                        "iris_wallet_storage_failed",
-                        username=username,
-                        error=str(e),
-                    )
-                    raise WalletAPIError(f"IRIS Wallet storage failed: {e}")
-
-            # Execute in thread pool
-            await asyncio.to_thread(_iris_wallet_storage)
-
-            logger.info(
-                "wallet_password_storage_success",
-                username=username,
-            )
-
-        except WalletAPIError:
-            raise
+            await asyncio.to_thread(self._store_wallet_secret_sync, wallet_key, password)
         except Exception as e:
-            logger.error(
+            self._wrap_wallet_exception(
+                e,
+                WalletAPIError,
                 "wallet_password_storage_error",
+                "Unexpected error during Wallet storage",
                 username=username,
-                error=str(e),
+                re_raise=(WalletAPIError,),
             )
-            raise WalletAPIError(f"Unexpected error during Wallet storage: {e}")
+
+        logger.info(
+            "wallet_password_storage_success",
+            username=username,
+        )
 
     async def get_oauth_client_secret(self) -> str:
         """
@@ -293,118 +239,68 @@ class WalletCredentials:
         )
 
         try:
-            # Execute Wallet retrieval in thread pool (blocking IRIS call)
-            def _iris_wallet_oauth_retrieval():
-                """Execute IRIS Wallet GetSecret() for OAuth client secret (blocking)"""
-                try:
-                    import iris
-
-                    # Get IRIS Wallet instance
-                    wallet = iris.cls("%IRIS.Wallet")
-
-                    # Retrieve OAuth client secret from Wallet
-                    client_secret = wallet.GetSecret(wallet_key)
-
-                    if client_secret is None:
-                        # OAuth secret not configured
-                        raise WalletAPIError(
-                            f"OAuth client secret not configured in Wallet (key: {wallet_key}). "
-                            f"Use IRIS Wallet management portal to configure secret."
-                        )
-
-                    # Validate minimum secret length
-                    if len(client_secret) < 32:
-                        raise WalletAPIError(
-                            f"OAuth client secret too short ({len(client_secret)} chars). "
-                            f"Minimum length: 32 characters for security."
-                        )
-
-                    return client_secret
-
-                except WalletAPIError:
-                    raise
-                except Exception as e:
-                    logger.error(
-                        "iris_wallet_oauth_retrieval_failed",
-                        error=str(e),
-                    )
-                    raise WalletAPIError(f"IRIS Wallet OAuth retrieval failed: {e}")
-
-            # Execute in thread pool
-            client_secret = await asyncio.to_thread(_iris_wallet_oauth_retrieval)
-
-            # Update audit trail (FR-022)
-            if self.config.audit_enabled:
-                await self._update_accessed_at(wallet_key)
-
-            logger.info(
-                "wallet_oauth_secret_retrieval_success",
-            )
-
-            return client_secret
-
-        except WalletAPIError:
-            raise
+            client_secret = await asyncio.to_thread(self._retrieve_wallet_secret_sync, wallet_key)
         except Exception as e:
-            logger.error(
+            self._wrap_wallet_exception(
+                e,
+                WalletAPIError,
                 "wallet_oauth_secret_retrieval_error",
-                error=str(e),
+                "Unexpected error during OAuth secret retrieval",
+                re_raise=(WalletAPIError,),
             )
-            raise WalletAPIError(f"Unexpected error during OAuth secret retrieval: {e}")
 
-    async def _update_accessed_at(self, wallet_key: str) -> None:
-        """
-        Update accessed_at timestamp for audit trail.
+        if client_secret is None:
+            raise WalletAPIError(
+                f"OAuth client secret not configured in Wallet (key: {wallet_key}). "
+                "Use IRIS Wallet management portal to configure secret."
+            )
 
-        Implements FR-022: Audit trail with accessed timestamps.
+        if len(client_secret) < 32:
+            raise WalletAPIError(
+                f"OAuth client secret too short ({len(client_secret)} chars). "
+                "Minimum length: 32 characters for security."
+            )
 
-        Args:
-            wallet_key: Wallet key to update
-        """
-        if not self.config.audit_enabled:
-            return
+        if self.config.audit_enabled:
+            await self._update_accessed_at(wallet_key)
 
+        logger.info(
+            "wallet_oauth_secret_retrieval_success",
+        )
+
+        return client_secret
+
+    def _iris_wallet_audit_update_sync(self, wallet_key: str) -> None:
+        """Update Wallet audit timestamp (blocking)."""
         try:
+            import iris
 
-            def _iris_wallet_audit_update():
-                """Update Wallet audit timestamp (blocking)"""
-                try:
-                    import iris
+            iris.cls("%IRIS.Wallet")
 
-                    # Get IRIS Wallet instance
-                    iris.cls("%IRIS.Wallet")
+            logger.debug(
+                "wallet_audit_trail_updated",
+                wallet_key=wallet_key,
+                accessed_at=datetime.now(UTC).isoformat(),
+            )
 
-                    # Update accessed timestamp (if API supports it)
-                    # Note: Actual IRIS Wallet API may differ - adjust based on documentation
-                    # For now, we'll log the access for audit purposes
-                    logger.debug(
-                        "wallet_audit_trail_updated",
-                        wallet_key=wallet_key,
-                        accessed_at=datetime.now(UTC).isoformat(),
-                    )
-
-                    # If IRIS Wallet supports UpdateAccessedAt(), call it here:
-                    # if hasattr(wallet, 'UpdateAccessedAt'):
-                    #     wallet.UpdateAccessedAt(wallet_key)
-
-                except Exception as e:
-                    # Don't fail the operation if audit update fails
-                    logger.warning(
-                        "wallet_audit_trail_update_failed",
-                        wallet_key=wallet_key,
-                        error=str(e),
-                    )
-
-            # Execute in thread pool
-            await asyncio.to_thread(_iris_wallet_audit_update)
+            # If IRIS Wallet supports UpdateAccessedAt(), call it here:
+            # if hasattr(wallet, 'UpdateAccessedAt'):
+            #     wallet.UpdateAccessedAt(wallet_key)
 
         except Exception as e:
             # Don't fail the operation if audit update fails
             logger.warning(
-                "wallet_audit_trail_update_error",
+                "wallet_audit_trail_update_failed",
                 wallet_key=wallet_key,
                 error=str(e),
             )
+
+    async def _update_accessed_at(self, wallet_key: str) -> None:
+        """Update accessed_at timestamp for audit trail (FR-022)."""
+        if not self.config.audit_enabled:
+            return
+
+        await asyncio.to_thread(self._iris_wallet_audit_update_sync, wallet_key)
 
 
 # Export public API

@@ -11,7 +11,8 @@ import asyncio
 import logging
 import secrets
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -47,7 +48,7 @@ class IRISUserInfo:
     last_login: str | None = None
     created_date: str | None = None
     iris_internal_id: str | None = None
-    metadata: dict[str, Any] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.metadata is None:
@@ -64,7 +65,7 @@ class PGWireUserInfo:
     enabled: bool
     last_auth: str | None = None
     created_date: str | None = None
-    metadata: dict[str, Any] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.metadata is None:
@@ -80,13 +81,9 @@ class UserSyncResult:
     users_created: int = 0
     users_updated: int = 0
     users_disabled: int = 0
-    errors: list[str] = None
+    errors: list[str] = field(default_factory=list)
     sync_time_ms: float = 0.0
     sla_compliant: bool = True
-
-    def __post_init__(self):
-        if self.errors is None:
-            self.errors = []
 
 
 class IRISUserManager:
@@ -99,6 +96,23 @@ class IRISUserManager:
         self._user_cache: dict[str, IRISUserInfo] = {}
         self._cache_ttl = 300  # 5 minutes cache TTL
 
+    def _create_iris_connection(self):
+        """Create an IRIS connection using the configured credentials.
+
+        Returns:
+            A tuple of (connection, cursor) for IRIS database operations.
+        """
+        import iris
+
+        connection = iris.createConnection(
+            hostname=self.iris_config["host"],
+            port=int(self.iris_config["port"]),
+            namespace=self.iris_config["namespace"],
+            username=self.iris_config.get("system_user", "_SYSTEM"),
+            password=self.iris_config.get("system_password", "SYS"),
+        )
+        return connection, connection.cursor()
+
     async def get_iris_users(self, namespace: str | None = None) -> list[IRISUserInfo]:
         """
         Get all users from IRIS Security.Users table
@@ -110,17 +124,7 @@ class IRISUserManager:
 
             def iris_query():
                 try:
-                    import iris
-
-                    connection = iris.createConnection(
-                        hostname=self.iris_config["host"],
-                        port=int(self.iris_config["port"]),
-                        namespace=self.iris_config["namespace"],
-                        username=self.iris_config.get("system_user", "_SYSTEM"),
-                        password=self.iris_config.get("system_password", "SYS"),
-                    )
-
-                    cursor = connection.cursor()
+                    connection, cursor = self._create_iris_connection()
 
                     # Query IRIS Security.Users table
                     if namespace:
@@ -206,7 +210,11 @@ class IRISUserManager:
         return None
 
     async def create_iris_user(
-        self, username: str, password: str, roles: list[str] = None, namespaces: list[str] = None
+        self,
+        username: str,
+        password: str,
+        roles: list[str] | None = None,
+        namespaces: list[str] | None = None,
     ) -> tuple[bool, str]:
         """
         Create new user in IRIS
@@ -215,166 +223,76 @@ class IRISUserManager:
         if self.sync_mode == UserSyncMode.READ_ONLY:
             return False, "User creation disabled in read-only mode"
 
-        start_time = time.perf_counter()
+        def iris_create():
+            connection, cursor = self._create_iris_connection()
 
-        try:
+            cursor.execute("SELECT COUNT(*) FROM Security.Users WHERE Name = ?", [username])
+            if cursor.fetchone()[0] > 0:
+                return False, "User already exists"
 
-            def iris_create():
-                try:
-                    import iris
+            role_str = ",".join(roles) if roles else ""
+            namespace_str = ",".join(namespaces) if namespaces else self.iris_config["namespace"]
 
-                    connection = iris.createConnection(
-                        hostname=self.iris_config["host"],
-                        port=int(self.iris_config["port"]),
-                        namespace=self.iris_config["namespace"],
-                        username=self.iris_config.get("system_user", "_SYSTEM"),
-                        password=self.iris_config.get("system_password", "SYS"),
-                    )
+            insert_query = """
+            INSERT INTO Security.Users (Name, Enabled, Roles, NameSpace, Password)
+            VALUES (?, 1, ?, ?, ?)
+            """
+            cursor.execute(insert_query, [username, role_str, namespace_str, password])
 
-                    cursor = connection.cursor()
+            if username in self._user_cache:
+                del self._user_cache[username]
 
-                    # Use IRIS ObjectScript to create user (more reliable than direct SQL)
-                    # This is a simplified approach - full implementation would use IRIS Security APIs
+            return True, "User created successfully"
 
-                    # Check if user already exists
-                    cursor.execute("SELECT COUNT(*) FROM Security.Users WHERE Name = ?", [username])
-                    if cursor.fetchone()[0] > 0:
-                        return False, "User already exists"
-
-                    # Create user record (simplified - actual IRIS user creation is more complex)
-                    role_str = ",".join(roles) if roles else ""
-                    namespace_str = (
-                        ",".join(namespaces) if namespaces else self.iris_config["namespace"]
-                    )
-
-                    # Note: This is a simplified example. Real IRIS user creation should use:
-                    # ##class(Security.Users).Create() method or similar IRIS Security APIs
-                    insert_query = """
-                    INSERT INTO Security.Users (Name, Enabled, Roles, NameSpace, Password)
-                    VALUES (?, 1, ?, ?, ?)
-                    """
-                    cursor.execute(insert_query, [username, role_str, namespace_str, password])
-
-                    # Clear cache
-                    if username in self._user_cache:
-                        del self._user_cache[username]
-
-                    return True, "User created successfully"
-
-                except Exception as e:
-                    logger.error(f"IRIS user creation failed for {username}: {e}")
-                    return False, f"User creation failed: {str(e)}"
-
-            success, message = await asyncio.to_thread(iris_create)
-
-            creation_time = (time.perf_counter() - start_time) * 1000
-            sla_compliant = creation_time < 5.0
-
-            if not sla_compliant:
-                logger.warning(f"IRIS user creation SLA violation: {creation_time:.2f}ms")
-
-            return success, message
-
-        except Exception as e:
-            logger.error(f"Error creating IRIS user {username}: {e}")
-            return False, f"Error creating user: {str(e)}"
+        return await self._execute_iris_operation(f"creating IRIS user {username}", iris_create)
 
     async def update_iris_user_password(self, username: str, new_password: str) -> tuple[bool, str]:
         """Update IRIS user password"""
         if self.sync_mode == UserSyncMode.READ_ONLY:
             return False, "Password updates disabled in read-only mode"
 
-        start_time = time.perf_counter()
+        def iris_update():
+            connection, cursor = self._create_iris_connection()
+            update_query = "UPDATE Security.Users SET Password = ? WHERE Name = ?"
+            cursor.execute(update_query, [new_password, username])
+            return True, "Password updated successfully"
 
-        try:
-
-            def iris_update():
-                try:
-                    import iris
-
-                    connection = iris.createConnection(
-                        hostname=self.iris_config["host"],
-                        port=int(self.iris_config["port"]),
-                        namespace=self.iris_config["namespace"],
-                        username=self.iris_config.get("system_user", "_SYSTEM"),
-                        password=self.iris_config.get("system_password", "SYS"),
-                    )
-
-                    cursor = connection.cursor()
-
-                    # Update password (simplified - real implementation should use IRIS Security APIs)
-                    update_query = "UPDATE Security.Users SET Password = ? WHERE Name = ?"
-                    cursor.execute(update_query, [new_password, username])
-
-                    return True, "Password updated successfully"
-
-                except Exception as e:
-                    logger.error(f"IRIS password update failed for {username}: {e}")
-                    return False, f"Password update failed: {str(e)}"
-
-            success, message = await asyncio.to_thread(iris_update)
-
-            update_time = (time.perf_counter() - start_time) * 1000
-            sla_compliant = update_time < 5.0
-
-            if not sla_compliant:
-                logger.warning(f"IRIS password update SLA violation: {update_time:.2f}ms")
-
-            return success, message
-
-        except Exception as e:
-            logger.error(f"Error updating IRIS user password for {username}: {e}")
-            return False, f"Error updating password: {str(e)}"
+        return await self._execute_iris_operation(
+            f"updating IRIS user password for {username}", iris_update
+        )
 
     async def disable_iris_user(self, username: str) -> tuple[bool, str]:
         """Disable IRIS user account"""
         if self.sync_mode == UserSyncMode.READ_ONLY:
             return False, "User modifications disabled in read-only mode"
 
+        def iris_disable():
+            connection, cursor = self._create_iris_connection()
+            cursor.execute("UPDATE Security.Users SET Enabled = 0 WHERE Name = ?", [username])
+            if username in self._user_cache:
+                del self._user_cache[username]
+            return True, "User disabled successfully"
+
+        return await self._execute_iris_operation(f"disabling IRIS user {username}", iris_disable)
+
+    async def _execute_iris_operation(
+        self, description: str, handler: Callable[[], tuple[bool, str]]
+    ) -> tuple[bool, str]:
+        """Run an IRIS operation in a thread with SLA monitoring."""
         start_time = time.perf_counter()
-
         try:
+            success, message = await asyncio.to_thread(handler)
+        except Exception as exc:
+            error_msg = f"IRIS {description} failed: {exc}"
+            logger.error(error_msg)
+            success = False
+            message = f"{description} failed: {str(exc)}"
+        finally:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            if elapsed_ms >= 5.0:
+                logger.warning(f"IRIS {description} SLA violation: {elapsed_ms:.2f}ms")
 
-            def iris_disable():
-                try:
-                    import iris
-
-                    connection = iris.createConnection(
-                        hostname=self.iris_config["host"],
-                        port=int(self.iris_config["port"]),
-                        namespace=self.iris_config["namespace"],
-                        username=self.iris_config.get("system_user", "_SYSTEM"),
-                        password=self.iris_config.get("system_password", "SYS"),
-                    )
-
-                    cursor = connection.cursor()
-                    cursor.execute(
-                        "UPDATE Security.Users SET Enabled = 0 WHERE Name = ?", [username]
-                    )
-
-                    # Clear cache
-                    if username in self._user_cache:
-                        del self._user_cache[username]
-
-                    return True, "User disabled successfully"
-
-                except Exception as e:
-                    logger.error(f"IRIS user disable failed for {username}: {e}")
-                    return False, f"User disable failed: {str(e)}"
-
-            success, message = await asyncio.to_thread(iris_disable)
-
-            disable_time = (time.perf_counter() - start_time) * 1000
-            sla_compliant = disable_time < 5.0
-
-            if not sla_compliant:
-                logger.warning(f"IRIS user disable SLA violation: {disable_time:.2f}ms")
-
-            return success, message
-
-        except Exception as e:
-            logger.error(f"Error disabling IRIS user {username}: {e}")
-            return False, f"Error disabling user: {str(e)}"
+        return success, message
 
     def map_iris_role_to_pgwire(self, iris_roles: list[str]) -> UserRole:
         """Map IRIS roles to PGWire user role"""

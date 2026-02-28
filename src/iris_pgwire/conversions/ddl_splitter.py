@@ -12,6 +12,72 @@ logger = structlog.get_logger()
 class DdlSplitter:
     """Splits complex DDL statements into multiple IRIS-compatible statements."""
 
+    def _should_toggle_quote(
+        self,
+        char: str,
+        quote_char: str,
+        other_quote: bool,
+        in_this_quote: bool,
+        in_line_comment: bool,
+        in_block_comment: bool,
+    ) -> bool:
+        return (
+            char == quote_char
+            and not other_quote
+            and not in_this_quote
+            and not in_line_comment
+            and not in_block_comment
+        )
+
+    def _start_line_comment(
+        self,
+        char: str,
+        next_char: str,
+        in_single_quote: bool,
+        in_double_quote: bool,
+        in_block_comment: bool,
+    ) -> bool:
+        return (
+            char == "-"
+            and next_char == "-"
+            and not in_single_quote
+            and not in_double_quote
+            and not in_block_comment
+        )
+
+    def _start_block_comment(
+        self,
+        char: str,
+        next_char: str,
+        in_single_quote: bool,
+        in_double_quote: bool,
+        in_line_comment: bool,
+    ) -> bool:
+        return (
+            char == "/"
+            and next_char == "*"
+            and not in_single_quote
+            and not in_double_quote
+            and not in_line_comment
+        )
+
+    def _end_block_comment(self, char: str, next_char: str, in_block_comment: bool) -> bool:
+        return char == "*" and next_char == "/" and in_block_comment
+
+    def _should_split_statement(
+        self, char: str, in_single_quote: bool, in_double_quote: bool
+    ) -> bool:
+        return char == ";" and not in_single_quote and not in_double_quote
+
+    def _is_action_separator(
+        self,
+        char: str,
+        paren_depth: int,
+        in_single_quote: bool,
+        in_double_quote: bool,
+    ) -> bool:
+        return char == "," and paren_depth == 0 and not in_single_quote and not in_double_quote
+
     def split(self, sql: str) -> list[str]:
         """
         Split SQL text into individual statements, respecting comments and quotes.
@@ -35,18 +101,16 @@ class DdlSplitter:
             char = sql[i]
             next_char = sql[i + 1] if i + 1 < len(sql) else ""
 
-            if char == "'" and not in_double_quote and not in_line_comment and not in_block_comment:
-                in_single_quote = not in_single_quote
-            elif (
-                char == '"' and not in_single_quote and not in_line_comment and not in_block_comment
+            if self._should_toggle_quote(
+                char, '"', in_single_quote, in_double_quote, in_line_comment, in_block_comment
             ):
                 in_double_quote = not in_double_quote
-            elif (
-                char == "-"
-                and next_char == "-"
-                and not in_single_quote
-                and not in_double_quote
-                and not in_block_comment
+            elif self._should_toggle_quote(
+                char, "'", in_double_quote, in_single_quote, in_line_comment, in_block_comment
+            ):
+                in_single_quote = not in_single_quote
+            elif self._start_line_comment(
+                char, next_char, in_single_quote, in_double_quote, in_block_comment
             ):
                 in_line_comment = True
                 i += 2
@@ -55,17 +119,13 @@ class DdlSplitter:
                 in_line_comment = False
                 i += 1
                 continue
-            elif (
-                char == "/"
-                and next_char == "*"
-                and not in_single_quote
-                and not in_double_quote
-                and not in_line_comment
+            elif self._start_block_comment(
+                char, next_char, in_single_quote, in_double_quote, in_line_comment
             ):
                 in_block_comment = True
                 i += 2
                 continue
-            elif char == "*" and next_char == "/" and in_block_comment:
+            elif self._end_block_comment(char, next_char, in_block_comment):
                 in_block_comment = False
                 i += 2
                 continue
@@ -74,7 +134,7 @@ class DdlSplitter:
                 i += 1
                 continue
 
-            if char == ";" and not in_single_quote and not in_double_quote:
+            if self._should_split_statement(char, in_single_quote, in_double_quote):
                 stmt = "".join(current_statement).strip()
                 if stmt:
                     statements.append(stmt)
@@ -183,14 +243,12 @@ class DdlSplitter:
                 paren_depth += 1
             elif char == ")" and not in_single_quote and not in_double_quote:
                 paren_depth -= 1
-            elif char == "," and paren_depth == 0 and not in_single_quote and not in_double_quote:
-                # Found a separator
+            elif self._is_action_separator(char, paren_depth, in_single_quote, in_double_quote):
                 actions.append("".join(current_action).strip())
                 current_action = []
-                # Skip whitespace after comma
-                while i + 1 < len(actions_str) and actions_str[i + 1].isspace():
-                    i += 1
                 i += 1
+                while i < len(actions_str) and actions_str[i].isspace():
+                    i += 1
                 continue
 
             current_action.append(char)

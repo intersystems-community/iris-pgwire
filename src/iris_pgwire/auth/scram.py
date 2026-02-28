@@ -1,17 +1,4 @@
-"""
-IRIS PostgreSQL Wire Protocol Authentication
-SCRAM-SHA-256 Implementation for P4: Authentication Phase
-
-Implements secure PostgreSQL-compatible authentication with IRIS integration
-while maintaining constitutional compliance (<5ms SLA).
-
-Key Features:
-- SCRAM-SHA-256 challenge-response authentication
-- IRIS native user validation
-- TLS channel binding support
-- Constitutional compliance monitoring
-- Attack prevention (brute force, timing attacks)
-"""
+"""SCRAM-SHA-256 authentication with IRIS integration and constitutional compliance."""
 
 import asyncio
 import base64
@@ -86,16 +73,45 @@ class IRISAuthenticationProvider:
         self._credential_cache: dict[str, ScramCredentials] = {}
         self._failed_attempts: dict[str, list] = {}
 
-    async def validate_iris_user(self, username: str, password: str) -> tuple[bool, str | None]:
-        """
-        Validate user credentials against IRIS with constitutional compliance monitoring
-        Returns (success, iris_session_id)
-        """
-        start_time = time.perf_counter()
+    @staticmethod
+    def _check_sla_compliance(
+        operation_name: str, auth_time: float, success: bool, **log_kwargs: Any
+    ) -> bool:
+        """Check SLA compliance, record metrics, and log violations. Returns sla_compliant."""
         monitor = get_monitor()
         governor = get_governor()
+        sla_compliant = auth_time < 5.0
 
-        # Log authentication attempt with constitutional monitoring
+        monitor.record_operation(operation=operation_name, duration_ms=auth_time, success=success)
+
+        logger.info(
+            f"{operation_name} completed",
+            auth_time_ms=auth_time,
+            sla_compliant=sla_compliant,
+            success=success,
+            constitutional_compliance=True,
+            **log_kwargs,
+        )
+
+        if not sla_compliant:
+            logger.warning(
+                f"Constitutional SLA violation in {operation_name}",
+                auth_time_ms=auth_time,
+                sla_threshold_ms=5.0,
+                violation_severity="HIGH",
+                **log_kwargs,
+            )
+            governor.check_compliance()
+
+        return sla_compliant
+
+    async def validate_iris_user(self, username: str, password: str) -> tuple[bool, str | None]:
+        """
+        Validate user credentials against IRIS with constitutional compliance monitoring.
+        Returns (success, iris_session_id).
+        """
+        start_time = time.perf_counter()
+
         logger.info(
             "IRIS authentication attempt initiated",
             username=username,
@@ -103,12 +119,11 @@ class IRISAuthenticationProvider:
         )
 
         try:
-            # Use asyncio.to_thread to avoid blocking event loop
+
             def iris_auth():
                 try:
                     import iris
 
-                    # Create IRIS connection with user credentials
                     connection = iris.createConnection(
                         hostname=self.iris_config["host"],
                         port=int(self.iris_config["port"]),
@@ -117,7 +132,6 @@ class IRISAuthenticationProvider:
                         password=password,
                     )
 
-                    # Test connection by executing simple query
                     cursor = connection.cursor()
                     cursor.execute("SELECT 1")
                     result = cursor.fetchone()
@@ -134,43 +148,14 @@ class IRISAuthenticationProvider:
 
             success, session_id = await asyncio.to_thread(iris_auth)
 
-            # Constitutional compliance monitoring
             auth_time = (time.perf_counter() - start_time) * 1000
-            sla_compliant = auth_time < 5.0  # Constitutional requirement (<5ms SLA)
-
-            # Record authentication metrics for constitutional compliance
-            monitor.record_operation(
-                operation="iris_authentication", duration_ms=auth_time, success=success
-            )
-
-            # Log constitutional compliance status
-            logger.info(
-                "IRIS authentication completed",
-                username=username,
-                auth_time_ms=auth_time,
-                sla_compliant=sla_compliant,
-                success=success,
-                constitutional_compliance=True,
-            )
-
-            if not sla_compliant:
-                logger.warning(
-                    "Constitutional SLA violation in authentication",
-                    username=username,
-                    auth_time_ms=auth_time,
-                    sla_threshold_ms=5.0,
-                    violation_severity="HIGH",
-                )
-
-                # Trigger constitutional compliance check
-                governor.check_compliance()
+            self._check_sla_compliance("iris_authentication", auth_time, success, username=username)
 
             return success, session_id
 
         except Exception as e:
-            # Record failed authentication for monitoring
             auth_time = (time.perf_counter() - start_time) * 1000
-            monitor.record_operation(
+            get_monitor().record_operation(
                 operation="iris_authentication", duration_ms=auth_time, success=False
             )
 
@@ -420,15 +405,9 @@ class PostgreSQLAuthenticator:
     async def authenticate(
         self, connection_id: str, username: str, auth_data: bytes = None
     ) -> AuthenticationResult:
-        """
-        Main authentication entry point with constitutional compliance monitoring
-        Returns authentication result with constitutional compliance tracking
-        """
+        """Main authentication entry point with constitutional compliance."""
         start_time = time.perf_counter()
-        monitor = get_monitor()
-        governor = get_governor()
 
-        # Log authentication attempt with constitutional monitoring
         logger.info(
             "PostgreSQL authentication initiated",
             connection_id=connection_id,
@@ -438,76 +417,68 @@ class PostgreSQLAuthenticator:
         )
 
         try:
-            if self.auth_method == AuthenticationMethod.TRUST:
-                result = await self._authenticate_trust(username, start_time)
-            elif self.auth_method == AuthenticationMethod.SCRAM_SHA_256:
-                result = await self._authenticate_scram(
-                    connection_id, username, auth_data, start_time
-                )
-            else:
-                result = AuthenticationResult(
-                    success=False,
-                    error_message=f"Unsupported authentication method: {self.auth_method}",
-                    auth_time_ms=(time.perf_counter() - start_time) * 1000,
-                )
-
-            # Constitutional compliance monitoring
-            auth_time = (time.perf_counter() - start_time) * 1000
-            result.auth_time_ms = auth_time
-            result.sla_compliant = auth_time < 5.0  # Constitutional requirement
-
-            # Record authentication metrics for constitutional compliance
-            monitor.record_operation(
-                operation="postgresql_authentication", duration_ms=auth_time, success=result.success
+            result = await self._run_authentication_method(
+                connection_id, username, auth_data, start_time
             )
-
-            # Log constitutional compliance status
-            logger.info(
-                "PostgreSQL authentication completed",
-                connection_id=connection_id,
-                username=username,
-                auth_method=self.auth_method.value,
-                auth_time_ms=auth_time,
-                sla_compliant=result.sla_compliant,
-                success=result.success,
-                constitutional_compliance=True,
-            )
-
-            if not result.sla_compliant:
-                logger.warning(
-                    "Constitutional SLA violation in PostgreSQL authentication",
-                    connection_id=connection_id,
-                    username=username,
-                    auth_method=self.auth_method.value,
-                    auth_time_ms=auth_time,
-                    sla_threshold_ms=5.0,
-                    violation_severity="HIGH",
-                )
-
-                # Trigger constitutional compliance check
-                governor.check_compliance()
-
-            return result
-
         except Exception as e:
-            # Record failed authentication for monitoring
-            auth_time = (time.perf_counter() - start_time) * 1000
-            monitor.record_operation(
-                operation="postgresql_authentication", duration_ms=auth_time, success=False
-            )
+            return self._handle_authentication_error(connection_id, username, start_time, e)
 
-            logger.error(
-                "PostgreSQL authentication error",
-                connection_id=connection_id,
-                username=username,
-                auth_method=self.auth_method.value,
-                error=str(e),
-                auth_time_ms=auth_time,
-            )
+        return self._finalize_auth_result(result, start_time, connection_id, username)
 
-            return AuthenticationResult(
-                success=False, error_message="Authentication failed", auth_time_ms=auth_time
-            )
+    async def _run_authentication_method(
+        self, connection_id: str, username: str, auth_data: bytes, start_time: float
+    ) -> AuthenticationResult:
+        if self.auth_method == AuthenticationMethod.TRUST:
+            return await self._authenticate_trust(username, start_time)
+        if self.auth_method == AuthenticationMethod.SCRAM_SHA_256:
+            return await self._authenticate_scram(connection_id, username, auth_data, start_time)
+
+        return AuthenticationResult(
+            success=False,
+            error_message=f"Unsupported authentication method: {self.auth_method}",
+            auth_time_ms=(time.perf_counter() - start_time) * 1000,
+        )
+
+    def _finalize_auth_result(
+        self,
+        result: AuthenticationResult,
+        start_time: float,
+        connection_id: str,
+        username: str,
+    ) -> AuthenticationResult:
+        auth_time = (time.perf_counter() - start_time) * 1000
+        result.auth_time_ms = auth_time
+        result.sla_compliant = IRISAuthenticationProvider._check_sla_compliance(
+            "postgresql_authentication",
+            auth_time,
+            result.success,
+            connection_id=connection_id,
+            username=username,
+            auth_method=self.auth_method.value,
+        )
+
+        return result
+
+    def _handle_authentication_error(
+        self, connection_id: str, username: str, start_time: float, exc: Exception
+    ) -> AuthenticationResult:
+        auth_time = (time.perf_counter() - start_time) * 1000
+        get_monitor().record_operation(
+            operation="postgresql_authentication", duration_ms=auth_time, success=False
+        )
+
+        logger.error(
+            "PostgreSQL authentication error",
+            connection_id=connection_id,
+            username=username,
+            auth_method=self.auth_method.value,
+            error=str(exc),
+            auth_time_ms=auth_time,
+        )
+
+        return AuthenticationResult(
+            success=False, error_message="Authentication failed", auth_time_ms=auth_time
+        )
 
     async def _authenticate_trust(self, username: str, start_time: float) -> AuthenticationResult:
         """Trust authentication (development only)"""
@@ -639,72 +610,71 @@ class PostgreSQLAuthenticator:
                 sla_compliant=auth_time < 5.0,
             )
 
+    async def _complete_iris_validation(
+        self, session: dict, auth_time: float
+    ) -> AuthenticationResult:
+        """Validate IRIS user and build final authentication result."""
+        username = session["username"]
+        iris_success, iris_session_id = await self.iris_provider.validate_iris_user_exists(username)
+
+        if not iris_success:
+            session["state"] = AuthenticationState.FAILED
+            return AuthenticationResult(
+                success=False,
+                error_message="IRIS user validation failed",
+                auth_time_ms=auth_time,
+                sla_compliant=auth_time < 5.0,
+            )
+
+        session["state"] = AuthenticationState.AUTHENTICATED
+        session["iris_session_id"] = iris_session_id
+        server_final = self.scram_authenticator.create_server_final_message(session)
+
+        return AuthenticationResult(
+            success=True,
+            username=username,
+            iris_session=iris_session_id,
+            auth_time_ms=auth_time,
+            sla_compliant=auth_time < 5.0,
+            metadata={
+                "method": "SCRAM-SHA-256",
+                "state": "authenticated",
+                "server_final_message": server_final,
+                "iris_session_id": iris_session_id,
+            },
+        )
+
     async def _handle_client_final_message(
         self, connection_id: str, auth_data: bytes, auth_time: float
     ) -> AuthenticationResult:
-        """Handle SCRAM client-final-message and complete authentication"""
+        """Handle SCRAM client-final-message and complete authentication."""
         session = self._active_sessions[connection_id]
 
         try:
-            # Parse client-final-message
             client_message = auth_data.decode("utf-8")
             success, error_message = self.scram_authenticator.verify_client_final_message(
                 client_message, session
             )
 
             if not success:
-                session["state"] = AuthenticationState.FAILED
-                return AuthenticationResult(
-                    success=False,
-                    error_message=error_message or "Authentication failed",
-                    auth_time_ms=auth_time,
-                    sla_compliant=auth_time < 5.0,
-                )
+                return self._client_final_failure(session, auth_time, error_message)
 
-            # For SCRAM, password is already verified - just validate user exists in IRIS
-            username = session["username"]
-            iris_success, iris_session_id = await self.iris_provider.validate_iris_user_exists(
-                username
-            )
-
-            if iris_success:
-                session["state"] = AuthenticationState.AUTHENTICATED
-                session["iris_session_id"] = iris_session_id
-
-                # Create server-final-message
-                server_final = self.scram_authenticator.create_server_final_message(session)
-
-                return AuthenticationResult(
-                    success=True,
-                    username=username,
-                    iris_session=iris_session_id,
-                    auth_time_ms=auth_time,
-                    sla_compliant=auth_time < 5.0,
-                    metadata={
-                        "method": "SCRAM-SHA-256",
-                        "state": "authenticated",
-                        "server_final_message": server_final,
-                        "iris_session_id": iris_session_id,
-                    },
-                )
-            else:
-                session["state"] = AuthenticationState.FAILED
-                return AuthenticationResult(
-                    success=False,
-                    error_message="IRIS user validation failed",
-                    auth_time_ms=auth_time,
-                    sla_compliant=auth_time < 5.0,
-                )
+            return await self._complete_iris_validation(session, auth_time)
 
         except Exception as e:
             logger.error(f"Error processing client-final-message: {e}")
-            session["state"] = AuthenticationState.FAILED
-            return AuthenticationResult(
-                success=False,
-                error_message="Authentication failed",
-                auth_time_ms=auth_time,
-                sla_compliant=auth_time < 5.0,
-            )
+            return self._client_final_failure(session, auth_time, None)
+
+    def _client_final_failure(
+        self, session: dict, auth_time: float, message: str | None
+    ) -> AuthenticationResult:
+        session["state"] = AuthenticationState.FAILED
+        return AuthenticationResult(
+            success=False,
+            error_message=message or "Authentication failed",
+            auth_time_ms=auth_time,
+            sla_compliant=auth_time < 5.0,
+        )
 
     def register_user_credentials(self, username: str, password: str) -> bool:
         """Register user credentials for SCRAM authentication"""

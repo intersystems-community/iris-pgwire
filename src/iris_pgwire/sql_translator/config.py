@@ -7,27 +7,17 @@ cache settings, performance tuning, and constitutional compliance parameters.
 Constitutional Compliance: Configurable SLA thresholds and monitoring settings.
 """
 
+import importlib.util
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-try:
-    import yaml
-
-    YAML_AVAILABLE = True
-except ImportError:
-    YAML_AVAILABLE = False
-
-try:
-    import toml
-
-    TOML_AVAILABLE = True
-except ImportError:
-    TOML_AVAILABLE = False
+YAML_AVAILABLE = importlib.util.find_spec("yaml") is not None
+TOML_AVAILABLE = importlib.util.find_spec("toml") is not None
 
 
 class ConfigFormat(Enum):
@@ -246,21 +236,7 @@ class ConfigurationManager:
         if config_path:
             self.config_path = Path(config_path)
 
-        # Try to find and load config file
-        config_data = {}
-        loaded_from = "defaults"
-
-        if self.config_path and self.config_path.exists():
-            config_data = self._load_config_file(self.config_path)
-            loaded_from = str(self.config_path)
-        else:
-            # Search for config files in standard locations
-            for search_path in self.search_paths:
-                if search_path.exists():
-                    config_data = self._load_config_file(search_path)
-                    loaded_from = str(search_path)
-                    self.config_path = search_path
-                    break
+        config_data, loaded_from = self._find_config_source()
 
         # Apply environment variable overrides
         env_overrides = self._load_environment_config()
@@ -322,11 +298,15 @@ class ConfigurationManager:
             with open(output_path, "w") as f:
                 json.dump(config_data, f, indent=2, default=str)
         elif format == ConfigFormat.YAML and YAML_AVAILABLE:
+            import yaml as _yaml
+
             with open(output_path, "w") as f:
-                yaml.dump(config_data, f, default_flow_style=False)
+                _yaml.dump(config_data, f, default_flow_style=False)
         elif format == ConfigFormat.TOML and TOML_AVAILABLE:
+            import toml as _toml
+
             with open(output_path, "w") as f:
-                toml.dump(config_data, f)
+                _toml.dump(config_data, f)
         else:
             raise ValueError(f"Unsupported format: {format}")
 
@@ -341,11 +321,15 @@ class ConfigurationManager:
                 elif config_path.suffix.lower() in [".yaml", ".yml"]:
                     if not YAML_AVAILABLE:
                         raise ImportError("PyYAML not available for YAML config files")
-                    return yaml.safe_load(f) or {}
+                    import yaml as _yaml
+
+                    return _yaml.safe_load(f) or {}
                 elif config_path.suffix.lower() == ".toml":
                     if not TOML_AVAILABLE:
                         raise ImportError("toml not available for TOML config files")
-                    return toml.load(f)
+                    import toml as _toml
+
+                    return _toml.load(f)
                 else:
                     # Try JSON as fallback
                     f.seek(0)
@@ -354,11 +338,22 @@ class ConfigurationManager:
             self.logger.error(f"Failed to load config from {config_path}: {e}")
             return {}
 
+    def _find_config_source(self) -> tuple[dict[str, Any], str]:
+        """Find a configuration file or fall back to defaults"""
+        if self.config_path and self.config_path.exists():
+            return self._load_config_file(self.config_path), str(self.config_path)
+
+        for search_path in self.search_paths:
+            if search_path.exists():
+                self.config_path = search_path
+                return self._load_config_file(search_path), str(search_path)
+
+        return {}, "defaults"
+
     def _load_environment_config(self) -> dict[str, Any]:
         """Load configuration overrides from environment variables"""
-        env_config = {}
+        env_config: dict[str, Any] = {}
 
-        # Define environment variable mappings
         env_mappings = {
             "IRIS_PGWIRE_DEBUG": ("debug", "enabled", bool),
             "IRIS_PGWIRE_CACHE_ENABLED": ("cache", "enabled", bool),
@@ -384,30 +379,30 @@ class ConfigurationManager:
 
         for env_var, (section, key, value_type) in env_mappings.items():
             env_value = os.getenv(env_var)
-            if env_value is not None:
-                try:
-                    # Convert value to appropriate type
-                    if value_type == bool:
-                        converted_value = env_value.lower() in ("true", "1", "yes", "on")
-                    elif value_type == int:
-                        converted_value = int(env_value)
-                    elif value_type == float:
-                        converted_value = float(env_value)
-                    else:
-                        converted_value = env_value
+            if env_value is None:
+                continue
 
-                    # Set in config structure
-                    if key is None:
-                        env_config[section] = converted_value
-                    else:
-                        if section not in env_config:
-                            env_config[section] = {}
-                        env_config[section][key] = converted_value
-
-                except (ValueError, TypeError) as e:
-                    self.logger.warning(f"Invalid value for {env_var}: {env_value} ({e})")
+            try:
+                converted = self._convert_env_value(env_value, value_type)
+                if key is None:
+                    env_config[section] = converted
+                else:
+                    env_config.setdefault(section, {})[key] = converted
+            except (ValueError, TypeError) as e:
+                self.logger.warning(f"Invalid value for {env_var}: {env_value} ({e})")
 
         return env_config
+
+    @staticmethod
+    def _convert_env_value(env_value: str, value_type: type) -> Any:
+        """Convert an environment variable string to the target type"""
+        if value_type == bool:
+            return env_value.lower() in ("true", "1", "yes", "on")
+        if value_type == int:
+            return int(env_value)
+        if value_type == float:
+            return float(env_value)
+        return env_value
 
     def _merge_config(
         self, base_config: dict[str, Any], override_config: dict[str, Any]
@@ -449,72 +444,7 @@ class ConfigurationManager:
 
     def _config_to_dict(self, config: TranslationConfig) -> dict[str, Any]:
         """Convert configuration object to dictionary"""
-        return {
-            "cache": {
-                "enabled": config.cache.enabled,
-                "max_size": config.cache.max_size,
-                "ttl_seconds": config.cache.ttl_seconds,
-                "cleanup_interval_seconds": config.cache.cleanup_interval_seconds,
-                "memory_limit_mb": config.cache.memory_limit_mb,
-                "hit_rate_threshold": config.cache.hit_rate_threshold,
-            },
-            "debug": {
-                "enabled": config.debug.enabled,
-                "trace_all_queries": config.debug.trace_all_queries,
-                "trace_constructs": config.debug.trace_constructs,
-                "trace_mappings": config.debug.trace_mappings,
-                "trace_performance": config.debug.trace_performance,
-                "trace_validation": config.debug.trace_validation,
-                "log_level": config.debug.log_level,
-                "log_format": config.debug.log_format,
-                "log_file": config.debug.log_file,
-                "max_trace_size": config.debug.max_trace_size,
-                "trace_retention_hours": config.debug.trace_retention_hours,
-            },
-            "performance": {
-                "sla_threshold_ms": config.performance.sla_threshold_ms,
-                "validation_sla_ms": config.performance.validation_sla_ms,
-                "enable_async_translation": config.performance.enable_async_translation,
-                "thread_pool_size": config.performance.thread_pool_size,
-                "batch_size": config.performance.batch_size,
-                "memory_limit_mb": config.performance.memory_limit_mb,
-                "enable_profiling": config.performance.enable_profiling,
-                "profile_sample_rate": config.performance.profile_sample_rate,
-            },
-            "validation": {
-                "enabled": config.validation.enabled,
-                "default_level": config.validation.default_level,
-                "confidence_threshold": config.validation.confidence_threshold,
-                "enable_constitutional_checks": config.validation.enable_constitutional_checks,
-                "enable_performance_checks": config.validation.enable_performance_checks,
-                "enable_semantic_checks": config.validation.enable_semantic_checks,
-                "max_issues_per_query": config.validation.max_issues_per_query,
-                "validation_timeout_ms": config.validation.validation_timeout_ms,
-            },
-            "metrics": {
-                "enabled": config.metrics.enabled,
-                "enable_otel": config.metrics.enable_otel,
-                "enable_prometheus": config.metrics.enable_prometheus,
-                "otel_endpoint": config.metrics.otel_endpoint,
-                "prometheus_port": config.metrics.prometheus_port,
-                "collection_interval_seconds": config.metrics.collection_interval_seconds,
-                "retention_days": config.metrics.retention_days,
-                "export_timeout_ms": config.metrics.export_timeout_ms,
-                "iris_integration": config.metrics.iris_integration,
-            },
-            "iris": {
-                "connection_string": config.iris.connection_string,
-                "embedded_python": config.iris.embedded_python,
-                "namespace": config.iris.namespace,
-                "timeout_seconds": config.iris.timeout_seconds,
-                "pool_size": config.iris.pool_size,
-                "enable_vector_support": config.iris.enable_vector_support,
-                "vector_license_check": config.iris.vector_license_check,
-                "version_detection": config.iris.version_detection,
-            },
-            "environment": config.environment,
-            "config_version": config.config_version,
-        }
+        return asdict(config)
 
     def get_constitutional_compliance_config(self) -> dict[str, Any]:
         """

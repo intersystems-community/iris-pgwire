@@ -75,50 +75,32 @@ def attached_iris_resources():
         yield resources
 
 
-def _execute_embedded_query(container, sql: str) -> list[dict[str, str | None]]:
-    script = f"""import iris, json
-sql = {json.dumps(sql)}
-result = iris.sql.exec(sql)
-rows = result.fetch()
-converted = []
-for row in rows:
-    normalized = {{k.lower(): str(v) if v is not None else None for k, v in row.items()}}
-    converted.append(normalized)
-print(json.dumps(converted))
-"""
-    exit_code, output = container.exec_run(
-        [
-            "/usr/irissys/bin/irispython",
-            "-c",
-            script,
-        ]
-    )
-    text = output.decode("utf-8", errors="replace").strip()
-    if exit_code != 0:
-        pytest.fail(f"Embedded IRIS query failed (exit {exit_code}): {text}")
-    if not text:
-        return []
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        pytest.fail(f"Unable to parse embedded query payload: {exc}\n{text}")
+def _execute_embedded_query(connection, sql: str) -> list[dict[str, str | None]]:
+    with connection.cursor() as cur:
+        cur.execute(sql)
+        columns = [d[0].lower() for d in cur.description] if cur.description else []
+        rows = cur.fetchall() or []
+    return [
+        {col: (str(val) if val is not None else None) for col, val in zip(columns, row)}
+        for row in rows
+    ]
 
 
-def _embedded_table_exists(container, table_name: str) -> bool:
+def _embedded_table_exists(connection, table_name: str) -> bool:
     sql = (
         "SELECT 1 AS exists_flag FROM INFORMATION_SCHEMA.TABLES "
-        f"WHERE TABLE_NAME = '{table_name.upper()}'"
+        f"WHERE UPPER(TABLE_NAME) = '{table_name.upper()}'"
     )
-    rows = _execute_embedded_query(container, sql)
+    rows = _execute_embedded_query(connection, sql)
     return bool(rows)
 
 
-def _embedded_journal_count(container, migration_hash: str) -> int:
+def _embedded_journal_count(connection, migration_hash: str) -> int:
     sql = (
         "SELECT COUNT(1) AS migration_count FROM __drizzle_migrations "
         f"WHERE hash = '{migration_hash}'"
     )
-    rows = _execute_embedded_query(container, sql)
+    rows = _execute_embedded_query(connection, sql)
     if not rows:
         return 0
     value = rows[0].get("migration_count")
@@ -209,7 +191,7 @@ def test_drizzle_basic_workflow(
         assert result.success, f"Migration {migration.filename} should succeed"
         assert result.error is None, "No error should be reported for a clean migration"
 
-        assert _embedded_table_exists(container, migration.target_table), (
+        assert _embedded_table_exists(connection, migration.target_table), (
             "Drizzle should create the workflow table before validation"
         )
 
@@ -228,7 +210,7 @@ def test_drizzle_basic_workflow(
                 f"Column {column_name} should exist as {expected_type}, got {actual} instead"
             )
 
-        assert _embedded_journal_count(container, migration.hash) == 1, (
+        assert _embedded_journal_count(connection, migration.hash) == 1, (
             "Journal should contain exactly one entry for the executed migration"
         )
     finally:
@@ -259,14 +241,14 @@ def test_drizzle_reserved_words_workflow(
         connection.commit()
 
         rows = _execute_embedded_query(
-            container,
+            connection,
             f'SELECT "level", "key", "trigger" FROM {migration.target_table}',
         )
         assert rows and rows[0].get("level") == "1" and rows[0].get("key") == "value", (
             "Quoted columns should be readable from embedded IRIS"
         )
 
-        assert _embedded_journal_count(container, migration.hash) == 1
+        assert _embedded_journal_count(connection, migration.hash) == 1
     finally:
         _cleanup_tables(connection, (migration.target_table,))
         _cleanup_journal_entries(connection, (migration.hash,))
@@ -289,7 +271,7 @@ def test_drizzle_type_mapping_workflow(
 
         test_uuid = str(uuid.UUID("11111111-2222-3333-4444-555555555555"))
         payload = json.dumps({"message": "drizzle-e2e"})
-        timestamp = "2026-01-01 12:00:00+00"
+        timestamp = "2026-01-01 12:00:00"
 
         with connection.cursor() as cursor:
             cursor.execute(
@@ -307,11 +289,13 @@ def test_drizzle_type_mapping_workflow(
 
         retrieved_payload = json.loads(str(row[2]))
         assert retrieved_payload.get("message") == "drizzle-e2e", "JSON payload should round-trip"
-        assert row[0].lower() == test_uuid.lower(), "UUID columns should store canonical strings"
+        assert str(row[0]).lower() == test_uuid.lower(), (
+            "UUID columns should store canonical strings"
+        )
         assert str(row[3]).strip() in {"1", "true"}, "Boolean should map to 1 or TRUE in IRIS"
         assert "2026-01-01" in str(row[4]), "Timestamp should preserve the date portion"
 
-        assert _embedded_journal_count(container, migration.hash) == 1
+        assert _embedded_journal_count(connection, migration.hash) == 1
     finally:
         _cleanup_tables(connection, (migration.target_table,))
         _cleanup_journal_entries(connection, (migration.hash,))
@@ -337,7 +321,7 @@ def test_drizzle_multiple_migrations_workflow(
             )
 
         for migration in migrations:
-            assert _embedded_journal_count(container, migration.hash) == 1, (
+            assert _embedded_journal_count(connection, migration.hash) == 1, (
                 f"Journal should have single entry for {migration.filename}"
             )
 
@@ -350,7 +334,7 @@ def test_drizzle_multiple_migrations_workflow(
                 "Already applied migrations execute zero statements"
             )
 
-        assert sum(_embedded_journal_count(container, m.hash) for m in migrations) == len(
+        assert sum(_embedded_journal_count(connection, m.hash) for m in migrations) == len(
             migrations
         )
     finally:
@@ -377,7 +361,7 @@ def test_drizzle_migration_failure_workflow(
         assert not _table_exists(connection, migration.target_table), (
             "Failed migration should leave no tables behind"
         )
-        assert _embedded_journal_count(container, migration.hash) == 0, (
+        assert _embedded_journal_count(connection, migration.hash) == 0, (
             "Journal must not record failed migrations"
         )
     finally:

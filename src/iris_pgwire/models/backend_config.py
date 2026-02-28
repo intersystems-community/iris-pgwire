@@ -12,8 +12,10 @@ Feature: 018-add-dbapi-option
 """
 
 import os
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -183,39 +185,40 @@ class BackendConfig(BaseModel):
         Returns:
             Validated BackendConfig instance
         """
-        env_config = {}
+        env_config: dict[str, Any] = {}
 
-        # Backend selection
-        if backend_type := os.getenv("PGWIRE_BACKEND_TYPE"):
-            env_config["backend_type"] = backend_type
+        def _as_bool(val: str) -> bool:
+            return val.lower() in ("true", "1", "yes")
 
-        # IRIS connection
-        if hostname := os.getenv("IRIS_HOSTNAME"):
-            env_config["iris_hostname"] = hostname
-        if port := os.getenv("IRIS_PORT"):
-            env_config["iris_port"] = int(port)
-        if namespace := os.getenv("IRIS_NAMESPACE"):
-            env_config["iris_namespace"] = namespace
-        if username := os.getenv("IRIS_USERNAME"):
-            env_config["iris_username"] = username
-        if password := os.getenv("IRIS_PASSWORD"):
-            env_config["iris_password"] = password
+        # (env_var, config_key, converter) — converter=None means use raw string
+        _env_mappings: list[tuple[str, str, Callable[[str], Any] | None]] = [
+            # Backend selection
+            ("PGWIRE_BACKEND_TYPE", "backend_type", None),
+            # IRIS connection
+            ("IRIS_HOSTNAME", "iris_hostname", None),
+            ("IRIS_PORT", "iris_port", int),
+            ("IRIS_NAMESPACE", "iris_namespace", None),
+            ("IRIS_USERNAME", "iris_username", None),
+            ("IRIS_PASSWORD", "iris_password", None),
+            # Connection pool
+            ("PGWIRE_POOL_SIZE", "pool_size", int),
+            ("PGWIRE_POOL_MAX_OVERFLOW", "pool_max_overflow", int),
+            ("PGWIRE_POOL_TIMEOUT", "pool_timeout", int),
+            ("PGWIRE_POOL_RECYCLE", "pool_recycle", int),
+            # Observability
+            ("PGWIRE_ENABLE_OTEL", "enable_otel", _as_bool),
+            ("PGWIRE_OTEL_ENDPOINT", "otel_endpoint", None),
+        ]
 
-        # Connection pool
-        if pool_size := os.getenv("PGWIRE_POOL_SIZE"):
-            env_config["pool_size"] = int(pool_size)
-        if pool_overflow := os.getenv("PGWIRE_POOL_MAX_OVERFLOW"):
-            env_config["pool_max_overflow"] = int(pool_overflow)
-        if pool_timeout := os.getenv("PGWIRE_POOL_TIMEOUT"):
-            env_config["pool_timeout"] = int(pool_timeout)
-        if pool_recycle := os.getenv("PGWIRE_POOL_RECYCLE"):
-            env_config["pool_recycle"] = int(pool_recycle)
+        def _assign_env_value(
+            env_var: str, config_key: str, converter: Callable[[str], Any] | None
+        ):
+            if (value := os.getenv(env_var)) is None:
+                return
+            env_config[config_key] = converter(value) if converter else value
 
-        # Observability
-        if enable_otel := os.getenv("PGWIRE_ENABLE_OTEL"):
-            env_config["enable_otel"] = enable_otel.lower() in ("true", "1", "yes")
-        if otel_endpoint := os.getenv("PGWIRE_OTEL_ENDPOINT"):
-            env_config["otel_endpoint"] = otel_endpoint
+        for env_var, config_key, converter in _env_mappings:
+            _assign_env_value(env_var, config_key, converter)
 
         return cls(**env_config)
 

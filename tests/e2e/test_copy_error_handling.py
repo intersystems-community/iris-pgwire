@@ -13,6 +13,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("cleanup_test_tables")
+
 
 @pytest.mark.e2e
 def test_copy_malformed_csv_missing_columns(psql_command):

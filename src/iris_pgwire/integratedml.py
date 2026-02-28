@@ -226,6 +226,15 @@ class IntegratedMLExecutor:
         self.parser = IntegratedMLParser()
         self.translator = IRISSystemFunctionTranslator()
 
+    # Dispatch table mapping command types to executor methods
+    _COMMAND_DISPATCH: dict[str, str] = {
+        "CREATE_MODEL": "_execute_create_model",
+        "TRAIN_MODEL": "_execute_train_model",
+        "VALIDATE_MODEL": "_execute_validate_model",
+        "DROP_MODEL": "_execute_drop_model",
+        "SELECT_WITH_PREDICT": "_execute_select_with_predict",
+    }
+
     async def execute_integratedml_command(self, sql: str) -> tuple[list[dict], list[str]]:
         """Execute IntegratedML command and return results"""
 
@@ -237,18 +246,10 @@ class IntegratedMLExecutor:
         command_type = parsed["command"]
 
         try:
-            if command_type == "CREATE_MODEL":
-                return await self._execute_create_model(parsed)
-            elif command_type == "TRAIN_MODEL":
-                return await self._execute_train_model(parsed)
-            elif command_type == "VALIDATE_MODEL":
-                return await self._execute_validate_model(parsed)
-            elif command_type == "DROP_MODEL":
-                return await self._execute_drop_model(parsed)
-            elif command_type == "SELECT_WITH_PREDICT":
-                return await self._execute_select_with_predict(parsed)
-            else:
+            method_name = self._COMMAND_DISPATCH.get(command_type)
+            if method_name is None:
                 raise ValueError(f"Unsupported IntegratedML command: {command_type}")
+            return await getattr(self, method_name)(parsed)
 
         except Exception as e:
             logger.error(
@@ -368,71 +369,58 @@ def enhance_iris_executor_with_integratedml(iris_executor):
     ml_executor = IntegratedMLExecutor(iris_executor)
     parser = IntegratedMLParser()
 
-    # Store original execute_query method
     original_execute_query = iris_executor.execute_query
 
-    async def execute_query_with_ml_support(
-        sql: str,
-        params: list | None = None,
-        session_id: str | None = None,
-        **kwargs,
-    ):
-        """Enhanced execute_query with IntegratedML support"""
-        # Feature 036 tactical fix: capture closure variables locally
-        c_sql = sql
-        c_params = params
-        c_session_id = session_id
-        call_kwargs = dict(kwargs)
-        # Pass params and session_id explicitly as named arguments to ensure
-        # they match the original method's signature exactly without positional clashes
+    def _build_ml_execute():
+        async def execute_query_with_ml_support(
+            sql: str,
+            params: list | None = None,
+            session_id: str | None = None,
+            **kwargs,
+        ):
+            c_sql = sql
+            c_params = params
+            c_session_id = session_id
+            call_kwargs = dict(kwargs)
 
-        # Check if this is an IntegratedML command
-        if parser.is_integratedml_command(c_sql):
-            logger.info("Detected IntegratedML command, routing to ML executor")
-            try:
-                return await ml_executor.execute_integratedml_command(c_sql)
-            except Exception as e:
-                logger.warning("IntegratedML execution failed, trying fallback", error=str(e))
-                # Try to pass through to IRIS directly as fallback
+            async def _fallback():
                 return await original_execute_query(
                     c_sql, params=c_params, session_id=c_session_id, **call_kwargs
                 )
 
-        # Check for IRIS system functions
-        if any(func in c_sql.upper() for func in ["%SYSTEM.ML."]):
-            logger.info("Detected IRIS system functions")
-            try:
-                return await ml_executor.handle_system_function_query(c_sql)
-            except Exception as e:
-                logger.warning("System function handling failed, trying fallback", error=str(e))
-                # Try to pass through to IRIS directly as fallback
-                return await original_execute_query(
-                    c_sql, params=c_params, session_id=c_session_id, **call_kwargs
-                )
+            if parser.is_integratedml_command(c_sql):
+                logger.info("Detected IntegratedML command, routing to ML executor")
+                try:
+                    return await ml_executor.execute_integratedml_command(c_sql)
+                except Exception as e:
+                    logger.warning("IntegratedML execution failed, trying fallback", error=str(e))
+                    return await _fallback()
 
-        # Fall back to original execution (with vector optimizer support)
-        return await original_execute_query(
-            c_sql, params=c_params, session_id=c_session_id, **call_kwargs
-        )
+            if "%SYSTEM.ML." in c_sql.upper():
+                logger.info("Detected IRIS system functions")
+                try:
+                    return await ml_executor.handle_system_function_query(c_sql)
+                except Exception as e:
+                    logger.warning("System function handling failed, trying fallback", error=str(e))
+                    return await _fallback()
 
-    # Replace the methods
-    iris_executor.execute_query = execute_query_with_ml_support
+            return await _fallback()
+
+        return execute_query_with_ml_support
+
+    iris_executor.execute_query = _build_ml_execute()
 
     if hasattr(iris_executor, "execute_many"):
         original_execute_many = iris_executor.execute_many
 
-        async def execute_many_with_ml_support(
-            sql: str, params_list: Any, session_id: str | None = None, **kwargs
-        ):
-            """Enhanced execute_many with potential ML support (currently pass-through)"""
-            # IntegratedML doesn't currently support batch execution via this interface
-            # so we always pass through to the original executor
+        def _build_execute_many():
+            async def execute_many_with_ml_support(
+                sql: str, params_list: Any, session_id: str | None = None, **kwargs
+            ):
+                return await original_execute_many(sql, params_list, session_id=session_id)
 
-            # Match the signature of IRISExecutor.execute_many which takes
-            # (sql, params_list, session_id=None) but doesn't expect **kwargs
-            # We filter session_id and drop others to be safe, or pass if original allows
-            return await original_execute_many(sql, params_list, session_id=session_id)
+            return execute_many_with_ml_support
 
-        iris_executor.execute_many = execute_many_with_ml_support
+        iris_executor.execute_many = _build_execute_many()
 
     return iris_executor

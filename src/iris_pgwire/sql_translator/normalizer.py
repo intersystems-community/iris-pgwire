@@ -29,7 +29,6 @@ from .default_values import DefaultValuesTranslator
 from .enum_registry import EnumTypeRegistry
 from .enum_translator import EnumTranslator
 from .identifier_normalizer import IdentifierNormalizer
-from .metadata_cache import MetadataCache
 from .mappings import translate_document_filters, translate_sql_constructs
 from .metadata_cache import MetadataCache
 from .models import (

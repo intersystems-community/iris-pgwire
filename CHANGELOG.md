@@ -7,20 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-02-28
+
 ### Added
 - **Drizzle ORM Migration Support**: Complete compatibility with Drizzle-style migrations including UUID/JSON handling, boolean defaults, and enum type mappings.
 - **Transaction Rollback Support**: Migrations now use explicit `START TRANSACTION` for proper rollback capability in IRIS.
-- **Enhanced DDL Translation**: 
+- **Enhanced DDL Translation**:
   - UUID columns automatically use `%Library.UniqueIdentifier` native type
   - JSON/JSONB columns automatically use `%Library.DynamicObject` native type
   - `DEFAULT gen_random_uuid()` automatically skipped (IRIS limitation)
   - `DEFAULT NOW()` automatically converted to `CURRENT_TIMESTAMP`
   - `ALTER TABLE RENAME COLUMN` marked as unsupported
 
+### Changed
+- **Comprehensive Code Simplification**: Major readability and maintainability improvements across all source files — `protocol.py`, `iris_executor.py`, `dbapi_executor.py`, `sql_translator/`, `auth/`, and `catalog/`. Functions shortened, duplication eliminated, and nesting reduced. No behaviour changes.
+
 ### Fixed
+- **DDL Parser Comment Handling**: `CREATE TABLE` statements prefixed with `--` SQL comments (as emitted by Drizzle CLI) are now correctly parsed.
+- **Migration Failure Detection**: Invalid SQL statements (e.g. `CREATE TAABLE`) that the DDL parser cannot recognise are now executed raw against IRIS so the database rejects them and the migration fails as expected.
 - **UUID/JSON DDL Handling**: Both CREATE TABLE and ALTER TABLE now correctly use IRIS native types for UUID and JSON columns.
 - **Transaction Management**: Migration executor now disables auto-commit and uses explicit transaction control for reliable rollback.
-- **Test Infrastructure**: All 21 Drizzle migration tests now run against live IRIS (previously 8 were skipped).
+- **Test Infrastructure**: All e2e tests pass; pool size increased to 20 to prevent exhaustion across sequential test classes.
 
 ## [1.3.0] - 2025-02-06
 

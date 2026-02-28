@@ -13,6 +13,7 @@ reporting, and governance enforcement.
 """
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -75,6 +76,21 @@ class ConstitutionalGovernor:
     def __init__(self):
         self.requirements = self._define_requirements()
         self.compliance_history: list[tuple[float, dict[str, ComplianceStatus]]] = []
+        self._requirement_checkers: dict[
+            str, Callable[[ComplianceRequirement], ComplianceStatus]
+        ] = {
+            "sla_compliance": self._check_sla_compliance,
+            "error_rate": self._check_error_rate,
+            "construct_coverage": self._check_construct_coverage,
+            "translation_accuracy": self._check_translation_accuracy,
+            "debug_tracing": self._check_debug_tracing,
+            "monitoring_coverage": self._check_monitoring_coverage,
+            "e2e_coverage": self._check_e2e_coverage,
+            "integration_tests": self._check_integration_tests,
+            "phase_progression": self._check_phase_progression,
+            "protocol_compliance": self._check_protocol_compliance,
+            "availability": self._check_availability,
+        }
 
     def _define_requirements(self) -> dict[str, ComplianceRequirement]:
         """Define all constitutional requirements"""
@@ -243,34 +259,22 @@ class ConstitutionalGovernor:
 
     def _check_single_requirement(self, requirement: ComplianceRequirement) -> ComplianceStatus:
         """Check compliance for a single requirement"""
+        checker = self._requirement_checkers.get(requirement.requirement_id)
+        if checker:
+            return checker(requirement)
 
-        if requirement.requirement_id == "sla_compliance":
-            return self._check_sla_compliance(requirement)
-        elif requirement.requirement_id == "error_rate":
-            return self._check_error_rate(requirement)
-        elif requirement.requirement_id == "construct_coverage":
-            return self._check_construct_coverage(requirement)
-        elif requirement.requirement_id == "translation_accuracy":
-            return self._check_translation_accuracy(requirement)
-        elif requirement.requirement_id == "debug_tracing":
-            return self._check_debug_tracing(requirement)
-        elif requirement.requirement_id == "monitoring_coverage":
-            return self._check_monitoring_coverage(requirement)
-        elif requirement.requirement_id == "e2e_coverage":
-            return self._check_e2e_coverage(requirement)
-        elif requirement.requirement_id == "integration_tests":
-            return self._check_integration_tests(requirement)
-        elif requirement.requirement_id == "phase_progression":
-            return self._check_phase_progression(requirement)
-        elif requirement.requirement_id == "protocol_compliance":
-            return self._check_protocol_compliance(requirement)
-        elif requirement.requirement_id == "availability":
-            return self._check_availability(requirement)
-        else:
-            # Default: assume compliant for unknown requirements
-            return ComplianceStatus(
-                requirement=requirement, compliant=True, details={"status": "not_implemented"}
-            )
+        return ComplianceStatus(
+            requirement=requirement, compliant=True, details={"status": "not_implemented"}
+        )
+
+    def _passes_threshold(
+        self, current_value: float, requirement: ComplianceRequirement, *, prefer_lower: bool = True
+    ) -> bool:
+        """Determine compliance against the configured threshold."""
+        threshold = requirement.threshold_value
+        if threshold is None:
+            return True
+        return current_value <= threshold if prefer_lower else current_value >= threshold
 
     def _check_sla_compliance(self, requirement: ComplianceRequirement) -> ComplianceStatus:
         """Check 5ms SLA compliance"""
@@ -279,7 +283,7 @@ class ConstitutionalGovernor:
 
         # Use P95 time as the metric (more realistic than average)
         current_value = stats.p95_time_ms
-        compliant = current_value <= requirement.threshold_value
+        compliant = self._passes_threshold(current_value, requirement)
 
         return ComplianceStatus(
             requirement=requirement,
@@ -300,7 +304,7 @@ class ConstitutionalGovernor:
         stats = monitor.get_stats()
 
         current_value = stats.error_rate
-        compliant = current_value <= requirement.threshold_value
+        compliant = self._passes_threshold(current_value, requirement)
 
         return ComplianceStatus(
             requirement=requirement,
@@ -327,7 +331,7 @@ class ConstitutionalGovernor:
             system_functions + iris_functions + data_types + json_functions + sql_extensions
         )
         current_value = float(total_constructs)
-        compliant = current_value >= requirement.threshold_value
+        compliant = self._passes_threshold(current_value, requirement, prefer_lower=False)
 
         return ComplianceStatus(
             requirement=requirement,
@@ -358,7 +362,7 @@ class ConstitutionalGovernor:
             accuracy = (successful_ops / stats.total_translations) * 100
 
         current_value = accuracy
-        compliant = current_value >= requirement.threshold_value
+        compliant = self._passes_threshold(current_value, requirement, prefer_lower=False)
 
         return ComplianceStatus(
             requirement=requirement,
@@ -472,13 +476,17 @@ class ConstitutionalGovernor:
         compliance_results = self.check_compliance(include_optional=True)
 
         # Calculate overall compliance
-        [r for r in self.requirements.values() if r.mandatory]
-        mandatory_results = {
-            k: v for k, v in compliance_results.items() if self.requirements[k].mandatory
-        }
+        mandatory_statuses: list[tuple[str, ComplianceStatus]] = []
+        for req_id, status in compliance_results.items():
+            if self.requirements[req_id].mandatory:
+                mandatory_statuses.append((req_id, status))
 
-        total_mandatory = len(mandatory_results)
-        compliant_mandatory = sum(1 for s in mandatory_results.values() if s.compliant)
+        total_mandatory = len(mandatory_statuses)
+        compliant_mandatory = 0
+        for _, status in mandatory_statuses:
+            if status.compliant:
+                compliant_mandatory += 1
+
         overall_compliance_rate = (
             (compliant_mandatory / total_mandatory) * 100 if total_mandatory > 0 else 0
         )
@@ -503,6 +511,26 @@ class ConstitutionalGovernor:
                 }
             )
 
+        critical_violations: list[dict[str, Any]] = []
+        for req_id, status in mandatory_statuses:
+            if not status.compliant:
+                critical_violations.append(
+                    {
+                        "requirement_id": req_id,
+                        "description": status.requirement.description,
+                        "current_value": status.current_value,
+                        "threshold": status.requirement.threshold_value,
+                    }
+                )
+
+        compliant_requirements = 0
+        violation_count = 0
+        for status in compliance_results.values():
+            if status.compliant:
+                compliant_requirements += 1
+            else:
+                violation_count += 1
+
         return {
             "constitutional_governance": {
                 "overall_compliance_rate": overall_compliance_rate,
@@ -516,20 +544,9 @@ class ConstitutionalGovernor:
             "compliance_by_principle": by_principle,
             "summary": {
                 "total_requirements": len(compliance_results),
-                "compliant_requirements": sum(
-                    1 for s in compliance_results.values() if s.compliant
-                ),
-                "violation_count": sum(1 for s in compliance_results.values() if not s.compliant),
-                "critical_violations": [
-                    {
-                        "requirement_id": req_id,
-                        "description": status.requirement.description,
-                        "current_value": status.current_value,
-                        "threshold": status.requirement.threshold_value,
-                    }
-                    for req_id, status in mandatory_results.items()
-                    if not status.compliant
-                ],
+                "compliant_requirements": compliant_requirements,
+                "violation_count": violation_count,
+                "critical_violations": critical_violations,
             },
         }
 

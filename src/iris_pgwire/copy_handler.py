@@ -47,16 +47,41 @@ class CopyHandler:
         self.csv_processor = csv_processor
         self.bulk_executor = bulk_executor
 
-    def build_copy_in_response(self, column_count: int) -> bytes:
+    def _build_copy_response(self, column_count: int, message_type: bytes) -> bytes:
         """
-        Build CopyInResponse message (Server → Client).
+        Build a COPY response message (shared logic for CopyIn/CopyOut).
 
         Format:
-        - Message type: 'G'
+        - Message type: 'G' (CopyIn) or 'H' (CopyOut)
         - Int32: Length (including self)
         - Int8: Copy format (0=text/CSV, 1=binary)
         - Int16: Number of columns
         - Int16[]: Format codes for each column (0=text)
+
+        Args:
+            column_count: Number of columns
+            message_type: b'G' for CopyInResponse, b'H' for CopyOutResponse
+
+        Returns:
+            Encoded COPY response message
+        """
+        format_code = 0  # 0 = text/CSV format
+        payload = struct.pack("!b", format_code)  # Int8: format
+        payload += struct.pack("!H", column_count)  # Int16: column count
+        # Format codes for each column (all 0 = text)
+        for _ in range(column_count):
+            payload += struct.pack("!H", 0)  # Int16: format code
+
+        length = len(payload) + 4  # Include length field itself
+        message = message_type + struct.pack("!I", length) + payload
+
+        label = "CopyInResponse" if message_type == b"G" else "CopyOutResponse"
+        logger.debug(f"Built {label}: {len(message)} bytes, {column_count} columns")
+        return message
+
+    def build_copy_in_response(self, column_count: int) -> bytes:
+        """
+        Build CopyInResponse message (Server → Client).
 
         Args:
             column_count: Number of columns in table
@@ -64,27 +89,11 @@ class CopyHandler:
         Returns:
             Encoded CopyInResponse message
         """
-        # Build message payload
-        format_code = 0  # 0 = text/CSV format
-        payload = struct.pack("!b", format_code)  # Int8: format
-        payload += struct.pack("!H", column_count)  # Int16: column count
-        # Format codes for each column (all 0 = text)
-        for _ in range(column_count):
-            payload += struct.pack("!H", 0)  # Int16: format code
-
-        # Build full message
-        message_type = b"G"
-        length = len(payload) + 4  # Include length field itself
-        message = message_type + struct.pack("!I", length) + payload
-
-        logger.debug(f"Built CopyInResponse: {len(message)} bytes, {column_count} columns")
-        return message
+        return self._build_copy_response(column_count, b"G")
 
     def build_copy_out_response(self, column_count: int) -> bytes:
         """
         Build CopyOutResponse message (Server → Client).
-
-        Format: Same as CopyInResponse but with message type 'H'.
 
         Args:
             column_count: Number of columns being exported
@@ -92,21 +101,7 @@ class CopyHandler:
         Returns:
             Encoded CopyOutResponse message
         """
-        # Build message payload (same format as CopyInResponse)
-        format_code = 0  # 0 = text/CSV format
-        payload = struct.pack("!b", format_code)  # Int8: format
-        payload += struct.pack("!H", column_count)  # Int16: column count
-        # Format codes for each column (all 0 = text)
-        for _ in range(column_count):
-            payload += struct.pack("!H", 0)  # Int16: format code
-
-        # Build full message
-        message_type = b"H"
-        length = len(payload) + 4  # Include length field itself
-        message = message_type + struct.pack("!I", length) + payload
-
-        logger.debug(f"Built CopyOutResponse: {len(message)} bytes, {column_count} columns")
-        return message
+        return self._build_copy_response(column_count, b"H")
 
     def build_copy_data(self, csv_data: bytes) -> bytes:
         """
@@ -411,7 +406,9 @@ class CopyHandler:
 
         # Generate CSV data
         csv_stream = self.csv_processor.generate_csv_rows(
-            result_rows, column_names or [], command.csv_options  # TODO: Get from query metadata
+            result_rows,
+            column_names or [],
+            command.csv_options,  # TODO: Get from query metadata
         )
 
         # Stream CSV data as CopyData messages

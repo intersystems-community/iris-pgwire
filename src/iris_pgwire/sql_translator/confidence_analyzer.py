@@ -202,22 +202,8 @@ class TranslationConfidenceAnalyzer:
         low_confidence_count = len([c for c in construct_confidences if 0.4 <= c < 0.7])
         critical_confidence_count = len([c for c in construct_confidences if c < 0.4])
 
-        # Construct type breakdown
-        construct_type_breakdown = {}
-        for construct_type in ConstructType:
-            type_confidences = [
-                m.confidence
-                for m in result.construct_mappings
-                if m.construct_type == construct_type
-            ]
-            if type_confidences:
-                construct_type_breakdown[construct_type] = statistics.mean(type_confidences)
-
-        # Confidence distribution
-        confidence_distribution = {}
-        for confidence in construct_confidences:
-            level = self._classify_confidence_level(confidence)
-            confidence_distribution[level] = confidence_distribution.get(level, 0) + 1
+        construct_type_breakdown = self._get_construct_type_confidence(result.construct_mappings)
+        confidence_distribution = self._build_confidence_distribution(construct_confidences)
 
         # Risk factors
         risk_factors = self._identify_risk_factors(result, overall_confidence)
@@ -393,73 +379,104 @@ class TranslationConfidenceAnalyzer:
     ) -> list[ConfidenceInsight]:
         """Generate detailed insights about confidence factors"""
         insights = []
-
-        # Overall confidence insight
-        if metrics.confidence_level == ConfidenceLevel.CRITICAL:
-            insights.append(
-                ConfidenceInsight(
-                    category=RiskCategory.FUNCTIONAL_CORRECTNESS,
-                    severity="critical",
-                    message=f"Critical confidence level ({metrics.overall_confidence:.2f}) indicates high risk of translation errors",
-                    suggested_actions=[
-                        "Manual review required",
-                        "Consider query rewriting",
-                        "Extensive testing needed",
-                    ],
-                )
-            )
-
-        # Performance insights
-        if not result.performance_stats.is_sla_compliant:
-            insights.append(
-                ConfidenceInsight(
-                    category=RiskCategory.PERFORMANCE_IMPACT,
-                    severity="warning",
-                    message=f"Translation time ({result.performance_stats.translation_time_ms:.2f}ms) exceeds constitutional SLA",
-                    suggested_actions=[
-                        "Enable caching",
-                        "Optimize query complexity",
-                        "Profile translation bottlenecks",
-                    ],
-                )
-            )
-
-        # Validation insights
-        if result.validation_result and not result.validation_result.success:
-            insights.append(
-                ConfidenceInsight(
-                    category=RiskCategory.SEMANTIC_ACCURACY,
-                    severity="error",
-                    message="Validation failed, semantic accuracy cannot be guaranteed",
-                    suggested_actions=[
-                        "Review validation issues",
-                        "Manual testing recommended",
-                        "Check SQL compatibility",
-                    ],
-                )
-            )
-
-        # Construct-specific insights
-        for construct_type, avg_confidence in metrics.construct_type_breakdown.items():
-            if avg_confidence < 0.6:
-                insights.append(
-                    ConfidenceInsight(
-                        category=RiskCategory.SYNTAX_COMPATIBILITY,
-                        severity="warning" if avg_confidence >= 0.4 else "error",
-                        message=f"{construct_type.value} constructs have low confidence ({avg_confidence:.2f})",
-                        affected_constructs=[
-                            m.original_syntax
-                            for m in result.construct_mappings
-                            if m.construct_type == construct_type
-                        ],
-                        suggested_actions=[
-                            "Review construct mappings",
-                            "Test affected functionality",
-                        ],
-                    )
-                )
-
+        self._add_critical_confidence_insights(insights, metrics)
+        self._add_performance_insights(insights, result)
+        self._add_validation_insights(insights, result)
+        self._add_construct_insights(insights, metrics, result)
         return insights
+
+    def _add_critical_confidence_insights(
+        self, insights: list[ConfidenceInsight], metrics: ConfidenceMetrics
+    ) -> None:
+        if metrics.confidence_level != ConfidenceLevel.CRITICAL:
+            return
+
+        insights.append(
+            ConfidenceInsight(
+                category=RiskCategory.FUNCTIONAL_CORRECTNESS,
+                severity="critical",
+                message=(
+                    f"Critical confidence level ({metrics.overall_confidence:.2f}) indicates high risk of translation errors"
+                ),
+                suggested_actions=[
+                    "Manual review required",
+                    "Consider query rewriting",
+                    "Extensive testing needed",
+                ],
+            )
+        )
+
+    def _add_performance_insights(
+        self, insights: list[ConfidenceInsight], result: TranslationResult
+    ) -> None:
+        if result.performance_stats.is_sla_compliant:
+            return
+
+        insights.append(
+            ConfidenceInsight(
+                category=RiskCategory.PERFORMANCE_IMPACT,
+                severity="warning",
+                message=(
+                    f"Translation time ({result.performance_stats.translation_time_ms:.2f}ms) exceeds constitutional SLA"
+                ),
+                suggested_actions=[
+                    "Enable caching",
+                    "Optimize query complexity",
+                    "Profile translation bottlenecks",
+                ],
+            )
+        )
+
+    def _add_validation_insights(
+        self, insights: list[ConfidenceInsight], result: TranslationResult
+    ) -> None:
+        validation_result = result.validation_result
+        if not validation_result or validation_result.success:
+            return
+
+        insights.append(
+            ConfidenceInsight(
+                category=RiskCategory.SEMANTIC_ACCURACY,
+                severity="error",
+                message="Validation failed, semantic accuracy cannot be guaranteed",
+                suggested_actions=[
+                    "Review validation issues",
+                    "Manual testing recommended",
+                    "Check SQL compatibility",
+                ],
+            )
+        )
+
+    def _add_construct_insights(
+        self,
+        insights: list[ConfidenceInsight],
+        metrics: ConfidenceMetrics,
+        result: TranslationResult,
+    ) -> None:
+        for construct_type, avg_confidence in metrics.construct_type_breakdown.items():
+            if avg_confidence >= 0.6:
+                continue
+
+            affected = [
+                m.original_syntax
+                for m in result.construct_mappings
+                if m.construct_type == construct_type
+            ]
+
+            insights.append(
+                ConfidenceInsight(
+                    category=RiskCategory.SYNTAX_COMPATIBILITY,
+                    severity="warning" if avg_confidence >= 0.4 else "error",
+                    message=(
+                        f"{construct_type.value} constructs have low confidence ({avg_confidence:.2f})"
+                    ),
+                    affected_constructs=affected,
+                    suggested_actions=[
+                        "Review construct mappings",
+                        "Test affected functionality",
+                    ],
+                )
+            )
 
     def _analyze_construct_confidence(self, mappings: list[ConstructMapping]) -> dict[str, dict]:
         """Analyze confidence at the construct level"""
@@ -599,6 +616,16 @@ class TranslationConfidenceAnalyzer:
             for construct_type, confidences in type_confidences.items()
         }
 
+    def _build_confidence_distribution(
+        self, confidences: list[float]
+    ) -> dict[ConfidenceLevel, int]:
+        """Build confidence level distribution"""
+        distribution: dict[ConfidenceLevel, int] = defaultdict(int)
+        for confidence in confidences:
+            level = self._classify_confidence_level(confidence)
+            distribution[level] += 1
+        return dict(distribution)
+
     def _record_confidence_data(self, timestamp: datetime, confidence: float, sql: str):
         """Record confidence data for trend analysis"""
         self._confidence_history.append((timestamp, confidence, sql))
@@ -610,39 +637,49 @@ class TranslationConfidenceAnalyzer:
     def analyze_confidence_trends(self, time_period: str = "24h") -> ConfidenceTrend:
         """Analyze confidence trends over specified time period"""
         if not self._confidence_history:
-            return ConfidenceTrend(
-                time_period=time_period,
-                average_confidence=0.0,
-                confidence_trend="insufficient_data",
-                trend_confidence=0.0,
-                sample_count=0,
-            )
+            return self._empty_confidence_trend(time_period)
 
-        # Filter by time period
-        cutoff_time = datetime.now(UTC) - self._parse_time_period(time_period)
-        recent_data = [
-            (ts, conf, sql) for ts, conf, sql in self._confidence_history if ts >= cutoff_time
-        ]
-
+        recent_data = self._recent_confidence_data(time_period)
         if len(recent_data) < 2:
-            return ConfidenceTrend(
-                time_period=time_period,
-                average_confidence=recent_data[0][1] if recent_data else 0.0,
-                confidence_trend="insufficient_data",
-                trend_confidence=0.0,
-                sample_count=len(recent_data),
-            )
+            return self._insufficient_confidence_trend(time_period, recent_data)
 
-        # Calculate trend
+        return self._build_confidence_trend(time_period, recent_data)
+
+    def _recent_confidence_data(self, time_period: str) -> list[tuple[datetime, float, str]]:
+        cutoff_time = datetime.now(UTC) - self._parse_time_period(time_period)
+        return [(ts, conf, sql) for ts, conf, sql in self._confidence_history if ts >= cutoff_time]
+
+    def _empty_confidence_trend(self, time_period: str) -> ConfidenceTrend:
+        return ConfidenceTrend(
+            time_period=time_period,
+            average_confidence=0.0,
+            confidence_trend="insufficient_data",
+            trend_confidence=0.0,
+            sample_count=0,
+        )
+
+    def _insufficient_confidence_trend(
+        self, time_period: str, recent_data: list[tuple[datetime, float, str]]
+    ) -> ConfidenceTrend:
+        average_confidence = recent_data[0][1] if recent_data else 0.0
+        return ConfidenceTrend(
+            time_period=time_period,
+            average_confidence=average_confidence,
+            confidence_trend="insufficient_data",
+            trend_confidence=0.0,
+            sample_count=len(recent_data),
+        )
+
+    def _build_confidence_trend(
+        self, time_period: str, recent_data: list[tuple[datetime, float, str]]
+    ) -> ConfidenceTrend:
         confidences = [conf for _, conf, _ in recent_data]
         average_confidence = statistics.mean(confidences)
-
-        # Simple trend analysis (first half vs second half)
         mid_point = len(confidences) // 2
         first_half_avg = statistics.mean(confidences[:mid_point])
         second_half_avg = statistics.mean(confidences[mid_point:])
-
         diff = second_half_avg - first_half_avg
+
         if abs(diff) < 0.05:
             trend = "stable"
             trend_confidence = 0.8
@@ -678,43 +715,29 @@ class TranslationConfidenceAnalyzer:
             return {"message": "No confidence data available"}
 
         confidences = [conf for _, conf, _ in self._confidence_history]
+        total = len(confidences)
+        min_threshold = self.constitutional_thresholds["minimum_acceptable_confidence"]
+
+        # Build distribution and compliance counts in a single pass
+        distribution: dict[str, int] = {level.value: 0 for level in ConfidenceLevel}
+        above_threshold = 0
+        for c in confidences:
+            distribution[self._classify_confidence_level(c).value] += 1
+            if c >= min_threshold:
+                above_threshold += 1
 
         return {
-            "total_translations": len(confidences),
+            "total_translations": total,
             "average_confidence": statistics.mean(confidences),
             "median_confidence": statistics.median(confidences),
             "min_confidence": min(confidences),
             "max_confidence": max(confidences),
-            "std_deviation": statistics.stdev(confidences) if len(confidences) > 1 else 0.0,
-            "confidence_distribution": {
-                level.value: len(
-                    [c for c in confidences if self._classify_confidence_level(c) == level]
-                )
-                for level in ConfidenceLevel
-            },
+            "std_deviation": statistics.stdev(confidences) if total > 1 else 0.0,
+            "confidence_distribution": distribution,
             "constitutional_compliance": {
-                "above_threshold": len(
-                    [
-                        c
-                        for c in confidences
-                        if c >= self.constitutional_thresholds["minimum_acceptable_confidence"]
-                    ]
-                ),
-                "below_threshold": len(
-                    [
-                        c
-                        for c in confidences
-                        if c < self.constitutional_thresholds["minimum_acceptable_confidence"]
-                    ]
-                ),
-                "compliance_rate": len(
-                    [
-                        c
-                        for c in confidences
-                        if c >= self.constitutional_thresholds["minimum_acceptable_confidence"]
-                    ]
-                )
-                / len(confidences),
+                "above_threshold": above_threshold,
+                "below_threshold": total - above_threshold,
+                "compliance_rate": above_threshold / total,
             },
         }
 

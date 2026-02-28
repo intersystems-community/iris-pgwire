@@ -11,6 +11,8 @@ FR-006: System MUST handle datasets up to 1 million rows without exceeding 100MB
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("cleanup_test_tables")
+
 
 @pytest.mark.e2e
 @pytest.mark.slow

@@ -99,7 +99,6 @@ class CSVProcessor:
                     if not line_text.strip():
                         continue  # Skip empty lines
 
-                    # Parse CSV line
                     csv_reader = csv.reader(
                         [line_text],
                         delimiter=options.delimiter,
@@ -108,36 +107,13 @@ class CSVProcessor:
                     )
                     row_values = next(csv_reader)
 
-                    # Handle header row
-                    if options.header and column_names is None:
-                        column_names = row_values
-                        # Validate column names against IRIS restrictions
-                        column_names = ColumnNameValidator.validate_column_list(column_names)
-                        logger.debug(f"CSV header (validated): {column_names}")
-                        continue  # Skip header row (don't yield as data)
+                    row_dict, column_names = self._process_row_values(
+                        row_values, options, column_names, line_number
+                    )
 
-                    # If no header, use positional column names
-                    if column_names is None:
-                        column_names = [f"column_{i}" for i in range(len(row_values))]
-
-                    # Validate column count
-                    if len(row_values) != len(column_names):
-                        raise CSVParsingError(
-                            f"Expected {len(column_names)} columns, got {len(row_values)}",
-                            line_number,
-                        )
-
-                    # Build row dict
-                    row_dict = {}
-                    for col_name, col_value in zip(column_names, row_values, strict=False):
-                        # Handle NULL values
-                        if col_value == options.null_string:
-                            row_dict[col_name] = None
-                        else:
-                            row_dict[col_name] = col_value
-
-                    yield row_dict
-                    rows_yielded += 1
+                    if row_dict is not None:
+                        yield row_dict
+                        rows_yielded += 1
 
                 except csv.Error as e:
                     raise CSVParsingError(str(e), line_number)
@@ -147,36 +123,94 @@ class CSVProcessor:
         # Process remaining buffer (last line without \n)
         if buffer:
             line_number += 1
-            try:
-                line_text = buffer.decode("utf-8").rstrip("\r\n")
-                if line_text.strip():
-                    csv_reader = csv.reader(
-                        [line_text], delimiter=options.delimiter, quotechar=options.quote
-                    )
-                    row_values = next(csv_reader)
-
-                    if column_names and len(row_values) != len(column_names):
-                        raise CSVParsingError(
-                            f"Expected {len(column_names)} columns, got {len(row_values)}",
-                            line_number,
-                        )
-
-                    if column_names is None:
-                        column_names = [f"column_{i}" for i in range(len(row_values))]
-
-                    row_dict = {}
-                    for col_name, col_value in zip(column_names, row_values, strict=False):
-                        row_dict[col_name] = None if col_value == options.null_string else col_value
-
-                    yield row_dict
-                    rows_yielded += 1
-
-            except Exception as e:
-                raise CSVParsingError(str(e), line_number)
+            row_dict, column_names = self._process_remaining_buffer(
+                buffer, column_names, line_number, options
+            )
+            if row_dict is not None:
+                yield row_dict
+                rows_yielded += 1
 
         logger.info(
             f"CSV parsing complete: {chunks_received} chunks received, {rows_yielded} rows yielded"
         )
+
+    def _process_remaining_buffer(
+        self,
+        buffer: bytes,
+        column_names: list[str] | None,
+        line_number: int,
+        options: CSVOptions,
+    ) -> tuple[dict | None, list[str] | None]:
+        """
+        Process the trailing buffer content (last line without trailing newline).
+
+        Args:
+            buffer: Remaining bytes after main loop
+            column_names: Current column names (may be None)
+            line_number: Current line number for error reporting
+            options: CSV format options
+
+        Returns:
+            Tuple of (row_dict or None, updated column_names)
+
+        Raises:
+            CSVParsingError: If the remaining buffer contains malformed CSV
+        """
+        try:
+            line_text = buffer.decode("utf-8").rstrip("\r\n")
+            if not line_text.strip():
+                return None, column_names
+
+            csv_reader = csv.reader(
+                [line_text],
+                delimiter=options.delimiter,
+                quotechar=options.quote,
+                escapechar=options.escape if options.escape != "\\" else None,
+            )
+            row_values = next(csv_reader)
+
+            return self._process_row_values(row_values, options, column_names, line_number)
+
+        except CSVParsingError:
+            raise
+        except Exception as e:
+            raise CSVParsingError(str(e), line_number)
+
+    def _process_row_values(
+        self,
+        row_values: list[str],
+        options: CSVOptions,
+        column_names: list[str] | None,
+        line_number: int,
+    ) -> tuple[dict | None, list[str] | None]:
+        """Validate row values and build a row dict if applicable."""
+
+        if options.header and column_names is None:
+            column_names = ColumnNameValidator.validate_column_list(row_values)
+            logger.debug(f"CSV header (validated): {column_names}")
+            return None, column_names
+
+        if column_names is None:
+            column_names = [f"column_{i}" for i in range(len(row_values))]
+
+        if len(row_values) != len(column_names):
+            raise CSVParsingError(
+                f"Expected {len(column_names)} columns, got {len(row_values)}",
+                line_number,
+            )
+
+        row_dict = self._build_row_dict(column_names, row_values, options.null_string)
+        return row_dict, column_names
+
+    def _build_row_dict(
+        self, column_names: list[str], row_values: list[str], null_string: str
+    ) -> dict:
+        """Build a dict from columns and values, applying NULL conversions."""
+
+        row_dict: dict[str, str | None] = {}
+        for col_name, col_value in zip(column_names, row_values, strict=False):
+            row_dict[col_name] = None if col_value == null_string else col_value
+        return row_dict
 
     async def generate_csv_rows(
         self, result_rows: AsyncIterator[tuple], column_names: list[str], options: CSVOptions

@@ -37,6 +37,7 @@ class IdentifierNormalizer:
         self._identifier_pattern = re.compile(
             r'((?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*|%s)(?:\s*\.\s*(?:"[^"]+"|[a-zA-Z_][a-zA-Z0-9_]*))*)'
         )
+        self._string_literal_pattern = re.compile(r"'(?:[^']|'')*'")
 
         # SQL keywords that should NOT be uppercased in context
         # (They're already uppercase in normalized form, but this helps with selective normalization)
@@ -168,75 +169,70 @@ class IdentifierNormalizer:
             - String literals (single-quoted) → SKIP (preserve as-is)
         """
         identifier_count = 0
+        sql = self._strip_generated_columns(sql)
 
-        # Feature 036: Pre-normalization transformations (before chunking)
+        normalized_segments: list[str] = []
+        for chunk, literal in self._split_on_string_literals(sql):
+            normalized_chunk, identifier_count = self._normalize_chunk(chunk, identifier_count)
+            normalized_segments.append(normalized_chunk)
+            if literal:
+                normalized_segments.append(literal)
 
-        # 1. Strip GENERATED ALWAYS AS ... STORED column definitions
-        if "GENERATED ALWAYS AS" in sql.upper():
-            sql = re.sub(
-                r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\(.*?\)\s*STORED",
-                "",
-                sql,
-                flags=re.DOTALL,
-            )
-            # Log warning
-            logger.warning(DDL_SKIP_FORMAT.format("GENERATED column"))
+        normalized_sql = "".join(normalized_segments)
+        normalized_sql = self._finalize_normalization(normalized_sql)
 
-        # CRITICAL FIX: Exclude string literals from normalization
-        # Split SQL by string literals (single-quoted strings)
-        # Pattern: Match string literals with escaped quotes support
-        string_literal_pattern = re.compile(r"'(?:[^']|'')*'")
+        return normalized_sql, identifier_count
 
-        # Find all string literals and their positions
-        string_literals = []
-        for match in string_literal_pattern.finditer(sql):
-            string_literals.append((match.start(), match.end(), match.group(0)))
+    def _strip_generated_columns(self, sql: str) -> str:
+        """Remove GENERATED column clauses before normalization"""
+        if "GENERATED ALWAYS AS" not in sql.upper():
+            return sql
 
-        # Process SQL in chunks, skipping string literal regions
-        normalized_sql = ""
-        last_pos = 0
+        stripped_sql = re.sub(
+            r"(?i),?\s*[\w\"]+\s+[\w\"]+(?:\s*\([^)]*\))?\s+GENERATED\s+ALWAYS\s+AS\s*\(.*?\)\s*STORED",
+            "",
+            sql,
+            flags=re.DOTALL,
+        )
+        logger.warning(DDL_SKIP_FORMAT.format("GENERATED column"))
+        return stripped_sql
 
-        for start, end, literal in string_literals:
-            # Process SQL before this string literal
-            chunk_before = sql[last_pos:start]
-            normalized_chunk = self._normalize_chunk(chunk_before, identifier_count)
-            normalized_sql += normalized_chunk[0]
-            identifier_count = normalized_chunk[1]
+    def _split_on_string_literals(self, sql: str) -> list[tuple[str, str]]:
+        """Yield (segment, literal) tuples that preserve literals"""
+        segments: list[tuple[str, str]] = []
+        last = 0
 
-            # Append string literal as-is (no normalization)
-            normalized_sql += literal
-            last_pos = end
+        for match in self._string_literal_pattern.finditer(sql):
+            segments.append((sql[last : match.start()], match.group(0)))
+            last = match.end()
 
-        # Process remaining SQL after last string literal
-        chunk_after = sql[last_pos:]
-        normalized_chunk = self._normalize_chunk(chunk_after, identifier_count)
-        normalized_sql += normalized_chunk[0]
-        identifier_count = normalized_chunk[1]
+        segments.append((sql[last:], ""))
+        return segments
 
-        # Feature 036: Post-normalization stripping (safer after identifiers are handled)
+    def _finalize_normalization(self, sql: str) -> str:
+        """Apply post-processing cleanups"""
+        normalized_sql = sql
+
         if "USING" in normalized_sql.upper():
             normalized_sql = re.sub(r"(?i)\s+USING\s+btree\b", "", normalized_sql)
-            # Log warning
             logger.warning(DDL_SKIP_FORMAT.format("USING btree"))
 
-        if "WITH" in normalized_sql.upper() and "FILLFACTOR" in normalized_sql.upper():
+        upper_sql = normalized_sql.upper()
+        if "WITH" in upper_sql and "FILLFACTOR" in upper_sql:
             normalized_sql = re.sub(
                 r"(?i)\s+WITH\s*\(\s*fillfactor\s*=\s*\d+\s*\)", "", normalized_sql
             )
-            # Log warning
             logger.warning(DDL_SKIP_FORMAT.format("WITH (fillfactor)"))
 
         if "::" in normalized_sql:
-            # Strip cast syntax
             normalized_sql = re.sub(
                 r"(?i)(\?|(?:\$\d+)|'(?:[^']|'')*'|\d+|[\w\.]+)::(?:\"[^\"]+\"|[\w.]+)(?:\s*\([^)]*\))?",
                 r"\1",
                 normalized_sql,
             )
-            # Log warning
             logger.warning(DDL_SKIP_FORMAT.format("Cast syntax"))
 
-        return normalized_sql, identifier_count
+        return normalized_sql
 
     def _normalize_chunk(self, chunk: str, current_count: int) -> tuple[str, int]:
         """Normalize identifiers in a SQL chunk (excluding string literals)"""

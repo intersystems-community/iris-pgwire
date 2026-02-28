@@ -438,67 +438,10 @@ class DebugTracer:
             return "<html><body>Debug tracing disabled</body></html>"
 
         try:
-            html_parts = [
-                "<html><head><title>IRIS SQL Translation Debug Trace</title>",
-                "<style>",
-                "body { font-family: monospace; margin: 20px; }",
-                ".step { border: 1px solid #ccc; margin: 10px 0; padding: 10px; }",
-                ".warning { background-color: #fff3cd; border-color: #ffeeba; }",
-                ".error { background-color: #f8d7da; border-color: #f5c6cb; }",
-                ".metadata { background-color: #f8f9fa; padding: 5px; }",
-                "pre { white-space: pre-wrap; word-wrap: break-word; }",
-                "</style></head><body>",
-                "<h1>IRIS SQL Translation Debug Trace</h1>",
-                f"<div class='metadata'><h2>Metadata</h2><pre>{json.dumps(trace.metadata, indent=2)}</pre></div>",
-            ]
-
-            # Parsing steps
-            if trace.parsing_steps:
-                html_parts.append("<h2>Parsing Steps</h2>")
-                for i, step in enumerate(trace.parsing_steps):
-                    html_parts.append("<div class='step'>")
-                    html_parts.append(f"<h3>Step {i + 1}: {step.step_name}</h3>")
-                    html_parts.append(f"<p><strong>Duration:</strong> {step.duration_ms}ms</p>")
-                    html_parts.append(f"<p><strong>Input:</strong></p><pre>{step.input_sql}</pre>")
-                    html_parts.append(
-                        f"<p><strong>Output:</strong></p><pre>{step.output_sql}</pre>"
-                    )
-                    if step.metadata:
-                        html_parts.append(
-                            f"<p><strong>Metadata:</strong></p><pre>{json.dumps(step.metadata, indent=2)}</pre>"
-                        )
-                    html_parts.append("</div>")
-
-            # Mapping decisions
-            if trace.mapping_decisions:
-                html_parts.append("<h2>Mapping Decisions</h2>")
-                for i, decision in enumerate(trace.mapping_decisions):
-                    css_class = "warning" if decision.confidence < 0.7 else "step"
-                    html_parts.append(f"<div class='{css_class}'>")
-                    html_parts.append(f"<h3>Decision {i + 1}: {decision.construct}</h3>")
-                    html_parts.append(
-                        f"<p><strong>Chosen Mapping:</strong> {decision.chosen_mapping}</p>"
-                    )
-                    html_parts.append(f"<p><strong>Confidence:</strong> {decision.confidence}</p>")
-                    html_parts.append(
-                        f"<p><strong>Available Mappings:</strong> {', '.join(decision.available_mappings)}</p>"
-                    )
-                    html_parts.append(f"<p><strong>Reasoning:</strong> {decision.reasoning}</p>")
-                    if decision.metadata:
-                        html_parts.append(
-                            f"<p><strong>Metadata:</strong></p><pre>{json.dumps(decision.metadata, indent=2)}</pre>"
-                        )
-                    html_parts.append("</div>")
-
-            # Warnings
-            if trace.warnings:
-                html_parts.append("<h2>Warnings</h2>")
-                for i, warning in enumerate(trace.warnings):
-                    html_parts.append("<div class='warning'>")
-                    html_parts.append(f"<h3>Warning {i + 1}</h3>")
-                    html_parts.append(f"<p>{warning}</p>")
-                    html_parts.append("</div>")
-
+            html_parts = self._build_html_header(trace)
+            html_parts.extend(self._render_parsing_steps(trace))
+            html_parts.extend(self._render_mapping_decisions(trace))
+            html_parts.extend(self._render_warnings(trace))
             html_parts.append("</body></html>")
             return "\n".join(html_parts)
 
@@ -506,40 +449,88 @@ class DebugTracer:
             self.logger.error(f"Failed to export trace to HTML: {e}")
             return f"<html><body>Error generating HTML trace: {e}</body></html>"
 
-    def get_session_stats(self) -> dict[str, Any]:
-        """
-        Get statistics for the current debug session
+    def _build_html_header(self, trace: DebugTrace) -> list[str]:
+        metadata = json.dumps(trace.metadata, indent=2)
+        return [
+            "<html><head><title>IRIS SQL Translation Debug Trace</title>",
+            "<style>",
+            "body { font-family: monospace; margin: 20px; }",
+            ".step { border: 1px solid #ccc; margin: 10px 0; padding: 10px; }",
+            ".warning { background-color: #fff3cd; border-color: #ffeeba; }",
+            ".error { background-color: #f8d7da; border-color: #f5c6cb; }",
+            ".metadata { background-color: #f8f9fa; padding: 5px; }",
+            "pre { white-space: pre-wrap; word-wrap: break-word; }",
+            "</style></head><body>",
+            "<h1>IRIS SQL Translation Debug Trace</h1>",
+            f"<div class='metadata'><h2>Metadata</h2><pre>{metadata}</pre></div>",
+        ]
 
-        Returns:
-            Session statistics
-        """
+    def _render_parsing_steps(self, trace: DebugTrace) -> list[str]:
+        if not trace.parsing_steps:
+            return []
+
+        parts = ["<h2>Parsing Steps</h2>"]
+        for index, step in enumerate(trace.parsing_steps, start=1):
+            parts.append("<div class='step'>")
+            parts.append(f"<h3>Step {index}: {step.step_name}</h3>")
+            parts.append(f"<p><strong>Duration:</strong> {step.duration_ms}ms</p>")
+            parts.append(f"<p><strong>Input:</strong></p><pre>{step.input_sql}</pre>")
+            parts.append(f"<p><strong>Output:</strong></p><pre>{step.output_sql}</pre>")
+            if step.metadata:
+                parts.append(
+                    f"<p><strong>Metadata:</strong></p><pre>{json.dumps(step.metadata, indent=2)}</pre>"
+                )
+            parts.append("</div>")
+        return parts
+
+    def _render_mapping_decisions(self, trace: DebugTrace) -> list[str]:
+        if not trace.mapping_decisions:
+            return []
+
+        parts = ["<h2>Mapping Decisions</h2>"]
+        for index, decision in enumerate(trace.mapping_decisions, start=1):
+            css_class = "warning" if decision.confidence < 0.7 else "step"
+            parts.append(f"<div class='{css_class}'>")
+            parts.append(f"<h3>Decision {index}: {decision.construct}</h3>")
+            parts.append(f"<p><strong>Chosen Mapping:</strong> {decision.chosen_mapping}</p>")
+            parts.append(f"<p><strong>Confidence:</strong> {decision.confidence}</p>")
+            parts.append(
+                f"<p><strong>Available Mappings:</strong> {', '.join(decision.available_mappings)}</p>"
+            )
+            parts.append(f"<p><strong>Reasoning:</strong> {decision.reasoning}</p>")
+            if decision.metadata:
+                parts.append(
+                    f"<p><strong>Metadata:</strong></p><pre>{json.dumps(decision.metadata, indent=2)}</pre>"
+                )
+            parts.append("</div>")
+        return parts
+
+    def _render_warnings(self, trace: DebugTrace) -> list[str]:
+        if not trace.warnings:
+            return []
+
+        parts = ["<h2>Warnings</h2>"]
+        for index, warning in enumerate(trace.warnings, start=1):
+            parts.append("<div class='warning'>")
+            parts.append(f"<h3>Warning {index}</h3>")
+            parts.append(f"<p>{warning}</p>")
+            parts.append("</div>")
+        return parts
+
+    def get_session_stats(self) -> dict[str, Any]:
+        """Get statistics for the current debug session"""
         with self._lock:
             session_duration = (datetime.now(UTC) - self._session_start).total_seconds()
+            level_counts, component_counts, compliance_counts = self._collect_event_summaries()
 
             return {
                 "session_start": self._session_start.isoformat(),
                 "session_duration_seconds": session_duration,
                 "active_traces": len(self._traces),
                 "total_events": len(self._events),
-                "events_by_level": {
-                    level.value: len([e for e in self._events if e.level == level])
-                    for level in LogLevel
-                },
-                "events_by_component": {
-                    component: len([e for e in self._events if e.component == component])
-                    for component in {e.component for e in self._events}
-                },
-                "constitutional_compliance": {
-                    "sla_violations": len(
-                        [e for e in self._events if e.event_type == "sla_violation"]
-                    ),
-                    "low_confidence_mappings": len(
-                        [e for e in self._events if e.event_type == "low_confidence_mapping"]
-                    ),
-                    "slow_parsing_steps": len(
-                        [e for e in self._events if e.event_type == "slow_parsing_step"]
-                    ),
-                },
+                "events_by_level": level_counts,
+                "events_by_component": component_counts,
+                "constitutional_compliance": compliance_counts,
             }
 
     def _log_event(
@@ -567,6 +558,28 @@ class DebugTracer:
         # Log to structured logger
         log_method = getattr(self.logger, level.value.lower())
         log_method(f"[{component}] {message}", **data)
+
+    def _collect_event_summaries(self) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+        level_counts: dict[str, int] = {level.value: 0 for level in LogLevel}
+        component_counts: dict[str, int] = {}
+        compliance_counts = {
+            "sla_violations": 0,
+            "low_confidence_mappings": 0,
+            "slow_parsing_steps": 0,
+        }
+        event_type_to_key = {
+            "sla_violation": "sla_violations",
+            "low_confidence_mapping": "low_confidence_mappings",
+            "slow_parsing_step": "slow_parsing_steps",
+        }
+
+        for event in self._events:
+            level_counts[event.level.value] += 1
+            component_counts[event.component] = component_counts.get(event.component, 0) + 1
+            if event.event_type in event_type_to_key:
+                compliance_counts[event_type_to_key[event.event_type]] += 1
+
+        return level_counts, component_counts, compliance_counts
 
 
 # Global tracer instance

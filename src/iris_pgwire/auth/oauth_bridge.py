@@ -1,28 +1,4 @@
-"""
-OAuth 2.0 Authentication Bridge for IRIS PGWire
-
-This module implements OAuth 2.0 token exchange and validation using IRIS's
-embedded Python OAuth client. It bridges PostgreSQL password authentication
-to IRIS OAuth tokens for secure authentication.
-
-Architecture:
-    PostgreSQL Client (password) → OAuthBridge → IRIS OAuth Server → OAuth Token
-
-Key Features:
-    - Password grant flow (RFC 6749 Section 4.3)
-    - Token introspection for validation
-    - Token refresh for expiry handling
-    - Dual-mode client secret: Wallet (preferred) or environment variable
-
-Constitutional Requirements:
-    - Uses iris.cls('OAuth2.Client') for IRIS integration (Principle IV)
-    - Uses asyncio.to_thread() for non-blocking execution
-    - <5s authentication latency (FR-028)
-    - Audit trail for all token exchanges (FR-026)
-
-Feature: 024-research-and-implement (Authentication Bridge)
-Phase: 3.4 (Core Implementation)
-"""
+"""Bridge OAuth token exchange and validation via embedded IRIS."""
 
 import asyncio
 import os
@@ -30,6 +6,7 @@ import os
 # Import contract interface
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import NoReturn
 
 import structlog
 
@@ -39,7 +16,7 @@ logger = structlog.get_logger(__name__)
 # Re-export contract types
 @dataclass
 class OAuthToken:
-    """OAuth 2.0 access token issued by IRIS OAuth server"""
+    """OAuth 2.0 token response."""
 
     access_token: str
     refresh_token: str | None
@@ -51,7 +28,6 @@ class OAuthToken:
 
     @property
     def expires_at(self) -> datetime:
-        """Calculate token expiry timestamp"""
         from datetime import timedelta
 
         return self.issued_at + timedelta(seconds=self.expires_in)
@@ -64,32 +40,32 @@ class OAuthToken:
 
 # Error classes
 class OAuthAuthenticationError(Exception):
-    """Raised when OAuth token exchange fails"""
+    """Raised when OAuth token exchange fails."""
 
     pass
 
 
 class OAuthValidationError(Exception):
-    """Raised when OAuth token validation request fails"""
+    """Raised when OAuth token validation fails."""
 
     pass
 
 
 class OAuthRefreshError(Exception):
-    """Raised when OAuth token refresh fails"""
+    """Raised when OAuth token refresh fails."""
 
     pass
 
 
 class OAuthConfigurationError(Exception):
-    """Raised when OAuth client credentials not configured"""
+    """Raised when OAuth client credentials are missing."""
 
     pass
 
 
 @dataclass
 class OAuthConfig:
-    """OAuth bridge configuration from environment variables"""
+    """OAuth bridge configuration."""
 
     client_id: str  # PGWIRE_OAUTH_CLIENT_ID
     token_endpoint: str  # PGWIRE_OAUTH_TOKEN_ENDPOINT
@@ -98,20 +74,9 @@ class OAuthConfig:
 
 
 class OAuthBridge:
-    """
-    OAuth 2.0 authentication bridge using IRIS embedded Python.
-
-    Implements OAuthBridgeProtocol contract for token exchange, validation,
-    and refresh operations.
-    """
+    """Perform OAuth token exchange, refresh, and validation."""
 
     def __init__(self, config: OAuthConfig | None = None):
-        """
-        Initialize OAuth bridge with configuration.
-
-        Args:
-            config: OAuth configuration (defaults to environment variables)
-        """
         self.config = config or self._load_config_from_env()
         self._wallet_credentials: any | None = None  # Lazy-loaded WalletCredentials
 
@@ -122,7 +87,7 @@ class OAuthBridge:
         )
 
     def _load_config_from_env(self) -> OAuthConfig:
-        """Load OAuth configuration from environment variables"""
+        """Load OAuth configuration from the environment."""
         client_id = os.getenv("PGWIRE_OAUTH_CLIENT_ID", "pgwire-server")
 
         # Default IRIS OAuth endpoints (localhost for embedded Python)
@@ -144,25 +109,46 @@ class OAuthBridge:
             use_wallet_for_secret=use_wallet,
         )
 
+    def _raise_with_context(
+        self,
+        exc: Exception,
+        error_cls: type[Exception],
+        log_event: str,
+        message: str,
+        **log_context: str,
+    ) -> NoReturn:
+        """Log and raise the requested error class, preserving prior exceptions."""
+        if isinstance(exc, error_cls):
+            raise exc
+
+        logger.error(log_event, error=str(exc), **{k: v for k, v in log_context.items() if v})
+        raise error_cls(f"{message}: {exc}") from exc
+
+    def _iris_token_exchange_sync(self, client_id: str, username: str, password: str) -> dict:
+        """Blocking token exchange against IRIS."""
+        try:
+            import iris
+
+            oauth_client = iris.cls("OAuth2.Client")
+            token_response = oauth_client.RequestToken(client_id, username, password)
+
+            if not token_response or "access_token" not in token_response:
+                raise OAuthAuthenticationError("Invalid token response from IRIS OAuth server")
+
+            return token_response
+
+        except OAuthAuthenticationError:
+            raise
+        except Exception as e:
+            logger.error(
+                "iris_oauth_token_exchange_failed",
+                username=username,
+                error=str(e),
+            )
+            raise OAuthAuthenticationError(f"OAuth token exchange failed: {e}")
+
     async def exchange_password_for_token(self, username: str, password: str) -> OAuthToken:
-        """
-        Exchange username/password for IRIS OAuth 2.0 access token.
-
-        Implements FR-007: Password grant flow (RFC 6749 Section 4.3).
-
-        Args:
-            username: PostgreSQL username from SCRAM handshake
-            password: PostgreSQL password from SCRAM handshake
-
-        Returns:
-            OAuthToken with access_token, refresh_token, expiry
-
-        Raises:
-            OAuthAuthenticationError: If token exchange fails
-            OAuthConfigurationError: If client credentials not configured
-
-        Performance: <5s (FR-028)
-        """
+        """Exchange credentials for an OAuth token."""
         logger.info(
             "oauth_token_exchange_start",
             username=username,
@@ -170,47 +156,12 @@ class OAuthBridge:
         )
 
         try:
-            # Get OAuth client credentials
-            client_id, client_secret = await self.get_client_credentials()
+            client_id, _ = await self.get_client_credentials()
 
-            # Execute token exchange in thread pool (blocking IRIS call)
-            def _iris_token_exchange():
-                """Execute IRIS OAuth2.Client.RequestToken() (blocking)"""
-                try:
-                    import iris
+            token_response = await asyncio.to_thread(
+                self._iris_token_exchange_sync, client_id, username, password
+            )
 
-                    # Get IRIS OAuth2.Client instance
-                    oauth_client = iris.cls("OAuth2.Client")
-
-                    # Request token using password grant
-                    # OAuth2.Client.RequestToken(appname, username, password) -> token response
-                    token_response = oauth_client.RequestToken(
-                        client_id,  # Application name
-                        username,  # Resource owner username
-                        password,  # Resource owner password
-                    )
-
-                    # Parse token response
-                    # Expected structure: {"access_token": "...", "refresh_token": "...", "expires_in": 3600}
-                    if not token_response or "access_token" not in token_response:
-                        raise OAuthAuthenticationError(
-                            "Invalid token response from IRIS OAuth server"
-                        )
-
-                    return token_response
-
-                except Exception as e:
-                    logger.error(
-                        "iris_oauth_token_exchange_failed",
-                        username=username,
-                        error=str(e),
-                    )
-                    raise OAuthAuthenticationError(f"OAuth token exchange failed: {e}")
-
-            # Execute in thread pool to avoid blocking event loop
-            token_response = await asyncio.to_thread(_iris_token_exchange)
-
-            # Create OAuthToken from response
             token = OAuthToken(
                 access_token=token_response["access_token"],
                 refresh_token=token_response.get("refresh_token"),
@@ -232,75 +183,48 @@ class OAuthBridge:
 
             return token
 
-        except OAuthAuthenticationError:
-            # Re-raise OAuth errors as-is
-            raise
         except Exception as e:
-            # Wrap unexpected errors
-            logger.error(
+            self._raise_with_context(
+                e,
+                OAuthAuthenticationError,
                 "oauth_token_exchange_error",
+                "Unexpected error during token exchange",
                 username=username,
+            )
+
+    def _iris_token_validation_sync(self, access_token: str) -> bool:
+        """Blocking introspection against IRIS."""
+        try:
+            import iris
+
+            oauth_client = iris.cls("OAuth2.Client")
+            client_id, client_secret = self._get_client_credentials_sync()
+
+            introspection_response = oauth_client.IntrospectToken(
+                access_token, client_id, client_secret
+            )
+
+            if introspection_response is None:
+                return False
+
+            return introspection_response.get("active", False)
+
+        except Exception as e:
+            logger.error(
+                "iris_oauth_token_validation_failed",
                 error=str(e),
             )
-            raise OAuthAuthenticationError(f"Unexpected error during token exchange: {e}")
+            raise OAuthValidationError(f"OAuth token validation failed: {e}")
 
     async def validate_token(self, access_token: str) -> bool:
-        """
-        Validate OAuth token against IRIS OAuth 2.0 server.
-
-        Implements FR-008: Token introspection for validation.
-
-        Args:
-            access_token: OAuth access token to validate
-
-        Returns:
-            True if token is active, False if inactive
-
-        Raises:
-            OAuthValidationError: If validation request fails
-
-        Performance: <1s
-        """
+        """Validate an OAuth token."""
         logger.debug(
             "oauth_token_validation_start",
             token_preview=access_token[:20] + "..." if len(access_token) > 20 else access_token,
         )
 
         try:
-            # Execute token validation in thread pool (blocking IRIS call)
-            def _iris_token_validation():
-                """Execute IRIS OAuth2.Client.IntrospectToken() (blocking)"""
-                try:
-                    import iris
-
-                    # Get IRIS OAuth2.Client instance
-                    oauth_client = iris.cls("OAuth2.Client")
-
-                    # Get client credentials for introspection
-                    client_id, client_secret = self._get_client_credentials_sync()
-
-                    # Introspect token
-                    # OAuth2.Client.IntrospectToken(token, client_id, client_secret) -> introspection response
-                    introspection_response = oauth_client.IntrospectToken(
-                        access_token, client_id, client_secret
-                    )
-
-                    # Parse introspection response
-                    # Expected structure: {"active": true/false, ...}
-                    if introspection_response is None:
-                        return False
-
-                    return introspection_response.get("active", False)
-
-                except Exception as e:
-                    logger.error(
-                        "iris_oauth_token_validation_failed",
-                        error=str(e),
-                    )
-                    raise OAuthValidationError(f"OAuth token validation failed: {e}")
-
-            # Execute in thread pool
-            is_active = await asyncio.to_thread(_iris_token_validation)
+            is_active = await asyncio.to_thread(self._iris_token_validation_sync, access_token)
 
             logger.debug(
                 "oauth_token_validation_complete",
@@ -309,79 +233,54 @@ class OAuthBridge:
 
             return is_active
 
-        except OAuthValidationError:
+        except Exception as e:
+            self._raise_with_context(
+                e,
+                OAuthValidationError,
+                "oauth_token_validation_error",
+                "Unexpected error during token validation",
+            )
+
+    def _iris_token_refresh_sync(self, client_id: str, refresh_token: str) -> dict:
+        """Blocking refresh call."""
+        try:
+            import iris
+
+            oauth_client = iris.cls("OAuth2.Client")
+            token_response = oauth_client.RefreshToken(client_id, refresh_token)
+
+            if not token_response or "access_token" not in token_response:
+                raise OAuthRefreshError("Invalid refresh token response from IRIS OAuth server")
+
+            return token_response
+
+        except OAuthRefreshError:
             raise
         except Exception as e:
             logger.error(
-                "oauth_token_validation_error",
+                "iris_oauth_token_refresh_failed",
                 error=str(e),
             )
-            raise OAuthValidationError(f"Unexpected error during token validation: {e}")
+            raise OAuthRefreshError(f"OAuth token refresh failed: {e}")
 
     async def refresh_token(self, refresh_token: str) -> OAuthToken:
-        """
-        Refresh expired OAuth token using refresh token.
-
-        Implements FR-010: Token refresh for expiry handling.
-
-        Args:
-            refresh_token: OAuth refresh token from previous token exchange
-
-        Returns:
-            New OAuthToken with updated access_token
-
-        Raises:
-            OAuthRefreshError: If refresh fails
-
-        Performance: <5s
-        """
+        """Refresh expired OAuth token using refresh token."""
         logger.info("oauth_token_refresh_start")
 
         try:
-            # Get OAuth client credentials
-            client_id, client_secret = await self.get_client_credentials()
+            client_id, _ = await self.get_client_credentials()
 
-            # Execute token refresh in thread pool (blocking IRIS call)
-            def _iris_token_refresh():
-                """Execute IRIS OAuth2.Client.RefreshToken() (blocking)"""
-                try:
-                    import iris
+            token_response = await asyncio.to_thread(
+                self._iris_token_refresh_sync, client_id, refresh_token
+            )
 
-                    # Get IRIS OAuth2.Client instance
-                    oauth_client = iris.cls("OAuth2.Client")
-
-                    # Refresh token using refresh grant
-                    # OAuth2.Client.RefreshToken(appname, refresh_token) -> token response
-                    token_response = oauth_client.RefreshToken(client_id, refresh_token)
-
-                    # Parse token response
-                    if not token_response or "access_token" not in token_response:
-                        raise OAuthRefreshError(
-                            "Invalid refresh token response from IRIS OAuth server"
-                        )
-
-                    return token_response
-
-                except Exception as e:
-                    logger.error(
-                        "iris_oauth_token_refresh_failed",
-                        error=str(e),
-                    )
-                    raise OAuthRefreshError(f"OAuth token refresh failed: {e}")
-
-            # Execute in thread pool
-            token_response = await asyncio.to_thread(_iris_token_refresh)
-
-            # Create new OAuthToken from response
             new_token = OAuthToken(
                 access_token=token_response["access_token"],
-                refresh_token=token_response.get(
-                    "refresh_token", refresh_token
-                ),  # May return new refresh token
+                refresh_token=token_response.get("refresh_token", refresh_token),
                 token_type=token_response.get("token_type", "Bearer"),
                 expires_in=token_response.get("expires_in", 3600),
                 issued_at=datetime.now(UTC),
-                username="",  # Username not available in refresh response
+                username="",
                 scopes=(
                     token_response.get("scope", "").split() if token_response.get("scope") else []
                 ),
@@ -394,27 +293,16 @@ class OAuthBridge:
 
             return new_token
 
-        except OAuthRefreshError:
-            raise
         except Exception as e:
-            logger.error(
+            self._raise_with_context(
+                e,
+                OAuthRefreshError,
                 "oauth_token_refresh_error",
-                error=str(e),
+                "Unexpected error during token refresh",
             )
-            raise OAuthRefreshError(f"Unexpected error during token refresh: {e}")
 
     async def get_client_credentials(self) -> tuple[str, str]:
-        """
-        Retrieve OAuth client ID and secret for PGWire server.
-
-        Implements FR-009: Client secret from Wallet (preferred) or environment.
-
-        Returns:
-            Tuple of (client_id, client_secret)
-
-        Raises:
-            OAuthConfigurationError: If client credentials not configured
-        """
+        """Return OAuth client credentials, preferring the Wallet."""
         client_id = self.config.client_id
 
         # Try Wallet first (if enabled)
@@ -457,7 +345,7 @@ class OAuthBridge:
         return client_id, client_secret
 
     def _get_client_credentials_sync(self) -> tuple[str, str]:
-        """Synchronous version of get_client_credentials() for use in blocking IRIS calls"""
+        """Synchronous credentials helper."""
         client_id = self.config.client_id
 
         # Try environment variable (Wallet access requires async)
@@ -471,7 +359,7 @@ class OAuthBridge:
         return client_id, client_secret
 
     async def _get_client_secret_from_wallet(self) -> str:
-        """Retrieve OAuth client secret from IRIS Wallet (Phase 4 integration)"""
+        """Retrieve OAuth client secret from the Wallet."""
         # Lazy-load WalletCredentials to avoid circular import
         if self._wallet_credentials is None:
             from .wallet_credentials import WalletCredentials

@@ -7,9 +7,9 @@ Coordinates all translation components with constitutional compliance monitoring
 Constitutional Compliance: Sub-5ms translation with high-confidence mappings.
 """
 
+import re
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -135,134 +135,46 @@ class IRISSQLTranslator:
         self._total_translations = 0
         self._start_time = datetime.now(UTC)
 
-        # Performance optimization
-        self._thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="iris_translator")
-
     def translate(self, context: TranslationContext) -> TranslationResult:
-        """
-        Translate IRIS SQL to PostgreSQL equivalent
-
-        Args:
-            context: Translation context with SQL and options
-
-        Returns:
-            Translation result with SQL and metadata
-        """
-        # Start debug trace
+        """Translate IRIS SQL to PostgreSQL equivalent."""
         debug_trace = None
-        trace_id = None
-        with PerformanceTimer() as timer:
-            # Generate trace ID if debug enabled
-            trace_id = context.trace_id or (str(uuid.uuid4()) if self.enable_debug else None)
+        trace_id = context.trace_id or (str(uuid.uuid4()) if self.enable_debug else None)
 
+        with PerformanceTimer() as timer:
             try:
                 if self.enable_debug and trace_id and self.tracer:
                     debug_trace = self.tracer.start_trace(trace_id, context.original_sql)
 
-                # Check cache first
-                cache_entry = None
                 cache_key = None
-                if self.enable_caching and context.enable_caching and self.cache:
-                    cache_key = generate_cache_key(
-                        context.original_sql, context.parameters, {"session_id": context.session_id}
+                if self._should_use_cache(context):
+                    cache_key = self._generate_cache_key(context)
+                    cache_hit = self._handle_cache_lookup(
+                        cache_key, context, trace_id, debug_trace, timer
                     )
-                    cache_entry = self.cache.get(cache_key)
+                    if cache_hit:
+                        return cache_hit
 
-                    if cache_entry:
-                        # Cache hit - return cached result
-                        self._update_session_stats(
-                            context.session_id, timer.elapsed_ms, cache_hit=True
-                        )
-
-                        if debug_trace and trace_id and self.tracer:
-                            self.tracer.add_parsing_step(
-                                trace_id,
-                                "cache_hit",
-                                context.original_sql,
-                                cache_entry.translated_sql,
-                                0.1,
-                                cache_key=cache_key,
-                            )
-                            self.tracer.complete_trace(
-                                trace_id, cache_entry.translated_sql, True, timer.elapsed_ms
-                            )
-
-                        return TranslationResult(
-                            translated_sql=cache_entry.translated_sql,
-                            construct_mappings=cache_entry.construct_mappings,
-                            performance_stats=PerformanceStats(
-                                translation_time_ms=timer.elapsed_ms,
-                                cache_hit=True,
-                                constructs_detected=len(cache_entry.construct_mappings),
-                                constructs_translated=len(cache_entry.construct_mappings),
-                            ),
-                            debug_trace=debug_trace,
-                        )
-
-                # Perform translation
                 translation_result = self._perform_translation(context, trace_id, debug_trace)
+                self._maybe_cache_result(cache_key, translation_result, context)
 
-                # Cache result if successful (no errors in warnings)
-                is_successful = not any("failed" in w.lower() for w in translation_result.warnings)
-                if (
-                    is_successful
-                    and self.enable_caching
-                    and context.enable_caching
-                    and self.cache
-                    and cache_key
-                ):
-                    self.cache.put(
-                        cache_key,
-                        translation_result.translated_sql,
-                        translation_result.construct_mappings,
-                        translation_result.performance_stats,
-                        original_sql=context.original_sql,
-                    )
+                validation_success = (
+                    translation_result.validation_result.success
+                    if translation_result.validation_result
+                    else True
+                )
 
-                # Update session stats
                 self._update_session_stats(
                     context.session_id,
                     timer.elapsed_ms,
                     cache_hit=False,
-                    validation_success=(
-                        translation_result.validation_result.success
-                        if translation_result.validation_result
-                        else True
-                    ),
+                    validation_success=validation_success,
                 )
 
-                # Constitutional compliance check
-                if timer.elapsed_ms > 5.0:  # 5ms SLA
-                    self._sla_violations += 1
-                    if debug_trace and trace_id and self.tracer:
-                        self.tracer.add_warning(
-                            trace_id,
-                            f"Translation exceeded 5ms SLA: {timer.elapsed_ms}ms",
-                            "constitutional",
-                        )
-
+                self._record_sla_violation(timer.elapsed_ms, trace_id, debug_trace)
                 return translation_result
 
             except Exception as e:
-                logger.error(f"Translation failed: {e}")
-
-                if debug_trace and trace_id and self.tracer:
-                    if hasattr(self.tracer, "add_error"):
-                        self.tracer.add_error(trace_id, str(e), "TranslationError")
-                    self.tracer.complete_trace(trace_id, "", False, timer.elapsed_ms)
-
-                return TranslationResult(
-                    translated_sql=context.original_sql,  # Fallback to original
-                    construct_mappings=[],
-                    performance_stats=PerformanceStats(
-                        translation_time_ms=timer.elapsed_ms,
-                        cache_hit=False,
-                        constructs_detected=0,
-                        constructs_translated=0,
-                    ),
-                    warnings=[f"Translation failed: {str(e)}"],
-                    debug_trace=debug_trace,
-                )
+                return self._handle_translation_error(e, context, timer, trace_id, debug_trace)
 
     def _perform_translation(
         self,
@@ -270,23 +182,14 @@ class IRISSQLTranslator:
         trace_id: str | None,
         debug_trace: DebugTrace | None,
     ) -> TranslationResult:
-        """Perform the actual translation process"""
+        """Perform the actual translation process."""
         with PerformanceTimer() as total_timer:
-            construct_mappings = []
-            warnings = []
+            construct_mappings: list[ConstructMapping] = []
+            warnings: list[str] = []
 
-            # Strip trailing semicolons from incoming SQL before translation
-            # PostgreSQL clients send queries with semicolons, but IRIS expects them without
-            # We'll add them back in _finalize_translation() if needed
-            original_sql = context.original_sql.rstrip(";").strip()
-            translated_sql = original_sql
-
-            # Step 1: Parse SQL to identify IRIS constructs
-            with PerformanceTimer() as parse_timer:
-                parsed_constructs, parse_debug = self.parser.parse(
-                    original_sql,  # Use cleaned SQL without trailing semicolon
-                    debug_mode=self.enable_debug,
-                )
+            cleaned_sql, parsed_constructs, parse_duration_ms = self._parse_constructs(
+                context.original_sql
+            )
 
             if debug_trace and trace_id and self.tracer:
                 self.tracer.add_parsing_step(
@@ -294,16 +197,14 @@ class IRISSQLTranslator:
                     "parse_constructs",
                     context.original_sql,
                     context.original_sql,
-                    parse_timer.elapsed_ms,
+                    parse_duration_ms,
                     constructs_found=len(parsed_constructs),
                 )
 
-            # Step 2: Translate each construct type
             translated_sql = self._translate_constructs(
-                translated_sql, parsed_constructs, construct_mappings, trace_id, debug_trace
+                cleaned_sql, parsed_constructs, construct_mappings, trace_id, debug_trace
             )
 
-            # Step 3: Validate translation if enabled
             validation_result = None
             if self.enable_validation and context.enable_validation:
                 validation_result = self._validate_translation(
@@ -313,29 +214,9 @@ class IRISSQLTranslator:
                 if not validation_result.success:
                     warnings.extend([issue.message for issue in validation_result.issues])
 
-            # Step 4: Final cleanup and optimization
             translated_sql = self._finalize_translation(translated_sql, trace_id, debug_trace)
+            self._log_audit_transformations(context, translated_sql, construct_mappings, trace_id)
 
-            # Audit logging: Record all transformations applied
-            if construct_mappings:
-                logger.info(
-                    "Audit: SQL transformations applied",
-                    original_sql=context.original_sql[:200],
-                    translated_sql=translated_sql[:200],
-                    mapping_count=len(construct_mappings),
-                    mappings=[
-                        {
-                            "type": m.construct_type.value,
-                            "original": m.original_syntax,
-                            "translated": m.translated_syntax,
-                        }
-                        for m in construct_mappings
-                    ],
-                    session_id=context.session_id,
-                    trace_id=trace_id,
-                )
-
-            # Complete debug trace
             if debug_trace and trace_id and self.tracer:
                 self.tracer.complete_trace(trace_id, translated_sql, True, total_timer.elapsed_ms)
 
@@ -352,6 +233,154 @@ class IRISSQLTranslator:
                 validation_result=validation_result,
                 debug_trace=debug_trace,
             )
+
+    def _parse_constructs(self, original_sql: str) -> tuple[str, list[ParsedConstruct], float]:
+        """Parse SQL and return cleaned SQL, constructs, and elapsed time."""
+        cleaned_sql = original_sql.rstrip(";").strip()
+        with PerformanceTimer() as timer:
+            parsed_constructs, _ = self.parser.parse(cleaned_sql, debug_mode=self.enable_debug)
+        return cleaned_sql, parsed_constructs, timer.elapsed_ms
+
+    def _log_audit_transformations(
+        self,
+        context: TranslationContext,
+        translated_sql: str,
+        construct_mappings: list[ConstructMapping],
+        trace_id: str | None,
+    ) -> None:
+        if not construct_mappings:
+            return
+
+        logger.info(
+            "Audit: SQL transformations applied",
+            original_sql=context.original_sql[:200],
+            translated_sql=translated_sql[:200],
+            mapping_count=len(construct_mappings),
+            mappings=[
+                {
+                    "type": m.construct_type.value,
+                    "original": m.original_syntax,
+                    "translated": m.translated_syntax,
+                }
+                for m in construct_mappings
+            ],
+            session_id=context.session_id,
+            trace_id=trace_id,
+        )
+
+    def _should_use_cache(self, context: TranslationContext) -> bool:
+        return bool(self.enable_caching and context.enable_caching and self.cache)
+
+    def _generate_cache_key(self, context: TranslationContext) -> str:
+        return generate_cache_key(
+            context.original_sql, context.parameters, {"session_id": context.session_id}
+        )
+
+    def _handle_cache_lookup(
+        self,
+        cache_key: str,
+        context: TranslationContext,
+        trace_id: str | None,
+        debug_trace: DebugTrace | None,
+        timer: PerformanceTimer,
+    ) -> TranslationResult | None:
+        cache_entry = self.cache.get(cache_key) if self.cache else None
+        if not cache_entry:
+            return None
+
+        self._update_session_stats(context.session_id, timer.elapsed_ms, cache_hit=True)
+
+        if debug_trace and trace_id and self.tracer:
+            self.tracer.add_parsing_step(
+                trace_id,
+                "cache_hit",
+                context.original_sql,
+                cache_entry.translated_sql,
+                0.1,
+                cache_key=cache_key,
+            )
+            self.tracer.complete_trace(trace_id, cache_entry.translated_sql, True, timer.elapsed_ms)
+
+        return TranslationResult(
+            translated_sql=cache_entry.translated_sql,
+            construct_mappings=cache_entry.construct_mappings,
+            performance_stats=PerformanceStats(
+                translation_time_ms=timer.elapsed_ms,
+                cache_hit=True,
+                constructs_detected=len(cache_entry.construct_mappings),
+                constructs_translated=len(cache_entry.construct_mappings),
+            ),
+            debug_trace=debug_trace,
+        )
+
+    def _maybe_cache_result(
+        self,
+        cache_key: str | None,
+        translation_result: TranslationResult,
+        context: TranslationContext,
+    ) -> None:
+        if not cache_key or not self._should_use_cache(context):
+            return
+
+        if any("failed" in w.lower() for w in translation_result.warnings):
+            return
+
+        cache = self.cache
+        if cache is None:
+            return
+
+        cache.put(
+            cache_key,
+            translation_result.translated_sql,
+            translation_result.construct_mappings,
+            translation_result.performance_stats,
+            original_sql=context.original_sql,
+        )
+
+    def _record_sla_violation(
+        self, elapsed_ms: float, trace_id: str | None, debug_trace: DebugTrace | None
+    ) -> None:
+        if elapsed_ms <= 5.0:
+            return
+
+        self._sla_violations += 1
+        if trace_id and self.tracer and debug_trace:
+            self.tracer.add_warning(
+                trace_id,
+                f"Translation exceeded 5ms SLA: {elapsed_ms}ms",
+                "constitutional",
+            )
+
+    def _handle_translation_error(
+        self,
+        error: Exception,
+        context: TranslationContext,
+        timer: PerformanceTimer,
+        trace_id: str | None,
+        debug_trace: DebugTrace | None,
+    ) -> TranslationResult:
+        logger.error(f"Translation failed: {error}")
+
+        if trace_id and self.tracer and debug_trace:
+            if hasattr(self.tracer, "add_error"):
+                self.tracer.add_error(trace_id, str(error), "TranslationError")
+            self.tracer.complete_trace(trace_id, "", False, timer.elapsed_ms)
+
+        if trace_id and self.tracer and not debug_trace:
+            self.tracer.complete_trace(trace_id, "", False, timer.elapsed_ms)
+
+        return TranslationResult(
+            translated_sql=context.original_sql,
+            construct_mappings=[],
+            performance_stats=PerformanceStats(
+                translation_time_ms=timer.elapsed_ms,
+                cache_hit=False,
+                constructs_detected=0,
+                constructs_translated=0,
+            ),
+            warnings=[f"Translation failed: {str(error)}"],
+            debug_trace=debug_trace,
+        )
 
     def _translate_constructs(
         self,
@@ -413,73 +442,80 @@ class IRISSQLTranslator:
         construct_mappings: list[ConstructMapping],
         trace_id: str | None,
     ) -> str:
-        """Translate IRIS functions to PostgreSQL equivalents"""
+        """Translate IRIS functions to PostgreSQL equivalents."""
         with PerformanceTimer() as timer:
+            translated_sql = sql
             for construct in function_constructs:
-                # Get function name from metadata (parser stores it there)
-                function_name = construct.metadata.get("function_name", construct.original_text)
-                mapping = self.function_registry.get_mapping(function_name)
-
-                if mapping:
-                    # Perform the function translation
-                    old_pattern = construct.original_text
-                    new_text = mapping.postgresql_function
-
-                    # Handle parameterized functions
-                    if construct.parameters:
-                        # Check if function template has placeholders ($1, $2, etc.)
-                        if "$" in new_text:
-                            new_text = self._apply_function_parameters(
-                                new_text, construct.parameters
-                            )
-                        else:
-                            # For simple functions without placeholders, append parameters directly
-                            params_str = ", ".join(construct.parameters)
-                            new_text = f"{new_text}({params_str})"
-                    else:
-                        # For functions without parameters, extract from original_text
-                        import re
-
-                        param_match = re.search(r"\(([^)]*)\)", construct.original_text)
-                        if param_match:
-                            params = param_match.group(1)
-                            new_text = f"{new_text}({params})"
-
-                    sql = sql.replace(old_pattern, new_text)
-
-                    # Record mapping
-                    construct_mapping = ConstructMapping(
-                        construct_type=ConstructType.FUNCTION,
-                        original_syntax=construct.original_text,
-                        translated_syntax=new_text,
-                        confidence=mapping.confidence,
-                        source_location=construct.location,
-                        metadata={"function_name": function_name},
-                    )
-                    construct_mappings.append(construct_mapping)
-
-                    # Debug trace
-                    if trace_id and self.tracer:
-                        self.tracer.add_mapping_decision(
-                            trace_id,
-                            construct.original_text,
-                            [new_text],
-                            new_text,
-                            mapping.confidence,
-                            f"Function mapping: {mapping.notes}",
-                        )
+                translated_sql = self._translate_single_function(
+                    translated_sql, construct, construct_mappings, trace_id
+                )
 
             if trace_id and self.tracer:
                 self.tracer.add_parsing_step(
                     trace_id,
                     "translate_functions",
-                    sql,
-                    sql,
+                    translated_sql,
+                    translated_sql,
                     timer.elapsed_ms,
                     functions_translated=len(function_constructs),
                 )
 
-        return sql
+        return translated_sql
+
+    def _translate_single_function(
+        self,
+        sql: str,
+        construct: ParsedConstruct,
+        construct_mappings: list[ConstructMapping],
+        trace_id: str | None,
+    ) -> str:
+        function_name = construct.metadata.get("function_name", construct.original_text)
+        mapping = self.function_registry.get_mapping(function_name)
+        if not mapping:
+            return sql
+
+        old_pattern = construct.original_text
+        new_text = self._build_function_replacement(construct, mapping)
+        updated_sql = sql.replace(old_pattern, new_text)
+
+        construct_mappings.append(
+            ConstructMapping(
+                construct_type=ConstructType.FUNCTION,
+                original_syntax=construct.original_text,
+                translated_syntax=new_text,
+                confidence=mapping.confidence,
+                source_location=construct.location,
+                metadata={"function_name": function_name},
+            )
+        )
+
+        if trace_id and self.tracer:
+            self.tracer.add_mapping_decision(
+                trace_id,
+                construct.original_text,
+                [new_text],
+                new_text,
+                mapping.confidence,
+                f"Function mapping: {mapping.notes}",
+            )
+
+        return updated_sql
+
+    def _build_function_replacement(self, construct: ParsedConstruct, mapping: Any) -> str:
+        template = mapping.postgresql_function
+        if construct.parameters:
+            if "$" in template:
+                return self._apply_function_parameters(template, construct.parameters)
+
+            params_str = ", ".join(construct.parameters)
+            return f"{template}({params_str})"
+
+        param_match = re.search(r"\(([^)]*)\)", construct.original_text)
+        if param_match:
+            params = param_match.group(1)
+            return f"{template}({params})"
+
+        return template
 
     def _translate_datatypes(
         self,
@@ -751,8 +787,7 @@ class IRISSQLTranslator:
 
     def shutdown(self):
         """Shutdown translator and cleanup resources"""
-        if self._thread_pool:
-            self._thread_pool.shutdown(wait=True)
+        pass
 
     @contextmanager
     def translation_session(self, session_id: str | None = None):
