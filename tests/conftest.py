@@ -679,8 +679,8 @@ def pgwire_server(
         iris_password=iris_config["password"],
         iris_namespace=pgwire_namespace,
         enable_ssl=False,
-        connection_pool_size=20,
-        connection_pool_timeout=10.0,
+        connection_pool_size=30,
+        connection_pool_timeout=15.0,
     )
 
     loop = asyncio.new_event_loop()

@@ -71,10 +71,23 @@ class BulkExecutor:
         total_rows = 0
         batch = []
         actual_column_names = column_names
+        # Lazily resolved from schema when CSV has no header and no column list
+        schema_columns: list[str] | None = None
 
         async for row_dict in rows:
-            # Determine column names from first row if not specified
-            if actual_column_names is None:
+            # When column_names is None and the CSV has no header, the CSV processor
+            # generates placeholder keys (column_0, column_1, …). Detect this on
+            # the first row, fetch real column names from IRIS schema, and re-map.
+            first_key = next(iter(row_dict), None)
+            if first_key is not None and first_key.startswith("column_"):
+                if schema_columns is None:
+                    schema_columns = await self.get_table_columns(table_name)
+                    logger.debug(f"Columns fetched from schema for {table_name}: {schema_columns}")
+                if schema_columns:
+                    actual_column_names = schema_columns
+                    values = list(row_dict.values())
+                    row_dict = dict(zip(schema_columns, values))
+            elif actual_column_names is None:
                 actual_column_names = list(row_dict.keys())
                 logger.debug(f"Columns inferred from data: {actual_column_names}")
 
@@ -321,25 +334,29 @@ class BulkExecutor:
         """
         Get column names for a table using INFORMATION_SCHEMA.
 
+        Bypasses the catalog router (which intercepts INFORMATION_SCHEMA queries
+        for pg_catalog emulation) by calling _execute_external_async directly.
+
         Args:
             table_name: Table name
 
         Returns:
-            List of column names
+            List of column names in ordinal order
 
         Raises:
             Exception: IRIS query error
         """
-        query = f"""
-            SELECT column_name
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE LOWER(table_name) = LOWER('{table_name}')
-            ORDER BY ordinal_position
-        """
+        query = (
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE LOWER(TABLE_NAME) = LOWER('{table_name}') "
+            "ORDER BY ORDINAL_POSITION"
+        )
 
-        result = await self.iris_executor.execute_query(query, [])
+        # Bypass iris_executor.execute_query (which routes through the catalog
+        # router and returns empty rows for INFORMATION_SCHEMA queries) by
+        # calling the external execution path directly.
+        result = await self.iris_executor._execute_external_async(query, [])
 
-        # Extract column names from result
         columns = []
         if result and "rows" in result:
             columns = [row[0] for row in result["rows"]]
