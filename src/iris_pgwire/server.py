@@ -75,6 +75,7 @@ class PGWireServer:
         enable_scram: bool = False,
         connection_pool_size: int = 10,
         connection_pool_timeout: float = 5.0,
+        query_timeout: float = 30.0,
         enable_query_cache: bool = True,
         query_cache_size: int = 1000,
         backend_type: str | None = None,
@@ -122,6 +123,7 @@ class PGWireServer:
             iris_namespace=iris_namespace,
             pool_size=connection_pool_size,
             pool_timeout=int(connection_pool_timeout),
+            query_timeout=query_timeout,
             strict_single_connection=strict_single_connection,
         )
 
@@ -300,6 +302,7 @@ def _gather_main_config() -> dict[str, Any]:
         "ssl_key_path": os.getenv("PGWIRE_SSL_KEY"),
         "connection_pool_size": int(os.getenv("PGWIRE_POOL_SIZE", "10")),
         "connection_pool_timeout": float(os.getenv("PGWIRE_POOL_TIMEOUT", "5.0")),
+        "query_timeout": float(os.getenv("PGWIRE_QUERY_TIMEOUT", "30.0")),
         "enable_query_cache": os.getenv("PGWIRE_QUERY_CACHE_ENABLED", "true").lower() == "true",
         "query_cache_size": int(os.getenv("PGWIRE_QUERY_CACHE_SIZE", "1000")),
         "debug": os.getenv("PGWIRE_DEBUG", "false").lower() == "true",
@@ -327,6 +330,7 @@ async def main():
         ssl_key_path=config["ssl_key_path"],
         connection_pool_size=config["connection_pool_size"],
         connection_pool_timeout=config["connection_pool_timeout"],
+        query_timeout=config["query_timeout"],
         enable_query_cache=config["enable_query_cache"],
         query_cache_size=config["query_cache_size"],
     )

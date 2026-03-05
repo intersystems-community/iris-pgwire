@@ -202,7 +202,25 @@ class DBAPIExecutor:
                     conn_wrapper.connection, plan, converted_params, session_id, original_sql
                 )
 
-            rows, columns, row_count = await asyncio.to_thread(execute_in_thread)
+            query_timeout = getattr(self.config, "query_timeout", 30.0)
+            try:
+                rows, columns, row_count = await asyncio.wait_for(
+                    asyncio.to_thread(execute_in_thread), timeout=query_timeout
+                )
+            except TimeoutError:
+                logger.error(
+                    "Query timed out — evicting connection from pool",
+                    sql_preview=sql[:120],
+                    timeout_seconds=query_timeout,
+                    session_id=session_id,
+                )
+                # Mark connection unhealthy so it gets evicted, not recycled
+                if conn_wrapper:
+                    conn_wrapper.is_healthy = False
+                raise RuntimeError(
+                    f"Query execution timed out after {query_timeout}s. "
+                    "The IRIS connection is being evicted to prevent pool exhaustion."
+                )
 
             tx_sql_upper = original_sql.strip().upper()
             self._update_transaction_state(session_id, tx_sql_upper)

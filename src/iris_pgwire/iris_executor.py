@@ -100,6 +100,7 @@ class IRISExecutor:
         enable_query_cache: bool = True,
         query_cache_size: int = 1000,
         strict_single_connection: bool = False,
+        query_timeout: float = 30.0,
     ):
         self.iris_config = iris_config
         self.server = server  # Reference to server for P4 cancellation
@@ -108,6 +109,7 @@ class IRISExecutor:
         self.enable_query_cache = enable_query_cache
         self.query_cache_size = query_cache_size
         self.strict_single_connection = strict_single_connection
+        self.query_timeout = query_timeout
 
         self.connection = None
         self.session_connections = {}
@@ -2884,6 +2886,12 @@ class IRISExecutor:
         Execute SQL using external IRIS connection with proper async threading
         """
 
+        import threading
+
+        # Shared flag: asyncio side sets this True when wait_for times out so the
+        # sync thread knows to close (evict) the connection instead of recycling it.
+        timed_out = threading.Event()
+
         def _sync_external_execute(captured_sql, captured_params, captured_session_id):
             """Synchronous external IRIS execution in thread pool"""
             sql = captured_sql
@@ -3103,13 +3111,40 @@ class IRISExecutor:
                     except Exception:
                         pass
                 if conn:
-                    self._return_connection(conn, session_id=session_id)
+                    if timed_out.is_set():
+                        # Evict — don't return a lock-held connection to the pool
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        logger.warning(
+                            "Evicted timed-out IRIS connection from pool",
+                            session_id=session_id,
+                        )
+                    else:
+                        self._return_connection(conn, session_id=session_id)
 
-        # Execute in thread pool to avoid blocking event loop
+        # Execute in thread pool to avoid blocking event loop.
+        # Wrap with a per-query timeout to prevent lock-wait cascades from
+        # exhausting the connection pool (PGWIRE_QUERY_TIMEOUT, default 30s).
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        future = loop.run_in_executor(
             self._get_executor(session_id), _sync_external_execute, sql, params, session_id
         )
+        try:
+            return await asyncio.wait_for(future, timeout=self.query_timeout)
+        except TimeoutError:
+            timed_out.set()  # Signal the sync thread to evict the connection
+            logger.error(
+                "Query timed out — connection will be evicted from pool",
+                sql_preview=sql[:120],
+                timeout_seconds=self.query_timeout,
+                session_id=session_id,
+            )
+            raise RuntimeError(
+                f"Query execution timed out after {self.query_timeout}s. "
+                "The IRIS connection is being evicted to prevent pool exhaustion."
+            )
 
     def _get_iris_connection(self):
         """

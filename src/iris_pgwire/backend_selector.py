@@ -265,6 +265,7 @@ class BackendSelector:
             connection_pool_size=config.pool_size,
             connection_pool_timeout=float(config.pool_timeout),
             strict_single_connection=config.strict_single_connection,
+            query_timeout=config.query_timeout,
         )
         # backend_type is now set in IRISExecutor.__init__
         logger.info(

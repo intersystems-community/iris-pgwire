@@ -80,6 +80,18 @@ class BackendConfig(BaseModel):
         description="Connection lifetime in seconds (1 hour default)",
     )
 
+    # Per-query execution timeout (separate from pool wait timeout)
+    query_timeout: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "Maximum seconds a single query may execute before being cancelled. "
+            "Prevents lock-wait cascades from exhausting the connection pool. "
+            "Set via PGWIRE_QUERY_TIMEOUT env var."
+        ),
+    )
+
     # Protocol Behavior
     strict_single_connection: bool = Field(
         default=False,
@@ -205,6 +217,7 @@ class BackendConfig(BaseModel):
             ("PGWIRE_POOL_MAX_OVERFLOW", "pool_max_overflow", int),
             ("PGWIRE_POOL_TIMEOUT", "pool_timeout", int),
             ("PGWIRE_POOL_RECYCLE", "pool_recycle", int),
+            ("PGWIRE_QUERY_TIMEOUT", "query_timeout", float),
             # Observability
             ("PGWIRE_ENABLE_OTEL", "enable_otel", _as_bool),
             ("PGWIRE_OTEL_ENDPOINT", "otel_endpoint", None),
