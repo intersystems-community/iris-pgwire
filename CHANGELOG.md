@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`PGWIRE_QUERY_TIMEOUT` env var**: Per-query execution timeout (default 30s) that cancels a stalled IRIS query and returns an error to the client immediately, rather than holding the pool slot for the full `PGWIRE_POOL_TIMEOUT`. On timeout the offending connection is evicted (closed) rather than recycled, preventing lock-held connections from polluting the pool. Fixes the concurrent write load pool exhaustion bug where IRIS row locks on `DELETE + INSERT + UPDATE` sequences blocked subsequent `SELECT` queries until the pool fully saturated.
+
 ### Fixed
 - **COPY FROM STDIN without header**: Rows were silently dropped because the bulk executor used placeholder column names (`column_0`, `column_1`, …) that don't exist in IRIS. Now fetches real column names from `INFORMATION_SCHEMA.COLUMNS` via a direct DBAPI call that bypasses the pg_catalog emulation layer.
 - **COPY FROM STDIN column list**: Same root cause — explicit column list COPY now correctly maps CSV values to the specified columns.
