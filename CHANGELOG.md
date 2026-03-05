@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-03-05
+
 ### Added
 - **`PGWIRE_QUERY_TIMEOUT` env var**: Per-query execution timeout (default 30s) that cancels a stalled IRIS query and returns an error to the client immediately, rather than holding the pool slot for the full `PGWIRE_POOL_TIMEOUT`. On timeout the offending connection is evicted (closed) rather than recycled, preventing lock-held connections from polluting the pool. Fixes the concurrent write load pool exhaustion bug where IRIS row locks on `DELETE + INSERT + UPDATE` sequences blocked subsequent `SELECT` queries until the pool fully saturated.
 
