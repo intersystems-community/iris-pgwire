@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-03-05
+
+### Fixed
+- **RETURNING emulation silent failure (Extended Query Protocol)**: `INSERT ... RETURNING` returned no rows when using postgres.js, Drizzle ORM, or any client that uses the Extended Query Protocol. Root cause: column names extracted from the INSERT were kept lowercase (e.g. `"id"`), but IRIS stores unquoted column names in uppercase (`ID`). The quoted `WHERE "id" = ?` clause matched nothing. Fixed by uppercasing the extracted column name in both `iris_executor.py` and `dbapi_executor.py`.
+
 ## [1.5.1] - 2026-03-05
 
 ### Added

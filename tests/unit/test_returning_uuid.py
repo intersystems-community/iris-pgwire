@@ -36,7 +36,7 @@ class TestExtractInsertIdFromSql:
 
         col_name, id_value = executor._extract_insert_id_from_sql(sql, params)
 
-        assert col_name == "id"
+        assert col_name == "ID"
         assert id_value == "550e8400-e29b-41d4-a716-446655440000"
 
     def test_extract_uuid_from_literal_values(self, executor):
@@ -45,7 +45,7 @@ class TestExtractInsertIdFromSql:
 
         col_name, id_value = executor._extract_insert_id_from_sql(sql, None)
 
-        assert col_name == "id"
+        assert col_name == "ID"
         assert id_value == "550e8400-e29b-41d4-a716-446655440000"
 
     def test_extract_id_second_position(self, executor):
@@ -55,7 +55,7 @@ class TestExtractInsertIdFromSql:
 
         col_name, id_value = executor._extract_insert_id_from_sql(sql, params)
 
-        assert col_name == "id"
+        assert col_name == "ID"
         assert id_value == "my-uuid-123"
 
     def test_no_id_column_returns_none(self, executor):
@@ -75,7 +75,7 @@ class TestExtractInsertIdFromSql:
 
         col_name, id_value = executor._extract_insert_id_from_sql(sql, params)
 
-        assert col_name == "id"
+        assert col_name == "ID"
         assert id_value == "uuid-456"
 
     def test_handles_uuid_column_name(self, executor):
@@ -85,7 +85,7 @@ class TestExtractInsertIdFromSql:
 
         col_name, id_value = executor._extract_insert_id_from_sql(sql, params)
 
-        assert col_name == "uuid"
+        assert col_name == "UUID"
         assert id_value == "item-uuid-789"
 
     def test_handles_malformed_sql(self, executor):

@@ -1765,7 +1765,10 @@ class IRISExecutor:
         for i, col in enumerate(columns):
             if col in id_col_names:
                 id_col_idx = i
-                id_col_name = col
+                # Return UPPERCASE so the WHERE clause matches IRIS's stored column name.
+                # IRIS stores unquoted column names as uppercase; using "id" (lowercase)
+                # in a quoted identifier fails silently and returns 0 rows.
+                id_col_name = col.upper()
                 break
 
         if id_col_idx is None:

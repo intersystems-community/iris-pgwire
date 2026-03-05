@@ -1062,7 +1062,10 @@ class DBAPIExecutor:
         for i, col in enumerate(columns):
             if col in ("id", "uuid", "_id"):
                 if params and len(params) > i:
-                    return col, params[i]
+                    # Return UPPERCASE so the WHERE clause matches IRIS's stored column name.
+                    # IRIS stores unquoted column names as uppercase; using "id" (lowercase)
+                    # in a quoted identifier fails silently and returns 0 rows.
+                    return col.upper(), params[i]
                 return None, None
 
         return None, None
