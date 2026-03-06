@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-03-06
+
+### Fixed
+- **`CREATE INDEX USING HNSW WITH (...)` translation**: pgvector-style HNSW index DDL is now correctly translated to IRIS syntax. Both pgvector forms are handled:
+  - `CREATE INDEX name ON table USING hnsw (col vector_cosine_ops)` — operator class maps to `Distance='Cosine'`
+  - `CREATE INDEX name ON table (col) USING HNSW WITH (M=16, ef_construction=64)` — column-first form with explicit parameters
+  - All three distance metrics: `vector_cosine_ops` → `'Cosine'`, `vector_ip_ops` → `'DotProduct'`, `vector_l2_ops` raises `NotImplementedError` (L2 distance not supported in IRIS HNSW)
+  - Parameters `M` and `ef_construction`/`efConstruction` pass through correctly
+  - Schema-qualified table names (e.g. `SQLUser.mytable`) supported
+  - `IF NOT EXISTS` clause stripped (not supported by IRIS)
+  - Native IRIS `AS HNSW(...)` syntax passes through untouched
+
+### Added
+- **E2E tests for HNSW index creation** (`tests/e2e/test_hnsw_index.py`): 12 tests covering pgvector syntax translation, live index creation/verification against IRIS, parameter passthrough, and native syntax passthrough.
+
 ## [1.5.3] - 2026-03-06
 
 ### Fixed

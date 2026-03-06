@@ -253,15 +253,27 @@ class IRISSQLConstructRegistry:
             notes="Strip IF NOT EXISTS from CREATE INDEX for IRIS compatibility",
         )
 
-        # HNSW Index Support (PostgreSQL USING hnsw -> IRIS AS HNSW)
+        # HNSW Index — Form 1: pgvector USING hnsw (col ops) [WITH (...)]
+        # Handles schema-qualified table names (schema.table)
         self.add_construct(
             name="HNSW_INDEX",
-            pattern=r"CREATE\s+INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s+USING\s+hnsw\s*\([^)]+\)",
-            replacement=None,  # Handled by post_process
+            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s+ON\s+[\w.]+\s+USING\s+hnsw\s*\([^)]+\)(?:\s+WITH\s*\([^)]*\))?",
+            replacement=None,
             post_process=self._translate_hnsw_index,
             confidence=0.95,
             construct_type=ConstructType.SYNTAX,
-            notes="Translate PostgreSQL HNSW index to IRIS syntax",
+            notes="Translate pgvector USING hnsw (col ops) to IRIS AS HNSW(Distance=...)",
+        )
+        # HNSW Index — Form 2: col-first (col) USING HNSW [WITH (...)]
+        # e.g. CREATE INDEX i ON t (emb) USING HNSW WITH (M=16, Distance='COSINE')
+        self.add_construct(
+            name="HNSW_INDEX_COL_FIRST",
+            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s+ON\s+[\w.]+\s*\([^)]+\)\s+USING\s+HNSW(?:\s+WITH\s*\([^)]*\))?",
+            replacement=None,
+            post_process=self._translate_hnsw_index,
+            confidence=0.95,
+            construct_type=ConstructType.SYNTAX,
+            notes="Translate col-first (col) USING HNSW WITH (...) to IRIS AS HNSW(Distance=...)",
         )
 
     def _translate_hnsw_index(self, match: re.Match, full_sql: str) -> str:
