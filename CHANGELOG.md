@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-03-06
+
+### Fixed
+- **`<=>` cosine distance semantics**: `ORDER BY embedding <=> query ASC` now correctly returns the most-similar rows first. pgvector `<=>` is cosine *distance* (0.0 = identical), but IRIS `VECTOR_COSINE()` is cosine *similarity* (1.0 = identical). The translator was emitting bare `VECTOR_COSINE(...)`, which caused `ORDER BY ASC` to return the *least*-similar row first. Fixed by wrapping as `(1 - VECTOR_COSINE(...))` to convert similarity → distance. Affects both `<=>` operator rewrites in `vector_optimizer.py` (already fixed in v1.5.2) and explicit `cosine_distance()`/`vector_cosine_distance()` function calls in `sql_translator/normalizer.py` (fixed now).
+
+### Added
+- **E2E regression test for cosine ordering** (`tests/e2e/test_vector_cosine_ordering.py`): inserts three vectors with known relative similarities, queries with `<=>`, and asserts the most-similar row is returned first — the test that would have caught this bug before it shipped.
+
 ## [1.5.2] - 2026-03-05
 
 ### Fixed

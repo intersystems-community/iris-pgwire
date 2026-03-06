@@ -22,8 +22,10 @@ class VectorQueryRequest(BaseModel):
     Vector similarity query after translation from pgvector to IRIS syntax.
 
     Lifecycle:
-    1. Client sends pgvector query: SELECT * FROM docs ORDER BY embedding <-> '[0.1,0.2]' LIMIT 5
-    2. PGWire translates to IRIS: SELECT TOP 5 * FROM docs ORDER BY VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2]', 'DECIMAL'))
+    1. Client sends pgvector query: SELECT * FROM docs ORDER BY embedding <=> '[0.1,0.2]' LIMIT 5
+    2. PGWire translates to IRIS: SELECT TOP 5 * FROM docs ORDER BY (1 - VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2]', DOUBLE)))
+       Note: <=> is cosine *distance* (0=identical); IRIS VECTOR_COSINE is cosine *similarity* (1=identical).
+       The (1 - ...) wrapper converts similarity → distance so ORDER BY ASC returns most-similar rows first.
     3. VectorQueryRequest captures both original and translated SQL + telemetry
     4. DBAPI executor uses translated_sql for execution
     5. Response includes translation_time_ms for SLA validation
@@ -98,15 +100,19 @@ class VectorQueryRequest(BaseModel):
 
     def operator_to_iris_function(self) -> str:
         """
-        Map pgvector operator to IRIS vector function.
+        Map pgvector operator to IRIS vector function name (for telemetry only).
+
+        Note: <=> maps to VECTOR_COSINE but the actual SQL rewrite wraps it as
+        (1 - VECTOR_COSINE(...)) to convert similarity → distance. This method
+        returns only the base function name for display/telemetry purposes.
 
         Returns:
             IRIS function name (VECTOR_L2, VECTOR_COSINE, VECTOR_DOT_PRODUCT)
         """
         operator_map = {
-            "<->": "VECTOR_L2",  # L2 distance (Euclidean)
-            "<=>": "VECTOR_COSINE",  # Cosine distance
-            "<#>": "VECTOR_DOT_PRODUCT",  # Inner product (max)
+            "<->": "VECTOR_L2",  # L2 distance (Euclidean) — unsupported, raises error
+            "<=>": "VECTOR_COSINE",  # Cosine distance → emitted as (1 - VECTOR_COSINE(...))
+            "<#>": "VECTOR_DOT_PRODUCT",  # Inner product (max) → emitted as (-VECTOR_DOT_PRODUCT(...))
         }
         return operator_map[self.vector_operator]
 
@@ -145,9 +151,9 @@ class VectorQueryRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "request_id": "req-f47ac10b-58cc-4372-a567-0e02b2c3d479",
-                "original_sql": "SELECT * FROM documents ORDER BY embedding <-> '[0.1,0.2,0.3]' LIMIT 5",
-                "translated_sql": "SELECT TOP 5 * FROM documents ORDER BY VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2,0.3]', 'DECIMAL'))",
-                "vector_operator": "<->",
+                "original_sql": "SELECT * FROM documents ORDER BY embedding <=> '[0.1,0.2,0.3]' LIMIT 5",
+                "translated_sql": "SELECT TOP 5 * FROM documents ORDER BY (1 - VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2,0.3]', DOUBLE)))",
+                "vector_operator": "<=>",
                 "vector_column": "embedding",
                 "query_vector": [0.1, 0.2, 0.3],
                 "vector_dimensions": 3,

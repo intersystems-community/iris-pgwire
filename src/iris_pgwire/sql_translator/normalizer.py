@@ -330,20 +330,38 @@ class SQLTranslator:
         return result, count
 
     def _translate_vector_functions(self, sql: str) -> tuple[str, int]:
-        """Translate pgvector function names to IRIS equivalents"""
+        """Translate pgvector function names to IRIS equivalents.
+
+        cosine_distance / vector_cosine_distance are pgvector distance functions
+        (0.0 = identical). IRIS VECTOR_COSINE is a *similarity* function (1.0 =
+        identical), so we wrap the call as (1 - VECTOR_COSINE(...)) to preserve
+        correct distance semantics.
+        """
         count = 0
-        vector_functions = {
-            "vector_cosine_distance": "VECTOR_COSINE",
-            "cosine_distance": "VECTOR_COSINE",
+
+        # Cosine distance functions: wrap as (1 - VECTOR_COSINE(...)) so that
+        # ORDER BY ASC still returns most-similar rows first.
+        for pg_func in ("vector_cosine_distance", "cosine_distance"):
+            pattern = rf"\b{pg_func}\b"
+            if re.search(pattern, sql, re.IGNORECASE):
+                sql = re.sub(pattern, "VECTOR_COSINE", sql, flags=re.IGNORECASE)
+                # Wrap each full VECTOR_COSINE(...) call produced by this substitution.
+                sql = re.sub(
+                    r"VECTOR_COSINE(\s*\([^)]*\))",
+                    r"(1 - VECTOR_COSINE\1)",
+                    sql,
+                )
+                count += 1
+
+        # Simple renames — no semantic adjustment needed.
+        simple_renames = {
             "vector_l2_distance": "VECTOR_L2_DISTANCE",  # Error handled later if not supported
             "l2_distance": "VECTOR_L2_DISTANCE",
             "inner_product": "VECTOR_DOT_PRODUCT",
             "vector_dims": "VECTOR_DIM",
             "vector_norm": "VECTOR_NORM",
         }
-
-        # Case-insensitive replacement
-        for pg_func, iris_func in vector_functions.items():
+        for pg_func, iris_func in simple_renames.items():
             pattern = rf"\b{pg_func}\b"
             if re.search(pattern, sql, re.IGNORECASE):
                 sql = re.sub(pattern, iris_func, sql, flags=re.IGNORECASE)
