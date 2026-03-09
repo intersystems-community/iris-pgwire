@@ -696,7 +696,18 @@ class IRISExecutor:
                 columns=plan.columns,
                 session_id=session_id,
             )
-        optimized_sql = plan.stripped_sql
+        # Strip RETURNING / ON CONFLICT from the *translated* optimized_sql.
+        # When original_sql was provided, plan.stripped_sql is the original (untranslated)
+        # SQL with only RETURNING removed — we must NOT use it to overwrite optimized_sql or
+        # we'd undo the entire normalization pipeline (DEFAULT, $1 params, schema names, etc.
+        # still present → IRIS SQLCODE -12).
+        # Instead, apply the same stripping regex directly to optimized_sql.
+        if original_sql:
+            optimized_sql = ReturningPlan._strip_clauses(
+                optimized_sql, plan.returning_clause, plan.on_conflict_clause
+            )
+        else:
+            optimized_sql = plan.stripped_sql
 
         # 6. Semicolon Stripping
         optimized_sql = optimized_sql.strip().rstrip(";")

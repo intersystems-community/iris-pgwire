@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.7] - 2026-03-09
+
+### Fixed
+- **`_prepare_sql` overwrote translated SQL with untranslated original after RETURNING strip**: After the 1.5.6 fix, `_prepare_sql` correctly used `original_sql` for `ReturningPlan.from_sql` RETURNING detection. However, line 699 then unconditionally did `optimized_sql = plan.stripped_sql`. Since `plan` was built from `original_sql`, `plan.stripped_sql` was the *original* (untranslated) SQL with just `RETURNING` removed — still containing `DEFAULT`, `$1`-style params, unquoted schema names, etc. This overwrote the correctly-translated `optimized_sql` from the normalization pipeline, causing IRIS to receive e.g. `INSERT INTO "SESSION" (...) VALUES (..., DEFAULT)` → `SQLCODE -12`. Fixed by applying `ReturningPlan._strip_clauses()` directly to `optimized_sql` when `original_sql` was provided, rather than using `plan.stripped_sql`. The `else` branch (no `original_sql`) continues to use `plan.stripped_sql` as before.
+
 ## [1.5.6] - 2026-03-09
 
 ### Fixed
