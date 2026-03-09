@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-03-09
+
+### Fixed
+- **`INSERT ... RETURNING` always empty with Extended Query Protocol (Drizzle / postgres.js / Better Auth)**: When a client uses the Extended Query Protocol (Parse → Describe → Bind → Execute), the Describe phase was incorrectly sending `NoData` instead of `RowDescription` for `INSERT ... RETURNING` statements. Root cause: `handle_describe_message` built the `ReturningPlan` from `translated_query`, which has the `RETURNING` clause stripped (because IRIS doesn't support it natively). `has_returning` was therefore always `False` at Describe time, causing `send_no_data()`. Clients like postgres.js and Drizzle ORM rely on the Describe response to decide whether to read rows at Execute time — receiving `NoData` caused them to discard all returned rows silently. Fixed by using `original_query` (the pre-translation SQL, which still contains `RETURNING`) for `ReturningPlan` detection in both the "Describe Statement" (`describe_type == "S"`) and "Describe Portal" (`describe_type == "P"`) branches of `handle_describe_message`.
+- **Impact**: Drizzle ORM `.returning()` returned `[]`. Better Auth failed at sign-in ("Failed to create session") because session creation uses `.returning()`. Any ORM or client using Extended Query Protocol with `RETURNING` (SQLAlchemy `returning()` with psycopg3, etc.) was affected.
+
+### Added
+- **E2E regression tests for RETURNING via Extended Query Protocol** (`tests/e2e/test_returning_extended_protocol.py`): 4 passing tests covering `INSERT ... RETURNING *`, specific columns, multiple rows, and RowDescription presence verification via `prepare=True` (forces Extended Query Protocol). 1 xfail for `UPDATE ... RETURNING` (separate pre-existing limitation).
+
 ## [1.5.4] - 2026-03-06
 
 ### Fixed

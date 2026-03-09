@@ -2930,10 +2930,14 @@ class PGWireProtocol:
                 # For SELECT/SHOW statements, send RowDescription with column metadata
                 # For DDL/DML statements, send NoData
                 query = stmt.get("translated_query", stmt.get("query", ""))
+                # Use original_query for RETURNING detection: the translation pipeline
+                # strips RETURNING before storing translated_query (IRIS doesn't support it
+                # natively), so has_returning would always be False if we use translated_query.
+                original_query = stmt.get("original_query", query)
                 query_upper = query.strip().upper()
 
                 plan = ReturningPlan.from_sql(
-                    query,
+                    original_query,
                     metadata_cache=self.iris_executor.metadata_cache,
                     executor=self.iris_executor,
                 )
@@ -3081,10 +3085,13 @@ class PGWireProtocol:
 
                 stmt = self.prepared_statements[statement_name]
                 query = stmt.get("translated_query", stmt.get("query", ""))
+                # Use original_query for RETURNING detection: translated_query has the
+                # RETURNING clause stripped (IRIS doesn't support it natively).
+                original_query = stmt.get("original_query", query)
                 query_upper = query.strip().upper()
 
                 plan = ReturningPlan.from_sql(
-                    query,
+                    original_query,
                     metadata_cache=self.iris_executor.metadata_cache,
                     executor=self.iris_executor,
                 )
