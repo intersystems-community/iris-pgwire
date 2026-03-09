@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-03-09
+
+### Fixed
+- **`INSERT ... RETURNING` returns empty array with Extended Query Protocol (Drizzle / Better Auth) — complete fix**: v1.5.5 fixed the Describe phase (NoData → RowDescription), but the Execute phase still returned zero rows. Two additional root causes:
+
+  1. **Fast-batch bypass used translated SQL for `has_returning` check** (`protocol.py` Execute handler): The batch fast-path (`is_dml and not has_returning`) inspected `translated_query` (RETURNING stripped) instead of `original_query`. This caused `has_returning=False`, so INSERT...RETURNING was incorrectly fast-batched — the INSERT executed and sent a synthetic `CommandComplete` immediately, but `_emulate_returning` was never reached and zero DataRows were returned.
+
+  2. **`_prepare_sql` used translated SQL for `ReturningPlan`** (`iris_executor.py`): Even when the fast-batch was bypassed, `_prepare_sql` built `ReturningPlan` from `optimized_sql` (which has RETURNING stripped by the normalization pipeline). `plan.has_returning` was therefore always `False`, so the RETURNING emulation block was never entered. Fixed by adding an `original_sql` parameter to `_prepare_sql`, `_execute_external_async`, `_execute_embedded_async`, and `execute_query`, threading the pre-translation SQL all the way through so `ReturningPlan` can detect RETURNING correctly.
+
+- **Impact**: Affects both embedded and external IRIS connection modes. Better Auth "Failed to create session", Drizzle `.returning()` always `[]`, SQLAlchemy `.returning()` with psycopg3.
+
 ## [1.5.5] - 2026-03-09
 
 ### Fixed

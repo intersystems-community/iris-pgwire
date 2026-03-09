@@ -627,6 +627,7 @@ class IRISExecutor:
         params: list | None,
         execution_path: str,
         session_id: str | None = None,
+        original_sql: str | None = None,
     ) -> tuple[str, list | None, "ReturningPlan", float]:
         """
         Shared pre-execution pipeline (steps 1–7) used by both embedded and external paths.
@@ -678,8 +679,12 @@ class IRISExecutor:
         t_opt_elapsed = (time.perf_counter() - t_opt_start) * 1000
 
         # 5. RETURNING / ON CONFLICT parsing
+        # Use original_sql (pre-translation) for RETURNING detection when available.
+        # translated sql (optimized_sql) has the RETURNING clause stripped because IRIS
+        # doesn't support it natively — so ReturningPlan must inspect the original.
+        _sql_for_plan = original_sql if original_sql else optimized_sql
         plan = ReturningPlan.from_sql(
-            optimized_sql,
+            _sql_for_plan,
             metadata_cache=self.metadata_cache,
             executor=self,
         )
@@ -998,10 +1003,14 @@ class IRISExecutor:
                 )
                 if self.embedded_mode:
                     logger.warning("🔍 DEBUG: Taking EMBEDDED path → _execute_embedded_async()")
-                    result = await self._execute_embedded_async(sql, params, session_id)
+                    result = await self._execute_embedded_async(
+                        sql, params, session_id, original_sql=kwargs.get("original_sql")
+                    )
                 else:
                     logger.warning("🔍 DEBUG: Taking EXTERNAL path → _execute_external_async()")
-                    result = await self._execute_external_async(sql, params, session_id)
+                    result = await self._execute_external_async(
+                        sql, params, session_id, original_sql=kwargs.get("original_sql")
+                    )
 
                 # Feature 026: Handle DDL idempotency (IF NOT EXISTS)
                 # Check both for raised exceptions and for success=False results
@@ -2292,7 +2301,11 @@ class IRISExecutor:
         return rows, columns
 
     async def _execute_embedded_async(
-        self, sql: str, params: list | None = None, session_id: str | None = None
+        self,
+        sql: str,
+        params: list | None = None,
+        session_id: str | None = None,
+        original_sql: str | None = None,
     ) -> dict[str, Any]:
         """Execute query in IRIS embedded Python environment (async wrapper)"""
 
@@ -2354,7 +2367,11 @@ class IRISExecutor:
 
                 # Steps 1-7: Shared pre-execution pipeline
                 optimized_sql, optimized_params, plan, t_opt_elapsed = self._prepare_sql(
-                    sql, params, execution_path="direct", session_id=session_id
+                    sql,
+                    params,
+                    execution_path="direct",
+                    session_id=session_id,
+                    original_sql=original_sql,
                 )
                 optimized_sql_upper = optimized_sql.upper()
                 returning_operation = plan.operation
@@ -2883,7 +2900,11 @@ class IRISExecutor:
         return rows, columns
 
     async def _execute_external_async(
-        self, sql: str, params: list | None = None, session_id: str | None = None
+        self,
+        sql: str,
+        params: list | None = None,
+        session_id: str | None = None,
+        original_sql: str | None = None,
     ) -> dict[str, Any]:
         """
         Execute SQL using external IRIS connection with proper async threading
@@ -2910,7 +2931,11 @@ class IRISExecutor:
 
                 # Steps 1-7: Shared pre-execution pipeline
                 optimized_sql, optimized_params, plan, t_opt_elapsed = self._prepare_sql(
-                    sql, params, execution_path="external", session_id=session_id
+                    sql,
+                    params,
+                    execution_path="external",
+                    session_id=session_id,
+                    original_sql=original_sql,
                 )
                 optimized_sql_upper = optimized_sql.upper()
 

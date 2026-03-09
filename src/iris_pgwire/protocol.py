@@ -3312,6 +3312,9 @@ class PGWireProtocol:
 
             # Use translated query for execution
             query = stmt.get("translated_query", stmt.get("query", stmt.get("original_query", "")))
+            # Use original_query for RETURNING detection: translated_query has RETURNING stripped.
+            # has_returning check below decides whether to fast-batch (DML without RETURNING).
+            original_query = stmt.get("original_query", query)
 
             # Log execution of prepared statement with translation metadata
             translation_metadata = stmt.get("translation_metadata", {})
@@ -3394,7 +3397,11 @@ class PGWireProtocol:
             # Standard PostgreSQL clients (psycopg3) send Sync every 5 rows, which is slow.
             # We buffer parameters and send synthetic CommandComplete to keep client pipe full.
             is_dml = self.iris_executor.sql_parser.is_dml_statement(query)
-            has_returning = self.iris_executor.sql_parser.has_returning_clause(query)
+            # Use original_query for RETURNING detection: translated_query has RETURNING stripped.
+            # If we used query (translated) here, INSERT...RETURNING would be fast-batched
+            # (because has_returning=False on translated_query), INSERT would execute but
+            # zero DataRows would be returned to the client.
+            has_returning = self.iris_executor.sql_parser.has_returning_clause(original_query)
 
             if is_dml and not has_returning:
                 # Store SQL if first row in batch
@@ -3432,6 +3439,7 @@ class PGWireProtocol:
                 session_id=self.connection_id,
                 in_transaction=in_txn,
                 autocommit=autocommit,
+                original_sql=original_query,
             )
 
             if result["success"]:
