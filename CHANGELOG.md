@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.8] - 2026-06-08
+
+### Added
+- **HNSW DDL translation** (`vector_optimizer.py`): pgvector-style `CREATE INDEX USING hnsw` DDL is now translated to IRIS HNSW syntax with `Distance=` parameter mapping (`vector_cosine_ops` → `Cosine`, `vector_ip_ops` → `DotProduct`). L2 (`vector_l2_ops`) raises `NotImplementedError` as IRIS does not support L2 HNSW indexes.
+- **JSON operator translation** (`vector_optimizer.py`): PostgreSQL `->` / `->>` JSON operators are now translated to IRIS `JSON_QUERY` / `JSON_VALUE` equivalents, enabling ORMs and clients that use JSON column access patterns to work transparently.
+- **`IF NOT EXISTS` duplicate-error suppression** (`vector_optimizer.py`, `protocol.py`): `CREATE TABLE IF NOT EXISTS` and similar DDL statements that trigger IRIS duplicate-object errors (SQLCODE -5016, -5019, -5002) are now silently suppressed with a synthetic success response, matching PostgreSQL `IF NOT EXISTS` semantics.
+
 ## [1.5.7] - 2026-03-09
 
 ### Fixed

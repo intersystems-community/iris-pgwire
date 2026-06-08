@@ -102,6 +102,9 @@ class VectorQueryOptimizer:
         # Rewrite pgvector operators to IRIS vector functions
         sql = self._rewrite_pgvector_operators(sql)
 
+        if "->" in sql:
+            sql = self._translate_nested_json_operators(sql)
+
         sql_upper = sql.upper()
 
         # Handle INSERT/UPDATE with vector patterns
@@ -266,6 +269,9 @@ class VectorQueryOptimizer:
     def _rewrite_pgvector_operators(self, sql: str) -> str:
         """Rewrite pgvector operators (<=> / <#>) to IRIS vector functions.
 
+        For DDL containing HNSW index syntax, translates to IRIS-native form instead
+        of rewriting operators.
+
         Raises:
             NotImplementedError: If L2 distance operator (<->) is found.
         """
@@ -274,7 +280,11 @@ class VectorQueryOptimizer:
 
         sql_upper = sql.upper()
         if any(kw in sql_upper for kw in _DDL_KEYWORDS):
-            return sql
+            # Translate pgvector HNSW DDL (CREATE INDEX … USING hnsw) to IRIS syntax
+            translated = self._translate_hnsw_index_ddl(sql)
+            if translated != sql:
+                logger.info("HNSW DDL translated", translated=translated[:200])
+            return translated
 
         return self._rewrite_operators_in_text(sql)
 
@@ -602,6 +612,113 @@ class VectorQueryOptimizer:
             "constitutional_sla_ms": self.CONSTITUTIONAL_SLA_MS,
             "recent_sample_size": len(recent_times),
         }
+
+
+    # ------------------------------------------------------------------
+    # HNSW index DDL translation (pgvector → IRIS)
+    # ------------------------------------------------------------------
+
+    _HNSW_DDL_RE = re.compile(
+        r"""
+        CREATE\s+INDEX\s+                    # CREATE INDEX
+        (?:IF\s+NOT\s+EXISTS\s+)?            # optional IF NOT EXISTS
+        (\w+)\s+                             # index name (group 1)
+        ON\s+(\w+(?:\.\w+)?)\s+             # ON table (group 2; schema.table ok)
+        USING\s+hnsw\s*                      # USING hnsw
+        \(\s*(\w+)(?:\s+(\w+))?\s*\)        # (column [inline_op_class]) groups 3,4
+        (?:\s+WITH\s*\(([^)]*)\))?           # optional WITH (options) group 5
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+    _DISTANCE_MAP = {
+        "vector_cosine_ops": "Cosine",
+        "vector_ip_ops": "DotProduct",
+        "vector_l2_ops": None,
+    }
+
+    def _translate_hnsw_index_ddl(self, sql: str) -> str:
+        """Translate pgvector HNSW index DDL to IRIS-native HNSW syntax."""
+
+        def _replace(m: re.Match) -> str:
+            idx_name = m.group(1)
+            table = m.group(2)
+            col = m.group(3)
+            inline_ops = m.group(4) or ""
+            with_clause = m.group(5) or ""
+            distance = "Cosine"
+            ops_source = inline_ops or ""
+            ops_match = re.search(r"op_class\s*=\s*(\w+)", with_clause, re.IGNORECASE)
+            if ops_match:
+                ops_source = ops_match.group(1)
+            if ops_source:
+                mapped = self._DISTANCE_MAP.get(ops_source.lower())
+                if mapped is None:
+                    raise NotImplementedError(
+                        "IRIS does not support L2 distance (vector_l2_ops) in HNSW indexes. "
+                        "Use Cosine or DotProduct."
+                    )
+                distance = mapped
+            iris_ddl = f"CREATE INDEX {idx_name} ON {table} ({col}) AS HNSW(Distance={distance}"
+            m_opts = re.search(r"\bm\s*=\s*(\d+)", with_clause, re.IGNORECASE)
+            ef_opts = re.search(r"ef_construction\s*=\s*(\d+)", with_clause, re.IGNORECASE)
+            if m_opts:
+                iris_ddl += f", M={m_opts.group(1)}"
+            if ef_opts:
+                iris_ddl += f", efConstruction={ef_opts.group(1)}"
+            iris_ddl += ")"
+            return iris_ddl
+
+        return self._HNSW_DDL_RE.sub(_replace, sql)
+
+    # ------------------------------------------------------------------
+    # PostgreSQL JSON operators → IRIS JSON_VALUE / JSON_QUERY
+    # ------------------------------------------------------------------
+
+    _JSON_CHAIN_RE = re.compile(
+        r"(\w+(?:\.\w+)?)"
+        r"((?:\s*->>\s*'[^']+'"
+        r"|\s*->\s*'[^']+')+)",
+        re.IGNORECASE,
+    )
+
+    def _translate_nested_json_operators(self, sql: str) -> str:
+        """Translate PostgreSQL -> / ->> chains to IRIS JSON_VALUE / JSON_QUERY."""
+
+        def _replace(m: re.Match) -> str:
+            col = m.group(1)
+            chain = m.group(2)
+            text_extract = "->>" in chain
+            keys = re.findall(r"->>?\s*'([^']+)'", chain)
+            path = "." + ".".join(keys)
+            if text_extract:
+                return f"JSON_VALUE({col}, '${path}')"
+            return f"JSON_QUERY({col}, '${path}')"
+
+        return self._JSON_CHAIN_RE.sub(_replace, sql)
+
+    # ------------------------------------------------------------------
+    # IF NOT EXISTS error classification (Feature 026)
+    # ------------------------------------------------------------------
+
+    _IRIS_DUPLICATE_CODES = frozenset({
+        "5016",
+        "5019",
+        "5002",
+        "SQLCODE: <-5016>",
+        "SQLCODE: <-5019>",
+        "SQLCODE: <-5002>",
+    })
+
+    @staticmethod
+    def is_duplicate_object_error(error_msg: str) -> bool:
+        """Return True if error_msg indicates an object-already-exists SQLCODE."""
+        return any(code in error_msg for code in VectorQueryOptimizer._IRIS_DUPLICATE_CODES)
+
+    @staticmethod
+    def sql_has_if_not_exists(sql: str) -> bool:
+        """Return True if sql contains an IF NOT EXISTS clause."""
+        return bool(re.search(r"\bIF\s+NOT\s+EXISTS\b", sql, re.IGNORECASE))
 
 
 # ---------------------------------------------------------------------------

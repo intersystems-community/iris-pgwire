@@ -32,6 +32,7 @@ from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
+from .vector_optimizer import VectorQueryOptimizer
 
 logger = structlog.get_logger()
 
@@ -1378,12 +1379,32 @@ class PGWireProtocol:
             if result["success"]:
                 await self.send_query_result(result, send_ready=send_ready)
             else:
-                await self.send_error_response(
-                    "ERROR", "42000", "syntax_error", result.get("error", "Query execution failed")
-                )
-                # CRITICAL: Send ReadyForQuery after error (only if last statement)
-                if send_ready:
-                    await self.send_ready_for_query()
+                error_msg = result.get("error", "Query execution failed")
+                if (
+                    VectorQueryOptimizer.sql_has_if_not_exists(final_sql)
+                    and VectorQueryOptimizer.is_duplicate_object_error(error_msg)
+                ):
+                    logger.info(
+                        "IF NOT EXISTS: suppressing duplicate-object error",
+                        connection_id=self.connection_id,
+                        sql_preview=final_sql[:100],
+                        error=error_msg,
+                    )
+                    fake_result = {
+                        "success": True,
+                        "rows": [],
+                        "columns": [],
+                        "row_count": 0,
+                        "command_tag": "CREATE TABLE",
+                    }
+                    await self.send_query_result(fake_result, send_ready=send_ready)
+                else:
+                    await self.send_error_response(
+                        "ERROR", "42000", "syntax_error", error_msg
+                    )
+                    # CRITICAL: Send ReadyForQuery after error (only if last statement)
+                    if send_ready:
+                        await self.send_ready_for_query()
 
         except Exception as e:
             logger.error(
