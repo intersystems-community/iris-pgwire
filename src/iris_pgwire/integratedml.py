@@ -348,7 +348,7 @@ class IntegratedMLExecutor:
     async def handle_system_function_query(self, sql: str) -> tuple[list[dict], list[str]]:
         """Handle queries with IRIS system functions"""
         # Check if this is a simple system function call we can handle
-        if "%SYSTEM.ML.%ModelExists" in sql.upper():
+        if "%SYSTEM.ML.%MODELEXISTS" in sql.upper():
             # Extract model name and check existence
             # For now, return mock data - in production this would query IRIS metadata
             return [{"model_exists": True}], ["model_exists"]

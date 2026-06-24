@@ -28,6 +28,15 @@ async def test_handle_copy_from_stdin_contract():
     csv_processor = CSVProcessor()
     bulk_executor = MagicMock(spec=BulkExecutor)
 
+    # Mock iris_executor.execute_query for transaction management
+    mock_iris_executor = MagicMock()
+
+    async def mock_execute_query(sql, params=None):
+        return {"success": True, "rows": [], "rowcount": 0}
+
+    mock_iris_executor.execute_query = mock_execute_query
+    bulk_executor.iris_executor = mock_iris_executor
+
     # Mock bulk_insert to return row count
     async def mock_bulk_insert(table_name, column_names, rows, batch_size=1000):
         # Consume async iterator and count rows

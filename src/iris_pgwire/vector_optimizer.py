@@ -27,6 +27,17 @@ _DDL_KEYWORDS = ("CREATE TABLE", "DROP TABLE", "ALTER TABLE", "CREATE INDEX", "D
 
 
 @dataclass
+class ValidationResult:
+    """Result of SQL syntax validation."""
+
+    is_valid: bool
+    has_brackets_in_vector_literals: bool
+    error_message: str | None = None
+    vector_literal_count: int = 0
+    validation_applied: bool = False
+
+
+@dataclass
 class OptimizationMetrics:
     """Performance metrics for vector query optimization"""
 
@@ -67,6 +78,70 @@ class VectorQueryOptimizer:
         self.metrics_history: list[OptimizationMetrics] = []
         self.sla_violations = 0
         self.total_optimizations = 0
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def validate_sql(self, sql: str) -> ValidationResult:
+        """Validate SQL syntax for vector query compatibility.
+
+        Checks that TO_VECTOR() literals have proper bracket syntax required by IRIS.
+
+        Args:
+            sql: SQL query string to validate
+
+        Returns:
+            ValidationResult with is_valid, has_brackets_in_vector_literals, error_message,
+            vector_literal_count, and validation_applied
+        """
+        # Match TO_VECTOR with type param: TO_VECTOR('...', TYPE)
+        to_vector_with_type = re.compile(
+            r"TO_VECTOR\s*\(\s*'([^']*)'\s*,\s*\w+\s*\)", re.IGNORECASE
+        )
+        # Match TO_VECTOR missing type param: TO_VECTOR('...')  (no second arg)
+        to_vector_no_type = re.compile(
+            r"TO_VECTOR\s*\(\s*'([^']*)'\s*\)", re.IGNORECASE
+        )
+
+        no_type_matches = to_vector_no_type.findall(sql)
+        if no_type_matches:
+            return ValidationResult(
+                is_valid=False,
+                has_brackets_in_vector_literals=bool(no_type_matches[0].strip().startswith("[")),
+                error_message="TO_VECTOR() requires a type parameter (e.g., FLOAT)",
+                vector_literal_count=len(no_type_matches),
+                validation_applied=True,
+            )
+
+        matches = to_vector_with_type.findall(sql)
+        if not matches:
+            return ValidationResult(
+                is_valid=True,
+                has_brackets_in_vector_literals=False,
+                vector_literal_count=0,
+                validation_applied=False,
+            )
+
+        vector_literal_count = len(matches)
+        literals_with_brackets = [m for m in matches if m.strip().startswith("[")]
+        all_have_brackets = len(literals_with_brackets) == vector_literal_count
+
+        if not all_have_brackets:
+            return ValidationResult(
+                is_valid=False,
+                has_brackets_in_vector_literals=False,
+                error_message="TO_VECTOR() literals must be wrapped in brackets, e.g. '[0.1,0.2]'",
+                vector_literal_count=vector_literal_count,
+                validation_applied=True,
+            )
+
+        return ValidationResult(
+            is_valid=True,
+            has_brackets_in_vector_literals=True,
+            vector_literal_count=vector_literal_count,
+            validation_applied=True,
+        )
 
     # ------------------------------------------------------------------
     # Main entry point

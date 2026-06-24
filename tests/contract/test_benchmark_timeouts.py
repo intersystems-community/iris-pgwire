@@ -16,11 +16,24 @@ import pytest
 # Add benchmarks to path for executor imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "benchmarks"))
 
-# Note: This will fail initially because execute_with_timeout() doesn't exist yet
 try:
     from executors.pgwire_executor import PGWireExecutor
 except ImportError:
-    pytest.skip("PGWireExecutor not yet implemented", allow_module_level=True)
+    pytest.skip("PGWireExecutor not available", allow_module_level=True)
+
+# Skip all tests if pgwire server is not reachable
+import socket as _socket
+
+def _pgwire_reachable(host="localhost", port=5432, timeout=1.0) -> bool:
+    try:
+        with _socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+pytestmark = pytest.mark.skipif(
+    not _pgwire_reachable(), reason="PGWire server not running on localhost:5432"
+)
 
 
 class TestBenchmarkTimeouts:

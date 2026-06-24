@@ -8,12 +8,11 @@ Contract: specs/025-comprehensive-code-and/contracts/security_contract.py
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
 
-# IMPORTANT: This import will fail initially (no implementation yet)
-# This is EXPECTED - tests MUST fail before implementation
 try:
     from iris_pgwire.quality.security_validator import SecurityValidator
 
@@ -21,10 +20,11 @@ try:
 except ImportError:
     IMPLEMENTATION_EXISTS = False
 
-    # Create placeholder for type hints
     class SecurityValidator:  # type: ignore
         pass
 
+_BANDIT_AVAILABLE = shutil.which("bandit") is not None
+_PIP_AUDIT_AVAILABLE = shutil.which("pip-audit") is not None
 
 pytestmark = pytest.mark.skipif(
     not IMPLEMENTATION_EXISTS,
@@ -67,6 +67,7 @@ password = "hardcoded_password123"  # B105: hardcoded password
 class TestSecurityContract:
     """Contract tests for SecurityValidator Protocol"""
 
+    @pytest.mark.skipif(not _BANDIT_AVAILABLE, reason="bandit not installed")
     def test_validate_security_iris_pgwire(self, validator, project_root):
         """
         Test validate_security() on iris-pgwire source code.
@@ -85,6 +86,7 @@ class TestSecurityContract:
         assert result["critical_count"] == 0, "No critical vulnerabilities expected"
         assert result["high_count"] == 0, "No high severity vulnerabilities expected"
 
+    @pytest.mark.skipif(not _BANDIT_AVAILABLE, reason="bandit not installed")
     def test_validate_security_vulnerable_code(self, validator, code_with_security_issue):
         """
         Test validate_security() with vulnerable code.
@@ -103,6 +105,7 @@ class TestSecurityContract:
             "B301" in itype or "pickle" in itype for itype in issue_types
         ), "Should detect pickle usage vulnerability"
 
+    @pytest.mark.skipif(not _BANDIT_AVAILABLE, reason="bandit not installed")
     def test_scan_code_security_clean(self, validator, project_root):
         """
         Test scan_code_security() on clean iris-pgwire code.
@@ -122,6 +125,7 @@ class TestSecurityContract:
         assert is_secure is True, f"Code should be secure. Issues: {high_critical_issues}"
         assert len(high_critical_issues) == 0, "No HIGH/CRITICAL issues expected"
 
+    @pytest.mark.skipif(not _BANDIT_AVAILABLE, reason="bandit not installed")
     def test_scan_code_security_hardcoded_password(self, validator, code_with_security_issue):
         """
         Test scan_code_security() with hardcoded password.
@@ -140,6 +144,7 @@ class TestSecurityContract:
             for issue in issues
         ), "Should detect hardcoded password"
 
+    @pytest.mark.skipif(not _PIP_AUDIT_AVAILABLE, reason="pip-audit not installed")
     def test_scan_dependency_vulnerabilities_clean(self, validator):
         """
         Test scan_dependency_vulnerabilities() on iris-pgwire.
@@ -245,6 +250,7 @@ class TestSecurityEdgeCases:
         with pytest.raises(FileNotFoundError):
             validator.validate_security("/nonexistent/path")
 
+    @pytest.mark.skipif(not _BANDIT_AVAILABLE, reason="bandit not installed")
     def test_scan_code_security_empty_directory(self, validator, tmp_path):
         """Test scan_code_security() with empty directory"""
         is_secure, issues = validator.scan_code_security(str(tmp_path))

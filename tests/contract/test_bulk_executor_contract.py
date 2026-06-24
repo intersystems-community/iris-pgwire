@@ -7,7 +7,19 @@ defined in plan.md (lines 345-360).
 Expected: FAIL - BulkExecutor class doesn't exist yet
 """
 
+import shutil
+
 import pytest
+
+_PYTEST_MOCK_AVAILABLE = shutil.which("pytest") is not None
+try:
+    import pytest_mock  # noqa: F401
+
+    _PYTEST_MOCK_AVAILABLE = True
+except ImportError:
+    _PYTEST_MOCK_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(not _PYTEST_MOCK_AVAILABLE, reason="pytest-mock not installed")
 
 
 @pytest.mark.contract

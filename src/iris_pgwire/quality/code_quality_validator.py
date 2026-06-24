@@ -101,6 +101,8 @@ class CodeQualityValidator:
         Returns:
             Tuple of (all_formatted: bool, files_needing_format: list[str])
         """
+        if not paths:
+            return (True, [])
         try:
             result = subprocess.run(
                 ["black", "--check", "--quiet"] + paths,
@@ -142,6 +144,8 @@ class CodeQualityValidator:
         Returns:
             Tuple of (no_errors: bool, error_messages: list[str])
         """
+        if not paths:
+            return (True, [])
         try:
             result = subprocess.run(
                 ["ruff", "check"] + paths,
@@ -216,22 +220,24 @@ class CodeQualityValidator:
         except Exception as e:
             return (False, [f"mypy check failed: {e}"])
 
-    def measure_complexity(self, paths: list[str]) -> dict[str, int]:
+    def measure_complexity(self, paths: list[str] | str) -> dict[str, int]:
         """
         Measure cyclomatic complexity of code (informational).
 
         Args:
-            paths: List of paths to analyze
+            paths: List of paths (or single path string) to analyze
 
         Returns:
             Dictionary with complexity metrics
         """
-        # Basic implementation: count functions and classes
-        # In production, could use radon or other complexity tools
-        metrics = {
+        if isinstance(paths, str):
+            paths = [paths]
+
+        metrics: dict[str, int] = {
             "total_functions": 0,
             "total_classes": 0,
-            "avg_complexity": 0,  # Placeholder
+            "average_complexity": 0,
+            "max_complexity": 0,
         }
 
         for path_str in paths:
@@ -247,7 +253,6 @@ class CodeQualityValidator:
                 try:
                     with open(py_file) as f:
                         content = f.read()
-                        # Simple heuristic: count function/class definitions
                         metrics["total_functions"] += content.count("\ndef ")
                         metrics["total_classes"] += content.count("\nclass ")
                 except Exception:

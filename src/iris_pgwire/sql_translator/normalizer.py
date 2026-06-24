@@ -33,6 +33,7 @@ from .mappings import translate_document_filters, translate_sql_constructs
 from .metadata_cache import MetadataCache
 from .models import (
     PerformanceStats,
+    TranslationRequest,
     TranslationResult,
 )
 from .refiner import SQLRefiner
@@ -411,6 +412,26 @@ class SQLTranslator:
         """
         translated_sql, _ = self.date_translator.translate(sql)
         return translated_sql
+
+    def translate(self, request: TranslationRequest) -> TranslationResult:
+        """
+        Translate IRIS SQL to PostgreSQL using the full translation pipeline.
+
+        Accepts a TranslationRequest and returns a TranslationResult with construct
+        mappings and performance stats. Delegates to the IRISSQLTranslator.
+
+        Args:
+            request: TranslationRequest with original_sql and options
+
+        Returns:
+            TranslationResult with translated_sql, construct_mappings, performance_stats
+        """
+        from .translator import translate_sql
+
+        return translate_sql(
+            request.original_sql,
+            enable_debug=getattr(request, "debug_mode", False),
+        )
 
     def get_normalization_metrics(self) -> dict:
         """

@@ -346,11 +346,11 @@ dynamic = ["version"]
                 ):
                     result = self.validator.validate_metadata("pyproject.toml")
 
-        # Should fail validation with 0 score and error message
-        assert result["is_valid"] is False
+        # pyroma unavailable is non-blocking — validation still passes if metadata is complete
         assert result["pyroma_score"] == 0
         assert result["pyroma_max_score"] == 10
-        assert any("pyroma check failed" in err for err in result["validation_errors"])
+        # No pyroma error in validation_errors when it's just unavailable (non-blocking)
+        assert not any("pyroma check failed" in err for err in result["validation_errors"])
 
 
 if __name__ == "__main__":

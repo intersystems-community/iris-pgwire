@@ -156,16 +156,18 @@ class DBAPIExecutor:
             return value
 
         date_part, time_part = ts_match.group(1), ts_match.group(2)
-        tz_sign, tz_hh, tz_mm = ts_match.group(4), ts_match.group(5), ts_match.group(6)
+        tz_sign, tz_hh = ts_match.group(4), ts_match.group(5)
 
+        # Strip timezone — IRIS doesn't support tz-aware timestamps; keep local time as-is
         if not (tz_sign and tz_hh):
             return f"{date_part} {time_part}"
 
-        offset_mins = (int(tz_hh) * 60 + int(tz_mm or 0)) * (1 if tz_sign == "+" else -1)
-        fmt = "%Y-%m-%d %H:%M:%S.%f" if "." in time_part else "%Y-%m-%d %H:%M:%S"
-        naive = dt.datetime.strptime(f"{date_part} {time_part}", fmt)
-        utc = naive - dt.timedelta(minutes=offset_mins)
-        return utc.strftime(fmt)
+        has_frac = "." in time_part
+        result = f"{date_part} {time_part}"
+        if has_frac and "." in result:
+            base, frac = result.rsplit(".", 1)
+            result = base + "." + frac[:3]
+        return result
 
     # ------------------------------------------------------------------
     # Query execution
@@ -538,7 +540,39 @@ class DBAPIExecutor:
         """Fetch rows and column metadata from a cursor with results."""
         if not cursor.description:
             return [], []
-        return cursor.fetchall(), self._build_metadata_from_description(cursor.description)
+        rows = cursor.fetchall()
+        columns = self._build_metadata_from_description(cursor.description)
+        if rows:
+            columns = self._refine_column_types_from_rows(columns, rows)
+        return rows, columns
+
+    def _refine_column_types_from_rows(
+        self, columns: list[dict], rows: list
+    ) -> list[dict]:
+        """Refine column type OIDs using actual first-row Python values.
+
+        IRIS DBAPI often returns type_code=4 for all columns regardless of type.
+        Use the actual Python type of the first row's values to assign correct OIDs.
+        Only refines columns that currently have the generic VARCHAR OID (1043).
+        """
+        if not rows or not columns:
+            return columns
+        first_row = rows[0]
+        refined = []
+        for i, col in enumerate(columns):
+            if col.get("type_oid") == 1043 and i < len(first_row):
+                val = first_row[i]
+                if isinstance(val, bool):
+                    refined.append({**col, "type_oid": 16})   # BOOL
+                elif isinstance(val, int):
+                    refined.append({**col, "type_oid": 23})   # INT4
+                elif isinstance(val, float):
+                    refined.append({**col, "type_oid": 701})  # FLOAT8
+                else:
+                    refined.append(col)
+            else:
+                refined.append(col)
+        return refined
 
     # ------------------------------------------------------------------
     # ON CONFLICT handling
@@ -913,7 +947,11 @@ class DBAPIExecutor:
                 cur.execute(query, tuple(query_params))
             else:
                 cur.execute(query)
-            return cur.fetchall(), self._build_metadata_from_description(cur.description)
+            rows = cur.fetchall()
+            columns = self._build_metadata_from_description(cur.description)
+            if rows:
+                columns = self._refine_column_types_from_rows(columns, rows)
+            return rows, columns
         finally:
             try:
                 cur.close()

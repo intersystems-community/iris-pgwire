@@ -2959,7 +2959,7 @@ class PGWireProtocol:
 
                 plan = ReturningPlan.from_sql(
                     original_query,
-                    metadata_cache=self.iris_executor.metadata_cache,
+                    metadata_cache=getattr(self.iris_executor, "metadata_cache", None),
                     executor=self.iris_executor,
                 )
                 is_select = self.iris_executor.sql_parser.is_select_statement(query)
@@ -3113,7 +3113,7 @@ class PGWireProtocol:
 
                 plan = ReturningPlan.from_sql(
                     original_query,
-                    metadata_cache=self.iris_executor.metadata_cache,
+                    metadata_cache=getattr(self.iris_executor, "metadata_cache", None),
                     executor=self.iris_executor,
                 )
                 is_dml = self.iris_executor.sql_parser.is_dml_statement(query)

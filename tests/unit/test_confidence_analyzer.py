@@ -555,3 +555,133 @@ class TestConfidenceAnalyzerIntegration:
         stats = analyzer.get_confidence_statistics()
         assert stats["total_translations"] > 5
         assert stats["constitutional_compliance"]["compliance_rate"] == 1.0  # All compliant
+
+
+class TestConfidenceTrendsEdgeCases:
+    """Cover trend/statistics edge-case branches missed by the main suite."""
+
+    def setup_method(self):
+        self.analyzer = TranslationConfidenceAnalyzer()
+
+    # --- line 635: history pruning at > 1000 entries ---
+    def test_history_pruned_at_1000(self):
+        """_record_confidence_data prunes history to 1000 entries."""
+        base = datetime.now(UTC)
+        for i in range(1005):
+            self.analyzer._record_confidence_data(
+                base - timedelta(seconds=i), 0.8, f"q{i}"
+            )
+        assert len(self.analyzer._confidence_history) == 1000
+
+    # --- line 640: analyze_confidence_trends with empty history ---
+    def test_trends_empty_history(self):
+        """analyze_confidence_trends returns insufficient_data when no history."""
+        trend = self.analyzer.analyze_confidence_trends("24h")
+        assert trend.confidence_trend == "insufficient_data"
+        assert trend.sample_count == 0
+        assert trend.average_confidence == 0.0
+
+    # --- line 644: single sample in window -> insufficient ---
+    def test_trends_single_sample(self):
+        """analyze_confidence_trends returns insufficient_data with only one sample."""
+        self.analyzer._record_confidence_data(datetime.now(UTC), 0.75, "only_one")
+        trend = self.analyzer.analyze_confidence_trends("24h")
+        assert trend.confidence_trend == "insufficient_data"
+        assert trend.sample_count == 1
+        assert trend.average_confidence == 0.75
+
+    # --- line 653: _empty_confidence_trend direct call ---
+    def test_empty_confidence_trend_direct(self):
+        trend = self.analyzer._empty_confidence_trend("7d")
+        assert trend.time_period == "7d"
+        assert trend.sample_count == 0
+        assert trend.trend_confidence == 0.0
+
+    # --- lines 664-665: _insufficient_confidence_trend with non-empty data ---
+    def test_insufficient_trend_with_data(self):
+        data = [(datetime.now(UTC), 0.77, "q")]
+        trend = self.analyzer._insufficient_confidence_trend("1h", data)
+        assert trend.average_confidence == 0.77
+        assert trend.sample_count == 1
+
+    # --- line 690-691: declining trend branch ---
+    def test_declining_trend(self):
+        """_build_confidence_trend detects declining trend."""
+        base = datetime.now(UTC)
+        # older entries have higher confidence
+        for i, conf in enumerate([0.9, 0.85, 0.7, 0.65]):
+            self.analyzer._record_confidence_data(
+                base - timedelta(hours=3 - i), conf, f"q{i}"
+            )
+        trend = self.analyzer.analyze_confidence_trends("24h")
+        assert trend.confidence_trend == "declining"
+
+    # --- lines 705-710: _parse_time_period all branches ---
+    def test_parse_time_period_hours(self):
+        delta = self.analyzer._parse_time_period("6h")
+        assert delta == timedelta(hours=6)
+
+    def test_parse_time_period_days(self):
+        delta = self.analyzer._parse_time_period("3d")
+        assert delta == timedelta(days=3)
+
+    def test_parse_time_period_minutes(self):
+        delta = self.analyzer._parse_time_period("30m")
+        assert delta == timedelta(minutes=30)
+
+    def test_parse_time_period_default(self):
+        delta = self.analyzer._parse_time_period("unknown")
+        assert delta == timedelta(hours=24)
+
+    # --- line 715: get_confidence_statistics with no data ---
+    def test_statistics_empty_history(self):
+        stats = self.analyzer.get_confidence_statistics()
+        assert "message" in stats
+        assert stats["message"] == "No confidence data available"
+
+    # --- lines 763, 768: module-level convenience wrappers ---
+    def test_get_confidence_trends_convenience(self):
+        from iris_pgwire.sql_translator.confidence_analyzer import get_confidence_trends
+
+        trend = get_confidence_trends("1h")
+        assert hasattr(trend, "confidence_trend")
+
+    def test_get_confidence_statistics_convenience(self):
+        from iris_pgwire.sql_translator.confidence_analyzer import get_confidence_statistics
+
+        # May or may not have data from previous tests — just confirm it returns a dict
+        result = get_confidence_statistics()
+        assert isinstance(result, dict)
+
+    # --- line 261: simple translation (complexity_factor < 0.5) ---
+    def test_weighted_confidence_simple_translation(self):
+        """Coverage for complexity_factor < 0.5 weight adjustment."""
+        from iris_pgwire.sql_translator.models import (
+            ConstructMapping,
+            ConstructType,
+            PerformanceStats,
+            SourceLocation,
+            TranslationResult,
+        )
+
+        # 1 mapping but 10 constructs_detected → ratio = 0.1 < 0.5
+        mapping = ConstructMapping(
+            construct_type=ConstructType.FUNCTION,
+            original_syntax="FUNC()",
+            translated_syntax="func()",
+            confidence=0.9,
+            source_location=SourceLocation(line=1, column=1, length=6),
+        )
+        stats = PerformanceStats(
+            translation_time_ms=1.0,
+            cache_hit=False,
+            constructs_detected=10,
+            constructs_translated=1,
+        )
+        result = TranslationResult(
+            translated_sql="SELECT func()",
+            construct_mappings=[mapping],
+            performance_stats=stats,
+        )
+        metrics = self.analyzer._calculate_confidence_metrics(result)
+        assert 0.0 <= metrics.overall_confidence <= 1.0

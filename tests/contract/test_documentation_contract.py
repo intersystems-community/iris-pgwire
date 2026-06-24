@@ -8,6 +8,7 @@ Contract: specs/025-comprehensive-code-and/contracts/documentation_contract.py
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,8 @@ except ImportError:
     class DocumentationValidator:  # type: ignore
         pass
 
+
+_INTERROGATE_AVAILABLE = shutil.which("interrogate") is not None
 
 pytestmark = pytest.mark.skipif(
     not IMPLEMENTATION_EXISTS,
@@ -231,6 +234,7 @@ Changes:
 class TestDocumentationContract:
     """Contract tests for DocumentationValidator Protocol"""
 
+    @pytest.mark.skipif(not _INTERROGATE_AVAILABLE, reason="interrogate not installed")
     def test_validate_documentation_iris_pgwire(self, validator, project_root):
         """
         Test validate_documentation() on iris-pgwire project.
@@ -294,6 +298,7 @@ class TestDocumentationContract:
         changelog_valid = results["changelog_validation"]
         assert changelog_valid["is_valid"] is False, "Should detect malformed CHANGELOG"
 
+    @pytest.mark.skipif(not _INTERROGATE_AVAILABLE, reason="interrogate not installed")
     def test_check_docstring_coverage_high(self, validator, well_documented_python_file):
         """
         Test check_docstring_coverage() on well-documented code.
@@ -389,6 +394,7 @@ class TestDocumentationContract:
         assert result["follows_keep_a_changelog"] is False, "Should not follow Keep a Changelog"
         assert len(result["validation_errors"]) > 0, "Should report errors"
 
+    @pytest.mark.skipif(not _INTERROGATE_AVAILABLE, reason="interrogate not installed")
     def test_generate_docstring_badge(self, validator, project_root, tmp_path):
         """
         Test generate_docstring_badge() creates SVG file.
