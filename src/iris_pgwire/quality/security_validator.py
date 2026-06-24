@@ -337,17 +337,18 @@ class SecurityValidator:
                 ],
             )
 
-    def check_license_compatibility(self, license_name: str) -> tuple[bool, list[str]]:
+    def check_license_compatibility(
+        self, license_name: str | list[str]
+    ) -> tuple[bool, list[str]]:
         """
         Check if license is compatible with project requirements.
 
         Args:
-            license_name: License identifier (e.g., "MIT", "GPL-3.0")
+            license_name: License identifier (e.g., "MIT", "GPL-3.0") or list of identifiers
 
         Returns:
             Tuple of (is_compatible: bool, incompatible_licenses: list[str])
         """
-        # List of incompatible licenses (copyleft licenses)
         INCOMPATIBLE_LICENSES = [
             "GPL",
             "AGPL",
@@ -358,13 +359,15 @@ class SecurityValidator:
             "OSL",
         ]
 
-        license_upper = license_name.upper()
+        names = license_name if isinstance(license_name, list) else [license_name]
         incompatible = []
 
-        for incompatible_license in INCOMPATIBLE_LICENSES:
-            if incompatible_license in license_upper:
-                incompatible.append(license_name)
-                break
+        for name in names:
+            name_upper = name.upper()
+            for incompatible_license in INCOMPATIBLE_LICENSES:
+                if incompatible_license in name_upper:
+                    incompatible.append(name)
+                    break
 
         is_compatible = len(incompatible) == 0
         return (is_compatible, incompatible)

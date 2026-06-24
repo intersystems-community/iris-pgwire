@@ -20,6 +20,17 @@ import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+try:
+    from sqlalchemy_iris.psycopg import IRISDialectAsync_psycopg as _check  # noqa: F401
+
+    _PSYCOPG_AVAILABLE = True
+except ImportError:
+    _PSYCOPG_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(
+    not _PSYCOPG_AVAILABLE, reason="sqlalchemy_iris.psycopg not installed"
+)
+
 # ==============================================================================
 # T003: Contract Test - DBAPI Import
 # ==============================================================================
@@ -28,8 +39,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 def test_async_dialect_import_dbapi():
     """
     T003: Verify IRISDialectAsync_psycopg.import_dbapi() returns psycopg with AsyncConnection.
-
-    Expected: FAIL (IRISDialectAsync_psycopg doesn't exist yet)
 
     Contract Requirements:
     - Class must exist: IRISDialectAsync_psycopg

@@ -5,7 +5,7 @@ services:
   # IRIS Database with Embedded PGWire Server
   # Server runs via irispython command inside IRIS process (spec 014-irispython-deployment)
   iris:
-    image: intersystemsdc/iris-community:latest
+    image: containers.intersystems.com/intersystems/iris-community:2026.1
     container_name: iris-pgwire-db
     environment:
       # IRIS configuration

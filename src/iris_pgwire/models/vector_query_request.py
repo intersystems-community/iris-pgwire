@@ -43,8 +43,8 @@ class VectorQueryRequest(BaseModel):
         description="pgvector operator used: '<->' (L2), '<=>' (cosine), '<#>' (inner product)"
     )
     vector_column: str = Field(description="Column name containing vector data")
-    query_vector: list[float] = Field(description="Query vector values")
     vector_dimensions: int = Field(ge=1, le=2048, description="Vector dimensionality")
+    query_vector: list[float] = Field(description="Query vector values")
 
     # Query Constraints
     limit_clause: int | None = Field(

@@ -8,6 +8,7 @@ Contract: specs/025-comprehensive-code-and/contracts/package_metadata_contract.p
 Constitutional Requirement: Production Readiness (Principle V)
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,15 @@ except ImportError:
     class PackageMetadataValidator:  # type: ignore
         pass
 
+
+_PYROMA_AVAILABLE = shutil.which("pyroma") is not None
+_CHECK_MANIFEST_AVAILABLE = shutil.which("check-manifest") is not None
+try:
+    import trove_classifiers as _tc  # noqa: F401
+
+    _TROVE_AVAILABLE = True
+except ImportError:
+    _TROVE_AVAILABLE = False
 
 pytestmark = pytest.mark.skipif(
     not IMPLEMENTATION_EXISTS,
@@ -129,6 +139,7 @@ class TestPackageMetadataContract:
             missing_fields
         ), f"Expected missing fields {expected_missing}, got {missing_fields}"
 
+    @pytest.mark.skipif(not _PYROMA_AVAILABLE, reason="pyroma not installed")
     def test_check_pyroma_score(self, validator):
         """
         Test check_pyroma_score() on iris-pgwire package.
@@ -144,6 +155,7 @@ class TestPackageMetadataContract:
         assert max_score == 10, "Max score should be 10"
         assert actual_score >= 9, f"iris-pgwire package should score ≥9/10 (got {actual_score})"
 
+    @pytest.mark.skipif(not _TROVE_AVAILABLE, reason="trove-classifiers not installed")
     def test_validate_classifiers_valid(self, validator):
         """
         Test validate_classifiers() with valid PyPI classifiers.
@@ -164,6 +176,7 @@ class TestPackageMetadataContract:
         assert all_valid is True, "All classifiers should be valid"
         assert len(invalid_classifiers) == 0, "No invalid classifiers expected"
 
+    @pytest.mark.skipif(not _TROVE_AVAILABLE, reason="trove-classifiers not installed")
     def test_validate_classifiers_invalid(self, validator):
         """
         Test validate_classifiers() with invalid classifier.
@@ -221,6 +234,7 @@ class TestPackageMetadataContract:
         assert len(errors) > 0, "Should report validation errors"
         assert any("cryptography" in error for error in errors), "Error should mention cryptography"
 
+    @pytest.mark.skipif(not _CHECK_MANIFEST_AVAILABLE, reason="check-manifest not installed")
     def test_check_manifest_completeness(self, validator):
         """
         Test check_manifest_completeness() on iris-pgwire package.

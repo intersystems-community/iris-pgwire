@@ -35,13 +35,17 @@ class BooleanTranslator:
     - Word boundaries respected (truetype not modified)
     """
 
-    # Pattern to match standalone true/false with word boundaries
-    # Group 1 captures 'true' or 'false'
+    # Pattern to match DEFAULT true/false (case-insensitive, with word boundaries)
+    # Group 1 captures the prefix up to DEFAULT, group 2 captures the boolean keyword
     _BOOL_PATTERN = re.compile(r"\b(true|false)\b", re.IGNORECASE)
+    _DEFAULT_BOOL_PATTERN = re.compile(r"\bDEFAULT\s+(true|false)\b", re.IGNORECASE)
 
     def translate(self, sql: str) -> tuple[str, int]:
         """
-        Translate standalone true/false literals to 1/0.
+        Translate DEFAULT true/false boolean literals to DEFAULT 1/0.
+
+        Only translates boolean values that appear after the DEFAULT keyword.
+        Standalone true/false in WHERE/SET/VALUES clauses are not modified.
 
         Args:
             sql: SQL statement potentially containing boolean defaults
@@ -64,27 +68,23 @@ class BooleanTranslator:
         result = []
         last_end = 0
 
-        for match in self._BOOL_PATTERN.finditer(sql):
-            match_start = match.start()
-            match_end = match.end()
+        for match in self._DEFAULT_BOOL_PATTERN.finditer(sql):
+            bool_start = match.start(1)  # start of the true/false group
+            bool_end = match.end(1)
 
-            # Check if this match is inside a protected region
-            if self._is_in_protected_region(match_start, protected_regions):
-                # Don't translate, keep original
+            # Check if the boolean value is inside a protected region
+            if self._is_in_protected_region(bool_start, protected_regions):
                 continue
 
-            # Add text before this match
-            result.append(sql[last_end:match_start])
+            # Add text before the boolean value (includes 'DEFAULT ')
+            result.append(sql[last_end:bool_start])
 
             # Translate the boolean value
             bool_value = match.group(1).lower()
-            if bool_value == "true":
-                result.append("1")
-            else:
-                result.append("0")
+            result.append("1" if bool_value == "true" else "0")
 
             count += 1
-            last_end = match_end
+            last_end = bool_end
 
         # Add remaining text
         result.append(sql[last_end:])

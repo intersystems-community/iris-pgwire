@@ -245,8 +245,7 @@ class IdentifierNormalizer:
             r"(CREATE\s+(?:TEMPORARY\s+|TEMP\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?)"
             r"(\S+)"  # Table name (will be uppercased)
             r"(\s*\()"  # Opening paren
-            r"(.*)"  # Column definitions (will handle nested parens manually)
-            r"(\))",  # Closing paren
+            r"(.*)",  # Rest of chunk — paren scanning below finds the matching close
             re.IGNORECASE | re.DOTALL,
         )
 

@@ -212,17 +212,16 @@ def iris_container(pytestconfig):
         from iris_devtester import IRISContainer
         from iris_devtester.utils.password import unexpire_all_passwords
 
-        # ALWAYS attach to the dedicated iris-pgwire-test container
-        # Do NOT create containers - use idt to manage them
-        container_name = "iris-pgwire-test"
-        logger.info("Attaching to iris-pgwire-test container")
+        # Attach to the project IRIS container (iris-pgwire-db, started via docker compose)
+        container_name = os.getenv("IRIS_CONTAINER_NAME", "iris-pgwire-db")
+        logger.info("Attaching to IRIS container", container=container_name)
 
         try:
             iris = IRISContainer.attach(container_name)
         except Exception as e:
             pytest.fail(
                 f"Failed to attach to {container_name}. "
-                f"Create it first with: idt container up --name {container_name} --edition community\n"
+                f"Start it with: docker compose up -d iris\n"
                 f"Error: {e}"
             )
 
@@ -250,40 +249,43 @@ def iris_container(pytestconfig):
             logger.warning("Failed to manage passwords", error=str(e))
 
         # Verify DBAPI connectivity early to avoid late failures in PGWire startup.
-        try:
-            from iris_devtester.config import IRISConfig
-            from iris_devtester.connections import get_connection
+        # Skip when IRIS_SKIP_DBAPI_VERIFY=1 (e.g. when embedded PGWire server
+        # is already holding all community-edition IRIS licenses).
+        if os.getenv("IRIS_SKIP_DBAPI_VERIFY") != "1":
+            try:
+                from iris_devtester.config import IRISConfig
+                from iris_devtester.connections import get_connection
 
-            config = iris.get_config()
-            for attempt in range(3):
-                try:
-                    conn = get_connection(
-                        IRISConfig(
-                            host=config.host,
-                            port=config.port,
-                            namespace=config.namespace,
-                            username=config.username,
-                            password=config.password,
-                            container_name=iris.get_container_name(),
+                config = iris.get_config()
+                for attempt in range(3):
+                    try:
+                        conn = get_connection(
+                            IRISConfig(
+                                host=config.host,
+                                port=config.port,
+                                namespace=config.namespace,
+                                username=config.username,
+                                password=config.password,
+                                container_name=iris.get_container_name(),
+                            )
                         )
-                    )
-                    conn.close()
-                    break
-                except Exception as e:
-                    logger.warning(
-                        "DBAPI verification failed",
-                        attempt=attempt + 1,
-                        error=str(e),
-                    )
-                    if hasattr(iris, "reset_password"):
-                        iris.reset_password("SuperUser", "SYS")
-                        iris.reset_password("_SYSTEM", "SYS")
-                    unexpire_all_passwords(iris.get_container_name())
-                    time.sleep(2)
-            else:
-                pytest.fail("DBAPI verification failed after password remediation")
-        except Exception as e:
-            pytest.fail(f"DBAPI verification failed: {e}")
+                        conn.close()
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            "DBAPI verification failed",
+                            attempt=attempt + 1,
+                            error=str(e),
+                        )
+                        if hasattr(iris, "reset_password"):
+                            iris.reset_password("SuperUser", "SYS")
+                            iris.reset_password("_SYSTEM", "SYS")
+                        unexpire_all_passwords(iris.get_container_name())
+                        time.sleep(2)
+                else:
+                    pytest.fail("DBAPI verification failed after password remediation")
+            except Exception as e:
+                pytest.fail(f"DBAPI verification failed: {e}")
 
         if iris_persist:
             logger.info("IRIS container will PERSIST after tests")
@@ -369,10 +371,12 @@ def base_dat_fixture(iris_container, dat_fixture_root):
     Ensure base DAT fixture exists (schema + base rows from examples/benchmarks).
     """
     if not HAS_DEVTESTER or not iris_container:
-        pytest.skip("iris-devtester required for DAT fixture creation")
+        logger.warning("iris-devtester not available — skipping DAT fixture creation")
+        return None
 
     if os.environ.get("PGWIRE_SKIP_DAT_FIXTURES") == "1":
-        pytest.skip("DAT fixture creation skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+        logger.warning("DAT fixture creation skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+        return None
 
     from iris_pgwire.testing.base_fixture_builder import ensure_base_fixture
 
@@ -386,6 +390,11 @@ def pgwire_namespace(iris_container, iris_config, request):
     """
     if not HAS_DEVTESTER or not iris_container:
         yield iris_config["namespace"]
+        return
+
+    # Skip namespace creation when license limit is tight (e.g. embedded PGWire running)
+    if os.getenv("IRIS_SKIP_NS_CREATE") == "1":
+        yield iris_config.get("namespace", "USER")
         return
 
     try:
@@ -503,7 +512,7 @@ def provision_test_user(iris_config, pgwire_namespace):
 
         logger.info("test_user provisioned", namespace=namespace_name)
     except Exception as exc:
-        pytest.skip(f"Failed to provision test_user: {exc}")
+        logger.warning("Failed to provision test_user (non-fatal)", error=str(exc))
     finally:
         if conn is not None:
             try:
@@ -519,10 +528,19 @@ def load_base_fixture(iris_container, base_dat_fixture, pgwire_namespace):
     Load the base DAT fixture into the module namespace.
     """
     if not HAS_DEVTESTER or not iris_container:
-        pytest.skip("iris-devtester required for DAT fixture loading")
+        logger.warning("iris-devtester not available — skipping DAT fixture loading")
+        yield None
+        return
 
     if os.environ.get("PGWIRE_SKIP_DAT_FIXTURES") == "1":
-        pytest.skip("DAT fixture loading skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+        logger.warning("DAT fixture loading skipped via PGWIRE_SKIP_DAT_FIXTURES=1")
+        yield None
+        return
+
+    if base_dat_fixture is None:
+        logger.warning("base_dat_fixture not available — skipping DAT fixture load")
+        yield None
+        return
 
     from iris_pgwire.testing.base_fixture_builder import restore_fixture
 
@@ -670,6 +688,8 @@ def pgwire_server(
     from iris_pgwire.server import PGWireServer
 
     # Configure server for testing
+    # Use PGWIRE_BACKEND_TYPE=dbapi when running outside Docker (no embedded iris.sql)
+    backend_type = os.environ.get("PGWIRE_BACKEND_TYPE", "dbapi")
     server = PGWireServer(
         host="127.0.0.1",
         port=int(os.environ.get("PGWIRE_PORT", "5434")),
@@ -678,8 +698,9 @@ def pgwire_server(
         iris_username=iris_config["username"],
         iris_password=iris_config["password"],
         iris_namespace=pgwire_namespace,
+        backend_type=backend_type,
         enable_ssl=False,
-        connection_pool_size=30,
+        connection_pool_size=int(os.environ.get("PGWIRE_POOL_SIZE", "2")),
         connection_pool_timeout=15.0,
     )
 
