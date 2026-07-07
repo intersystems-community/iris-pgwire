@@ -79,3 +79,35 @@ docs/articles/developer-community-article.md
 docs/presentations/
 docs/articles/
 /.opencode
+
+# Build / coverage artifacts
+coverage.json
+coverage.xml
+interrogate_badge.svg
+test_failures.jsonl
+htmlcov/
+pgwire.log
+server_log.txt
+
+# Docker runtime files (not for source control)
+merge.cpf
+iris_pgwire.json
+
+# AI tooling files (not for public repo)
+AGENTS.md
+CODEX.md
+TABNINE.md
+
+# Root-level debug/scratch scripts (use scripts/ directory instead)
+check_intersystems.py
+check_iris.py
+check_resolve.py
+find_shadowing.py
+inspect_monkeypatch.py
+repro_scoping.py
+test_conn.py
+test_connection_stability.py
+test_pg_type.py
+test_scope.py
+update_article.py
+verify_demo.sql

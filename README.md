@@ -1,288 +1,212 @@
-# iris-pgwire: PostgreSQL Wire Protocol for InterSystems IRIS
+# iris-pgwire
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
-[![InterSystems IRIS](https://img.shields.io/badge/IRIS-Compatible-green.svg)](https://www.intersystems.com/products/intersystems-iris/)
+[![Coverage: 92%](https://img.shields.io/badge/coverage-92%25-brightgreen.svg)](https://github.com/intersystems-community/iris-pgwire)
 
-**Access IRIS through the entire PostgreSQL ecosystem** - Connect BI tools, Python frameworks, data pipelines, and thousands of PostgreSQL-compatible clients to InterSystems IRIS databases with zero code changes.
+PostgreSQL wire protocol server for InterSystems IRIS. Connects BI tools, Python frameworks, data pipelines, and any PostgreSQL-compatible client to IRIS databases — no IRIS-specific drivers needed.
 
----
-
-## 📊 Why This Matters
-
-**Verified compatibility** with PostgreSQL clients across 8 languages - no IRIS-specific drivers needed:
-
-- **Tested & Working**: Python (psycopg3, asyncpg), Node.js (pg), Java (JDBC), .NET (Npgsql), Go (pgx), Ruby (pg gem), Rust (tokio-postgres), PHP (PDO)
-- **BI Tools**: Apache Superset, Metabase, Grafana (use standard PostgreSQL driver)
-- **ORMs**: SQLAlchemy, Prisma, Sequelize, Hibernate, Drizzle
-
-**Connection**: `postgresql://localhost:5432/USER` - that's it!
+**Connection string**: `postgresql://user:pass@localhost:5432/USER`
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### Docker (Fastest - 60 seconds)
+### Docker (recommended)
 
 ```bash
 git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
+docker compose up -d
 
-# Create persistent IRIS container (for development/testing)
-./scripts/create_persistent_container.sh
-
-# Start PGWire server
-export IRIS_HOST=localhost IRIS_PORT=21972 IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS IRIS_NAMESPACE=USER
-python -m iris_pgwire.server
-
-# Test it works (in another terminal)
+# Test it (PGWire runs on port 5432 inside the IRIS container)
 psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 ```
 
-### Python Package
+### Python package
 
 ```bash
 pip install iris-pgwire psycopg[binary]
 
-# Configure IRIS connection
-export IRIS_HOST=localhost IRIS_PORT=1972 IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS IRIS_NAMESPACE=USER
+export IRIS_HOST=localhost IRIS_PORT=1972 \
+       IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS IRIS_NAMESPACE=USER
 
-# Start server
 python -m iris_pgwire.server
 ```
 
-### ZPM Installation (Existing IRIS)
-
-For InterSystems IRIS 2024.1+ with ZPM package manager:
-
-```objectscript
-// Install the package
-zpm "install iris-pgwire"
-
-// Start the server manually
-do ##class(IrisPGWire.Service).Start()
-
-// Check server status
-do ##class(IrisPGWire.Service).ShowStatus()
-```
-
-**From terminal**:
-```bash
-# Install
-iris session IRIS -U USER 'zpm "install iris-pgwire"'
-
-# Start server
-iris session IRIS -U USER 'do ##class(IrisPGWire.Service).Start()'
-```
-
-### First Query
+### First query
 
 ```python
 import psycopg
 
-with psycopg.connect('host=localhost port=5432 dbname=USER') as conn:
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM YourTable')
-    print(f'Rows: {cur.fetchone()[0]}')
+with psycopg.connect("host=localhost port=5432 dbname=USER user=_SYSTEM password=SYS") as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM MyTable")
+        print(cur.fetchone()[0])
 ```
 
 ---
 
-## ✅ Client Compatibility
+## Verified Client Compatibility
 
-**171/171 tests passing** across 8 programming languages:
+Tested against real IRIS instances via the wire protocol:
 
-| Language | Verified Clients | Test Coverage |
-|----------|------------------|---------------|
-| **Python** | psycopg3, asyncpg, SQLAlchemy | 100% (21 tests) |
-| **Node.js** | pg (node-postgres) | 100% (17 tests) |
-| **Java** | PostgreSQL JDBC | 100% (27 tests) |
-| **.NET** | Npgsql | 100% (15 tests) |
-| **Go** | pgx v5 | 100% (19 tests) |
-| **Ruby** | pg gem | 100% (25 tests) |
-| **Rust** | tokio-postgres | 100% (22 tests) |
-| **PHP** | PDO PostgreSQL | 100% (25 tests) |
+| Language | Clients                                      |
+| -------- | -------------------------------------------- |
+| Python   | psycopg3, asyncpg, SQLAlchemy (sync + async) |
+| Node.js  | pg (node-postgres)                           |
+| Java     | PostgreSQL JDBC                              |
+| .NET     | Npgsql                                       |
+| Go       | pgx v5                                       |
+| Ruby     | pg gem                                       |
+| Rust     | tokio-postgres                               |
+| PHP      | PDO PostgreSQL                               |
 
-**ORMs & BI Tools**: Prisma, Sequelize, Hibernate, Drizzle, Apache Superset, Metabase, Grafana
+**ORMs**: SQLAlchemy, Prisma, Drizzle, Sequelize, Hibernate  
+**BI tools**: Apache Superset, Metabase, Grafana (standard PostgreSQL driver)
 
-See [Client Compatibility Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md) for detailed testing results and ORM setup examples.
-
----
-
-## 🎯 Key Features
-
-- **pgvector Syntax**: Use familiar `<=>` and `<#>` operators - auto-translated to IRIS VECTOR_COSINE/DOT_PRODUCT. HNSW indexes provide 5× speedup on 100K+ vectors. See [Vector Operations Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)
-
-- **ORM & DDL Compatibility**: Automatic `public` ↔ `SQLUser` schema mapping and PostgreSQL DDL transformations (stripping `fillfactor`, `GENERATED` columns, `USING btree`, etc.) for seamless migrations. See [DDL Compatibility Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DDL_COMPATIBILITY.md)
-
-- **Enterprise Security**: SCRAM-SHA-256, OAuth 2.0, IRIS Wallet authentication. Industry-standard security matching PgBouncer, YugabyteDB. See [Deployment Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)
-
-- **Performance**: ~4ms protocol overhead, dual backend (DBAPI/Embedded), async SQLAlchemy support. See [Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md)
-
-## 🎉 Release 1.3.0 / IRIS 2024.2+ Compatibility
-
-- **Full IRIS 2024.2+ compatibility**: Automatic `%EXACT` wrapping for `SELECT DISTINCT` and `UNION` ensures parity with PostgreSQL set semantics.
-- **Enhanced RETURNING emulation**: Multi-column and `RETURNING *` pipelines are handled with richer metadata, supplemental selects, and session-local lookups.
-- **ON CONFLICT support**: `DO NOTHING` and `DO UPDATE` branches map to IRIS logic while preserving consistent `RETURNING` output.
-- **Metadata-driven DEFAULTs**: The translator now resolves `DEFAULT` references via IRIS metadata so that INSERT/UPDATE statements stay intact.
-- **Global boolean translation**: PostgreSQL `true`/`false` literals translate to their IRIS equivalents automatically across all SQL paths.
-- **Session pinning for DBAPI**: Connections stay bound to the original session to maintain identity lookups (`LAST_IDENTITY()`, `%EXACT`, etc.) during emulation.
+See [Client Compatibility Guide](docs/CLIENT_RECOMMENDATIONS.md) for setup examples.
 
 ---
 
-## 💻 Usage Examples
+## Key Features
 
-### Command-Line (psql)
+**pgvector operators** — `<=>` (cosine), `<#>` (dot product), `<->` (L2) auto-translate to IRIS `VECTOR_COSINE`/`VECTOR_DOT_PRODUCT`. HNSW indexes give 5× speedup at 100K+ vectors. See [Vector Operations](docs/VECTOR_PARAMETER_BINDING.md).
 
-```bash
-# Connect to IRIS via PostgreSQL protocol
-psql -h localhost -p 5432 -U _SYSTEM -d USER
+**DDL compatibility** — Automatic `public` ↔ `SQLUser` schema mapping; strips `fillfactor`, `GENERATED` columns, `USING btree`, `IF NOT EXISTS` guards, and other PostgreSQL-specific DDL so ORM migrations run cleanly. See [DDL Compatibility](docs/DDL_COMPATIBILITY.md).
 
-# Simple queries
-SELECT * FROM MyTable LIMIT 10;
+**SQL translation** — `RETURNING` emulation, `ON CONFLICT`, boolean literals, `pg_catalog` → `INFORMATION_SCHEMA` rewrites, JSON operators (`->` / `->>` → `JSON_EXTRACT`), parameterized queries.
 
-# Vector similarity search
-SELECT id, VECTOR_COSINE(embedding, TO_VECTOR('[0.1,0.2,0.3]', DOUBLE)) AS score
-FROM vectors
-ORDER BY score DESC
-LIMIT 5;
-```
+**Authentication** — SCRAM-SHA-256, OAuth 2.0 (RFC 6749), IRIS Wallet credentials.
 
-### Python (psycopg3)
+**Dual backend** — Embedded Python (irispython, lowest latency) or external DBAPI (standard TCP connection). Selectable via `IRIS_BACKEND` env var.
+
+**COPY protocol** — Bulk load via `COPY … FROM STDIN` (~600 rows/sec on DBAPI path).
+
+---
+
+## Usage Examples
+
+### Parameterized queries (psycopg3)
 
 ```python
 import psycopg
 
-with psycopg.connect('host=localhost port=5432 dbname=USER user=_SYSTEM password=SYS') as conn:
-    # Simple query
+with psycopg.connect("host=localhost port=5432 dbname=USER user=_SYSTEM password=SYS") as conn:
     with conn.cursor() as cur:
-        cur.execute('SELECT COUNT(*) FROM MyTable')
-        count = cur.fetchone()[0]
-        print(f'Total rows: {count}')
-
-    # Parameterized query
-    with conn.cursor() as cur:
-        cur.execute('SELECT * FROM MyTable WHERE id = %s', (42,))
+        cur.execute("SELECT * FROM MyTable WHERE id = %s", (42,))
         row = cur.fetchone()
-
-    # Vector search with parameter binding
-    query_vector = [0.1, 0.2, 0.3]  # Works with any embedding model
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, VECTOR_COSINE(embedding, TO_VECTOR(%s, DOUBLE)) AS score
-            FROM vectors
-            ORDER BY score DESC
-            LIMIT 5
-        """, (query_vector,))
-        results = cur.fetchall()
 ```
 
-### Async SQLAlchemy with FastAPI
+### Vector similarity search
+
+```python
+query_vector = [0.1, 0.2, 0.3]
+with conn.cursor() as cur:
+    cur.execute("""
+        SELECT id, embedding <=> %s::vector AS score
+        FROM vectors
+        ORDER BY score
+        LIMIT 5
+    """, (query_vector,))
+    results = cur.fetchall()
+```
+
+### Async SQLAlchemy
 
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import text
-from fastapi import FastAPI, Depends
 
-# Setup
 engine = create_async_engine("postgresql+psycopg://localhost:5432/USER")
-SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-app = FastAPI()
+SessionLocal = async_sessionmaker(engine, class_=AsyncSession)
 
-async def get_db():
+async def query():
     async with SessionLocal() as session:
-        yield session
+        result = await session.execute(text("SELECT * FROM MyTable"))
+        return result.fetchall()
+```
 
-# FastAPI endpoint with async IRIS query
-@app.get("/users/{user_id}")
-async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        text("SELECT * FROM users WHERE id = :id"),
-        {"id": user_id}
-    )
-    return result.fetchone()
+### COPY bulk load
+
+```python
+with conn.cursor() as cur:
+    with cur.copy("COPY MyTable (col1, col2) FROM STDIN") as copy:
+        for row in data:
+            copy.write_row(row)
 ```
 
 ---
 
-## 📚 Documentation Index
+## Documentation
 
-**📖 [Complete Documentation →](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/README.md)** - Full navigation hub with all guides, architecture docs, and troubleshooting
-
-### Getting Started
-- **[Installation Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/INSTALLATION.md)** - Docker, PyPI, ZPM, Embedded Python deployment
-- **[Quick Start Examples](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/QUICKSTART_EXAMPLES.md)** - First queries with psql, Python, FastAPI
-- **[BI Tools Setup](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/BI_TOOLS.md)** - Superset, Metabase, Grafana integration
-
-### Features & Capabilities
-- **[Features Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/FEATURES_OVERVIEW.md)** - pgvector, ORM compatibility, DDL transformations, authentication
-- **[DDL Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DDL_COMPATIBILITY.md)** - Automatic handling of PostgreSQL-specific DDL (fillfactor, generated columns, enums)
-- **[pg_catalog Support](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)** - 6 catalog tables + 5 functions for ORM introspection
-- **[Vector Operations](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/VECTOR_PARAMETER_BINDING.md)** - High-dimensional vectors, parameter binding
-- **[Client Compatibility](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/CLIENT_RECOMMENDATIONS.md)** - 171 tests across 8 languages
-
-### Architecture & Performance
-- **[Architecture Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ARCHITECTURE.md)** - System design, dual backend, components
-- **[Performance Benchmarks](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PERFORMANCE.md)** - ~4ms overhead, HNSW indexes
-- **[Deployment Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md)** - Production setup, authentication, SSL/TLS
-
-### Development & Reference
-- **[Roadmap & Limitations](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ROADMAP.md)** - Current status, future enhancements
-- **[Developer Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/developer_guide.md)** - Development setup, contribution guidelines
-- **[Testing Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/testing.md)** - Test framework, validation
+| Guide                                                  | Description                                |
+| ------------------------------------------------------ | ------------------------------------------ |
+| [Installation](docs/INSTALLATION.md)                   | Docker, PyPI, Embedded Python deployment   |
+| [Architecture](docs/ARCHITECTURE.md)                   | System design, dual backend, request flow  |
+| [DDL Compatibility](docs/DDL_COMPATIBILITY.md)         | PostgreSQL DDL transformations             |
+| [Vector Operations](docs/VECTOR_PARAMETER_BINDING.md)  | pgvector syntax, HNSW indexes              |
+| [Client Compatibility](docs/CLIENT_RECOMMENDATIONS.md) | Per-language setup and caveats             |
+| [Deployment](docs/DEPLOYMENT.md)                       | Production setup, SSL/TLS, auth            |
+| [Performance](docs/PERFORMANCE.md)                     | Benchmarks, tuning                         |
+| [Developer Guide](docs/developer_guide.md)             | Development setup, contribution guidelines |
 
 ---
 
-## ⚡ Production Ready
-
-**171/171 tests passing** - Verified compatibility with Python, Node.js, Java, .NET, Go, Ruby, Rust, PHP PostgreSQL clients
-
-**What Works**: Core protocol (queries, transactions, COPY), Enterprise auth (SCRAM-SHA-256, OAuth 2.0), pgvector operators, ORM introspection
-
-**Architecture**: SSL/TLS via reverse proxy (nginx/HAProxy), OAuth 2.0 instead of Kerberos - industry patterns matching PgBouncer, YugabyteDB
-
-See [Roadmap & Limitations](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ROADMAP.md) for details
-
----
-
-## 🤝 Contributing
+## Development
 
 ```bash
-# Clone repository
-git clone https://github.com/intersystems-community/iris-pgwire.git
-cd iris-pgwire
-
-# Install development dependencies
+# Install dependencies
 uv sync --frozen
 
-# Create persistent IRIS test container
-./scripts/create_persistent_container.sh
+# Run unit + contract tests (no IRIS needed)
+pytest tests/unit/ tests/contract/ -v
 
-# Run tests (automatically starts PGWire server via fixtures)
-pytest tests/
+# Run with live IRIS (container must be up)
+docker compose up -d
+PGWIRE_BACKEND_TYPE=dbapi PGWIRE_POOL_SIZE=1 pytest tests/ -v
 
-# Run tests
-pytest -v
+# Code quality check
+python -m iris_pgwire.quality
 ```
 
-**Code Quality**: black (formatter), ruff (linter), pytest (testing)
+**Test coverage**: 92% (5349 tests)  
+**Code quality**: black (formatter), ruff (linter), bandit (security)
 
 ---
 
-## 🔗 Links
+## Known Limitations
 
-- **Repository**: https://github.com/intersystems-community/iris-pgwire
-- **IRIS Documentation**: https://docs.intersystems.com/iris/
-- **PostgreSQL Protocol**: https://www.postgresql.org/docs/current/protocol.html
-- **pgvector**: https://github.com/pgvector/pgvector
+See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full list. Key items:
 
----
-
-## 📄 License
-
-MIT License - See [LICENSE](https://github.com/intersystems-community/iris-pgwire/blob/main/LICENSE) for details
+- IRIS Community Edition: 5-user connection limit — use `PGWIRE_POOL_SIZE=1` for dev
+- No native SSL termination — use nginx/HAProxy in front for TLS
+- Kerberos/GSSAPI auth wiring deferred (OAuth 2.0 is the recommended enterprise auth)
+- `INFORMATION_SCHEMA` only, no `pg_catalog` tables (translated automatically)
 
 ---
 
-**Questions?** Open an issue on [GitHub](https://github.com/intersystems-community/iris-pgwire/issues)
+## Contributing
+
+```bash
+git clone https://github.com/intersystems-community/iris-pgwire.git
+cd iris-pgwire
+uv sync --frozen
+docker compose up -d
+pytest tests/unit/ tests/contract/ -v
+```
+
+Open an issue or PR on [GitHub](https://github.com/intersystems-community/iris-pgwire/issues).
+
+---
+
+## Links
+
+- [InterSystems IRIS](https://www.intersystems.com/products/intersystems-iris/)
+- [IRIS Documentation](https://docs.intersystems.com/iris/)
+- [PostgreSQL Protocol Spec](https://www.postgresql.org/docs/current/protocol.html)
+- [pgvector](https://github.com/pgvector/pgvector)
+
+---
+
+MIT License — see [LICENSE](LICENSE)
