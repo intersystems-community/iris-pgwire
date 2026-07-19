@@ -99,6 +99,9 @@ iris = [
     # IRIS embedded Python (when available)
     # "intersystems-iris>=3.6.0",
 ]
+ai = [
+    "iris-agentic-dev>=1.0",
+]
 kerberos = [
     # Kerberos GSSAPI authentication (optional - not implemented in wire protocol yet)
     # Install with: pip install iris-pgwire[kerberos]

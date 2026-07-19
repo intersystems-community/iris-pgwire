@@ -94,7 +94,6 @@ merge.cpf
 iris_pgwire.json
 
 # AI tooling files (not for public repo)
-AGENTS.md
 CODEX.md
 TABNINE.md
 
