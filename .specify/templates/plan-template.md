@@ -31,7 +31,21 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+Evaluate against `.specify/memory/constitution.md` v1.0.0. Mark each PASS / VIOLATION / N/A.
+Any VIOLATION must be resolved or justified in Complexity Tracking below — an unjustified
+violation blocks merge.
+
+| # | Principle | Gate | Status |
+|---|-----------|------|--------|
+| I | Protocol Fidelity | No client-side workaround is required; unsupported constructs return a protocol error rather than a degraded or wrong result | |
+| II | Test-First Development | Tests run against real IRIS and real PostgreSQL clients — no mocks, no fakes, no skipped tests to reach green | |
+| III | Phased Implementation | Phases have demonstrable exit criteria; any spike that would change the design has actually been run | |
+| IV | IRIS Integration | Works on both embedded Python and DBAPI backends; backend choice stays configuration | |
+| V | Production Readiness | Query-path latency measured against the 5 ms budget; monitoring and tracing present | |
+| VI | Vector Performance | HNSW where applicable; L2 (`<->`) rejected with NOT IMPLEMENTED, never emulated | |
+
+Also confirm the Technical Constraints hold: correct package import (`import iris`), container
+restart performed before any reported test result, and consistent `public` → IRIS schema mapping.
 
 ## Project Structure
 

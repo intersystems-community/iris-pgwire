@@ -2,7 +2,7 @@
 
 **Feature Branch**: `043-local-first-sync` (developed on `claude/iris-pglite-replicache-3ysrqe`)
 **Created**: 2026-08-16
-**Status**: Draft — 2 clarifications outstanding
+**Status**: Draft — clarifications resolved 2026-08-16; **blocked on Phase 0 spike Q1**
 **Input**: User description: "Local-first sync for IRIS: an Electric-shape-compatible read path and Replicache-style write path over a transactional outbox change feed, letting PGlite clients hold a live, offline-capable partial replica of IRIS data."
 
 **Research**: [`research.md`](research.md) — landscape analysis, four candidate change-feed
@@ -139,7 +139,12 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 **Change capture**
 
 - **FR-001**: System MUST capture inserts, updates and deletes to registered IRIS tables as an
-  ordered, replayable stream of row-level change events.
+  ordered, replayable stream of row-level change events, **regardless of the path by which the
+  change was made** — SQL, direct global write, or bulk load. (Clarification Q2 = "all writes".)
+- **FR-001a**: A change to a registered table that the feed cannot capture MUST be treated as a
+  defect, not a documented limitation. Where a write path provably cannot be observed, the system
+  MUST detect the resulting divergence and force affected clients to re-sync rather than leave
+  them silently stale.
 - **FR-002**: Each change event MUST carry enough information to apply it to a replica: the
   operation, the row's identity, and the affected column values.
 - **FR-003**: Change events MUST be ordered consistently with the order the changes committed in
@@ -187,8 +192,12 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 - **FR-022**: Administrators MUST be able to see which tables are registered, which subsets are
   active, and how far each is behind.
 - **FR-023**: System MUST refuse a subset request that a caller is not entitled to, rather than
-  narrowing it silently.
+  narrowing it silently. **Table-level entitlement is required for the first release**;
+  row-level entitlement is a **release gate before any production use** (Clarification Q1 = C).
 - **FR-024**: Data excluded by a column projection MUST NOT leave IRIS through this feature.
+- **FR-025**: Because the change feed observes writes below the SQL layer (FR-001), it MUST filter
+  to registered tables **inside** the feed, before any change leaves IRIS. Changes to unregistered
+  tables MUST NOT be materialised, logged, or transmitted.
 
 ### Key Entities
 
@@ -257,10 +266,11 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   be introduced — the project tests against real systems (`tests/conftest.py`: "NO MOCKS —
   everything tested against real systems"). Every requirement above is verified against a live
   instance or it is not verified.
-- **Phase 0 spikes gate parts of this spec.** Q3 (write-path cost) gates SC-002. Q1 (resumable
-  journal tailing) and Q2 (global-to-row resolution) gate whether FR-001 can be satisfied for
-  non-SQL writes — see Clarification Q2 below. The spikes exist in [`spikes/`](spikes/) but **have
-  not been executed**; no result in this spec is evidence-backed until they run.
+- **Phase 0 spikes Q1 and Q2 are BLOCKING.** Following Clarification Q2, the journal substrate is
+  required, so Q1 (resumable journal tailing) and Q2 (global-to-row resolution) now gate FR-001
+  itself. A failure in either means this feature cannot be built as specified. Q3 (write-path cost)
+  gates SC-002 but is not blocking. The spikes exist in [`spikes/`](spikes/) and **have not been
+  executed** — no figure in this spec is evidence-backed until they run.
 - Existing iris-pgwire capability is assumed for SQL translation, type formatting, catalog
   introspection and authentication (`research.md` §3).
 
@@ -277,41 +287,36 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 
 ---
 
-## Clarifications Needed
+## Clarifications
 
-### Q1: Authorization granularity for the first release
+### Q1: Authorization granularity for the first release — **RESOLVED: table-level v1, row-level as a release gate**
 
-**Context**: FR-023, FR-024 and User Story 4. `research.md` §7 Q6 leaves this open.
+Table-level entitlement is required for the first release. Row-level entitlement is a **hard gate
+before any production use**, not a backlog item. User Story 4 is therefore a named release gate;
+the feature may be demonstrated without it but MUST NOT be deployed against real data without it.
 
-**What we need to know**: Must the first release enforce **row-level** entitlement on subsets, or is
-**table-level** sufficient with row-level deferred?
+Recorded in FR-023.
 
-| Option | Answer | Implications |
-|--------|--------|--------------|
-| A | Table-level only in v1 | Fastest to ship. Suitable for trusted-tenant or single-user deployments only. Blocks regulated-data pilots. |
-| B | Row-level required in v1 | Deployable in regulated settings from day one. Adds an authorization layer to every subset request and every change event, materially enlarging P1 and P3. |
-| C | Table-level in v1, row-level as a hard gate before any production use | Ships early, keeps the regulated door open, and makes the constraint explicit rather than implied. |
-| Custom | Provide your own answer | — |
+### Q2: Must non-SQL writes be captured? — **RESOLVED: yes, all writes**
 
-**Your choice**: _[awaiting]_
+Capturing every write to a registered table is a requirement, whatever path made it. Recorded in
+FR-001, FR-001a and FR-025.
 
----
+**This resolution has consequences that change the plan**, and they should be visible rather than
+buried:
 
-### Q2: Must non-SQL writes be captured?
+1. **The trigger-based outbox alone is insufficient.** It observes SQL writes only. `research.md`
+   §4 recommended it for v1 with the journal substrate as a later upgrade; that recommendation no
+   longer satisfies FR-001 on its own.
+2. **Phase 0 spike Q1 becomes blocking.** The journal substrate is the only candidate that sees
+   non-SQL writes. Its feasibility turns on whether a journal reader can seek to a saved position
+   and roll across files — currently unproven, with no documented mechanism found. **If Q1 fails,
+   this feature cannot be built as specified** and the clarification must be revisited.
+3. **Spike Q2 becomes blocking too.** A journal feed sees global writes, so it must map globals
+   back to rows. Without reliable resolution there is no row-level change event.
+4. **The bulk-PHI concern (`research.md` §4.5) is now live rather than hypothetical.** A journal
+   feed observes every write to every global in the database. FR-025 exists because of this: the
+   feed must filter to registered tables inside IRIS, before anything is materialised or leaves.
 
-**Context**: FR-001 and the "write path bypasses the change feed" edge case. `research.md` §4
-establishes that a trigger-based feed sees SQL writes only; direct global writes and some bulk paths
-bypass it. Capturing those requires the journal-based substrate, whose feasibility is unproven
-(Q1 spike) and which carries a bulk-PHI exposure concern (`research.md` §4.5).
-
-**What we need to know**: Is capturing non-SQL writes a **requirement** of this feature, or may they
-be documented as unsupported?
-
-| Option | Answer | Implications |
-|--------|--------|--------------|
-| A | SQL writes only; non-SQL documented as unsupported | Unblocks the whole feature immediately. Any application writing globals directly gets silently stale clients unless it adopts the SQL path. |
-| B | All writes must be captured | Makes the Q1 journal spike **blocking**: if seek-resume proves impossible, the feature cannot be built as specified. Also inherits the PHI exposure question. |
-| C | SQL writes in v1, with a documented detection mechanism that warns when a registered table is modified outside the captured path | Ships on the outbox while making the gap loud instead of silent. Costs a consistency check. |
-| Custom | Provide your own answer | — |
-
-**Your choice**: _[awaiting]_
+The outbox retains a role — as the corroborating path for SQL writes and as the mechanism behind
+FR-001a's divergence detection — but it can no longer be the whole answer.
