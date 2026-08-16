@@ -157,6 +157,11 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 - **FR-004**: A change MUST NOT be recorded if its transaction rolls back.
 - **FR-005**: System MUST expose a durable position marker such that a subscriber presenting a
   previous position receives exactly the changes committed since it.
+- **FR-005a**: Position markers MUST be treated as **monotonic but not contiguous**. The feed MUST
+  NOT wait for a specific next value before emitting later ones. *(Verified on IRIS 2026.2: the
+  sequence allocator is non-transactional, so a rolled-back transaction correctly leaves no change
+  event but does consume a sequence number. A reader assuming contiguity stalls permanently on the
+  first rollback.)*
 - **FR-006**: System MUST retain change history for a configurable window, and MUST tell a
   subscriber whose position predates the window to discard and re-sync rather than serving a gap.
 - **FR-007**: Registering a table for capture MUST be an explicit, reversible, per-table act.
@@ -174,7 +179,14 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 - **FR-012**: A row edited into or out of a subset's filter MUST be delivered as an addition or a
   removal respectively.
 - **FR-013**: The read path MUST be consumable by existing local-first client libraries without
-  modifications to those libraries (see Assumptions).
+  modifications to those libraries (see Assumptions). **Two reference clients are supported as
+  first-class**, and both MUST work against the same unmodified read path:
+  a WASM-Postgres client (SQL and client-side vector search) and a reactive
+  collection store (incremental queries for generated UI). Neither may require a server-side
+  variant of the protocol.
+- **FR-013a**: Change events MUST carry a **transaction identifier** grouping all changes committed
+  together, and it MUST be exposed on the read stream. One reference client confirms mutations by
+  transaction identity rather than by client request identity, so this is required, not optional.
 
 **Write path**
 
@@ -185,7 +197,9 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 - **FR-016**: Writes from one client MUST be applied in the order that client submitted them.
 - **FR-017**: The server MUST be authoritative: it MUST be able to reject or alter a submitted
   write, and the client MUST converge on the server's result.
-- **FR-018**: A client MUST be able to determine which of its writes have been confirmed.
+- **FR-018**: A client MUST be able to determine which of its writes have been confirmed, by
+  **either** mechanism: per-client mutation identity on the push response, **or** transaction
+  identity on the read stream (FR-013a). Supporting only one excludes one of the reference clients.
 - **FR-019**: Each write MUST be applied within a single IRIS transaction — fully or not at all.
 
 **Operational**
@@ -219,6 +233,8 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   retries safe and an ordering within its originating client.
 - **Client Identity**: distinguishes devices and groups those belonging to one user, so write
   ordering and confirmation are tracked per device.
+- **Transaction Identity**: groups all change events committed together, so a client can recognise
+  its own write arriving back on the read stream without per-client bookkeeping.
 
 ---
 
@@ -243,6 +259,9 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   IRIS write throughput degrading more than 10% against an unsubscribed baseline.
 - **SC-008**: A subset's column projection is honoured in **100%** of delivered events — no excluded
   column value appears in any payload, initial or incremental.
+- **SC-010**: **Both** reference client stacks sync the same subset from the same endpoint with **no
+  server-side configuration difference** between them, and both are covered by the conformance
+  suite. A change that breaks either is a release blocker.
 - **SC-009**: Recovery from a forced sync-service restart completes with **no client requiring a full
   re-sync**, provided each client's position is inside the retention window.
 

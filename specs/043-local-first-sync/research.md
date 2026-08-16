@@ -198,18 +198,74 @@ backends must work — or a regression, or something about this configuration. D
 generated forms → generated admin all derive from it. Nothing downstream in the Zen-like story
 works until introspection does. This moves ahead of the sync work in priority.
 
-### The open decision: PGlite or TanStack DB
+### Resolved: support both PGlite and TanStack DB
 
-Not interchangeable, and the spec currently assumes PGlite throughout:
+Both are supported as first-class clients. They are not competitors here — they serve different
+jobs, and protocol compatibility means supporting the second costs far less than building it.
 
-- **PGlite** — real Postgres in WASM, SQL, and **pgvector**, which is the only route to client-side
-  vector search over synced IRIS embeddings. Single-connection, ~3 MB.
-- **TanStack DB** — normalised collections with a far faster incremental query engine, no SQL, and
-  the Electric adapter described above.
+| | PGlite | TanStack DB |
+|---|---|---|
+| Store | Real Postgres in WASM, SQL | Normalised collections, no SQL |
+| Query engine | Postgres planner | Differential dataflow, ~0.7 ms on 100k rows |
+| Vectors | **pgvector** — client-side similarity search | none |
+| Size | ~3 MB gzipped, single-connection | lighter |
+| Best for | Vector/RAG clients, SQL-heavy apps, offline-heavy | Generated CRUD admin, relational UI |
 
-For a generated CRUD admin, TanStack DB looks the better fit. For the vector story — differentiated
-given this repo's existing work — PGlite is the only option. They can coexist; the point is the
-spec should say which is primary rather than assume.
+**Why this is cheap**: both consume the *same* Electric shape stream —
+`@electric-sql/pglite-sync` applies it into PGlite tables, TanStack DB's Electric collection applies
+it into collections. One read path serves both. This is the wire-compatibility bet paying off
+twice, and it is the strongest available evidence that the bet is correct.
+
+**The one real cost — two write-confirmation mechanisms.** They confirm mutations differently:
+
+- **TanStack DB** confirms by **transaction ID**, matched against the `txids` array in shape
+  message headers.
+- **A Replicache-style PGlite client** confirms by **`lastMutationID`** per client.
+
+So the write path must serve both: `txids` on the read stream *and* mutation-ID confirmation on the
+push response. These are complementary, not conflicting — one describes what the server did, the
+other which client request caused it — but the change feed must carry a transaction identifier for
+the first to be possible.
+
+### Verified: a transaction ID can be synthesised in IRIS (2026-08-16, IRIS 2026.2)
+
+IRIS has no `xid` equivalent, so this was tested rather than assumed. A trigger allocates a txid on
+first fire within a transaction and parks it in a **process-private global**:
+
+```objectscript
+if '$data(^||PGWireTx) { set ^||PGWireTx = $increment(^PGWireSync.TxSeq) }
+set ^PGWireSync.Log($increment(^PGWireSync.Seq)) = $listbuild(table, op, {id}, ^||PGWireTx, $tlevel)
+```
+
+Result — three inserts in one transaction share a txid; separate transactions get distinct ones:
+
+```
+seq 1 -> pk=1, txid=1     <- one transaction
+seq 2 -> pk=2, txid=1
+seq 3 -> pk=3, txid=1
+seq 4 -> pk=4, txid=2     <- separate transactions
+seq 5 -> pk=5, txid=3
+```
+
+**Rollback correctly discards the outbox row** — a rolled-back insert left no entry, empirically
+confirming FR-004.
+
+### ⚠ The outbox sequence WILL contain gaps
+
+The same test surfaced a trap. `$INCREMENT` is deliberately **non-transactional** in IRIS — that is
+why it is safe for ID allocation — so a rollback discards the outbox *row* but **not** the sequence
+number it consumed:
+
+```
+seq before rollback = 5
+seq after  rollback = 6     <- 6 allocated, no row at 6
+```
+
+**Consequence**: the change feed must never assume contiguous sequence numbers. A reader that waits
+for `N+1` before emitting `N+2` will stall permanently on the first rolled-back transaction — a
+hang that would only appear under transaction load, and would look like a sync outage rather than a
+bug. Electric's `offset` is opaque to clients, so gaps are invisible on the wire; this is purely a
+constraint on the feed reader, and it must be a test case, not a comment.
 
 ## 2. Landscape
 
