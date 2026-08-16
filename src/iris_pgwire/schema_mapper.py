@@ -148,8 +148,14 @@ def translate_input_schema(sql: str) -> str:
     # that can never match and the client sees an empty catalog. Prisma filters
     # on nspname = 'public' throughout introspection, so this silently emptied
     # every result.
+    #
+    # The lookbehind excludes a preceding word character, so a table merely
+    # ending in the catalog name (my_pg_class) does not count. It must NOT also
+    # exclude a preceding dot: `pg_catalog.pg_namespace` is the spelling real
+    # clients use, and skipping it left the defect above live for every
+    # schema-qualified query.
     targets_catalog_views = any(
-        re.search(rf"(?i)(?<![\w.]){re.escape(table)}\b", sql) for table in VIEW_BACKED_TABLES
+        re.search(rf"(?i)(?<!\w){re.escape(table)}\b", sql) for table in VIEW_BACKED_TABLES
     )
 
     final_sql = processed_sql

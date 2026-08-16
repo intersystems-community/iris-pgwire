@@ -27,19 +27,15 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
 - [X] **T010** `pg_class` view over `INFORMATION_SCHEMA.TABLES` with OIDs and `relkind`.
 - [X] **T011** Test: projection, alias, `WHERE` and JOIN all honoured against `pg_class` (SC-003).
-- [~] **T011a** **`ANY($n)` → `IN (…)` expansion.** *Partially done.*
-  Implemented in `sql_translator/array_params.py`, unit-tested (5 tests), and wired into
-  `execute_query` on **both** executors. Works for the simple-query path and for extended-protocol
-  *Execute*.
-  *Discovered when it still did not fix Prisma*: the failure is at **Prepare/Describe**, not
-  Execute. `protocol.py:3071` describes the statement using `dummy_params` — the real array does
-  not exist yet — and IRIS cannot prepare `= ANY(?)` at all, so it errors before any value is
-  bound. Note the router never had this problem because it answered such queries without ever
-  preparing them.
-  **Remaining**: make the statement preparable at Describe time. Options — rewrite `= ANY(?)` to a
-  single-element `IN (?)` for preparation and re-expand at Execute (parameter count changes), or
-  synthesise the row description without asking IRIS to prepare. Needs a decision before coding.
-  **This is the current blocker.**
+- [X] **T011a** **`ANY($n)` membership.** Rewritten to IRIS's `%INLIST`, with the bound array
+  encoded as a `$LIST`. Research and measurements: [research-t011a.md](research-t011a.md).
+  Verified end-to-end through the wire protocol on **both** backends — 8/8 cases including the
+  empty array, negation, a mixed array + scalar parameter list, and the Prisma join shape.
+- [ ] **T011b** **Boolean expressions in a projection.** The next thing `prisma db pull` hits once
+  T011a is out of the way. Prisma's table query projects a boolean *value*:
+  `(tbl.relhassubclass and tbl.relkind = 'p') as is_partition`. IRIS allows `AND` only in a
+  predicate, and answers `ERROR: ) expected, AND found`. Needs a translation to `CASE WHEN … THEN 1
+  ELSE 0 END`, applied to boolean expressions appearing in a select list.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.
@@ -71,7 +67,8 @@ Introspection now gets materially further than it did:
 | Table enumeration | 0 rows | ✅ 4 tables |
 | Projection honoured | 32 columns for a 2-column request | ✅ exactly what was asked |
 | Aliased JOIN + filter | not answerable | ✅ correct rows |
-| `nspname = ANY($1)` | never reached | ❌ **T011a — current blocker** |
+| `nspname = ANY($1)` | never reached | ✅ `%INLIST` with a bound `$LIST`, both backends |
+| Boolean value in a projection | never reached | ❌ **T011b — current blocker** |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
 instance rather than by reasoning:
@@ -87,6 +84,11 @@ instance rather than by reasoning:
    literal `'public'` to the IRIS schema on restore — correct when comparing against IRIS's own
    catalog, wrong against the emulated views where `public` is the stored value. Prisma filters on
    this throughout, so it silently emptied every result. Scoped the rewrite to non-catalog queries.
+4. **…and the scoping missed the spelling clients actually use.** The guard added for defect 3
+   excluded any table name preceded by a dot, so `pg_catalog.pg_namespace` did not count as a
+   catalog view and the literal was still rewritten. Defect 3 was therefore only half fixed; the
+   qualified form kept returning nothing. Found by the T011a end-to-end run, not by review — the
+   unit tests for defect 3 all used the bare spelling.
 
 ## Notes
 

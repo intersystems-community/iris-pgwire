@@ -25,7 +25,12 @@ from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.sql_translator import SQLInterceptor, SQLPipeline
-from iris_pgwire.sql_translator.array_params import expand_array_params, has_array_param
+from iris_pgwire.sql_translator.array_params import (
+    encode_inlist_params,
+    expand_array_literals,
+    has_array_param,
+    rewrite_any_to_inlist,
+)
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
@@ -201,13 +206,16 @@ class DBAPIExecutor:
             if intercept_result.intercepted:
                 return intercept_result.result
 
-            # Expand `col = ANY($n)` into `col IN (...)`. IRIS has no ANY(array)
-            # construct, so an unexpanded one reaches it as a parse error
-            # ("SELECT expected, ? found"). Applied to every statement rather
-            # than only intercepted ones — catalog tables served by IRIS views
+            # Rewrite `col = ANY($n)` to `col %INLIST $n`. IRIS has no
+            # ANY(array) construct — it reaches the parser as
+            # "SELECT expected, ? found" — and the rewrite has to happen
+            # whether or not values are bound, because Describe prepares the
+            # statement with nothing bound. Applied to every statement rather
+            # than only intercepted ones: catalog tables served by IRIS views
             # reach the database for real (feature 044).
-            if params and has_array_param(sql):
-                sql, params = expand_array_params(sql, params)
+            if has_array_param(sql):
+                sql = expand_array_literals(rewrite_any_to_inlist(sql))
+                params = encode_inlist_params(sql, params)
 
             sql = self._translate_placeholders(sql)
             plan = ReturningPlan.from_sql(sql)

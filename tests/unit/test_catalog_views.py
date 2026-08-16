@@ -233,47 +233,134 @@ class TestInstallerContract:
             assert view.create_sql() in executed
 
 
-class TestArrayParameterExpansion:
-    """T011a: `col = ANY($n)` must become `col IN (...)`.
+class TestArrayMembershipRewrite:
+    """T011a: `col = ANY($n)` must become `col %INLIST $n`.
 
-    IRIS has no ANY(array) construct. The translation existed on CatalogRouter
-    but nothing ever called it — catalog queries were intercepted wholesale
-    before it mattered. Once catalog tables moved to views the queries reach
-    IRIS for real, and Prisma's `WHERE nspname = ANY($1)` failed with
-    "SELECT expected, ? found".
+    IRIS has no ANY(array) construct — the parser rejects it outright with
+    "SELECT expected, ? found" (SQLCODE -1). The first attempt at this
+    substituted the values at execute time, which cannot work: Describe
+    prepares the statement with nothing bound, so it fails before any value
+    exists. %INLIST is the shape that survives preparation *and* keeps one
+    placeholder in the source mapped to one in the target, so the parameter
+    count the client is told at Describe still holds at Bind.
+
+    See specs/044-catalog-as-views/research-t011a.md.
     """
 
-    def test_array_is_expanded_to_in_list(self):
-        from iris_pgwire.sql_translator.array_params import expand_array_params
+    def test_any_becomes_inlist(self):
+        from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
 
-        sql, remaining = expand_array_params(
-            "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1)",
-            [["public", "other"]],
+        sql = rewrite_any_to_inlist(
+            "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1)"
         )
-        assert "IN ('public', 'other')" in sql
-        assert "ANY" not in sql
-        assert remaining == [], "the inlined array must not stay bound"
+        assert sql == "SELECT nspname FROM pg_namespace WHERE nspname %INLIST $1"
 
-    def test_empty_array_matches_nothing_rather_than_failing(self):
-        from iris_pgwire.sql_translator.array_params import expand_array_params
+    def test_rewrite_does_not_need_the_values(self):
+        """The whole point: it must work at Describe, before anything is bound."""
+        from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
 
-        sql, _ = expand_array_params("SELECT a FROM t WHERE a = ANY($1)", [[]])
+        assert "%INLIST" in rewrite_any_to_inlist("SELECT a FROM t WHERE a = ANY(?)")
+
+    def test_placeholder_numbering_is_preserved(self):
+        """A moved parameter position would misbind every later parameter."""
+        from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
+
+        sql = rewrite_any_to_inlist("SELECT a FROM t WHERE b = $1 AND a = ANY($2) AND c = $3")
+        assert sql == "SELECT a FROM t WHERE b = $1 AND a %INLIST $2 AND c = $3"
+
+    def test_not_all_becomes_negated_inlist(self):
+        from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
+
+        sql = rewrite_any_to_inlist("SELECT a FROM t WHERE t.k <> ALL($1)")
+        assert sql == "SELECT a FROM t WHERE NOT (t.k %INLIST $1)"
+
+    def test_any_over_a_subquery_is_left_alone(self):
+        """`ANY (SELECT …)` is standard SQL that IRIS understands natively."""
+        from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
+
+        original = "SELECT a FROM t WHERE a = ANY (SELECT k FROM u)"
+        assert rewrite_any_to_inlist(original) == original
+
+    def test_array_literal_becomes_an_in_list(self):
+        """No parameter to bind, and IRIS has no $LIST literal syntax."""
+        from iris_pgwire.sql_translator.array_params import expand_array_literals
+
+        sql = expand_array_literals("SELECT a FROM t WHERE a = ANY('{public,other}')")
+        assert sql == "SELECT a FROM t WHERE a IN ('public', 'other')"
+
+    def test_empty_array_literal_matches_nothing_rather_than_failing(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_literals
+
+        sql = expand_array_literals("SELECT a FROM t WHERE a = ANY('{}')")
         assert "IN (NULL)" in sql, "an empty set must be a real answer, not a parse error"
 
-    def test_scalar_parameters_are_untouched(self):
-        from iris_pgwire.sql_translator.array_params import expand_array_params
+    def test_quotes_in_literal_values_are_escaped(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_literals
 
-        sql, remaining = expand_array_params("SELECT a FROM t WHERE a = $1", [5])
-        assert sql == "SELECT a FROM t WHERE a = $1"
-        assert remaining == [5]
-
-    def test_quotes_in_values_are_escaped(self):
-        from iris_pgwire.sql_translator.array_params import expand_array_params
-
-        sql, _ = expand_array_params("SELECT a FROM t WHERE a = ANY($1)", [["O'Brien"]])
+        sql = expand_array_literals("""SELECT a FROM t WHERE a = ANY('{"O''Brien"}')""")
         assert "'O''Brien'" in sql
 
-    def test_both_executors_expand_array_params(self):
+    def test_scalar_parameters_are_untouched(self):
+        from iris_pgwire.sql_translator.array_params import (
+            encode_inlist_params,
+            has_array_param,
+            rewrite_any_to_inlist,
+        )
+
+        sql = "SELECT a FROM t WHERE a = $1"
+        assert not has_array_param(sql)
+        assert rewrite_any_to_inlist(sql) == sql
+        assert encode_inlist_params(sql, [5]) == [5]
+
+    def test_bound_array_is_encoded_as_an_iris_list(self):
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+        from iris_pgwire.sql_translator.iris_list import encode_iris_list
+
+        params = encode_inlist_params(
+            "SELECT nspname FROM pg_namespace WHERE nspname %INLIST $1",
+            [["public", "pg_catalog"]],
+        )
+        assert params == [encode_iris_list(["public", "pg_catalog"])]
+
+    def test_only_the_inlist_parameter_is_encoded(self):
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+
+        params = encode_inlist_params(
+            "SELECT a FROM t WHERE b = $1 AND a %INLIST $2 AND c = $3",
+            ["scalar", ["x"], 7],
+        )
+        assert params[0] == "scalar"
+        assert isinstance(params[1], bytes)
+        assert params[2] == 7
+
+    def test_array_arrives_from_bind_as_text_and_is_still_encoded(self):
+        """Bind decodes a text[] to the string `{a,b}`, never to a Python list.
+
+        This is why the first attempt never fired: it tested isinstance(list)
+        against a value the protocol layer does not produce.
+        """
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+        from iris_pgwire.sql_translator.iris_list import encode_iris_list
+
+        params = encode_inlist_params(
+            "SELECT a FROM t WHERE a %INLIST $1", ["{public,pg_catalog}"]
+        )
+        assert params == [encode_iris_list(["public", "pg_catalog"])]
+
+    def test_empty_array_binds_as_null(self):
+        """An empty $LIST is zero bytes, which IRIS rejects with SQLCODE -400."""
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+
+        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", [[]]) == [None]
+        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", ["{}"]) == [None]
+
+    def test_describe_dummy_parameter_survives(self):
+        """Describe prepares with None; that must stay None, not become bytes."""
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+
+        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", [None]) == [None]
+
+    def test_both_executors_rewrite_array_membership(self):
         """Principle IV: a construct must not work on only one backend."""
         import inspect
 
@@ -281,7 +368,99 @@ class TestArrayParameterExpansion:
 
         for module in (iris_executor, dbapi_executor):
             source = inspect.getsource(module)
-            assert "expand_array_params(" in source, (
-                f"{module.__name__} never expands array parameters; "
-                "ANY($n) would reach IRIS as a parse error on this backend"
+            assert "rewrite_any_to_inlist(" in source, (
+                f"{module.__name__} never rewrites ANY(array); "
+                "it would reach IRIS as a parse error on this backend"
             )
+            assert "encode_inlist_params(" in source, (
+                f"{module.__name__} rewrites to %INLIST but never encodes the "
+                "bound array, so IRIS would answer SQLCODE -400"
+            )
+
+
+class TestPublicLiteralAgainstCatalogViews:
+    """A literal `'public'` must survive when the query targets a catalog view.
+
+    schema_mapper rewrites `'public'` to the IRIS schema name, which is right
+    when comparing against IRIS's own catalog and wrong against the emulated
+    views, where `public` is the stored value. The guard that scopes the
+    rewrite originally excluded any name preceded by a dot — which is exactly
+    the `pg_catalog.pg_namespace` spelling clients use, so the defect stayed
+    live for every schema-qualified query. Caught end-to-end, not by review.
+    """
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT nspname FROM pg_namespace WHERE nspname = 'public'",
+            "SELECT nspname FROM pg_catalog.pg_namespace WHERE nspname = 'public'",
+            "SELECT NSPNAME FROM PG_CATALOG.PG_NAMESPACE WHERE NSPNAME IN ('public')",
+            "SELECT relname FROM pg_catalog.pg_class c "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public'",
+        ],
+    )
+    def test_public_is_preserved(self, sql):
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA, translate_input_schema
+
+        translated = translate_input_schema(sql)
+        assert "'public'" in translated.lower(), (
+            f"the literal was rewritten: {translated}"
+        )
+        assert f"'{IRIS_SCHEMA}'".lower() not in translated.lower()
+
+    def test_non_catalog_queries_still_map_public_to_the_iris_schema(self):
+        """The rewrite must stay in force where it is correct."""
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA, translate_input_schema
+
+        translated = translate_input_schema(
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'public'"
+        )
+        assert f"'{IRIS_SCHEMA}'" in translated
+
+    def test_a_name_merely_ending_in_a_catalog_name_does_not_count(self):
+        """`my_pg_class` is an ordinary user table, not a catalog view."""
+        from iris_pgwire.schema_mapper import IRIS_SCHEMA, translate_input_schema
+
+        translated = translate_input_schema(
+            "SELECT a FROM my_pg_class WHERE schema_name = 'public'"
+        )
+        assert f"'{IRIS_SCHEMA}'" in translated
+
+
+class TestPostgresArrayLiteralParsing:
+    """The text format a client sends for an array parameter."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("{}", []),
+            ("{a}", ["a"]),
+            ("{a,b}", ["a", "b"]),
+            ("{ a , b }", ["a", "b"]),
+            ('{"a,b",c}', ["a,b", "c"]),
+            ('{"say \\"hi\\""}', ['say "hi"']),
+            ("{NULL}", [None]),
+            ("{null,a}", [None, "a"]),
+            ('{"NULL"}', ["NULL"]),
+            ('{""}', [""]),
+        ],
+    )
+    def test_parsing(self, text, expected):
+        from iris_pgwire.sql_translator.array_params import parse_pg_array_literal
+
+        assert parse_pg_array_literal(text) == expected
+
+    @pytest.mark.parametrize("text", ["public", "", "{a", 'a}', "{{1,2},{3,4}}", '{"unclosed}'])
+    def test_non_arrays_are_declined_not_guessed(self, text):
+        """Nested arrays have no %INLIST equivalent; flattening would be a lie."""
+        from iris_pgwire.sql_translator.array_params import parse_pg_array_literal
+
+        assert parse_pg_array_literal(text) is None
+
+    def test_a_bare_scalar_is_treated_as_a_one_element_set(self):
+        from iris_pgwire.sql_translator.array_params import encode_inlist_params
+        from iris_pgwire.sql_translator.iris_list import encode_iris_list
+
+        params = encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", ["public"])
+        assert params == [encode_iris_list(["public"])]

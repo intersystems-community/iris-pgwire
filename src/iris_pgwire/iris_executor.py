@@ -29,7 +29,12 @@ from .schema_mapper import (
     IRIS_SCHEMA,
     translate_output_schema,
 )  # Feature 030: PostgreSQL schema mapping
-from .sql_translator.array_params import expand_array_params, has_array_param
+from .sql_translator.array_params import (
+    encode_inlist_params,
+    expand_array_literals,
+    has_array_param,
+    rewrite_any_to_inlist,
+)
 from .sql_translator import (
     SQLInterceptor,
     SQLPipeline,
@@ -993,13 +998,16 @@ class IRISExecutor:
             if intercept_result.intercepted:
                 return intercept_result.result
 
-            # Expand `col = ANY($n)` into `col IN (...)`. IRIS has no ANY(array)
-            # construct, so an unexpanded one reaches it as a parse error
-            # ("SELECT expected, ? found"). Applied to every statement rather
-            # than only intercepted ones — catalog tables served by IRIS views
+            # Rewrite `col = ANY($n)` to `col %INLIST $n`. IRIS has no
+            # ANY(array) construct — it reaches the parser as
+            # "SELECT expected, ? found" — and the rewrite has to happen
+            # whether or not values are bound, because Describe prepares the
+            # statement with nothing bound. Applied to every statement rather
+            # than only intercepted ones: catalog tables served by IRIS views
             # reach the database for real (feature 044).
-            if params and has_array_param(sql):
-                sql, params = expand_array_params(sql, params)
+            if has_array_param(sql):
+                sql = expand_array_literals(rewrite_any_to_inlist(sql))
+                params = encode_inlist_params(sql, params)
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(
