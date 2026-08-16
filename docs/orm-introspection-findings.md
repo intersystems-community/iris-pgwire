@@ -130,16 +130,80 @@ concludes there are no tables.
 **This is a materially larger piece of work than everything above it** — it needs enough query
 evaluation over emulated rows to satisfy real introspection SQL: projections, aliases, joins across
 catalog tables, and `WHERE` predicates on columns like `relkind`. Prisma's later queries add CTEs.
-Options worth weighing before starting:
 
-1. **Pattern-match Prisma's specific queries.** Fastest, brittle, and does not generalise to Drizzle
-   or anything else.
-2. **Evaluate emulated catalogs with a real SQL engine** — materialise the emulated rows into
-   temporary IRIS tables, or run them through an in-process engine, and let actual SQL do the work.
-   Slower to build, but it makes every client's introspection work rather than one client's.
+### Spike: project `pg_catalog` as real IRIS views — **all six unknowns cleared**
 
-Option 2 is the recommendation. Option 1 recreates the same fragility that produced defects 1a and
-1b — handlers matching on query shape, and breaking the moment a client phrases things differently.
+Run 2026-08-16 against IRIS 2026.2. Every question that could have killed the views approach came
+back positive.
+
+| # | Question | Result |
+|---|---|---|
+| 1 | Does IRIS SQL support CTEs? Prisma emits `WITH rawindex AS (…)` | ✅ `WITH t AS (…) SELECT COUNT(*) FROM t` → 4 |
+| 2 | Can a schema literally named `pg_catalog` be created? | ✅ `CREATE VIEW pg_catalog.pg_class_v` succeeded |
+| 3 | Projection + alias + `WHERE` over the view? | ✅ `SELECT v.relname AS table_name … WHERE …` |
+| 4 | JOIN across two catalog views with aliases? | ✅ returned rows |
+| 5 | Can the deterministic OID be computed in SQL? | ✅ via `SqlProc` — see below |
+| 6 | Are the views visible to `INFORMATION_SCHEMA`? | ✅ 2 objects reported under `pg_catalog` |
+
+**The OID was the one real risk and it is solved.** Calling `$SYSTEM.Encryption.SHA1Hash(...)`
+inline in SQL fails with `SQLCODE -12` (a parse error — ObjectScript system functions are not SQL
+callable). Exposing it as a `SqlProc` class method works:
+
+```objectscript
+ClassMethod PgOid(identity As %String) As %Integer [ SqlName = PG_OID, SqlProc ]
+{
+    set hash = $SYSTEM.Encryption.SHA1Hash($zconvert(identity,"L"))
+    set n = 0
+    for i = 1:1:4 { set n = (n * 256) + $ascii(hash, i) }
+    quit 16384 + (n # 4278190080)
+}
+```
+
+Verified: stable across calls (`733435086` twice), distinct for different inputs, inside the user
+OID range (≥ 16384), and — the part that matters — **usable inside a `CREATE VIEW` definition**.
+
+**The decisive test.** Prisma's exact table-enumeration shape, run against real views with *no
+interception code in the path at all*:
+
+```sql
+SELECT tbl.relname AS table_name, ns.nspname AS namespace
+FROM pg_catalog.pg_class_v tbl
+JOIN pg_catalog.pg_namespace_test ns ON ns.oid = tbl.relnamespace
+WHERE tbl.relkind = 'r' AND ns.nspname = 'public'
+```
+
+```
+customer in public
+customerorder in public
+iadcheck in public
+orderline in public
+```
+
+Four rows, correct aliases, correct join — the query the emulator could not answer, answered by
+IRIS itself.
+
+### Firm recommendation
+
+**Project `pg_catalog` as real IRIS views over `INFORMATION_SCHEMA`, with OIDs from a `SqlProc`.**
+
+Projections, aliases, joins, `WHERE` predicates and CTEs stop being features anyone implements —
+they are the database's job, and IRIS already does them. Both backends inherit it because it lives
+server-side. It generalises to Drizzle, SQLAlchemy, PostgREST and anything else, rather than to one
+client's query shapes.
+
+The alternative — extending shape-matching — recreates precisely the fragility that produced
+defects 1a, 1b and 5a: three of the six defects in this document, all of which failed *silently*,
+returning empty results rather than errors.
+
+**Migration is incremental and low-risk.** Views and the router can coexist: add a view for one
+catalog table, have the router decline that table, verify, move to the next. No big-bang cutover.
+
+Remaining work to scope (none of it blocking, all of it ordinary):
+
+- Define views for the ten emulated tables, matching PostgreSQL column names and order.
+- Decide where they are created — namespace setup, IPM install, or first connection.
+- Confirm type OIDs and `relkind` mapping match what clients expect.
+- `regclass` casts and PG-specific operators still need the existing translation layer.
 
 ---
 
