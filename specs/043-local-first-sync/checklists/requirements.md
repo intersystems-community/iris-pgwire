@@ -80,8 +80,11 @@ all PASS.** No mocks were used and none were needed (Constitution Principle II).
 
 - **SC-002 is now evidence-backed**: 0.0032–0.0135 ms/row for the outbox trigger against a 5 ms
   budget.
-- **Q2 turned a suspected hazard into a confirmed one**: the legacy `^SQLUser.<Table>D` convention
-  resolves to a nonexistent global on 2026.2. Recorded in the spec's Dependencies as a MUST.
+- **Q2 produced a robustness requirement, not a confirmed defect.** On 2026.2 the `^Schema.TableD`
+  convention held for a class-defined table and not for a DDL-created one. An earlier draft called
+  this a "proven silent-write-loss bug" — retracted: no write loss was demonstrated, and both
+  behaviours are documented IRIS storage design. The MUST in the spec's Dependencies stands on the
+  robustness argument alone.
 - **Q1's pass makes the journal upgrade path real** rather than speculative — seek and cross-file
   enumeration both work, at ~121k records/sec.
 

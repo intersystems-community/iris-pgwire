@@ -506,12 +506,36 @@ Run against **IRIS for UNIX (Ubuntu Server LTS for x86-64 Containers) 2026.2 (Bu
 | **Q2** — global-to-row resolution | **PASS** | `SQLUser.SpikeQ2` (DDL-created) projects to class `User.SpikeQ2` with `DataLocation=^poCN.DyVu.1`, and the row was confirmed present at that global. |
 | **Q3** — outbox trigger cost | **PASS** | **0.0032–0.0135 ms/row** over 1,000 inserts (baseline 0.027–0.047 ms/row). Two to three orders of magnitude inside the 5 ms budget. Outbox captured 1000/1000 rows. |
 
-**Q2 also settled the inference question empirically.** The legacy convention `^SQLUser.SpikeQ2D`
-**does not exist** on 2026.2 — `$DATA` returns 0 — while the real global is the hashed
-`^poCN.DyVu.1`. Name inference is confirmed unsafe, not merely suspect. Anything resolving table
-globals MUST go through `%Dictionary.CompiledStorage` and fail closed. (This is exactly the
-fallback path in `iris-agentic-dev`'s `sql_table_inspect`, which would return the wrong global for
-a DDL table on this version.)
+**Q2 on global naming — what was actually observed, and what it does not prove.**
+
+Measured on 2026.2, two data points:
+
+| Table | Created via | Resolved `DataLocation` | `^Schema.TableD` exists? |
+|---|---|---|---|
+| `SQLUser.SpikeQ2` | DDL `CREATE TABLE` | `^poCN.DyVu.1` (hashed) | **No** — `$DATA` = 0 |
+| `Spike.Legacy` | class definition | `^Spike.LegacyD` | **Yes** — `$DATA` = 11 |
+
+So the `^Package.ClassD` convention is **correct for class-defined tables and does not hold for
+DDL-created ones**. Both behaviours are longstanding, documented IRIS storage design, not a
+malfunction.
+
+**An earlier draft of this document called name inference a "proven silent-write-loss bug." That
+was wrong and has been retracted.** No write loss was demonstrated — only a name mismatch, for one
+table, on one version, under default settings. The inference is a reasonable heuristic for the case
+it targets, and `iris-agentic-dev`'s `sql_table_inspect` only reaches it when the class-projection
+lookup misses, which did not occur for the DDL table tested (it correctly returned the hashed
+global). Treating it as a defect assumed a design intent that the evidence does not support.
+
+**What the evidence does support** is a robustness argument, which is all this design needs:
+resolution via `%Dictionary.CompiledStorage` is correct for *both* creation paths, while inference
+is correct for one. A change feed that must work regardless of how a table was created should
+resolve and fail closed rather than infer. That conclusion stands independently of whether anything
+upstream is buggy.
+
+**Untested** and therefore unknown: other IRIS versions, explicit `USEEXTENTSET` settings (the
+parameter read as "not set" on both tables here, so the DDL path applies hashed storage by some
+other mechanism we did not trace), sharded tables, mapped globals, and tables whose storage was
+edited by hand.
 
 **What Q1 changes.** Journal CDC is substantially more viable than the research feared — both
 gating mechanisms exist and the scan rate is high. Two implementation details the spike surfaced:
@@ -526,12 +550,12 @@ gating mechanisms exist and the scan rate is high. Two implementation details th
   the address and open the file first. Addresses are byte offsets and are **not** unique across
   files.
 
-- **`TypeName` is never the string `"SetKillRecord"`** — that is the *class* name. Measured values
-  on 2026.2 are `SET`, `KILL`, `ZKILL`, `BeginTrans`, `CommitTrans`. **Discriminate on the class**
-  (`$classname(rec) [ "SetKillRecord"`), not on `TypeName`. Gating `GlobalReference` on
-  `TypeName = "SetKillRecord"` yields an empty global on every record, silently. This bit both the
-  first draft of our own Q1 probe and `iris-agentic-dev`'s `journal_search` — see "Upstream defects"
-  below.
+- **`TypeName` did not take the value `"SetKillRecord"` in any of 4,000 records sampled** — that is
+  the *class* name. Observed domain on 2026.2: `SET`, `KILL`, `ZKILL`, `BeginTrans`, `CommitTrans`.
+  **Discriminate on the class** (`$classname(rec) [ "SetKillRecord"`), not on `TypeName`: gating
+  `GlobalReference` on `TypeName = "SetKillRecord"` yielded an empty global on every record, with no
+  error. This bit the first draft of our own Q1 probe. Scope: one journal file, one version,
+  non-mirrored.
 
 - **Transaction boundaries are directly observable**: `BeginTrans` and `CommitTrans` appear as
   their own record types (a 200-record sample showed `BeginTrans=2, CommitTrans=1, SET=196,
@@ -542,26 +566,42 @@ gating mechanisms exist and the scan rate is high. Two implementation details th
   `^["^^/usr/irissys/mgr/"]SYS("LastLicenseKey")`. A feed must strip the `["..."]` prefix before
   matching against a resolved `DataLocation`, and can use it to filter by database.
 
-### Upstream defects found in `iris-agentic-dev` while using it
+### Observations about `iris-agentic-dev`, and how confident to be in each
 
-Both verified on 2026.2 against the tool's own code; worth reporting since the project is
-InterSystems-community maintained and this repo depends on it (`pyproject.toml` `[ai]` extra).
+This repo depends on that project (`pyproject.toml` `[ai]` extra), so these are worth raising
+upstream — as questions, not bug reports. Each is scoped to what was actually observed on 2026.2.
 
-1. **`journal_search` never returns a global, and silently ignores its `global_pattern` filter.**
-   It gates both on `rec.TypeName = "SetKillRecord"`, which is never true. Observed: filtering on a
-   table name returned five unrelated records, each with `"global": ""`. Fix is to discriminate on
-   the class. (`crates/iris-agentic-dev-core/src/tools/admin_tools.rs`, `journal_search_impl`.)
+1. **`journal_search` returned an empty `global` on every record and appeared to ignore its
+   `global_pattern` filter.** *Confidence: high, but not exhaustive.* It gates both `GlobalReference`
+   and the filter on `rec.TypeName = "SetKillRecord"`. Across 4,000 records in one journal file,
+   `TypeName` never took that value — the observed domain was `SET`, `KILL`, `ZKILL`, `BeginTrans`,
+   `CommitTrans`, while the *class* was `%SYS.Journal.SetKillRecord`. Given that domain the
+   comparison cannot succeed, so the behaviour follows. Untested: other versions, mirrored or ECP
+   journals, and whether any record type reports `TypeName` differently. Worth asking upstream
+   whether the comparison is intended to match the class name.
+   (`crates/iris-agentic-dev-core/src/tools/admin_tools.rs`, `journal_search_impl`.)
 
-2. **`TOOL_NAMES` and the `tool` subcommand's dispatch are out of parity**, despite a comment
-   asserting a test enforces it. `iris_doc_search`, `journal_search`, `resolve_storage` and
-   `my_access` are listed as available but return `unknown tool` from the CLI, because the CLI
-   routes through `call_for_test()` while the MCP server registers the full set. They work when
-   driven over the MCP stdio transport. (`crates/iris-agentic-dev-bin/src/cmd/tool.rs`.)
+2. **The `tool` CLI subcommand reaches fewer tools than it advertises.** *Confidence: observed
+   behaviour; probably by design.* `iris_doc_search`, `journal_search`, `resolve_storage` and
+   `my_access` appear in `TOOL_NAMES` but return `unknown tool` from the CLI. **An earlier draft
+   called this a parity violation "despite a comment asserting a test enforces it" — that was a
+   misreading and is retracted.** The comment states that `TOOL_NAMES` tracks
+   `registered_tool_names(Toolset::Merged)`, a different relation, and says nothing about dispatch
+   coverage. The CLI routes through `call_for_test()` — a name that suggests a deliberately narrow
+   test entry point rather than an oversight. All four tools work over the MCP stdio transport,
+   which is the supported path. At most this is a discoverability wart.
 
-3. Not a defect but worth noting: `iris_table_info` took the **correct** path for a DDL-created
-   table on 2026.2, returning the hashed `^poCN.DvER.1` via the class projection. The unsafe
-   name-inference branch is only reached when `%Dictionary.CompiledClass` has no matching row, which
-   did not occur here. The hazard recorded above is real but narrower than first stated.
+3. **`iris_table_info` took the correct path** for a DDL-created table on 2026.2, returning the
+   hashed `^poCN.DvER.1` via the class projection, and `resolve_storage` agreed. Both independently
+   corroborated the spike's Q2 result.
+
+### Evidence standard for this document
+
+Several claims above were overstated in earlier drafts and corrected. The standard going forward:
+state the observation and its scope (version, path, sample size) separately from the inference; do
+not call third-party behaviour a bug without either reproducing across configurations or reading
+the intent; and prefer "observed X on Y" to "X is broken." A single passing or failing probe
+establishes what happened once, not what is true in general.
 
 None of this is needed for v1 (Clarification Q2 scoped capture to the SQL path), but the upgrade
 path is now evidence-backed rather than speculative.
@@ -629,7 +669,7 @@ Phases 1–3 are the minimum viable product: one table, syncing live into PGlite
 | ~~Journal reverse-mapping proves unreliable~~ | — | **RETIRED** — Q2 PASS on 2026.2: `CompiledStorage` resolved `^poCN.DyVu.1` and the row was found there |
 | ~~Journal tailing not resumable~~ | — | **RETIRED** — Q1 PASS: seek via `%SYS.Journal.Record.%OpenId`, files via `ByTimeReverseOrder`, ~121k rec/s |
 | Journal feed blocked by PHI policy in healthcare deployments | §4.2 unusable where IRIS is strongest | Ship the outbox as the default; gate journal mode explicitly (§4.5) |
-| Global name inferred rather than resolved | **Silent write loss** | **CONFIRMED REAL** — `^SQLUser.SpikeQ2D` does not exist on 2026.2 while the true global is `^poCN.DyVu.1`. Resolve via `%Dictionary.CompiledStorage` only; fail closed |
+| Global name inferred rather than resolved | Wrong global for some creation paths | Resolve via `%Dictionary.CompiledStorage`, fail closed. Rationale is robustness, not a known defect: on 2026.2 the `^Schema.TableD` convention held for a class-defined table and not for a DDL-created one, so resolution is correct for both paths where inference is correct for one |
 | Electric changes its protocol under us | Compatibility drift | Pin to a spec version; vendor the OpenAPI file; conformance tests in CI |
 | ~~Trigger overhead breaches 5 ms~~ | — | **RETIRED** — Q3 PASS: 0.0032–0.0135 ms/row, ~400× inside budget |
 | Chasing a moving local-first ecosystem | Wasted effort | Compatibility is with a *protocol*, not a vendor's runtime — the reason to reject the Zero clone |

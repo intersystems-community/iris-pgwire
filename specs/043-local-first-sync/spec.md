@@ -278,10 +278,11 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
     orders of magnitude inside the 5 ms budget, capturing 1000/1000 rows.
   - **Q1 and Q2 pass**, so journal CDC is a viable future upgrade for non-SQL writes rather than a
     speculative one. Neither gates v1.
-  - **Q2 confirmed a real hazard**: on 2026.2 the legacy global-name convention
-    `^SQLUser.<Table>D` does not exist while the true global is hashed (`^poCN.DyVu.1`). Any
-    component resolving table globals MUST use `%Dictionary.CompiledStorage` and fail closed.
-    Inferring a name risks silent write loss.
+  - **Q2 established a robustness requirement**, not a defect: on 2026.2 the `^Schema.TableD`
+    naming convention held for a class-defined table but not for a DDL-created one, whose global was
+    hashed (`^poCN.DyVu.1`). Both are documented IRIS storage behaviour. Because a change feed must
+    work regardless of how a table was created, any component resolving table globals MUST use
+    `%Dictionary.CompiledStorage` and fail closed rather than infer a name.
   - SC-001 and SC-007 remain unmeasured — they need the built system, not a spike.
 - Existing iris-pgwire capability is assumed for SQL translation, type formatting, catalog
   introspection and authentication (`research.md` §3).
