@@ -59,7 +59,7 @@ class TestCommandCompleteTag:
         """The router's own tag must pass through unchanged."""
         router = CatalogRouter()
         result = asyncio.run(
-            router.handle_catalog_query("SELECT nspname FROM pg_namespace", None, "t", None)
+            router.handle_catalog_query("SELECT attname FROM pg_attribute", None, "t", None)
         )
         assert result is not None
         tag = result["command_tag"]
@@ -73,7 +73,13 @@ class TestSchemaQualifiedCatalogNames:
 
     The handler required a bare `FROM PG_NAMESPACE`, so the schema-qualified
     form real clients emit fell to the router's empty fallback and returned
-    zero rows.
+    **zero rows** — silently, as if no schemas existed.
+
+    Feature 044 moved pg_namespace to an IRIS view, so the router now declines
+    it rather than answering. The invariant being protected is unchanged and is
+    what these tests assert: a catalog query is **never answered with an empty
+    handler result**. It is either declined (the database answers it) or
+    answered with rows. Silence is the bug.
     """
 
     @pytest.mark.parametrize(
@@ -85,22 +91,38 @@ class TestSchemaQualifiedCatalogNames:
             "select nspname from pg_catalog.pg_namespace;",
         ],
     )
-    def test_both_qualified_and_bare_forms_resolve(self, sql):
+    def test_no_form_is_answered_with_silent_emptiness(self, sql):
         router = CatalogRouter()
         result = asyncio.run(router.handle_catalog_query(sql, None, "t", None))
-        assert result is not None, f"{sql!r} was not intercepted"
-        assert result["row_count"] > 0, f"{sql!r} returned no namespaces"
+        if result is None:
+            return  # declined — an IRIS view answers it
+        assert result["row_count"] > 0, (
+            f"{sql!r} was answered by a handler with zero rows, which reads to a "
+            "client as 'no such schemas exist'"
+        )
 
-    def test_public_schema_is_reported(self):
-        """Introspection asks whether `public` exists; it must be listed."""
+    def test_public_schema_is_reachable(self):
+        """Introspection asks whether `public` exists; it must be discoverable.
+
+        Served by a view now, so assert the view declares it. The end-to-end
+        proof that IRIS returns it lives in the E2E suite.
+        """
+        from iris_pgwire.catalog.views.definitions import PG_NAMESPACE
+
         router = CatalogRouter()
         result = asyncio.run(
             router.handle_catalog_query(
                 "SELECT nspname FROM pg_catalog.pg_namespace", None, "t", None
             )
         )
-        names = {row[0] for row in result["rows"]}
-        assert "public" in names, f"public missing from {names}"
+        if result is None:
+            assert "PG_PUBLIC_SCHEMA()" in PG_NAMESPACE.body, (
+                "the view must expose the public schema (via the SqlProc, since a "
+                "literal would be rewritten to the IRIS schema name)"
+            )
+        else:
+            names = {row[0] for row in result["rows"]}
+            assert "public" in names, f"public missing from {names}"
 
 
 class TestUnevaluableExpressionsFallThrough:
@@ -136,12 +158,16 @@ class TestUnevaluableExpressionsFallThrough:
         assert exists_value is True, "the public schema must be reported as existing"
 
     def test_plain_catalog_queries_are_still_intercepted(self):
-        """The guard must not disable ordinary catalog emulation."""
+        """The guard must not disable ordinary catalog emulation.
+
+        Uses pg_attribute: pg_namespace moved to a view in feature 044 and is
+        now legitimately declined, which would make this assertion vacuous.
+        """
         router = CatalogRouter()
         result = asyncio.run(
-            router.handle_catalog_query("SELECT nspname FROM pg_namespace", None, "t", None)
+            router.handle_catalog_query("SELECT attname FROM pg_attribute", None, "t", None)
         )
-        assert result is not None and result["row_count"] > 0
+        assert result is not None, "handler-backed tables must still be intercepted"
 
 
 class TestNestedCatalogQueryGuard:
@@ -182,7 +208,7 @@ class TestNestedCatalogQueryGuard:
     def test_guard_is_released_after_dispatch(self):
         """A leaked guard would silently disable catalog emulation thereafter."""
         router = CatalogRouter()
-        asyncio.run(router.handle_catalog_query("SELECT nspname FROM pg_namespace", None, "t", None))
+        asyncio.run(router.handle_catalog_query("SELECT attname FROM pg_attribute", None, "t", None))
         assert cr._IN_CATALOG_HANDLER.get() is False
 
     def test_guard_is_task_scoped_not_global(self):
@@ -192,21 +218,22 @@ class TestNestedCatalogQueryGuard:
         """
         router = CatalogRouter()
 
+        # pg_attribute, not pg_namespace: the latter is view-backed since
+        # feature 044 and is declined for that reason, which would mask whether
+        # the guard is task-scoped.
+        probe = "SELECT attname FROM pg_attribute"
+
         async def nested_holder():
             token = cr._IN_CATALOG_HANDLER.set(True)
             try:
                 await asyncio.sleep(0.01)
-                return await router.handle_catalog_query(
-                    "SELECT nspname FROM pg_namespace", None, "nested", None
-                )
+                return await router.handle_catalog_query(probe, None, "nested", None)
             finally:
                 cr._IN_CATALOG_HANDLER.reset(token)
 
         async def other_session():
             await asyncio.sleep(0.005)
-            return await router.handle_catalog_query(
-                "SELECT nspname FROM pg_namespace", None, "other", None
-            )
+            return await router.handle_catalog_query(probe, None, "other", None)
 
         async def run():
             return await asyncio.gather(nested_holder(), other_session())

@@ -40,6 +40,13 @@ REVERSE_MAP = {IRIS_SCHEMA: "public"}
 SCHEMA_COLUMNS = frozenset({"table_schema", "schema_name", "nspname"})
 
 
+# Declared here rather than imported from catalog.views.definitions: that module
+# imports IRIS_SCHEMA from this one, so importing back would be circular. The
+# test suite asserts the two stay in agreement.
+CATALOG_SCHEMA = "pg_catalog"
+VIEW_BACKED_TABLES = frozenset({"pg_namespace", "pg_class"})
+
+
 def translate_input_schema(sql: str) -> str:
     """
     Replace mapped schemas (like 'public' or 'drizzle') with configured IRIS schema.
@@ -115,15 +122,40 @@ def translate_input_schema(sql: str) -> str:
         if table_name.upper() == IRIS_SCHEMA.upper():
             return match.group(0)
 
+        # Catalog tables live in the pg_catalog schema, not the user schema.
+        # Clients address them bare — Prisma emits "FROM pg_namespace as
+        # namespace" — and qualifying those with the user schema produced
+        # "Table 'SQLUSER.PG_CLASS' not found". Qualify with pg_catalog instead
+        # so both the bare and the pg_catalog-qualified forms resolve to the
+        # same view (feature 044, spec FR-002).
+        if table_name.lower() in VIEW_BACKED_TABLES:
+            return f'{keyword} {CATALOG_SCHEMA}."{table_name.upper()}"'
+
         return f'{keyword} {IRIS_SCHEMA}."{table_name.upper()}"'
 
     processed_sql = re.sub(bare_table_pattern, replace_bare_table, processed_sql)
 
     # 4. Restore literals
+    #
+    # A literal 'public' is normally rewritten to the IRIS schema name, because
+    # queries like
+    #     SELECT ... FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'public'
+    # are comparing against IRIS's own catalog, which stores 'SQLUser'.
+    #
+    # That is exactly wrong for the emulated pg_catalog views, where 'public'
+    # IS the stored value — pg_namespace.nspname returns 'public' by design, so
+    # rewriting the literal turns `WHERE nspname = 'public'` into a comparison
+    # that can never match and the client sees an empty catalog. Prisma filters
+    # on nspname = 'public' throughout introspection, so this silently emptied
+    # every result.
+    targets_catalog_views = any(
+        re.search(rf"(?i)(?<![\w.]){re.escape(table)}\b", sql) for table in VIEW_BACKED_TABLES
+    )
+
     final_sql = processed_sql
     for i, literal in enumerate(literals):
         placeholder = f"__LITERAL_{i}__"
-        if literal.lower() == "'public'":
+        if literal.lower() == "'public'" and not targets_catalog_views:
             literal = f"'{IRIS_SCHEMA}'"
         final_sql = final_sql.replace(placeholder, literal)
 

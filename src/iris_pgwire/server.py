@@ -244,11 +244,34 @@ class PGWireServer:
                 await writer.wait_closed()
             logger.info("Client connection closed", connection_id=connection_id)
 
+    async def _install_catalog_views(self):
+        """Create the emulated pg_catalog views, aborting startup on failure."""
+        from .catalog.views import CatalogViewInstaller, CatalogViewInstallError
+
+        installer = CatalogViewInstaller(self.iris_executor)
+        try:
+            installed = await installer.install()
+        except CatalogViewInstallError:
+            logger.error(
+                "Catalog view installation failed - refusing to start",
+                hint="the account needs privileges to create views in a pg_catalog schema",
+            )
+            raise
+        logger.info("Catalog views ready", count=len(installed))
+
     async def start(self):
         """Start the PGWire server"""
         try:
             # Test IRIS connectivity before starting
             await self.iris_executor.test_connection()
+
+            # Converge the emulated pg_catalog before accepting clients. Done
+            # here rather than as a migration step so a fresh container or a new
+            # namespace needs no manual setup, and identically on both backends.
+            # A failure aborts startup: serving a half-installed catalog would
+            # answer introspection with empty results instead of errors, which
+            # is the failure mode feature 044 exists to remove.
+            await self._install_catalog_views()
 
             # Setup SSL if enabled
             self.ssl_context = await self.setup_ssl_context()

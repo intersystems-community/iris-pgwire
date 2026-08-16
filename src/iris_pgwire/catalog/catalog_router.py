@@ -5,7 +5,6 @@ Routes pg_catalog and information_schema queries to appropriate emulators.
 Handles query parsing, array parameter translation, and regclass resolution.
 """
 
-import contextvars
 import json
 import re
 from dataclasses import dataclass, field
@@ -16,7 +15,9 @@ import structlog
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.type_mapping import get_type_mapping
 
+from ._reentrancy import _IN_CATALOG_HANDLER
 from .oid_generator import OIDGenerator
+from .views.definitions import CATALOG_SCHEMA, VIEW_BACKED_TABLES
 from .pg_attrdef import PgAttrdefEmulator
 from .pg_attribute import PgAttributeEmulator
 from .pg_class import PgClassEmulator
@@ -27,18 +28,6 @@ from .pg_type import PgTypeEmulator
 
 logger = structlog.get_logger(__name__)
 
-# Re-entrancy guard. Some handlers answer a catalog query by issuing their own
-# SQL through the executor — _build_pg_class_response asks IRIS for
-# INFORMATION_SCHEMA.TABLES to enumerate real tables. That inner query re-enters
-# this router, which has no information_schema.tables handler, so the empty
-# fallback intercepted it and returned zero rows. The handler then had no tables
-# to report and pg_class came back permanently empty, which is why ORM
-# introspection enumerated nothing. A ContextVar (not a plain flag) keeps the
-# guard per-asyncio-task, so one session's internal query cannot suppress
-# interception for a concurrent session.
-_IN_CATALOG_HANDLER: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "iris_pgwire_in_catalog_handler", default=False
-)
 
 
 @dataclass
@@ -373,6 +362,24 @@ class CatalogRouter:
             sql_upper=sql_upper,
             session_id=session_id,
         )
+
+        # Tables served by real IRIS views are answered by the database, which
+        # evaluates projections, aliases, joins and CTEs correctly. Declining
+        # here is what makes exactly one path answer a given catalog table
+        # (spec 044 FR-011). Without it the old handler would intercept first
+        # and the view would be unreachable.
+        # extract_catalog_tables() matches anything with a pg_ prefix, so the
+        # schema qualifier in "pg_catalog.pg_class" comes back looking like a
+        # table. Drop it before deciding, or no qualified query would ever be
+        # declined.
+        targeted = {t for t in self.extract_catalog_tables(sql) if t != CATALOG_SCHEMA}
+        if targeted and targeted <= set(VIEW_BACKED_TABLES):
+            logger.debug(
+                "Declining catalog query served by IRIS views",
+                tables=sorted(targeted),
+                session_id=session_id,
+            )
+            return None
 
         if _IN_CATALOG_HANDLER.get():
             logger.debug(
