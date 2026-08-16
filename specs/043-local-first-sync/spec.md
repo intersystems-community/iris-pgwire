@@ -2,7 +2,7 @@
 
 **Feature Branch**: `043-local-first-sync` (developed on `claude/iris-pglite-replicache-3ysrqe`)
 **Created**: 2026-08-16
-**Status**: Draft — clarifications resolved 2026-08-16; ready for planning
+**Status**: Draft — clarifications resolved and **Phase 0 spikes executed and passed** 2026-08-16 (IRIS 2026.2); ready for planning
 
 > **A note on the name.** By the Ink & Switch / Smashing taxonomy this feature delivers
 > **offline-first**, not local-first: IRIS holds the authoritative copy and wins conflicts
@@ -272,11 +272,17 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   be introduced — the project tests against real systems (`tests/conftest.py`: "NO MOCKS —
   everything tested against real systems"). Every requirement above is verified against a live
   instance or it is not verified.
-- **Phase 0 spike Q3 gates SC-002.** It measures what change capture costs on the write path; if it
-  breaches the 5 ms constitutional budget the substrate must change. Spikes Q1 and Q2 are
-  **informative, not blocking** — they establish whether journal CDC is a viable future upgrade for
-  capturing non-SQL writes (see Clarification Q2). The spikes exist in [`spikes/`](spikes/) and
-  **have not been executed** — no figure in this spec is evidence-backed until they run.
+- **Phase 0 spikes: EXECUTED, all three PASS** (2026-08-16, IRIS 2026.2 Build 221U). See
+  `research.md` §7 for full results.
+  - **Q3 gates SC-002 — satisfied.** Outbox trigger costs **0.0032–0.0135 ms/row**, two to three
+    orders of magnitude inside the 5 ms budget, capturing 1000/1000 rows.
+  - **Q1 and Q2 pass**, so journal CDC is a viable future upgrade for non-SQL writes rather than a
+    speculative one. Neither gates v1.
+  - **Q2 confirmed a real hazard**: on 2026.2 the legacy global-name convention
+    `^SQLUser.<Table>D` does not exist while the true global is hashed (`^poCN.DyVu.1`). Any
+    component resolving table globals MUST use `%Dictionary.CompiledStorage` and fail closed.
+    Inferring a name risks silent write loss.
+  - SC-001 and SC-007 remain unmeasured — they need the built system, not a spike.
 - Existing iris-pgwire capability is assumed for SQL translation, type formatting, catalog
   introspection and authentication (`research.md` §3).
 

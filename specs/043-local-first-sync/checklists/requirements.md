@@ -73,10 +73,20 @@ Net effect on risk: **materially reduced.** The trigger outbox is sufficient; sp
 from blocking to informative; the bulk-PHI exposure of `research.md` §4.5 is avoided rather than
 mitigated. The only added mechanism is FR-001a's drift detection, which exists to satisfy SC-006.
 
-### Not yet verifiable
+### Iteration 4 — Phase 0 spikes executed 2026-08-16
 
-The Phase 0 spikes have **not been executed** against a live IRIS instance — none was reachable in
-the authoring environment (container registry blob hosts blocked by egress policy). SC-001, SC-002
-and SC-007 carry targets derived from research, not measurement. Q3 gates SC-002 and should run
-before implementation begins. No mock IRIS will be introduced to work around this (Constitution
-Principle II).
+Run against real IRIS 2026.2 (Build 221U), `intersystems/iris-community:latest-cd`. **Q1, Q2 and Q3
+all PASS.** No mocks were used and none were needed (Constitution Principle II).
+
+- **SC-002 is now evidence-backed**: 0.0032–0.0135 ms/row for the outbox trigger against a 5 ms
+  budget.
+- **Q2 turned a suspected hazard into a confirmed one**: the legacy `^SQLUser.<Table>D` convention
+  resolves to a nonexistent global on 2026.2. Recorded in the spec's Dependencies as a MUST.
+- **Q1's pass makes the journal upgrade path real** rather than speculative — seek and cross-file
+  enumeration both work, at ~121k records/sec.
+
+### Still not verifiable by spike
+
+SC-001 (end-to-end change latency) and SC-007 (100 concurrent clients, <10% write degradation)
+require the built system and cannot be settled by a Phase 0 probe. They remain targets derived from
+research and must be measured during implementation.

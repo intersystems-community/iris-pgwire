@@ -84,10 +84,44 @@ def preamble() -> None:
 
 
 SPIKES = {
-    "q1": ("q1_journal_resume.cos", "%SYS", "Q1 -- resumable journal tailing"),
-    "q2": ("q2_storage_resolution.cos", "USER", "Q2 -- global resolution for DDL tables"),
-    "q3": ("q3_trigger_overhead.cos", "USER", "Q3 -- outbox trigger write-path cost"),
+    "q1": ("SpikeQ1", "Q1 -- resumable journal tailing"),
+    "q2": ("SpikeQ2", "Q2 -- global resolution for DDL tables"),
+    "q3": ("SpikeQ3", "Q3 -- outbox trigger write-path cost"),
 }
+
+
+def run_probe(routine: str) -> str:
+    """Load a probe class into IRIS and invoke its Run() classmethod.
+
+    Probes are classes rather than terminal input because `iris session`
+    interprets piped stdin line by line, so multi-line brace blocks are syntax
+    errors. Classes compile as a unit and behave normally. (.cls rather than
+    .mac because $SYSTEM.OBJ.Load rejects UDL .mac with "Unknown file type".)
+    """
+    source = load(routine + ".cls")
+    local = SPIKE_DIR / f".{routine}.generated.cls"
+    local.write_text(source)
+
+    remote = f"/tmp/{routine}.cls"
+    if USE_SESSION:
+        import shutil
+
+        shutil.copy(local, remote)
+    else:
+        cp = subprocess.run(
+            ["docker", "cp", str(local), f"{CONTAINER}:{remote}"],
+            capture_output=True,
+            text=True,
+        )
+        if cp.returncode != 0:
+            return f"SPIKE_DRIVER_ERROR: docker cp failed: {cp.stderr.strip()}"
+    local.unlink(missing_ok=True)
+
+    loader = (
+        f' do $SYSTEM.OBJ.Load("{remote}","ck")\n'
+        f' do ##class(Spike.{routine[-2:]}).Run()\n'
+    )
+    return run_objectscript(loader, namespace="USER")
 
 
 def main(argv: list[str]) -> int:
@@ -101,11 +135,11 @@ def main(argv: list[str]) -> int:
 
     verdicts: dict[str, str] = {}
     for key in requested:
-        filename, namespace, title = SPIKES[key]
+        routine, title = SPIKES[key]
         print("-" * 72)
         print(title)
         print("-" * 72)
-        output = run_objectscript(load(filename), namespace=namespace)
+        output = run_probe(routine)
         print(output.strip())
         print()
 

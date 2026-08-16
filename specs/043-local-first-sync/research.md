@@ -495,26 +495,45 @@ flows back through the read path → client sees confirmation and drops its opti
 | D6 | Conflict model | Server-authoritative rebase, no CRDTs | High — §5.5 |
 | D7 | Multi-instance fanout | Validate ECP app-server tier early | Medium — differentiator if it holds |
 
-**Open questions requiring spikes**, in priority order:
+### Phase 0 spike results — EXECUTED 2026-08-16
 
-- **Q1 — Resumable journal tailing.** *Highest-value unknown, and now sharper (§4.2).* Two parts:
-  (a) can we **seek to a saved `Address`** instead of rescanning from `FirstRecord`, and iterate
-  across journal file boundaries rather than only the current file? (b) if so, can it keep up with
-  a realistic write rate, and what is the latency floor? The one reference implementation available
-  answers neither — it rescans, single-file, capped at 500 records. If (a) is unachievable, journal
-  CDC is dead as a feed regardless of throughput and §4.1 becomes the permanent answer.
-- **Q2 — Global→row reverse mapping.** The authoritative path is verified: join
-  `%Dictionary.CompiledClass` to `%Dictionary.CompiledStorage` on the SQL projection —
-  `SELECT c.Name, s.DataLocation, s.IndexLocation, s.IDLocation FROM %Dictionary.CompiledClass c
-  LEFT JOIN %Dictionary.CompiledStorage s ON s.parent = c.Name WHERE c.SqlSchemaName = ? AND
-  c.SqlTableName = ?` (confirmed `SQLCODE=0` against IRIS 2026.2). Remaining unknowns: does the
-  class projection always resolve for DDL-created tables with hashed globals (`^EW3K.B3vA.1`), and
-  how do we invalidate the mapping on DDL? **Do not fall back to name inference.** `iris-agentic-dev`'s
-  `sql_table_inspect` infers `^SQLUser.<Table>D` when the class lookup misses; that convention
-  predates `USEEXTENTSET=1` and will silently produce the wrong global for hashed-storage tables.
-  A feed that guesses wrong here loses writes silently — the worst possible failure mode.
-- **Q3 — Trigger overhead.** What does the outbox cost on the write path, measured against the
-  constitution's 5 ms budget?
+Run against **IRIS for UNIX (Ubuntu Server LTS for x86-64 Containers) 2026.2 (Build 221U)**,
+`intersystems/iris-community:latest-cd`, via [`spikes/`](spikes/). **All three PASS.**
+
+| Spike | Verdict | Finding |
+|---|---|---|
+| **Q1** — resumable journal tailing | **PASS** | Seek works: `##class(%SYS.Journal.Record).%OpenId(205004)` round-trips to the same `Address`. Cross-file works: `%SYS.Journal.File:ByTimeReverseOrder` enumerates every journal file with its size. Cold scan runs at **~121,000–126,000 records/sec**. |
+| **Q2** — global-to-row resolution | **PASS** | `SQLUser.SpikeQ2` (DDL-created) projects to class `User.SpikeQ2` with `DataLocation=^poCN.DyVu.1`, and the row was confirmed present at that global. |
+| **Q3** — outbox trigger cost | **PASS** | **0.0032–0.0135 ms/row** over 1,000 inserts (baseline 0.027–0.047 ms/row). Two to three orders of magnitude inside the 5 ms budget. Outbox captured 1000/1000 rows. |
+
+**Q2 also settled the inference question empirically.** The legacy convention `^SQLUser.SpikeQ2D`
+**does not exist** on 2026.2 — `$DATA` returns 0 — while the real global is the hashed
+`^poCN.DyVu.1`. Name inference is confirmed unsafe, not merely suspect. Anything resolving table
+globals MUST go through `%Dictionary.CompiledStorage` and fail closed. (This is exactly the
+fallback path in `iris-agentic-dev`'s `sql_table_inspect`, which would return the wrong global for
+a DDL table on this version.)
+
+**What Q1 changes.** Journal CDC is substantially more viable than the research feared — both
+gating mechanisms exist and the scan rate is high. Two implementation details the spike surfaced:
+
+- `%SYS.Journal.File` exposes `FirstRecord`, `LastRecord`, `LastMarker`, `End`, `Name`, `Chan` —
+  but **no `Next`/`Prev`**. File traversal goes through the `ByTimeReverseOrder` query, not
+  object navigation.
+- `%SYS.Journal.Record` exposes `Address`, `NextAddress`, `PrevAddress`, `InTransaction`, `JobID`,
+  `ProcessID`, `TimeStamp`, `Type`/`TypeName`, and `ECPSystemID`/`RemoteSystemID`. The
+  address/next-address pair supports a cursor without holding objects, and `InTransaction` gives
+  real transaction boundaries. `%OpenId(file||address)` returns **null** — the composite form does
+  not work, so a resume key must pair the file name with the address and open the file first.
+  Addresses are byte offsets and are **not** unique across files.
+
+None of this is needed for v1 (Clarification Q2 scoped capture to the SQL path), but the upgrade
+path is now evidence-backed rather than speculative.
+
+### Remaining open questions
+
+Q1–Q3 are answered above. The rest are unchanged:
+
+
 - **Q4 — Client compatibility.** Does unmodified `@electric-sql/pglite-sync` work against our
   endpoint? Conformance-test against Electric's own OpenAPI spec (already fetched).
 - **Q5 — Type formatting fidelity.** Shape values must be strings in Postgres display format
@@ -567,12 +586,12 @@ Phases 1–3 are the minimum viable product: one table, syncing live into PGlite
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Journal reverse-mapping proves unreliable across IRIS versions | Kills §4.2 | Outbox is v1; journal is an upgrade, not a dependency |
-| Journal tailing turns out not to be resumable at all (Q1a) | Kills §4.2 outright | Same — §4.1 is designed to stand alone |
+| ~~Journal reverse-mapping proves unreliable~~ | — | **RETIRED** — Q2 PASS on 2026.2: `CompiledStorage` resolved `^poCN.DyVu.1` and the row was found there |
+| ~~Journal tailing not resumable~~ | — | **RETIRED** — Q1 PASS: seek via `%SYS.Journal.Record.%OpenId`, files via `ByTimeReverseOrder`, ~121k rec/s |
 | Journal feed blocked by PHI policy in healthcare deployments | §4.2 unusable where IRIS is strongest | Ship the outbox as the default; gate journal mode explicitly (§4.5) |
-| Global name inferred rather than resolved | **Silent write loss** | Resolve via `%Dictionary.CompiledStorage` only; fail closed if unresolved (Q2) |
+| Global name inferred rather than resolved | **Silent write loss** | **CONFIRMED REAL** — `^SQLUser.SpikeQ2D` does not exist on 2026.2 while the true global is `^poCN.DyVu.1`. Resolve via `%Dictionary.CompiledStorage` only; fail closed |
 | Electric changes its protocol under us | Compatibility drift | Pin to a spec version; vendor the OpenAPI file; conformance tests in CI |
-| Trigger overhead breaches the 5 ms budget | Forces §4.2 early | Measure in Phase 0, not Phase 3 |
+| ~~Trigger overhead breaches 5 ms~~ | — | **RETIRED** — Q3 PASS: 0.0032–0.0135 ms/row, ~400× inside budget |
 | Chasing a moving local-first ecosystem | Wasted effort | Compatibility is with a *protocol*, not a vendor's runtime — the reason to reject the Zero clone |
 | ECP unavailable or unlicensed in target deployments | Loses §5.7 advantage | Treat as an optimization, never a requirement |
 | Scope: this is a second product, not a feature | Delivery risk | Ship Phases 1–3 as a separate installable alongside iris-pgwire |
