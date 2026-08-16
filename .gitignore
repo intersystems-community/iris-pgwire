@@ -110,3 +110,8 @@ test_pg_type.py
 test_scope.py
 update_article.py
 verify_demo.sql
+
+# iris-agentic-dev local connection config (per-developer: host, port, container
+# name and credentials vary by machine). Template is committed at
+# specs/043-local-first-sync/spikes/iris-agentic-dev.toml.example
+.iris-agentic-dev.toml
