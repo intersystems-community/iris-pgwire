@@ -483,8 +483,10 @@ point to extend for Q1. It is already this repo's documented IRIS introspection 
 
 ## 8. Phased plan
 
-**Phase 0 — Spikes (answer Q1–Q3 before committing).** Journal tailing benchmark; hashed-global
-reverse mapping; trigger overhead measurement. Deliverable: a go/no-go on the v1 substrate.
+**Phase 0 — Spikes (answer Q1–Q3 before committing).** Journal seek/resume probe; hashed-global
+reverse mapping; trigger overhead measurement. Harness in [`spikes/`](spikes/) — runs against any
+IRIS Community instance via `iris session`, one verdict per question. Deliverable: a go/no-go on
+the v1 substrate.
 
 **Phase 1 — Change feed.** `ChangeFeed` interface + outbox implementation + IRIS-side DDL helpers
 (`irissync.register_table`). Deliverable: an ordered, replayable op stream with a stable sequence.

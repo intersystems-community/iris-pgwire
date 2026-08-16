@@ -1,0 +1,155 @@
+ // Q1 -- Is journal tailing RESUMABLE? Can we seek to a saved position instead
+ // of rescanning from FirstRecord, and iterate across journal file boundaries?
+ //
+ // Run in: %SYS namespace
+ // Kill criterion: if no seek mechanism works, journal CDC is dead as a change
+ // feed regardless of throughput, and the section 4.1 outbox becomes permanent.
+ //
+ // This is an API PROBE. No working seek-by-address pattern is documented, so
+ // several candidates are tried and some are EXPECTED to fail. The useful
+ // output is which one succeeds.
+ //
+ new jfName,jf,rec,r2,n,addr,gref,seekOK,seekHow,crossOK,crossHow,t0,el,scanned,verdict,note,e
+ set seekOK = 0, seekHow = "", crossOK = 0, crossHow = "", addr = "", gref = ""
+ //
+ write !,"Q1.1 open the current journal file",!
+ set jfName = ##class(%SYS.Journal.System).GetCurrentFileName()
+ write "  current file: ",jfName,!
+ set jf = ##class(%SYS.Journal.File).%OpenId(jfName)
+ if '$isobject(jf) {
+   write !,"Q1 VERDICT: INCONCLUSIVE -- could not open the current journal file",!
+   quit
+ }
+ //
+ write !,"Q1.2 forward scan; capture an Address to seek back to",!
+ set rec = jf.FirstRecord, n = 0
+ while $isobject(rec) && (n < 200) {
+   set n = n + 1
+   if n = 100 {
+     try {
+       set addr = rec.Address
+     } catch e {
+       write "  rec.Address not available: ",e.DisplayString(),!
+     }
+     try {
+       if rec.TypeName = "SetKillRecord" { set gref = rec.GlobalReference }
+     } catch e { }
+   }
+   set rec = rec.Next
+ }
+ write "  walked ",n," records; captured Address = '",addr,"'",!
+ if gref '= "" { write "  sample GlobalReference = ",gref,! }
+ if addr = "" {
+   write "  no Address captured -- seek probes cannot run",!
+   write !,"Q1 VERDICT: FAIL -- records expose no Address to resume from",!
+   quit
+ }
+ //
+ write !,"Q1.3 probe seek-by-address candidates",!
+ // Candidate A: %SYS.Journal.Record.%OpenId(<address>)
+ try {
+   set r2 = ##class(%SYS.Journal.Record).%OpenId(addr)
+   if $isobject(r2) {
+     write "  [A] %SYS.Journal.Record.%OpenId(addr) -> OK, Address=",r2.Address,!
+     if r2.Address = addr { set seekOK = 1, seekHow = "%SYS.Journal.Record.%OpenId(address)" }
+   } else {
+     write "  [A] %SYS.Journal.Record.%OpenId(addr) -> null",!
+   }
+ } catch e {
+   write "  [A] failed: ",e.DisplayString(),!
+ }
+ // Candidate B: composite id "<file>||<address>"
+ if 'seekOK {
+   try {
+     set r2 = ##class(%SYS.Journal.Record).%OpenId(jfName_"||"_addr)
+     if $isobject(r2) {
+       write "  [B] %OpenId(file||addr) -> OK, Address=",r2.Address,!
+       set seekOK = 1, seekHow = "%SYS.Journal.Record.%OpenId(file||address)"
+     } else {
+       write "  [B] %OpenId(file||addr) -> null",!
+     }
+   } catch e {
+     write "  [B] failed: ",e.DisplayString(),!
+   }
+ }
+ // Candidate C: a seek method on the file object
+ if 'seekOK {
+   try {
+     set r2 = jf.GetRecordAt(addr)
+     if $isobject(r2) {
+       write "  [C] jf.GetRecordAt(addr) -> OK, Address=",r2.Address,!
+       set seekOK = 1, seekHow = "jf.GetRecordAt(address)"
+     } else {
+       write "  [C] jf.GetRecordAt(addr) -> null",!
+     }
+   } catch e {
+     write "  [C] failed: ",e.DisplayString(),!
+   }
+ }
+ // Candidate D: settable cursor property on the file object
+ if 'seekOK {
+   try {
+     set jf.LastRecordAddr = addr
+     write "  [D] jf.LastRecordAddr assignable -- inspect manually",!
+   } catch e {
+     write "  [D] failed: ",e.DisplayString(),!
+   }
+ }
+ if 'seekOK { write "  no seek candidate succeeded",! }
+ //
+ write !,"Q1.4 probe cross-file iteration",!
+ // Candidate A: Next/Prev navigation on the file object
+ try {
+   if jf.Next '= "" {
+     write "  [A] jf.Next = ",jf.Next,!
+     set crossOK = 1, crossHow = "jf.Next"
+   } else {
+     write "  [A] jf.Next is empty (expected on the newest file)",!
+   }
+ } catch e {
+   write "  [A] jf.Next not available: ",e.DisplayString(),!
+ }
+ try {
+   if jf.Prev '= "" {
+     write "  [B] jf.Prev = ",jf.Prev,!
+     if 'crossOK { set crossOK = 1, crossHow = "jf.Prev" }
+   } else {
+     write "  [B] jf.Prev is empty -- only one journal file on this instance?",!
+   }
+ } catch e {
+   write "  [B] jf.Prev not available: ",e.DisplayString(),!
+ }
+ // Candidate C: enumerate the journal file catalogue
+ try {
+   set rs = ##class(%SQL.Statement).%ExecDirect(,"SELECT COUNT(*) AS n FROM %SYS_Journal.File")
+   if rs.%SQLCODE >= 0, rs.%Next() {
+     write "  [C] %SYS_Journal.File rows = ",rs.%Get("n"),!
+     if 'crossOK { set crossOK = 1, crossHow = "%SYS_Journal.File catalogue query" }
+   }
+ } catch e {
+   write "  [C] catalogue query failed: ",e.DisplayString(),!
+ }
+ //
+ write !,"Q1.5 throughput -- forward scan up to 20000 records",!
+ set t0 = $zh, rec = jf.FirstRecord, scanned = 0
+ while $isobject(rec) && (scanned < 20000) {
+   set scanned = scanned + 1
+   set rec = rec.Next
+ }
+ set el = $zh - t0
+ write "  scanned ",scanned," records in ",$fnumber(el,"",3),"s"
+ if el > 0 { write "  (~",$fnumber(scanned/el,"",0)," rec/s)" }
+ write !
+ write "  NOTE: this is a cold full scan. It is the cost a NON-resumable reader",!
+ write "  pays on every poll. Compare against the seek result above.",!
+ //
+ // Verdict -- seek is the gating capability; cross-file is required for a
+ // durable feed but is a lesser blocker (a feed could restart per file).
+ if seekOK && crossOK {
+   set verdict = "PASS", note = "seek via "_seekHow_"; cross-file via "_crossHow
+ } elseif seekOK {
+   set verdict = "PASS", note = "seek via "_seekHow_" but NO cross-file mechanism found -- feed would stall at file rollover"
+ } else {
+   set verdict = "FAIL", note = "no seek-by-address mechanism works; journal tailing is not resumable"
+ }
+ write !,"Q1 VERDICT: ",verdict," -- ",note,!
