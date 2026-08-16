@@ -48,6 +48,55 @@ server-authoritative push endpoint for writes. Phased plan in §8.
 
 ---
 
+## 1a. Why this matters: the Zen gap
+
+The strategic case does not rest on local-first being fashionable. It rests on a hole InterSystems
+has not filled.
+
+**Zen was deprecated in IRIS 2019.1** and Zen Reports left the distribution in 2025.3 — not because
+something better shipped, but because it depends on browser features that are themselves going
+away. What Zen actually gave developers was *autogeneration*: declare a persistent class, get a
+working UI. Nothing InterSystems ships today replaces that. The recommended path — decouple the UI,
+talk JSON, use Angular — is a real improvement in architecture and a regression in effort. `isc.rest`
++ `isc.ipm.js` removes HTTP-client boilerplate but stops at services and interfaces; RESTForms2 /
+IRIS RAD Studio is the closest experiential match but is unofficial and dormant since ~2021.
+
+That is the gap this work sits in. A PostgreSQL-speaking IRIS can borrow the Postgres ecosystem's
+generators wholesale — schema-driven clients, generated APIs, off-the-shelf BI — plausibly removing
+**80–90% of CRUD boilerplate** for standard data-in/data-out resources. Sync is the last layer of
+that story, and the only one with no off-the-shelf answer for IRIS.
+
+**This is the strongest argument for wire compatibility (§2.2), and it is a warning.** The value is
+entirely in *stock tools working unmodified*. A bespoke IRIS sync protocol — however good — would
+recreate the Zen trap: a framework only InterSystems maintains, whose longevity depends on
+InterSystems continuing to care. Compatibility with a protocol that others also implement is the
+structural difference between this and Zen.
+
+**One clarification, because it is easy to get backwards**: Electric and PowerSync read the
+PostgreSQL WAL, so they cannot run against IRIS through iris-pgwire — correct, and a common
+conclusion. The proposal here is not to run Electric's service against IRIS. It is to **serve
+Electric's shape protocol ourselves**. Same conclusion about their server; opposite conclusion
+about their wire format.
+
+*Source: internal research memo, "IRIS Full-Stack Modernization: pgwire, PGlite, Local-First, and
+the Zen Legacy" (2026-08-16), which also supplies the Zen deprecation timeline and the
+codegen-successor survey summarised above.*
+
+## 1b. Offline-first, not local-first — naming this honestly
+
+By the Ink & Switch definition, local-first means the device holds the **primary** copy and servers
+play a supporting role. By that standard this feature is **offline-first**: IRIS is authoritative,
+and on reconnect the server wins.
+
+That is the right trade here, and the local-first literature agrees: strong-transactional-consistency
+domains — banking, payments, inventory, and by extension the healthcare and finance settings where
+IRIS lives — are listed as *poor fits* for true local-first. §5.5's ECP lesson points the same way:
+distributed caches do not vote, one node is authoritative.
+
+So the design stands, but the label should not overreach. What is delivered is an offline-capable
+partial replica with server authority — most of the felt benefit (no spinners, works on a plane,
+instant local reads) without claiming data ownership semantics the design does not provide.
+
 ## 2. Landscape
 
 ### 2.1 PGlite
@@ -65,6 +114,12 @@ Relevant capabilities:
 | Live/reactive queries | `@electric-sql/pglite/live` | Re-runs a query when its inputs change |
 | Sync-into-tables | `@electric-sql/pglite-sync` 0.6.6 | Applies an Electric shape stream into local tables |
 | Shape client | `@electric-sql/client` 1.5.26 | Framework-agnostic shape consumer |
+
+Two constraints worth carrying into design: PGlite is **single-connection** (it builds on Postgres's
+single-user mode, since WASM cannot fork per-connection processes), and `pglite-sync` is **alpha and
+one-directional** — server→client only, with no write-back and no conflict resolution. The second is
+not a problem for us: the write path is ours to build either way (§2.3), and its absence upstream is
+precisely why User Story 2 exists.
 
 For us, PGlite is a **consumer**, not something to port. It runs unchanged. Notably, pgvector in
 PGlite means client-side vector search over a synced subset of IRIS vector data — a differentiated

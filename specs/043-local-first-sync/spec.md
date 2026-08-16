@@ -2,7 +2,13 @@
 
 **Feature Branch**: `043-local-first-sync` (developed on `claude/iris-pglite-replicache-3ysrqe`)
 **Created**: 2026-08-16
-**Status**: Draft — clarifications resolved 2026-08-16; **blocked on Phase 0 spike Q1**
+**Status**: Draft — clarifications resolved 2026-08-16; ready for planning
+
+> **A note on the name.** By the Ink & Switch / Smashing taxonomy this feature delivers
+> **offline-first**, not local-first: IRIS holds the authoritative copy and wins conflicts
+> (Assumptions, FR-017). True local-first would make the device's copy primary, which is the wrong
+> trade for IRIS's transactional-consistency domains. The directory name is retained for
+> continuity; the accurate description is "offline-capable partial replica with server authority."
 **Input**: User description: "Local-first sync for IRIS: an Electric-shape-compatible read path and Replicache-style write path over a transactional outbox change feed, letting PGlite clients hold a live, offline-capable partial replica of IRIS data."
 
 **Research**: [`research.md`](research.md) — landscape analysis, four candidate change-feed
@@ -138,13 +144,12 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
 
 **Change capture**
 
-- **FR-001**: System MUST capture inserts, updates and deletes to registered IRIS tables as an
-  ordered, replayable stream of row-level change events, **regardless of the path by which the
-  change was made** — SQL, direct global write, or bulk load. (Clarification Q2 = "all writes".)
-- **FR-001a**: A change to a registered table that the feed cannot capture MUST be treated as a
-  defect, not a documented limitation. Where a write path provably cannot be observed, the system
-  MUST detect the resulting divergence and force affected clients to re-sync rather than leave
-  them silently stale.
+- **FR-001**: System MUST capture inserts, updates and deletes made **through the SQL path** to
+  registered IRIS tables, as an ordered, replayable stream of row-level change events.
+- **FR-001a**: Writes that bypass the SQL path (direct global writes, bulk loads that skip
+  triggers) are **out of scope for capture**, but MUST NOT cause silent staleness. The system MUST
+  detect that a registered table has been modified outside the captured path and force affected
+  clients to re-sync. An undetected divergence is a defect; a detected one is acceptable.
 - **FR-002**: Each change event MUST carry enough information to apply it to a replica: the
   operation, the row's identity, and the affected column values.
 - **FR-003**: Change events MUST be ordered consistently with the order the changes committed in
@@ -195,9 +200,10 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   narrowing it silently. **Table-level entitlement is required for the first release**;
   row-level entitlement is a **release gate before any production use** (Clarification Q1 = C).
 - **FR-024**: Data excluded by a column projection MUST NOT leave IRIS through this feature.
-- **FR-025**: Because the change feed observes writes below the SQL layer (FR-001), it MUST filter
-  to registered tables **inside** the feed, before any change leaves IRIS. Changes to unregistered
-  tables MUST NOT be materialised, logged, or transmitted.
+- **FR-025**: The change feed MUST capture only registered tables. Changes to unregistered tables
+  MUST NOT be materialised, logged, or transmitted. (Trivially satisfied by per-table capture under
+  FR-001; retained as an explicit requirement so it remains binding if the substrate ever changes
+  to one that observes writes below the SQL layer.)
 
 ### Key Entities
 
@@ -266,11 +272,11 @@ refusal; confirm an entitled caller receives exactly their permitted rows.
   be introduced — the project tests against real systems (`tests/conftest.py`: "NO MOCKS —
   everything tested against real systems"). Every requirement above is verified against a live
   instance or it is not verified.
-- **Phase 0 spikes Q1 and Q2 are BLOCKING.** Following Clarification Q2, the journal substrate is
-  required, so Q1 (resumable journal tailing) and Q2 (global-to-row resolution) now gate FR-001
-  itself. A failure in either means this feature cannot be built as specified. Q3 (write-path cost)
-  gates SC-002 but is not blocking. The spikes exist in [`spikes/`](spikes/) and **have not been
-  executed** — no figure in this spec is evidence-backed until they run.
+- **Phase 0 spike Q3 gates SC-002.** It measures what change capture costs on the write path; if it
+  breaches the 5 ms constitutional budget the substrate must change. Spikes Q1 and Q2 are
+  **informative, not blocking** — they establish whether journal CDC is a viable future upgrade for
+  capturing non-SQL writes (see Clarification Q2). The spikes exist in [`spikes/`](spikes/) and
+  **have not been executed** — no figure in this spec is evidence-backed until they run.
 - Existing iris-pgwire capability is assumed for SQL translation, type formatting, catalog
   introspection and authentication (`research.md` §3).
 
@@ -297,26 +303,30 @@ the feature may be demonstrated without it but MUST NOT be deployed against real
 
 Recorded in FR-023.
 
-### Q2: Must non-SQL writes be captured? — **RESOLVED: yes, all writes**
+### Q2: Must non-SQL writes be captured? — **RESOLVED: no. SQL path only, with drift detection**
 
-Capturing every write to a registered table is a requirement, whatever path made it. Recorded in
-FR-001, FR-001a and FR-025.
+*(Initially answered "all writes" on 2026-08-16 and reversed the same day. The reversal is recorded
+rather than erased, because the reasoning is the useful part.)*
 
-**This resolution has consequences that change the plan**, and they should be visible rather than
-buried:
+Capture covers the SQL path. Writes that bypass it are out of scope, but MUST be *detected* so they
+cannot cause silent staleness (FR-001a).
 
-1. **The trigger-based outbox alone is insufficient.** It observes SQL writes only. `research.md`
-   §4 recommended it for v1 with the journal substrate as a later upgrade; that recommendation no
-   longer satisfies FR-001 on its own.
-2. **Phase 0 spike Q1 becomes blocking.** The journal substrate is the only candidate that sees
-   non-SQL writes. Its feasibility turns on whether a journal reader can seek to a saved position
-   and roll across files — currently unproven, with no documented mechanism found. **If Q1 fails,
-   this feature cannot be built as specified** and the clarification must be revisited.
-3. **Spike Q2 becomes blocking too.** A journal feed sees global writes, so it must map globals
-   back to rows. Without reliable resolution there is no row-level change event.
-4. **The bulk-PHI concern (`research.md` §4.5) is now live rather than hypothetical.** A journal
-   feed observes every write to every global in the database. FR-025 exists because of this: the
-   feed must filter to registered tables inside IRIS, before anything is materialised or leaves.
+**Why the reversal was right**: requiring all writes would have forced the journal substrate — a
+WAL-equivalent — which is precisely the dependency that makes Electric and PowerSync unusable
+against IRIS in the first place. Choosing a sync design that avoids database-level replication and
+then mandating a requirement that reimposes it defeats the choice. The trigger outbox needs no
+journal access, no `%SYS` privilege, and no global-to-row reverse mapping.
 
-The outbox retains a role — as the corroborating path for SQL writes and as the mechanism behind
-FR-001a's divergence detection — but it can no longer be the whole answer.
+**Consequences, all favourable**:
+
+1. **The trigger outbox is sufficient** and remains the v1 substrate per `research.md` §4.1.
+2. **Phase 0 spikes Q1 and Q2 are no longer blocking.** They revert to informative: Q1 determines
+   whether journal CDC is a viable *future* upgrade for capturing non-SQL writes, and Q2 whether
+   the row mapping it would need is reliable. Neither gates delivery. Q3 (write-path cost) still
+   gates SC-002.
+3. **The bulk-PHI exposure of `research.md` §4.5 is avoided**, not merely mitigated. A per-table
+   outbox carries only the columns its trigger writes; nothing observes every global in the
+   database.
+
+The cost is FR-001a's drift detection — the one mechanism this option adds over doing nothing about
+non-SQL writes. It exists to satisfy SC-006.

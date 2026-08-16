@@ -59,15 +59,24 @@ Both markers were answered by the project owner; the spec was updated and re-val
 - **Q2 (non-SQL writes) → all writes must be captured.** FR-001 rewritten, FR-001a and FR-025
   added.
 
-**Q2's answer materially changed the feature's risk profile**, and the checklist should say so
-plainly: the trigger outbox alone no longer satisfies FR-001, the journal substrate becomes
-required, and Phase 0 spikes Q1 and Q2 move from *informative* to *blocking*. If journal
-seek-resume proves impossible, this specification is not buildable and Q2 must be reopened. That
-is a real possibility, not a formality — no working seek mechanism has been found documented
-anywhere.
+### Iteration 3 — Q2 reversed the same day
 
-### Not yet verifiable — unchanged and now more consequential
+Q2 was first answered "all writes must be captured", then reversed to "SQL path only, with drift
+detection". Both are recorded in the spec rather than the first being erased.
 
-The Phase 0 spikes have **not been executed** against a live IRIS instance. SC-001, SC-002 and
-SC-007 carry targets derived from research, not measurement. With Q1/Q2 now blocking, the spec
-cannot progress beyond planning until they run. Re-confirm and adjust these figures once they do.
+The reversal was correct and the reasoning generalises: mandating capture of non-SQL writes would
+have forced a WAL-equivalent substrate (journal CDC) — the exact dependency that makes Electric and
+PowerSync unusable against IRIS. Selecting a sync design *because* it avoids database-level
+replication, then adding a requirement that reimposes it, cancels the reason for the choice.
+
+Net effect on risk: **materially reduced.** The trigger outbox is sufficient; spikes Q1 and Q2 drop
+from blocking to informative; the bulk-PHI exposure of `research.md` §4.5 is avoided rather than
+mitigated. The only added mechanism is FR-001a's drift detection, which exists to satisfy SC-006.
+
+### Not yet verifiable
+
+The Phase 0 spikes have **not been executed** against a live IRIS instance — none was reachable in
+the authoring environment (container registry blob hosts blocked by egress policy). SC-001, SC-002
+and SC-007 carry targets derived from research, not measurement. Q3 gates SC-002 and should run
+before implementation begins. No mock IRIS will be introduced to work around this (Constitution
+Principle II).
