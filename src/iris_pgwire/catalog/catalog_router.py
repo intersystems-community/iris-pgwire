@@ -330,6 +330,17 @@ class CatalogRouter:
         # Return first found
         return next(iter(tables))
 
+    # Expressions the row emulators cannot evaluate. They can project and
+    # filter columns over emulated rows; they cannot compute EXISTS(...) or
+    # call scalar functions. Queries containing these must fall through to
+    # SQLInterceptor, which has purpose-built handlers for them — notably
+    # Prisma's schema probe:
+    #   SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1),
+    #          version(), current_setting('server_version_num')
+    # Intercepting that returned raw namespace rows, so Prisma read it as
+    # "public does not exist" and issued CREATE SCHEMA "public".
+    UNEVALUABLE_EXPRESSIONS = ("EXISTS(", "EXISTS (", "VERSION()", "CURRENT_SETTING(")
+
     async def handle_catalog_query(
         self,
         sql: str,
@@ -348,6 +359,14 @@ class CatalogRouter:
             sql_upper=sql_upper,
             session_id=session_id,
         )
+
+        if any(token in sql_upper for token in self.UNEVALUABLE_EXPRESSIONS):
+            logger.debug(
+                "Declining catalog query with unevaluable expression",
+                sql_preview=sql[:120],
+                session_id=session_id,
+            )
+            return None
 
         tables = self.extract_catalog_tables(sql)
         for table in self.CATALOG_HANDLER_PRIORITY:
@@ -494,7 +513,14 @@ class CatalogRouter:
     ) -> dict[str, Any] | None:
         is_simple_pg_namespace = (
             "PG_NAMESPACE" in sql_upper
-            and re.search(r"\bFROM\s+PG_NAMESPACE\b", sql_upper)
+            # Accept the schema-qualified form too. Real clients emit
+            # "FROM pg_catalog.pg_namespace"; requiring the bare name sent every
+            # qualified query to the empty fallback, which returns zero rows.
+            # Prisma's schema-existence probe is
+            #   SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)
+            # so an empty result reads as "the public schema does not exist" and
+            # introspection reports the database as empty.
+            and re.search(r"\bFROM\s+(?:PG_CATALOG\.)?PG_NAMESPACE\b", sql_upper)
             and "JOIN" not in sql_upper
             and len(re.findall(r"\bFROM\b", sql_upper)) <= 2
         )

@@ -1562,10 +1562,25 @@ class PGWireProtocol:
         logger.info("🔵 STEP 3: DataRows sent", connection_id=self.connection_id)
 
     async def _send_command_complete(self, command: str, row_count: int):
-        if command.upper() == "SELECT":
-            tag = f"SELECT {row_count}\x00".encode()
+        # `command` arrives in two shapes. Most executors pass a bare verb
+        # ("SELECT") and expect the row count appended here. The catalog router
+        # passes a complete tag that already carries its count ("SELECT 0").
+        # Appending to the latter produced "SELECT 0 0", which is not a valid
+        # CommandComplete tag — clients reject the whole result with
+        # "could not interpret result from server", so every emulated
+        # pg_catalog query failed at the protocol level rather than returning
+        # rows. Detect a count that is already present instead of doubling it.
+        stripped = command.strip()
+        already_tagged = bool(stripped) and stripped.split()[-1].isdigit()
+
+        if already_tagged:
+            tag_text = stripped
+        elif stripped.upper() == "SELECT":
+            tag_text = f"SELECT {row_count}"
         else:
-            tag = f"{command} {row_count}\x00".encode()
+            tag_text = f"{stripped} {row_count}"
+
+        tag = f"{tag_text}\x00".encode()
 
         cmd_complete_length = 4 + len(tag)
         cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag

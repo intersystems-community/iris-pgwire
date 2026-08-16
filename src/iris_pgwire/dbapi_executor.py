@@ -24,7 +24,7 @@ from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
-from iris_pgwire.sql_translator import SQLPipeline
+from iris_pgwire.sql_translator import SQLInterceptor, SQLPipeline
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
@@ -98,6 +98,13 @@ class DBAPIExecutor:
         self.sql_translator = self.sql_pipeline.translator
         self.sql_parser = get_parser()
         self.catalog_router = CatalogRouter()
+        # Handles scalar session functions (version(), current_database(), ...)
+        # that IRIS has no equivalent for. The embedded executor has always had
+        # this; without it here, DBAPI passed them through to IRIS SQL, which
+        # resolved version() as SQLUser.VERSION and errored. That broke every
+        # ORM introspection on this backend and violated Principle IV, which
+        # requires both backends stay functional.
+        self.sql_interceptor = SQLInterceptor(self)
 
         self._total_queries = 0
         self._total_query_time_ms = 0.0
@@ -188,6 +195,10 @@ class DBAPIExecutor:
             )
             if catalog_result is not None:
                 return catalog_result
+
+            intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
+            if intercept_result.intercepted:
+                return intercept_result.result
 
             sql = self._translate_placeholders(sql)
             plan = ReturningPlan.from_sql(sql)

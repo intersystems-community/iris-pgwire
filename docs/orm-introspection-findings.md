@@ -1,6 +1,6 @@
 # ORM introspection against iris-pgwire — test results and defects
 
-**Status**: 🔎 OPEN — four defects, none fixed
+**Status**: 🟡 PARTIAL — three of four defects **fixed and verified on both backends**; one remains
 **Tested**: 2026-08-16, IRIS 2026.2 (Build 221U), `intersystems/iris-community:latest-cd`
 **Backends**: both — embedded (irispython, port 5432) and DBAPI (external, port 15432)
 **Clients**: Prisma 6.19.3 (the version this repo targets) and Prisma 7.9.1
@@ -12,19 +12,102 @@
 
 ## Summary
 
-| # | Defect | Embedded | DBAPI | Severity |
-|---|--------|----------|-------|----------|
-| 1 | `public` schema invisible to introspection — Prisma tries to `CREATE SCHEMA "public"` | ✗ | ✗ | **Blocker** |
-| 2 | Scalar session functions unhandled on the DBAPI backend | ✅ works | ✗ | **High** |
-| 3 | Some `pg_catalog` query shapes return a malformed protocol response | ✗ | ✗ | High |
-| 4 | `current_setting('server_version_num')` returns `off` | ✗ | ✗ | Medium |
+| # | Defect | Status | Severity |
+|---|--------|--------|----------|
+| 3 | Malformed `CommandComplete` tag (`SELECT 0 0`) broke every emulated catalog query | ✅ **FIXED** — both backends | High |
+| 1a | `pg_namespace` handler rejected the schema-qualified form clients actually emit | ✅ **FIXED** — both backends | **Blocker** |
+| 1b | Catalog router stole Prisma's schema probe from the handler built to answer it | ✅ **FIXED** — both backends | **Blocker** |
+| 2 | Scalar session functions unhandled on the DBAPI backend (Principle IV violation) | ✅ **FIXED** | **High** |
+| 5 | `pg_class` returns zero rows — user tables are not enumerated | ❌ **OPEN** — now the blocker | **Blocker** |
+
+Defect 4 (`current_setting('server_version_num')` returning `off`) resolved as a side effect: the
+purpose-built handler now answers the probe and returns `160000`.
+
+### Where introspection gets to now
+
+| Stage | Before | After |
+|---|---|---|
+| `SELECT version()` | DBAPI: hard SQL error | ✅ both backends |
+| Schema probe `EXISTS(… pg_namespace …)` | returns nothing → Prisma issues `CREATE SCHEMA "public"` | ✅ `exists = t`, `version`, `160000` |
+| Table enumeration via `pg_class` | never reached | ❌ **0 rows — current blocker** |
+
+`prisma db pull` no longer dies on its first query or tries to create the `public` schema. It now
+runs the full introspection sequence and reports `P4001` because table enumeration comes back
+empty.
 
 **Ordinary SQL works on both backends**, including joins across foreign keys — this is specifically
 the introspection path.
 
 ---
 
-## Defect 1 — the `public` schema is invisible to introspection (BLOCKER)
+## ✅ FIXED — Defects 1a / 1b / 3: the catalog path
+
+Three separate bugs stacked on top of each other; all three had to go before introspection could
+advance past its second query.
+
+**Defect 3 — malformed `CommandComplete`.** `catalog_router._build_success_response` emits
+`command_tag = "SELECT 0"` with the count already in it, while
+`protocol._send_command_complete` treated its argument as a bare verb and appended the count
+again. `"SELECT 0".upper() != "SELECT"`, so it fell to the else branch and produced
+**`"SELECT 0 0"`** — not a valid tag. Clients rejected the entire result with
+`could not interpret result from server`, so *every* emulated catalog query failed at the protocol
+level. Fixed by detecting a count that is already present. The change is surgical — verified
+against representative inputs, only strings already carrying a count behave differently, and in
+every such case the old output was malformed:
+
+| input | old | new |
+|---|---|---|
+| `SELECT` / 5 | `SELECT 5` | `SELECT 5` |
+| `SELECT 0` / 0 | `SELECT 0 0` ✗ | `SELECT 0` ✓ |
+| `INSERT 0 1` / 1 | `INSERT 0 1 1` ✗ | `INSERT 0 1` ✓ |
+| `CREATE TABLE` / 0 | `CREATE TABLE 0` | `CREATE TABLE 0` |
+
+**Defect 1a — qualified names rejected.** `is_simple_pg_namespace` required
+`\bFROM\s+PG_NAMESPACE\b`, which does not match `FROM pg_catalog.pg_namespace` — the form real
+clients emit. Qualified queries fell to the router's empty fallback and returned zero rows. Fixed
+by accepting an optional `PG_CATALOG.` prefix.
+
+**Defect 1b — the router stole Prisma's probe.** `SQLInterceptor` already had
+`_handle_prisma_schema_check`, registered for `EXISTS.*PG_NAMESPACE.*VERSION`, returning
+`schema_exists = True` — exactly right. It was never reached: the catalog router runs first and
+intercepted the query, returning raw namespace rows for something that asked for a boolean. The row
+emulators can project and filter columns but cannot evaluate `EXISTS(...)` or scalar functions, so
+the router now declines those shapes at its entry point and lets them fall through. Putting the
+guard in one handler was not enough — the router's *empty fallback* still caught them.
+
+### Verified after the fix, both backends
+
+```console
+$ psql -c "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='public'), version()"
+ exists |               version               | numeric_version
+--------+-------------------------------------+-----------------
+ t      | PostgreSQL 16.0 (InterSystems IRIS) |          160000
+```
+
+---
+
+## ❌ OPEN — Defect 5: `pg_class` enumerates no tables (current blocker)
+
+With the schema probe answered, Prisma proceeds to table enumeration and gets nothing:
+
+```console
+$ psql -c "SELECT tbl.relname, namespace.nspname FROM pg_class tbl
+           JOIN pg_namespace namespace ON namespace.oid = tbl.relnamespace
+           WHERE tbl.relkind = 'r' AND namespace.nspname = 'public'"
+(0 rows)
+```
+
+Two problems visible in that output: zero rows despite three user tables existing, and the
+projection is ignored — all 32 `pg_class` columns come back rather than the two requested. A plain
+`SELECT relname FROM pg_class LIMIT 5` is also empty.
+
+This is the next piece of work and it is larger than the three above: `pg_class` has to be
+populated from IRIS's own catalog and joined against `pg_namespace`, with `public` mapping to
+`SQLUser`.
+
+---
+
+## Original analysis — Defect 1 as first diagnosed
 
 On the **embedded** backend, `prisma db pull` runs to completion and reports:
 
