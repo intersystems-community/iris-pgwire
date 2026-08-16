@@ -190,24 +190,50 @@ IRIS SQL `AFTER INSERT/UPDATE/DELETE` triggers write a row into an outbox, seque
 
 | | |
 |---|---|
-| **Pros** | Row-level and schema-aware from day one — no global-to-row reverse mapping. Writes commit in the same transaction as the data, so the outbox can never diverge. Ordinary SQL/ObjectScript, no privileged access, no `%SYS` dependency. `$INCREMENT` maps cleanly onto Electric's `offset`/`lsn`. Works identically on both iris-pgwire backends. Trimming the outbox has a defined client behavior (`must-refetch`). |
+| **Pros** | Row-level and schema-aware from day one — no global-to-row reverse mapping. Writes commit in the same transaction as the data, so the outbox can never diverge. Ordinary SQL/ObjectScript, no privileged access, no `%SYS` dependency. `$INCREMENT` maps cleanly onto Electric's `offset`/`lsn`. Works identically on both iris-pgwire backends. Trimming the outbox has a defined client behavior (`must-refetch`). Table-scoped and opt-in, which matters for the PHI governance problem in §4.5. |
 | **Cons** | Requires DDL per synced table — an explicit opt-in, and a migration story. Write amplification on hot tables. Bulk paths that bypass SQL (direct global sets, `%NOJOURN`, some `COPY` fast paths — see `bulk_executor.py`) will bypass triggers too. |
 | **Risk** | Trigger overhead on the write path must be measured against the constitution's 5 ms translation budget. |
 
 ### 4.2 Journal-based CDC — the WAL analog, right answer eventually
 
 IRIS journals are the true structural analog of the Postgres WAL: totally ordered, durable,
-transaction-aware. `%SYS.Journal.File` and `%SYS.Journal.Record` expose them programmatically;
-`%SYS.Journal.SetKillRecord` carries `GlobalNode` (as `MyGlobal(subscripts)`), record type
-(`S` for SET, `K` for KILL), `Address` (byte offset — a natural LSN), `DatabaseName`, `ProcessID`,
-`InTransaction`, and `TimeStamp`. `SYS.MirrorDejournal::RunFilter` demonstrates the per-record
-interception pattern InterSystems itself uses.
+transaction-aware. `SYS.MirrorDejournal::RunFilter` demonstrates the per-record interception
+pattern InterSystems itself uses.
+
+**The read pattern is verified working code**, not speculation. `intersystems-community/iris-agentic-dev`
+ships a `journal_search` tool whose approach was confirmed against a live IRIS 2026.2 instance:
+
+```objectscript
+Set jfName = ##class(%SYS.Journal.System).GetCurrentFileName()
+Set jf     = ##class(%SYS.Journal.File).%OpenId(jfName)
+Set rec    = jf.FirstRecord
+While (rec '= "") {
+    // rec.TypeName, rec.TimeStamp, rec.JobID
+    // SetKillRecord adds: GlobalReference, DatabaseName, NewValue, OldValue
+    Set rec = rec.Next
+}
+```
+
+Confirmed record properties: `TypeName`, `TimeStamp`, `JobID`, `Next`, and on `SetKillRecord`
+additionally `GlobalReference`, `DatabaseName`, **`NewValue`** and **`OldValue`**. Gotcha recorded
+by that project: `FileSize` does *not* exist on `%SYS.Journal.File`.
+
+`NewValue`/`OldValue` is better news than expected — it means a journal-derived feed can populate
+Electric's `old_value` and support `replica=full` without a separate read-back.
 
 | | |
 |---|---|
-| **Pros** | Zero write-path overhead, zero DDL. Captures *everything*, including non-SQL and bulk writes. `Address` is a genuine monotonic LSN. Transaction boundaries are present — we can emit `last` and `txids` honestly. |
-| **Cons** | **Global-level, not row-level.** We must reverse-map `^Global(sub…)` → `(table, pk, column)`. For DDL-created tables IRIS uses **hashed global names** like `^EW3K.B3vA.1`, so the mapping must be read from `DataLocation` in `%Dictionary.StorageDefinition` / `%Dictionary.CompiledStorage` and re-read on every DDL change. Index globals must be filtered out. Requires `%SYS` / `%DB_%DEFAULT` privileges — a real deployment constraint. Journal purge is a hard horizon (→ `must-refetch`). Tailing throughput is **unmeasured** and is the single biggest unknown in this document. |
-| **Risk** | Storage-definition reverse mapping is fiddly and version-sensitive. Prove it in a spike before committing. |
+| **Pros** | Zero write-path overhead, zero DDL. Captures *everything*, including non-SQL and bulk writes. Transaction boundaries are present — we can emit `last` and `txids` honestly. Old and new values come free. |
+| **Cons** | **Global-level, not row-level** (see Q2). Runs in the **`%SYS` namespace** and needs matching privileges — a real deployment constraint, confirmed by the reference implementation. Journal purge is a hard horizon (→ `must-refetch`). **No demonstrated cheap seek/resume** (see below). |
+| **Risk** | Resumable tailing is unproven — this is the project's biggest unknown. |
+
+**The resume problem, sharpened.** The reference implementation always scans forward from
+`jf.FirstRecord`, reads only the *current* journal file via `GetCurrentFileName()`, and caps output
+at 500 entries. That is fine for an interactive search tool and unusable as a change feed. A real
+feed needs to (a) resume at a saved position rather than rescan, and (b) roll across journal file
+boundaries. `Address` (the record's byte offset) is the natural LSN and the natural seek key, but
+**no working seek-by-address or cross-file iteration pattern has been demonstrated** — the existing
+tool sidesteps both. Q1 is therefore not just "is it fast enough" but "is it resumable at all."
 
 ### 4.3 Version-column polling — fallback only
 
@@ -220,6 +246,23 @@ which point it is a worse §4.1. Useful as a compatibility path for tables we ca
 IRIS Interoperability can publish changes to Kafka, and there is community demand for
 CDC-to-Kafka as a first-class SQL feature. This is a heavyweight dependency for a browser sync
 engine, but it is the natural integration point if a deployment already runs Interoperability.
+
+### 4.5 Governance: a journal feed is a bulk-PHI egress path
+
+Not a technical constraint, but it may bind harder than any of them in IRIS's core markets.
+
+`iris-agentic-dev` classifies `journal_search` as a **bulk-PHI tool**: hard-blocked unless the
+workspace sets `dataPolicy = "allow"`, with *no* per-item acknowledgment bypass, on the stated
+grounds that such tools "access PHI in bulk and cannot be made PHI-aware at field level."
+
+That reasoning transfers directly. A journal-tailing change feed reads every write to every global
+in a database — it cannot be scoped to the tables a shape actually needs, and it cannot be made
+field-aware. In a healthcare deployment that is a bulk PHI egress path feeding a *browser*.
+
+The outbox inverts this: it is opt-in per table, carries only the columns a trigger writes, and is
+auditable by reading the trigger definitions. **This is an independent argument for §4.1 in v1** —
+and a reason the journal path may need to stay an opt-in deployment mode with an explicit policy
+gate rather than becoming the default, even after Q1 and Q2 are solved.
 
 ### Recommendation
 
@@ -399,10 +442,22 @@ flows back through the read path → client sees confirmation and drops its opti
 
 **Open questions requiring spikes**, in priority order:
 
-- **Q1 — Journal tailing throughput.** Can `%SYS.Journal.Record` iteration keep up with a
-  realistic write rate, and what is the latency floor? *This is the highest-value unknown.*
-- **Q2 — Global→row reverse mapping.** Can we reliably resolve hashed globals (`^EW3K.B3vA.1`) to
-  `(table, pk, column)` via `%Dictionary.CompiledStorage`, across IRIS versions and after DDL?
+- **Q1 — Resumable journal tailing.** *Highest-value unknown, and now sharper (§4.2).* Two parts:
+  (a) can we **seek to a saved `Address`** instead of rescanning from `FirstRecord`, and iterate
+  across journal file boundaries rather than only the current file? (b) if so, can it keep up with
+  a realistic write rate, and what is the latency floor? The one reference implementation available
+  answers neither — it rescans, single-file, capped at 500 records. If (a) is unachievable, journal
+  CDC is dead as a feed regardless of throughput and §4.1 becomes the permanent answer.
+- **Q2 — Global→row reverse mapping.** The authoritative path is verified: join
+  `%Dictionary.CompiledClass` to `%Dictionary.CompiledStorage` on the SQL projection —
+  `SELECT c.Name, s.DataLocation, s.IndexLocation, s.IDLocation FROM %Dictionary.CompiledClass c
+  LEFT JOIN %Dictionary.CompiledStorage s ON s.parent = c.Name WHERE c.SqlSchemaName = ? AND
+  c.SqlTableName = ?` (confirmed `SQLCODE=0` against IRIS 2026.2). Remaining unknowns: does the
+  class projection always resolve for DDL-created tables with hashed globals (`^EW3K.B3vA.1`), and
+  how do we invalidate the mapping on DDL? **Do not fall back to name inference.** `iris-agentic-dev`'s
+  `sql_table_inspect` infers `^SQLUser.<Table>D` when the class lookup misses; that convention
+  predates `USEEXTENTSET=1` and will silently produce the wrong global for hashed-storage tables.
+  A feed that guesses wrong here loses writes silently — the worst possible failure mode.
 - **Q3 — Trigger overhead.** What does the outbox cost on the write path, measured against the
   constitution's 5 ms budget?
 - **Q4 — Client compatibility.** Does unmodified `@electric-sql/pglite-sync` work against our
@@ -416,6 +471,13 @@ flows back through the read path → client sees confirmation and drops its opti
   IRIS row-level security and this repo's existing auth?
 - **Q7 — ECP tier viability.** Does the multi-instance ECP story hold under test, and is ECP
   licensed/available in target deployments?
+- **Q8 — PHI policy posture.** If journal CDC ships, what gates it (§4.5)? Does the outbox need an
+  equivalent column-level policy so a shape cannot sync a field the deployment considers PHI?
+
+**Tooling for the spikes**: `intersystems-community/iris-agentic-dev` (Rust MCP server, `pip install
+iris-pgwire[ai]`) is the right instrument for Q1–Q3 — `iris_execute` runs the ObjectScript probes,
+`resolve_storage` and `sql_table_inspect` answer Q2 directly, and `journal_search` is the starting
+point to extend for Q1. It is already this repo's documented IRIS introspection tool (`AGENTS.md`).
 
 ---
 
@@ -449,6 +511,9 @@ Phases 1–3 are the minimum viable product: one table, syncing live into PGlite
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Journal reverse-mapping proves unreliable across IRIS versions | Kills §4.2 | Outbox is v1; journal is an upgrade, not a dependency |
+| Journal tailing turns out not to be resumable at all (Q1a) | Kills §4.2 outright | Same — §4.1 is designed to stand alone |
+| Journal feed blocked by PHI policy in healthcare deployments | §4.2 unusable where IRIS is strongest | Ship the outbox as the default; gate journal mode explicitly (§4.5) |
+| Global name inferred rather than resolved | **Silent write loss** | Resolve via `%Dictionary.CompiledStorage` only; fail closed if unresolved (Q2) |
 | Electric changes its protocol under us | Compatibility drift | Pin to a spec version; vendor the OpenAPI file; conformance tests in CI |
 | Trigger overhead breaches the 5 ms budget | Forces §4.2 early | Measure in Phase 0, not Phase 3 |
 | Chasing a moving local-first ecosystem | Wasted effort | Compatibility is with a *protocol*, not a vendor's runtime — the reason to reject the Zero clone |
@@ -459,6 +524,16 @@ Phases 1–3 are the minimum viable product: one table, syncing live into PGlite
 
 ## 10. Sources
 
+**Provenance note.** In the session that produced this document, `docs.intersystems.com` was blocked
+by egress policy, as was the Algolia index host (`EP91R43SFK-dsn.algolia.net`) that
+`iris_doc_search` and the docs site's own search use. InterSystems claims below are therefore drawn
+from search-result excerpts of those pages plus **verified-against-live-IRIS API notes in
+`intersystems-community/iris-agentic-dev`** (its `specs/072-multi-instance-pool/research.md`
+verification table, and the `journal_search` / `sql_table_inspect` / `resolve_storage`
+implementations). Electric protocol claims are from its OpenAPI spec, fetched in full. Anything
+marked as an open question in §7 has *not* been verified against a live instance.
+
+
 - [PGlite](https://pglite.dev/) · [electric-sql/pglite](https://github.com/electric-sql/pglite) · [Live Queries](https://pglite.dev/docs/live-queries)
 - [Electric HTTP API](https://electric-sql.com/docs/api/http) · [electric-api.yaml (OpenAPI, fetched)](https://github.com/electric-sql/electric/blob/main/website/electric-api.yaml) · [Client development guide](https://electric-sql.com/docs/guides/client-development)
 - [Electric joins Databricks](https://www.databricks.com/blog/electric-joins-databricks-bring-wasm-postgres-ai-agent-sandboxes)
@@ -467,3 +542,4 @@ Phases 1–3 are the minimum viable product: one table, syncing live into PGlite
 - [Overview of Distributed Caching (ECP)](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSCALE_ecp_oview) · [ECP Recovery Process, Guarantees, and Limitations](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSCALE_ecp_recovery) · [Developing Distributed Cache Applications](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSCALE_ecp_develop) · [ECP Client Instability advisory](https://www.intersystems.com/support/product-alerts-advisories/ecp-client-instability/)
 - [%SYS.Journal.Record](https://docs.intersystems.com/irislatest/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=%25SYS.Journal.Record) · [%SYS.Journal.File](https://docs.intersystems.com/irislatest/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&PRIVATE=1&CLASSNAME=%25SYS.Journal.File) · [SYS.MirrorDejournal](https://docs.intersystems.com/irislatest/csp/documatic/%25CSP.Documatic.cls?LIBRARY=%25SYS&CLASSNAME=SYS.MirrorDejournal) · [Journaling Overview](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GCDI_journal)
 - [Choose an SQL Table Storage Layout (hashed globals)](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSOD_storage) · [Using Triggers](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=GSQL_triggers) · [CDC from IRIS to Kafka (Ideas)](https://ideas.intersystems.com/ideas/DPI-I-343)
+- [intersystems-community/iris-agentic-dev](https://github.com/intersystems-community/iris-agentic-dev) — verified IRIS API patterns: `journal_search` (`crates/iris-agentic-dev-core/src/tools/admin_tools.rs`), `sql_table_inspect` (`.../tools/info.rs`), `resolve_storage` (`.../tools/admin_tools.rs`), bulk-PHI policy gate (`.../policy/data_policy_gate.rs`), verification table (`specs/072-multi-instance-pool/research.md`), and the `iris-docs` skill's Algolia recipe (`skills/skills/iris-docs/SKILL.md`)
