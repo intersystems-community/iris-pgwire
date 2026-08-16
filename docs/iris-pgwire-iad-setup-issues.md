@@ -1,6 +1,6 @@
 # [RESOLVED] iris-pgwire issues found while setting up iris-agentic-dev
 
-**Status**: ✅ RESOLVED — both fixed in the same commit that filed this
+**Status**: ✅ RESOLVED — both fixed and verified
 **Scope**: defects in **iris-pgwire's own** packaging and documentation
 **Date**: 2026-08-16
 
@@ -17,7 +17,7 @@ literally, and both fail in ways that point away from the real cause.
 | # | Issue | Impact | Status |
 |---|-------|--------|--------|
 | 1 | `AGENTS.md` configures the SQL port where the web port is required | Silent misconfiguration → confusing connection error | ✅ Fixed |
-| 2 | `pyproject.toml` `[ai]` extra declares a package that is not installable | `pip install iris-pgwire[ai]` fails outright | ✅ Fixed in docs; `pyproject.toml` decision outstanding |
+| 2 | `pyproject.toml` `[ai]` extra declares a package that is not installable | `pip install iris-pgwire[ai]` fails outright | ✅ Fixed in docs **and** `pyproject.toml` |
 
 ---
 
@@ -107,19 +107,50 @@ curl -fsSL https://github.com/intersystems-community/iris-agentic-dev/releases/l
 brew install https://raw.githubusercontent.com/intersystems-community/iris-agentic-dev/master/Formula/iris-agentic-dev.rb
 ```
 
-### Outstanding decision
+### Fix in `pyproject.toml`
 
-**The `[ai]` extra in `pyproject.toml` is still declared and still unsatisfiable.** The docs no
-longer point at it, so nobody is led into the failure, but `pip install iris-pgwire[ai]` remains
-broken for anyone who finds the extra by other means. Three options:
+The extra is **kept but emptied**, with the install instructions inline. This matches the pattern
+the file already uses twice — `iris` keeps its extra name with the unavailable dependency commented
+out, and `dev` explains a tool that must be installed separately:
 
-1. **Remove the extra.** Cleanest, if nothing else will ever go in it.
-2. **Keep it and empty it**, with a comment pointing at the binary install.
-3. **Leave it**, on the expectation that iris-agentic-dev publishes a PyPI shim.
+```toml
+ai = [
+    # IRIS-aware agent tooling. iris-agentic-dev is a Rust binary and is NOT
+    # published on PyPI, so it cannot be declared as a dependency here — doing
+    # so made `pip install iris-pgwire[ai]` fail outright. Install it directly:
+    #   Linux:  curl -fsSL .../iris-agentic-dev-linux-x86_64 -o /usr/local/bin/iris-agentic-dev
+    #   macOS:  brew install .../Formula/iris-agentic-dev.rb
+    # See docs/iris-pgwire-iad-setup-issues.md and AGENTS.md.
+]
+```
 
-Deferred pending the upstream answer to the distribution question in the
+Keeping the name means an existing `pip install iris-pgwire[ai]` in someone's scripts or CI keeps
+working instead of emitting an unknown-extra warning. The trade-off is that the extra now installs
+nothing silently, which is why the instructions live in the file itself and in `AGENTS.md`.
+
+**Revisit if** iris-agentic-dev publishes a PyPI shim — see the distribution question in the
 [iris-agentic-dev report](iris-agentic-dev-bug-report.md#1-not-distributed-on-pypi--intentional).
-Option 2 is the recommendation if that answer is "no PyPI planned".
+Then the dependency can simply be uncommented.
+
+### Verification
+
+Same command, both directions, dependencies actually resolved:
+
+```console
+# BEFORE (pyproject at HEAD, extra declaring iris-agentic-dev>=1.0)
+$ pip install --dry-run ".[ai]"
+ERROR: Could not find a version that satisfies the requirement
+       iris-agentic-dev>=1.0; extra == "ai" (from iris-pgwire[ai]) (from versions: none)
+exit=1
+
+# AFTER
+$ pip install --dry-run ".[ai]"
+exit=0
+```
+
+> A first attempt at this check used `--no-deps`, which skips resolution entirely and reported
+> success for *both* versions. Noted because it is an easy way to "verify" a dependency fix without
+> testing anything.
 
 ---
 
