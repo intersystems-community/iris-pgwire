@@ -37,6 +37,28 @@ from .vector_optimizer import VectorQueryOptimizer
 logger = structlog.get_logger()
 
 
+def build_command_complete_tag(command: str, row_count: int) -> str:
+    """Build a PostgreSQL CommandComplete tag.
+
+    `command` arrives in two shapes. Most executors pass a bare verb
+    ("SELECT") and expect the row count appended. The catalog router passes a
+    complete tag that already carries its count ("SELECT 0"). Appending to the
+    latter produced "SELECT 0 0", which is not a valid tag — clients reject the
+    whole result with "could not interpret result from server", so every
+    emulated pg_catalog query failed at the protocol level rather than
+    returning rows.
+
+    Kept as a module-level pure function so the tag rules can be tested without
+    a socket.
+    """
+    stripped = command.strip()
+    if stripped and stripped.split()[-1].isdigit():
+        return stripped
+    if stripped.upper() == "SELECT":
+        return f"SELECT {row_count}"
+    return f"{stripped} {row_count}"
+
+
 # PostgreSQL protocol constants
 SSL_REQUEST_CODE = 80877103
 
@@ -1562,25 +1584,7 @@ class PGWireProtocol:
         logger.info("🔵 STEP 3: DataRows sent", connection_id=self.connection_id)
 
     async def _send_command_complete(self, command: str, row_count: int):
-        # `command` arrives in two shapes. Most executors pass a bare verb
-        # ("SELECT") and expect the row count appended here. The catalog router
-        # passes a complete tag that already carries its count ("SELECT 0").
-        # Appending to the latter produced "SELECT 0 0", which is not a valid
-        # CommandComplete tag — clients reject the whole result with
-        # "could not interpret result from server", so every emulated
-        # pg_catalog query failed at the protocol level rather than returning
-        # rows. Detect a count that is already present instead of doubling it.
-        stripped = command.strip()
-        already_tagged = bool(stripped) and stripped.split()[-1].isdigit()
-
-        if already_tagged:
-            tag_text = stripped
-        elif stripped.upper() == "SELECT":
-            tag_text = f"SELECT {row_count}"
-        else:
-            tag_text = f"{stripped} {row_count}"
-
-        tag = f"{tag_text}\x00".encode()
+        tag = f"{build_command_complete_tag(command, row_count)}\x00".encode()
 
         cmd_complete_length = 4 + len(tag)
         cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag

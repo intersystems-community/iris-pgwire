@@ -5,6 +5,7 @@ Routes pg_catalog and information_schema queries to appropriate emulators.
 Handles query parsing, array parameter translation, and regclass resolution.
 """
 
+import contextvars
 import json
 import re
 from dataclasses import dataclass, field
@@ -25,6 +26,19 @@ from .pg_namespace import PgNamespaceEmulator
 from .pg_type import PgTypeEmulator
 
 logger = structlog.get_logger(__name__)
+
+# Re-entrancy guard. Some handlers answer a catalog query by issuing their own
+# SQL through the executor — _build_pg_class_response asks IRIS for
+# INFORMATION_SCHEMA.TABLES to enumerate real tables. That inner query re-enters
+# this router, which has no information_schema.tables handler, so the empty
+# fallback intercepted it and returned zero rows. The handler then had no tables
+# to report and pg_class came back permanently empty, which is why ORM
+# introspection enumerated nothing. A ContextVar (not a plain flag) keeps the
+# guard per-asyncio-task, so one session's internal query cannot suppress
+# interception for a concurrent session.
+_IN_CATALOG_HANDLER: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "iris_pgwire_in_catalog_handler", default=False
+)
 
 
 @dataclass
@@ -360,6 +374,14 @@ class CatalogRouter:
             session_id=session_id,
         )
 
+        if _IN_CATALOG_HANDLER.get():
+            logger.debug(
+                "Declining nested catalog query issued by a handler",
+                sql_preview=sql[:120],
+                session_id=session_id,
+            )
+            return None
+
         if any(token in sql_upper for token in self.UNEVALUABLE_EXPRESSIONS):
             logger.debug(
                 "Declining catalog query with unevaluable expression",
@@ -369,15 +391,19 @@ class CatalogRouter:
             return None
 
         tables = self.extract_catalog_tables(sql)
-        for table in self.CATALOG_HANDLER_PRIORITY:
-            if table not in tables:
-                continue
-            handler = self._catalog_handler_map.get(table)
-            if not handler:
-                continue
-            result = await handler(sql, sql_upper, params, session_id, executor)
-            if result is not None:
-                return result
+        guard_token = _IN_CATALOG_HANDLER.set(True)
+        try:
+            for table in self.CATALOG_HANDLER_PRIORITY:
+                if table not in tables:
+                    continue
+                handler = self._catalog_handler_map.get(table)
+                if not handler:
+                    continue
+                result = await handler(sql, sql_upper, params, session_id, executor)
+                if result is not None:
+                    return result
+        finally:
+            _IN_CATALOG_HANDLER.reset(guard_token)
 
         if self.can_handle(sql):
             target = self.get_target_catalog(sql)

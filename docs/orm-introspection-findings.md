@@ -1,6 +1,7 @@
 # ORM introspection against iris-pgwire — test results and defects
 
-**Status**: 🟡 PARTIAL — three of four defects **fixed and verified on both backends**; one remains
+**Status**: 🟡 PARTIAL — five defects **fixed, verified on both backends, and covered by regression
+tests**; one remains (5b), and it is the largest
 **Tested**: 2026-08-16, IRIS 2026.2 (Build 221U), `intersystems/iris-community:latest-cd`
 **Backends**: both — embedded (irispython, port 5432) and DBAPI (external, port 15432)
 **Clients**: Prisma 6.19.3 (the version this repo targets) and Prisma 7.9.1
@@ -18,7 +19,8 @@
 | 1a | `pg_namespace` handler rejected the schema-qualified form clients actually emit | ✅ **FIXED** — both backends | **Blocker** |
 | 1b | Catalog router stole Prisma's schema probe from the handler built to answer it | ✅ **FIXED** — both backends | **Blocker** |
 | 2 | Scalar session functions unhandled on the DBAPI backend (Principle IV violation) | ✅ **FIXED** | **High** |
-| 5 | `pg_class` returns zero rows — user tables are not enumerated | ❌ **OPEN** — now the blocker | **Blocker** |
+| 5a | `pg_class` returned zero rows — handler's own query was swallowed by the router | ✅ **FIXED** — tables now enumerate | **Blocker** |
+| 5b | Catalog emulators ignore projections, aliases and JOINs | ❌ **OPEN** — now the blocker | **Blocker** |
 
 Defect 4 (`current_setting('server_version_num')` returning `off`) resolved as a side effect: the
 purpose-built handler now answers the probe and returns `160000`.
@@ -29,7 +31,8 @@ purpose-built handler now answers the probe and returns `160000`.
 |---|---|---|
 | `SELECT version()` | DBAPI: hard SQL error | ✅ both backends |
 | Schema probe `EXISTS(… pg_namespace …)` | returns nothing → Prisma issues `CREATE SCHEMA "public"` | ✅ `exists = t`, `version`, `160000` |
-| Table enumeration via `pg_class` | never reached | ❌ **0 rows — current blocker** |
+| Table enumeration via `pg_class` | never reached | ✅ real tables returned |
+| Prisma's aliased JOIN over `pg_class` | never reached | ❌ **projection ignored — current blocker** |
 
 `prisma db pull` no longer dies on its first query or tries to create the `public` schema. It now
 runs the full introspection sequence and reports `P4001` because table enumeration comes back
@@ -86,24 +89,57 @@ $ psql -c "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='public'), ver
 
 ---
 
-## ❌ OPEN — Defect 5: `pg_class` enumerates no tables (current blocker)
+## ✅ FIXED — Defect 5a: `pg_class` enumerated no tables
 
-With the schema probe answered, Prisma proceeds to table enumeration and gets nothing:
+`_build_pg_class_response` answers by asking IRIS for `INFORMATION_SCHEMA.TABLES` **through the
+executor**. That inner query re-entered the catalog router, which has no
+`information_schema.tables` handler — so the **empty fallback swallowed it and returned zero rows**.
+The handler then had no tables to report, and `pg_class` was permanently empty. A self-inflicted
+wound: the emulator's own data source was being intercepted by the emulator.
+
+Fixed with a re-entrancy guard. It is a `ContextVar`, not an instance flag, so it is scoped to the
+asyncio task: one session's internal query cannot suppress interception for a concurrent session.
+That property is covered by a test.
 
 ```console
-$ psql -c "SELECT tbl.relname, namespace.nspname FROM pg_class tbl
-           JOIN pg_namespace namespace ON namespace.oid = tbl.relnamespace
-           WHERE tbl.relkind = 'r' AND namespace.nspname = 'public'"
-(0 rows)
+$ psql -tAc "SELECT relname FROM pg_class"
+3909377549|customer|2200|...
+3157564129|customerorder|2200|...
+1128014727|orderline|2200|...
 ```
 
-Two problems visible in that output: zero rows despite three user tables existing, and the
-projection is ignored — all 32 `pg_class` columns come back rather than the two requested. A plain
-`SELECT relname FROM pg_class LIMIT 5` is also empty.
+Real tables, in namespace 2200 (`public`).
 
-This is the next piece of work and it is larger than the three above: `pg_class` has to be
-populated from IRIS's own catalog and joined against `pg_namespace`, with `public` mapping to
-`SQLUser`.
+---
+
+## ❌ OPEN — Defect 5b: emulators ignore projections, aliases and JOINs (current blocker)
+
+`prisma db pull` still reports `P4001`. Its table-enumeration query is not a flat select:
+
+```sql
+SELECT tbl.relname AS table_name, namespace.nspname AS namespace
+FROM pg_class tbl
+JOIN pg_namespace namespace ON namespace.oid = tbl.relnamespace
+WHERE tbl.relkind = 'r' AND namespace.nspname = 'public'
+```
+
+The emulator returns **all 32 raw `pg_class` columns** regardless of what was asked for, performs no
+join, and applies no aliases. Prisma reads results by column name, finds no `table_name`, and
+concludes there are no tables.
+
+**This is a materially larger piece of work than everything above it** — it needs enough query
+evaluation over emulated rows to satisfy real introspection SQL: projections, aliases, joins across
+catalog tables, and `WHERE` predicates on columns like `relkind`. Prisma's later queries add CTEs.
+Options worth weighing before starting:
+
+1. **Pattern-match Prisma's specific queries.** Fastest, brittle, and does not generalise to Drizzle
+   or anything else.
+2. **Evaluate emulated catalogs with a real SQL engine** — materialise the emulated rows into
+   temporary IRIS tables, or run them through an in-process engine, and let actual SQL do the work.
+   Slower to build, but it makes every client's introspection work rather than one client's.
+
+Option 2 is the recommendation. Option 1 recreates the same fragility that produced defects 1a and
+1b — handlers matching on query shape, and breaking the moment a client phrases things differently.
 
 ---
 
