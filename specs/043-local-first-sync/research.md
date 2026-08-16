@@ -187,16 +187,29 @@ Two distinct defects, both reproduced:
    `SELECT COUNT(*) FROM pg_catalog.pg_class`, `... pg_attribute`, `information_schema.tables`, and
    `SELECT relname FROM pg_catalog.pg_class LIMIT 3`.
 
-**Scope, stated deliberately.** This is the **DBAPI backend** on IRIS 2026.2 at this commit. The
-compose stack runs iris-pgwire **embedded** inside IRIS via irispython, which is likely what spec
-031 was validated against, and **the embedded path was not tested here**. So this may be a
-backend-specific defect — which Constitution Principle IV would still make a defect, since both
-backends must work — or a regression, or something about this configuration. Do not record it as
-"Prisma introspection is broken" until the embedded path is checked.
+**Both backends have now been tested** (2026-08-16). Full results and defect analysis in
+[`docs/orm-introspection-findings.md`](../../docs/orm-introspection-findings.md). Summary:
 
-**Impact if it holds**: the typed-client layer is the root of the generation chain. Prisma → Zod →
-generated forms → generated admin all derive from it. Nothing downstream in the Zen-like story
-works until introspection does. This moves ahead of the sync work in priority.
+- **Defect 1 is backend-specific.** The embedded backend answers `version()` and
+  `current_database()` correctly; DBAPI errors on both. Cause confirmed in code: `SQLInterceptor`
+  is wired into `iris_executor.py` and **not** into `dbapi_executor.py` (0 references). That is a
+  Principle IV violation — both backends must work. `current_schema()` is missing from the
+  interceptor and so fails on *both*.
+- **Defect 2 affects both backends**, so it is not backend-specific. Scoped honestly: the failing
+  shapes are ones I chose, and the emulator may only ever have targeted the shapes real ORMs emit.
+  The unacceptable part is the *failure mode* — an unparseable reply rather than a clean error.
+- **The actual blocker is neither of those.** On embedded, `prisma db pull` completes and reports
+  `P4001 database was empty` despite three tables existing, because its last two statements are
+  `SET search_path = "public"` then **`CREATE SCHEMA "public"`**. Introspection believes the
+  `public` schema does not exist. `schema_mapper.py` maps `public` ↔ `SQLUser` on the DDL and DML
+  paths, but the introspection surface disagrees with that mapping. Fixing this unblocks the whole
+  generation chain; nothing else in §1c matters until it is fixed.
+
+**Prisma 7 was scoped at the same time** and needs no separate workstream: it hits the identical
+`public`-schema blocker (surfacing it as a hard error rather than a misleading "empty database"),
+requires `prisma.config.ts` instead of `url` in the schema, and — notably — routes its runtime
+through `@prisma/adapter-pg`, i.e. **node-postgres, which this repo already verifies at 100%**. That
+may make Prisma 7 runtime support *easier* than Prisma 6's bespoke engine once introspection works.
 
 ### Resolved: support both PGlite and TanStack DB
 
