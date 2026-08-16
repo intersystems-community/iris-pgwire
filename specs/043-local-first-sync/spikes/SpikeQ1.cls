@@ -30,12 +30,27 @@ ClassMethod Probe()
         set n = n + 1
         if n = 100 {
             try { set addr = rec.Address } catch e { write "  rec.Address unavailable: ",e.DisplayString(),! }
-            try { if rec.TypeName = "SetKillRecord" { set gref = rec.GlobalReference } } catch e { }
         }
+        // Discriminate on the CLASS, not TypeName. TypeName is never the string
+        // "SetKillRecord" -- on 2026.2 it takes values SET / KILL / ZKILL /
+        // BeginTrans / CommitTrans. Gating GlobalReference on
+        // TypeName="SetKillRecord" silently yields an empty global every time.
+        if (gref = "") && ($classname(rec) [ "SetKillRecord") {
+            try { set gref = rec.GlobalReference } catch e { }
+        }
+        set tn = "?"
+        try { set tn = rec.TypeName } catch e { set tn = "?" }
+        if $increment(seen(tn)) { }
         set rec = rec.Next
     }
     write "  walked ",n," records; captured Address = '",addr,"'",!
     if gref '= "" { write "  sample GlobalReference: ",gref,! }
+    write "  record types seen: "
+    set t = "" for { set t = $order(seen(t)) quit:t=""  write t,"=",seen(t),"  " }
+    write !
+    if ($data(seen("BeginTrans")) > 0) || ($data(seen("CommitTrans")) > 0) {
+        write "  >> transaction boundaries ARE observable (BeginTrans/CommitTrans present)",!
+    }
     if addr = "" {
         write !,"Q1 VERDICT: FAIL -- records expose no Address to resume from",!
         quit

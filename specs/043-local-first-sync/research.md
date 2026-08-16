@@ -521,10 +521,47 @@ gating mechanisms exist and the scan rate is high. Two implementation details th
   object navigation.
 - `%SYS.Journal.Record` exposes `Address`, `NextAddress`, `PrevAddress`, `InTransaction`, `JobID`,
   `ProcessID`, `TimeStamp`, `Type`/`TypeName`, and `ECPSystemID`/`RemoteSystemID`. The
-  address/next-address pair supports a cursor without holding objects, and `InTransaction` gives
-  real transaction boundaries. `%OpenId(file||address)` returns **null** — the composite form does
-  not work, so a resume key must pair the file name with the address and open the file first.
-  Addresses are byte offsets and are **not** unique across files.
+  address/next-address pair supports a cursor without holding objects. `%OpenId(file||address)`
+  returns **null** — the composite form does not work, so a resume key must pair the file name with
+  the address and open the file first. Addresses are byte offsets and are **not** unique across
+  files.
+
+- **`TypeName` is never the string `"SetKillRecord"`** — that is the *class* name. Measured values
+  on 2026.2 are `SET`, `KILL`, `ZKILL`, `BeginTrans`, `CommitTrans`. **Discriminate on the class**
+  (`$classname(rec) [ "SetKillRecord"`), not on `TypeName`. Gating `GlobalReference` on
+  `TypeName = "SetKillRecord"` yields an empty global on every record, silently. This bit both the
+  first draft of our own Q1 probe and `iris-agentic-dev`'s `journal_search` — see "Upstream defects"
+  below.
+
+- **Transaction boundaries are directly observable**: `BeginTrans` and `CommitTrans` appear as
+  their own record types (a 200-record sample showed `BeginTrans=2, CommitTrans=1, SET=196,
+  ZKILL=1`). A journal-derived feed can emit Electric's `last` and `txids` honestly, and can hold
+  changes back until commit, rather than inferring boundaries.
+
+- `GlobalReference` carries an **extended global reference with the database directory** —
+  `^["^^/usr/irissys/mgr/"]SYS("LastLicenseKey")`. A feed must strip the `["..."]` prefix before
+  matching against a resolved `DataLocation`, and can use it to filter by database.
+
+### Upstream defects found in `iris-agentic-dev` while using it
+
+Both verified on 2026.2 against the tool's own code; worth reporting since the project is
+InterSystems-community maintained and this repo depends on it (`pyproject.toml` `[ai]` extra).
+
+1. **`journal_search` never returns a global, and silently ignores its `global_pattern` filter.**
+   It gates both on `rec.TypeName = "SetKillRecord"`, which is never true. Observed: filtering on a
+   table name returned five unrelated records, each with `"global": ""`. Fix is to discriminate on
+   the class. (`crates/iris-agentic-dev-core/src/tools/admin_tools.rs`, `journal_search_impl`.)
+
+2. **`TOOL_NAMES` and the `tool` subcommand's dispatch are out of parity**, despite a comment
+   asserting a test enforces it. `iris_doc_search`, `journal_search`, `resolve_storage` and
+   `my_access` are listed as available but return `unknown tool` from the CLI, because the CLI
+   routes through `call_for_test()` while the MCP server registers the full set. They work when
+   driven over the MCP stdio transport. (`crates/iris-agentic-dev-bin/src/cmd/tool.rs`.)
+
+3. Not a defect but worth noting: `iris_table_info` took the **correct** path for a DDL-created
+   table on 2026.2, returning the hashed `^poCN.DvER.1` via the class projection. The unsafe
+   name-inference branch is only reached when `%Dictionary.CompiledClass` has no matching row, which
+   did not occur here. The hazard recorded above is real but narrower than first stated.
 
 None of this is needed for v1 (Clarification Q2 scoped capture to the SQL path), but the upgrade
 path is now evidence-backed rather than speculative.
@@ -548,10 +585,13 @@ Q1–Q3 are answered above. The rest are unchanged:
 - **Q8 — PHI policy posture.** If journal CDC ships, what gates it (§4.5)? Does the outbox need an
   equivalent column-level policy so a shape cannot sync a field the deployment considers PHI?
 
-**Tooling for the spikes**: `intersystems-community/iris-agentic-dev` (Rust MCP server, `pip install
-iris-pgwire[ai]`) is the right instrument for Q1–Q3 — `iris_execute` runs the ObjectScript probes,
-`resolve_storage` and `sql_table_inspect` answer Q2 directly, and `journal_search` is the starting
-point to extend for Q1. It is already this repo's documented IRIS introspection tool (`AGENTS.md`).
+**Tooling**: `intersystems-community/iris-agentic-dev` is this repo's documented IRIS introspection
+tool (`AGENTS.md`). It is **not on PyPI** despite the `iris-pgwire[ai]` extra declaring
+`iris-agentic-dev>=1.0`, and has no published release binaries — it must be built from source
+(`cargo build --release`, ~3.5 min). It connects over the Atelier REST API on the web port (52773),
+not the SQL port. `iris_table_info` and `resolve_storage` independently confirmed the Q2 result
+(`^poCN.DvER.1`). Note the two defects recorded in §7 before relying on `journal_search` or the
+`tool` CLI subcommand.
 
 ---
 
