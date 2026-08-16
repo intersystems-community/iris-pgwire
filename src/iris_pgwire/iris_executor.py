@@ -29,6 +29,7 @@ from .schema_mapper import (
     IRIS_SCHEMA,
     translate_output_schema,
 )  # Feature 030: PostgreSQL schema mapping
+from .sql_translator.array_params import expand_array_params, has_array_param
 from .sql_translator import (
     SQLInterceptor,
     SQLPipeline,
@@ -991,6 +992,14 @@ class IRISExecutor:
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
+
+            # Expand `col = ANY($n)` into `col IN (...)`. IRIS has no ANY(array)
+            # construct, so an unexpanded one reaches it as a parse error
+            # ("SELECT expected, ? found"). Applied to every statement rather
+            # than only intercepted ones — catalog tables served by IRIS views
+            # reach the database for real (feature 044).
+            if params and has_array_param(sql):
+                sql, params = expand_array_params(sql, params)
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(

@@ -25,6 +25,7 @@ from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.sql_translator import SQLInterceptor, SQLPipeline
+from iris_pgwire.sql_translator.array_params import expand_array_params, has_array_param
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
@@ -199,6 +200,14 @@ class DBAPIExecutor:
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
+
+            # Expand `col = ANY($n)` into `col IN (...)`. IRIS has no ANY(array)
+            # construct, so an unexpanded one reaches it as a parse error
+            # ("SELECT expected, ? found"). Applied to every statement rather
+            # than only intercepted ones — catalog tables served by IRIS views
+            # reach the database for real (feature 044).
+            if params and has_array_param(sql):
+                sql, params = expand_array_params(sql, params)
 
             sql = self._translate_placeholders(sql)
             plan = ReturningPlan.from_sql(sql)

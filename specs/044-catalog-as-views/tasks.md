@@ -27,11 +27,18 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
 - [X] **T010** `pg_class` view over `INFORMATION_SCHEMA.TABLES` with OIDs and `relkind`.
 - [X] **T011** Test: projection, alias, `WHERE` and JOIN all honoured against `pg_class` (SC-003).
-- [ ] **T011a** **Move `ANY($n)` → `IN (…)` translation out of the catalog router.**
-  *Found during T011.* The router did more than emulate — it also rewrote array parameters. Now
-  that it declines view-backed tables, that translation no longer runs, and Prisma's
-  `WHERE nspname = ANY($1)` reaches IRIS unrewritten: `SELECT expected, ? found`. The translation
-  belongs in the SQL pipeline, where it applies to every query rather than only intercepted ones.
+- [~] **T011a** **`ANY($n)` → `IN (…)` expansion.** *Partially done.*
+  Implemented in `sql_translator/array_params.py`, unit-tested (5 tests), and wired into
+  `execute_query` on **both** executors. Works for the simple-query path and for extended-protocol
+  *Execute*.
+  *Discovered when it still did not fix Prisma*: the failure is at **Prepare/Describe**, not
+  Execute. `protocol.py:3071` describes the statement using `dummy_params` — the real array does
+  not exist yet — and IRIS cannot prepare `= ANY(?)` at all, so it errors before any value is
+  bound. Note the router never had this problem because it answered such queries without ever
+  preparing them.
+  **Remaining**: make the statement preparable at Describe time. Options — rewrite `= ANY(?)` to a
+  single-element `IN (?)` for preparation and re-expand at Execute (parameter count changes), or
+  synthesise the row description without asking IRIS to prepare. Needs a decision before coding.
   **This is the current blocker.**
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.

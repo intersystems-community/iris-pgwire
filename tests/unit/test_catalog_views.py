@@ -231,3 +231,57 @@ class TestInstallerContract:
         for view in CATALOG_VIEWS:
             assert view.drop_sql() in executed
             assert view.create_sql() in executed
+
+
+class TestArrayParameterExpansion:
+    """T011a: `col = ANY($n)` must become `col IN (...)`.
+
+    IRIS has no ANY(array) construct. The translation existed on CatalogRouter
+    but nothing ever called it — catalog queries were intercepted wholesale
+    before it mattered. Once catalog tables moved to views the queries reach
+    IRIS for real, and Prisma's `WHERE nspname = ANY($1)` failed with
+    "SELECT expected, ? found".
+    """
+
+    def test_array_is_expanded_to_in_list(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_params
+
+        sql, remaining = expand_array_params(
+            "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1)",
+            [["public", "other"]],
+        )
+        assert "IN ('public', 'other')" in sql
+        assert "ANY" not in sql
+        assert remaining == [], "the inlined array must not stay bound"
+
+    def test_empty_array_matches_nothing_rather_than_failing(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_params
+
+        sql, _ = expand_array_params("SELECT a FROM t WHERE a = ANY($1)", [[]])
+        assert "IN (NULL)" in sql, "an empty set must be a real answer, not a parse error"
+
+    def test_scalar_parameters_are_untouched(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_params
+
+        sql, remaining = expand_array_params("SELECT a FROM t WHERE a = $1", [5])
+        assert sql == "SELECT a FROM t WHERE a = $1"
+        assert remaining == [5]
+
+    def test_quotes_in_values_are_escaped(self):
+        from iris_pgwire.sql_translator.array_params import expand_array_params
+
+        sql, _ = expand_array_params("SELECT a FROM t WHERE a = ANY($1)", [["O'Brien"]])
+        assert "'O''Brien'" in sql
+
+    def test_both_executors_expand_array_params(self):
+        """Principle IV: a construct must not work on only one backend."""
+        import inspect
+
+        from iris_pgwire import dbapi_executor, iris_executor
+
+        for module in (iris_executor, dbapi_executor):
+            source = inspect.getsource(module)
+            assert "expand_array_params(" in source, (
+                f"{module.__name__} never expands array parameters; "
+                "ANY($n) would reach IRIS as a parse error on this backend"
+            )
