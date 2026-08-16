@@ -1,8 +1,13 @@
-# Bug Report: iris-agentic-dev — setup friction and four defects
+# Bug Report: iris-agentic-dev — three defects and a distribution question
 
-**Status**: 🔎 OPEN — filed from iris-pgwire feature work, not yet raised upstream
+**Status**: 🔎 OPEN — not yet raised upstream
+**Upstream**: [intersystems-community/iris-agentic-dev](https://github.com/intersystems-community/iris-agentic-dev)
 **Reporter**: Thomas Dyar
 **Date**: 2026-08-16
+
+> **Scope**: defects in **iris-agentic-dev** only, so this can be filed upstream as-is.
+> Issues in iris-pgwire's own configuration and docs that surfaced during the same session are
+> tracked separately in [iris-pgwire-iad-setup-issues.md](iris-pgwire-iad-setup-issues.md).
 
 ## Environment
 
@@ -17,17 +22,17 @@
 
 Used iris-agentic-dev to corroborate findings from the `043-local-first-sync` Phase 0 spikes. It
 did that job well — `iris_table_info` and `resolve_storage` independently reproduced the spike's
-storage result. Getting to that point took longer than it should have, and using it surfaced four
-defects.
+storage result. Getting to that point took longer than it should have, and using it surfaced three
+defects plus one packaging question.
 
-Ordered by impact:
+All three defects are in iris-agentic-dev itself. Ordered by impact:
 
 | # | Issue | Severity | Confidence |
 |---|-------|----------|-----------|
 | 1 | HTTP 401 surfaces as `error decoding response body` | **High** — misdiagnoses every auth failure | High, reproduced |
 | 2 | `journal_search` returns empty `global`, appears to ignore `global_pattern` | **High** — tool returns wrong results silently | High, scoped below |
 | 3 | `tool` subcommand advertises tools it cannot dispatch | Medium — discoverability | High, reproduced |
-| 4 | `iris-pgwire[ai]` extra is unsatisfiable — package not on PyPI | Medium — documented install path fails | High, reproduced |
+| — | Not distributed on PyPI (question, not a defect) | Low — see below | High, reproduced |
 
 ---
 
@@ -35,19 +40,9 @@ Ordered by impact:
 
 Recorded because most of the friction was avoidable, and one part of it was my own error.
 
-### 1. `pip install` does not work (defect 4)
+### 1. Not distributed on PyPI — intentional?
 
-`pyproject.toml` in iris-pgwire declares `iris-agentic-dev>=1.0` under the `[ai]` extra, and
-`AGENTS.md` instructs `pip install iris-pgwire[ai]`. The package is not on PyPI:
-
-```console
-$ pip install iris-agentic-dev
-ERROR: Could not find a version that satisfies the requirement iris-agentic-dev
-       (from versions: none)
-ERROR: No matching distribution found for iris-agentic-dev
-```
-
-Sibling packages resolve fine, so this is specific to this project:
+`pip install iris-agentic-dev` finds nothing, while sibling projects in the same org resolve:
 
 | Package | PyPI |
 |---|---|
@@ -56,9 +51,10 @@ Sibling packages resolve fine, so this is specific to this project:
 | `iris-devtester` | 200 |
 | `iris-vector-graph` | 200 |
 
-The project is Rust, so a PyPI presence may never have been intended — in which case the fix
-belongs in **iris-pgwire**: drop or rewrite the `[ai]` extra so it does not promise an install
-that cannot succeed.
+The project is Rust, so this may be deliberate — a Python package would only ever be a shim around
+a binary. **Raising it as a question, not a defect**: is a PyPI presence intended? Downstream
+projects have written `pip install`-based instructions on the assumption that one exists, which is
+what prompted the question.
 
 ### 2. I built from source unnecessarily — my mistake, with a contributing factor
 
@@ -89,25 +85,18 @@ sandbox) reinforced the wrong conclusion.
 **No action needed from the project** beyond possibly publishing macOS x64 and Windows builds, if
 those platforms are in scope. Recorded so the next person does not repeat it.
 
-### 3. The connection is over the web port, which the iris-pgwire docs get wrong
+### 3. The connection is over the web port
 
 The CLI connects via the **Atelier REST API on the web port (52773)**, not the SQL port. Every
-connection flag is web-oriented: `--host`, `--web-port`, `--web-prefix`, `--scheme`.
+connection flag is web-oriented: `--host`, `--web-port`, `--web-prefix`, `--scheme`. This is
+correct and consistent behaviour — noted only because `port` is accepted as a serde alias for
+`web_port` (`workspace_config.rs:15`), so a config naming the *SQL* port parses cleanly and
+silently misconfigures the client. A validation warning when the configured port looks like a
+superserver port (1972/51773/…) would turn a confusing connection error into an obvious one.
 
-iris-pgwire's own `AGENTS.md` documents the config as:
+*(A downstream config doing exactly that is tracked in iris-pgwire's own issue log, not here.)*
 
-```toml
-[connections.iris-pgwire-db]
-host = "localhost"
-port = 2972          # ← the SQL port
-```
-
-`port` is a **serde alias for `web_port`** (`workspace_config.rs:15`), so this parses successfully
-and silently configures the *web* port to the SQL port. The failure is then a confusing connection
-error rather than a config complaint. **This is an iris-pgwire documentation bug**, fixed alongside
-this report.
-
-### 4. Community-image credentials, and defect 1
+### 4. Community-image credentials
 
 `intersystems/iris-community:latest-cd` started without `ISC_DEFAULT_PASSWORD`, leaving `_SYSTEM`
 in a state where `/api/atelier/` returns 401. Resolved with:
@@ -284,12 +273,6 @@ may well be intended behaviour, in which case only the advertised list needs adj
 
 ---
 
-## Defect 4 — `iris-pgwire[ai]` extra cannot be installed
-
-Covered under setup above. Fix belongs in iris-pgwire unless a PyPI shim is planned.
-
----
-
 ## What worked well
 
 Worth recording alongside the defects:
@@ -344,5 +327,7 @@ iris-agentic-dev query "SELECT \$ZV"
 
 ## Related
 
+- [iris-pgwire-iad-setup-issues.md](iris-pgwire-iad-setup-issues.md) — the iris-pgwire-side issues
+  from the same session, kept separate so this report can be filed upstream unedited
 - `specs/043-local-first-sync/research.md` §7 — the spike results this tool corroborated
 - `specs/043-local-first-sync/spikes/` — the probe harness, including the `TypeName` fix
