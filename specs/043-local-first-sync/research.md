@@ -97,6 +97,120 @@ So the design stands, but the label should not overreach. What is delivered is a
 partial replica with server authority — most of the felt benefit (no spinners, works on a plane,
 instant local reads) without claiming data ownership semantics the design does not provide.
 
+## 1c. Delivering a Zen-like experience — the stack, and where it breaks today
+
+§1a says the Zen gap is the motivation. This section asks the harder question: does the envisioned
+stack actually deliver a Zen-*like* developer experience, and do we know enough to build it?
+
+### The thesis: local-first restores Zen's programming model honestly
+
+Zen felt simple because it hid the network — forms submitted via POST while the framework "handled
+the details of the submit operation including invoking server callbacks and error processing." That
+was a fiction layered over HTTP, and it died because it depended on browser behaviour that browsers
+withdrew. REST + SPA is architecturally honest and an ergonomic regression: every read becomes an
+explicit async operation with its own loading and error states.
+
+**Local-first is the first architecture since Zen that can legitimately hide the network again** —
+not by pretending the round trip is synchronous, but by removing it from the read path. The local
+write *is* the state. Same synchronous feel Zen offered; no lie underneath; nothing for a browser
+vendor to deprecate out from under it.
+
+That is the real pitch. Not "offline support" — *Zen's ergonomics on a foundation that cannot rot
+the same way*.
+
+### The layers, and what is actually verified
+
+| Layer | Candidate | Status |
+|---|---|---|
+| Change capture | Trigger outbox (§4.1) | **Measured** — 0.0032–0.0135 ms/row (Q3) |
+| Sync wire format | Electric shape protocol (§2.2) | Spec fetched in full; not yet implemented |
+| Client store | PGlite **or** TanStack DB | **Undecided** — see below |
+| Reactive queries | TanStack DB differential dataflow | Verified upstream: ~0.7 ms update on a sorted 100k-row collection |
+| Optimistic writes | TanStack DB Electric collection | Upstream already rebases optimistic state on synced data and **tracks txids for mutation confirmation** |
+| Typed client | Prisma / Drizzle introspection | **BLOCKED — see the test below** |
+| Generated CRUD UI | react-admin Guessers / Refine Inferencer | Exists off the shelf; untested against IRIS |
+| Data provider | Our own sync layer | **Recommended over PostgREST — see below** |
+
+Two findings materially improve the plan:
+
+**TanStack DB's Electric collection already implements most of User Story 2's client half.** It
+applies mutations locally, rebases them on synced data, and confirms them by transaction ID. If we
+are wire-compatible, we inherit that instead of building it. It also lines up with the Q1 finding
+that `BeginTrans`/`CommitTrans` are observable in IRIS journals, and with `txids` in the shape
+message headers.
+
+**Skip PostgREST.** react-admin and Refine need a *data provider* — list / getOne / create / update
+/ delete — and the obvious one for a Postgres-shaped backend is PostgREST. But PostgREST leans on
+Postgres far harder than a query client does: catalog introspection, roles and RLS, JWT claims, and
+schema-cache reloads triggered by `NOTIFY`, which iris-pgwire does not implement
+(`protocol.py:1448`). Once the shape service and push endpoint exist, **they already are a data
+provider**. Writing one directly over them is on the order of 200 lines, avoids a server
+dependency, and makes the generated admin UI local-first by default rather than another REST
+client. This is the recommendation.
+
+### The introspection test — run 2026-08-16, and it FAILED
+
+The whole generation story rests on introspecting IRIS through iris-pgwire. That was tested end to
+end rather than assumed, against IRIS 2026.2 with iris-pgwire on the **DBAPI backend**, using a
+three-table schema with foreign keys.
+
+Ordinary SQL works — including a join across the FK:
+
+```console
+$ psql -h 127.0.0.1 -p 15432 -U _SYSTEM -d USER \
+    -c "SELECT c.name, o.status, o.total FROM Customer c JOIN CustomerOrder o ON o.customer_id = c.id"
+   name   | status | total
+----------+--------+--------
+ Acme Ltd | open   | 249.50
+```
+
+`prisma db pull` (6.19.3, the version this repo targets) fails on its **first** query:
+
+```console
+Error: ERROR: Execute failed: <SQL ERROR>; [SQLCODE: <-359>]
+[%msg: < User defined SQL function 'SQLUSER.VERSION' does not exist>]
+```
+
+Two distinct defects, both reproduced:
+
+1. **Scalar session functions are not intercepted** and fall through to IRIS SQL, which resolves
+   `version()` as `SQLUser.VERSION`. Confirmed failing: `version()`, `current_schema()`,
+   `current_database()`, `current_setting()`, `obj_description()`, `format_type()`,
+   `has_schema_privilege()`. `current_user` and `session_user` fail differently (SQLCODE -12, a
+   parse error) because they are bare keywords rather than calls. `catalog_functions.py` implements
+   the `pg_get_*` family but no session functions.
+
+2. **Intercepted catalog queries return a malformed protocol response.** The router *does* engage —
+   the log shows `Intercepting pg_class query` and `Intercepting pg_attribute query` — but the
+   client then reports `could not interpret result from server: SELECT 0 0`. This is worse than an
+   error: it is a protocol violation that leaves the client unable to parse the reply. Affects
+   `SELECT COUNT(*) FROM pg_catalog.pg_class`, `... pg_attribute`, `information_schema.tables`, and
+   `SELECT relname FROM pg_catalog.pg_class LIMIT 3`.
+
+**Scope, stated deliberately.** This is the **DBAPI backend** on IRIS 2026.2 at this commit. The
+compose stack runs iris-pgwire **embedded** inside IRIS via irispython, which is likely what spec
+031 was validated against, and **the embedded path was not tested here**. So this may be a
+backend-specific defect — which Constitution Principle IV would still make a defect, since both
+backends must work — or a regression, or something about this configuration. Do not record it as
+"Prisma introspection is broken" until the embedded path is checked.
+
+**Impact if it holds**: the typed-client layer is the root of the generation chain. Prisma → Zod →
+generated forms → generated admin all derive from it. Nothing downstream in the Zen-like story
+works until introspection does. This moves ahead of the sync work in priority.
+
+### The open decision: PGlite or TanStack DB
+
+Not interchangeable, and the spec currently assumes PGlite throughout:
+
+- **PGlite** — real Postgres in WASM, SQL, and **pgvector**, which is the only route to client-side
+  vector search over synced IRIS embeddings. Single-connection, ~3 MB.
+- **TanStack DB** — normalised collections with a far faster incremental query engine, no SQL, and
+  the Electric adapter described above.
+
+For a generated CRUD admin, TanStack DB looks the better fit. For the vector story — differentiated
+given this repo's existing work — PGlite is the only option. They can coexist; the point is the
+spec should say which is primary rather than assume.
+
 ## 2. Landscape
 
 ### 2.1 PGlite
