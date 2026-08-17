@@ -2,6 +2,8 @@
 
 **Spec**: [spec.md](spec.md) | **Plan**: [plan.md](plan.md)
 **Constitution**: Test-First is non-negotiable — the test for a task lands before its implementation.
+**Spec-kit commands**: prefix with `SPECIFY_FEATURE=044-catalog-as-views` — the scripts resolve the
+feature from a `NNN-` branch prefix and work happens on `claude/iris-pglite-replicache-3ysrqe`.
 
 Legend: `[P]` = parallelisable · `[X]` = done
 
@@ -9,8 +11,10 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
 ## Phase 1 — Foundation
 
-- [X] **T001** Write `PGWire.Catalog` ObjectScript class with `PG_OID` SqlProc.
-  *Exit*: callable as `SELECT PGWire.PG_OID('sqluser:table:x')`, stable, distinct, ≥ 16384.
+- [X] **T001** `PG_OID` callable from SQL. *Superseded in flight*: planned as a `SqlProc` on a
+  shipped `PGWire.Catalog.cls`, delivered as `CREATE OR REPLACE FUNCTION … LANGUAGE OBJECTSCRIPT`
+  (`catalog/functions.py`) because nothing installed the class file — see plan.md Design §1.
+  *Exit*: callable as `SELECT PGWire.PG_OID('sqluser:table:x')`, stable, distinct, ≥ 16384. ✅
 - [X] **T002** Test: OID properties — stability, distinctness, range, and **parity with Python's
   `OIDGenerator`** for the same identity string.
 - [X] **T003** `views/definitions.py` — view DDL registry, one entry per catalog table, each with
@@ -86,13 +90,36 @@ Legend: `[P]` = parallelisable · `[X]` = done
 - [ ] **T016** `pg_index` view.
 - [ ] **T017** E2E: generated schema carries PKs and FK relations (SC-002).
 
+## Phase 3.5 — Coverage gaps found by `/speckit.analyze` (2026-08-17)
+
+These are requirements the spec states and no task covered. Listed here rather than silently
+inherited by "Phase 4".
+
+- [ ] **T023** E2E: a table created *after* server start appears in introspection with no restart
+  (**SC-006**, User Story 3). The views read `INFORMATION_SCHEMA` at query time so this should hold
+  by construction — which is exactly why it needs a test rather than an assumption.
+- [ ] **T024** Regression guarantee (**SC-008**, **FR-013**, **FR-014**): ordinary SQL, DDL, DML and
+  vector paths unchanged, and every defect in `docs/orm-introspection-findings.md` still fixed. One
+  task, run before each phase exit.
+- [ ] **T025** Edge cases from spec §Edge Cases with no coverage: schema and table names differing
+  only by case; an IRIS object with no PostgreSQL equivalent (must be omitted or mapped, never
+  surfaced as a broken row).
+- [X] **T026** **SC-009** — measure what the translation gates cost per statement.
+  `tests/unit/test_translation_gate_budget.py`: 0.09 ms plain, 0.62 ms paren-heavy (12.4% of the
+  5 ms Principle V budget), with a 25% ceiling enforced so it cannot drift.
+
 ## Phase 4 — Generality
 
 - [ ] **T018** Remaining views: `pg_type`, `pg_attrdef`, `pg_enum`, `pg_extension`.
 - [ ] **T019** E2E with a second ORM (SC-005).
 - [ ] **T020** Error-not-empty audit: unsatisfiable catalog queries error (FR-008, SC-004).
 - [ ] **T021** Performance: 50-table introspection under 10 s (SC-007).
-- [ ] **T022** Remove handlers whose tables are fully served by views.
+- [ ] **T022** Remove handlers whose tables are fully served by views. Includes deleting
+  `catalog/catalog_functions.py` — Python implementations of `format_type`,
+  `pg_get_constraintdef` and friends from feature 033 that **no longer have any caller**: they
+  worked when a handler answered a whole query in Python, which stopped being true once catalog
+  tables became views. Whatever is still needed must be reinstated as an installed SQL function
+  (T013 needs `format_type`). Its name also collides confusingly with `catalog/functions.py`.
 
 ## Progress — 2026-08-16
 
@@ -108,7 +135,9 @@ Introspection now gets materially further than it did:
 | Projection honoured | 32 columns for a 2-column request | ✅ exactly what was asked |
 | Aliased JOIN + filter | not answerable | ✅ correct rows |
 | `nspname = ANY($1)` | never reached | ✅ `%INLIST PGWire.PG_ARRAY(?)`, both backends |
-| Boolean value in a projection | never reached | ❌ **T011b — current blocker** |
+| Boolean value in a projection | never reached | ✅ `CAST(CASE WHEN … AS BIT)`, both backends |
+| Table enumeration through a real client | hard error | ✅ Prisma receives all 5 tables |
+| Constraints / relations | never reached | ❌ **T015 — current blocker** |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
 instance rather than by reasoning:

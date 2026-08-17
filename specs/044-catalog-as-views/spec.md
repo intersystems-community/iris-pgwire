@@ -1,8 +1,16 @@
 # Feature Specification: Catalog Emulation as IRIS Views
 
 **Feature Branch**: `044-catalog-as-views` (developed on `claude/iris-pglite-replicache-3ysrqe`)
-**Created**: 2026-08-16
-**Status**: Draft — no open clarifications
+**Created**: 2026-08-16 · **Updated**: 2026-08-17
+**Status**: In progress — Phases 1–2 implemented, Phase 3 next. No open clarifications.
+
+**Running spec-kit commands on this feature**: the scripts resolve the feature from a `NNN-` branch
+prefix, and development happens on `claude/iris-pglite-replicache-3ysrqe`, so every invocation needs
+the override:
+
+```bash
+SPECIFY_FEATURE=044-catalog-as-views bash .specify/scripts/bash/check-prerequisites.sh --json
+```
 **Input**: Replace pattern-matched `pg_catalog` emulation with real IRIS views, so introspection SQL
 is evaluated by the database instead of by handlers that match query shapes.
 
@@ -153,6 +161,18 @@ A stale catalog produces confusing results.
   intercept — exactly one path answers any given table.
 - **FR-012**: Behaviour MUST be identical on both backends (Constitution Principle IV).
 
+**Constructs the catalog surface exposes**
+
+- **FR-015**: PostgreSQL constructs that appear in real introspection SQL MUST be translated well
+  enough for a catalog query to reach IRIS and be answered. This is a **consequence of FR-001**: once
+  the database evaluates catalog SQL instead of a handler recognising its shape, every construct in
+  that SQL becomes IRIS's problem rather than a pattern to match. Scope is bounded by evidence — a
+  construct is in scope when a real client is observed to emit it against a catalog table.
+  *(Added 2026-08-17. Seven such constructs were found by running `prisma db pull`: `= ANY($n)`,
+  a boolean expression used as a projected value, a bare boolean operand, boolean literals compared
+  against a boolean column, `obj_description()`, binary-format array parameters, and column type
+  metadata for boolean and array columns. See tasks T011a–T011g.)*
+
 **Compatibility**
 
 - **FR-013**: Non-catalog behaviour MUST NOT change — ordinary SQL, DDL, DML and vector operations
@@ -185,6 +205,8 @@ A stale catalog produces confusing results.
 - **SC-007**: Introspection of a 50-table schema completes in **under 10 seconds**.
 - **SC-008**: The existing test suite passes unchanged, and every defect fixed in
   `docs/orm-introspection-findings.md` stays fixed.
+- **SC-009**: The per-statement cost of deciding whether a catalog translation applies stays under
+  25% of the Principle V 5 ms budget, measured (not asserted).
 
 ---
 
@@ -208,7 +230,11 @@ A stale catalog produces confusing results.
 
 ## Out of Scope
 
-- `regclass` casts and PostgreSQL-specific operator translation.
+- `regclass` casts, and PostgreSQL-specific operator translation **not required to answer a catalog
+  query**. Translation that a catalog query does require is in scope under FR-015 — that boundary was
+  redrawn on 2026-08-17, when seven such constructs turned out to sit between a working view and a
+  working `prisma db pull`. The alternative, a sibling feature, would have had no independent user
+  value and a circular dependency with this one.
 - Catalog **writes** — the surface is read-only.
 - `pg_catalog` tables no client in evidence queries.
 - Making PostgREST work; it needs `NOTIFY`, tracked separately.
