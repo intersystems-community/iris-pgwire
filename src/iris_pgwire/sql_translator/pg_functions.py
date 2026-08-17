@@ -31,6 +31,9 @@ import re
 PG_FUNCTION_MAP: dict[str, str] = {
     "obj_description": "PGWire.OBJ_DESCRIPTION",
     "pg_get_constraintdef": "PGWire.PG_GET_CONSTRAINTDEF",
+    "format_type": "PGWire.FORMAT_TYPE",
+    "pg_get_expr": "PGWire.PG_GET_EXPR",
+    "col_description": "PGWire.COL_DESCRIPTION",
 }
 
 # `name(` not preceded by a dot or word character, so a qualified call

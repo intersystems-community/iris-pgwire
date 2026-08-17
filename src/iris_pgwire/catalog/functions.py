@@ -235,6 +235,92 @@ PG_GET_CONSTRAINTDEF = CatalogFunction(
 }}""",
 )
 
+# Renders a type OID and modifier the way PostgreSQL's format_type does, because
+# that string is what an ORM writes into a generated schema. Every case below was
+# measured against postgres:15-alpine rather than recalled:
+#
+#   format_type(23, -1)        -> integer
+#   format_type(1043, 104)     -> character varying(100)
+#   format_type(1043, -1)      -> character varying          (no modifier, no parens)
+#   format_type(1042, 14)      -> character(10)
+#   format_type(1700, 655366)  -> numeric(10,2)
+#   format_type(1700, -1)      -> numeric
+#   format_type(1114, -1)      -> timestamp without time zone
+#   format_type(701, -1)       -> double precision
+#   format_type(16, -1)        -> boolean
+#   format_type(99999, -1)     -> ???                        (unknown OID)
+#
+# The modifier encoding is PostgreSQL's: varchar and char carry length + 4, and
+# numeric packs precision * 65536 + scale + 4. `\\` is integer division in
+# ObjectScript and `#` is modulo.
+FORMAT_TYPE = CatalogFunction(
+    name="FORMAT_TYPE",
+    signature="typeOid INTEGER, typeMod INTEGER",
+    returns="VARCHAR(128)",
+    purpose="render a type OID and modifier as PostgreSQL's format_type does",
+    body="""{
+  new mod, prec, scale
+  set mod = typeMod
+  if mod = "" { set mod = -1 }
+  if typeOid = 23 { quit "integer" }
+  if typeOid = 20 { quit "bigint" }
+  if typeOid = 21 { quit "smallint" }
+  if typeOid = 16 { quit "boolean" }
+  if typeOid = 25 { quit "text" }
+  if typeOid = 700 { quit "real" }
+  if typeOid = 701 { quit "double precision" }
+  if typeOid = 1082 { quit "date" }
+  if typeOid = 1083 { quit "time without time zone" }
+  if typeOid = 1114 { quit "timestamp without time zone" }
+  if typeOid = 1184 { quit "timestamp with time zone" }
+  if typeOid = 1043 {
+    if mod < 5 { quit "character varying" }
+    quit "character varying(" _ (mod - 4) _ ")"
+  }
+  if typeOid = 1042 {
+    if mod < 5 { quit "character" }
+    quit "character(" _ (mod - 4) _ ")"
+  }
+  if typeOid = 1700 {
+    if mod < 5 { quit "numeric" }
+    set prec = (mod - 4) \\ 65536
+    set scale = (mod - 4) # 65536
+    quit "numeric(" _ prec _ "," _ scale _ ")"
+  }
+  quit "???"
+}""",
+)
+
+# PostgreSQL stores a parse tree in pg_attrdef.adbin and renders it with
+# pg_get_expr. We have the default's expression *text* and no parse tree, so the
+# pg_attrdef view carries the text in adbin and this returns it unchanged — an
+# honest rendering of what IRIS records, and what a client writes into a
+# generated schema. The relation OID is accepted and unused, as the signature
+# requires it.
+PG_GET_EXPR = CatalogFunction(
+    name="PG_GET_EXPR",
+    signature="expressionText VARCHAR(4000), relationOid INTEGER",
+    returns="VARCHAR(4000)",
+    purpose="render a stored default expression; ours is already text",
+    body="""{
+  quit expressionText
+}""",
+)
+
+# The column-level counterpart of OBJ_DESCRIPTION, and NULL for the same reason:
+# IRIS records no per-column comment reachable from an OID and a column number,
+# and PostgreSQL returns NULL for an uncommented column. Inventing text would put
+# it in a generated schema file.
+COL_DESCRIPTION = CatalogFunction(
+    name="COL_DESCRIPTION",
+    signature="relationOid INTEGER, columnNumber INTEGER",
+    returns="VARCHAR(4000)",
+    purpose="the comment on a column; always NULL, as IRIS records none",
+    body="""{
+  quit ""
+}""",
+)
+
 CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     PG_OID,
     PG_PUBLIC_SCHEMA,
@@ -242,4 +328,7 @@ CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     OBJ_DESCRIPTION,
     # After PG_OID: the body calls it.
     PG_GET_CONSTRAINTDEF,
+    FORMAT_TYPE,
+    PG_GET_EXPR,
+    COL_DESCRIPTION,
 )

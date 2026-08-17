@@ -176,3 +176,63 @@ class TestScopedToTheUserSchema:
 
         for view in (PG_ATTRIBUTE, PG_ATTRDEF):
             assert IRIS_SCHEMA.upper() in view.body.upper(), view.name
+
+
+class TestTheColumnQueryFunctions:
+    """T015b: format_type, pg_get_expr and col_description.
+
+    `format_type` renders the string an ORM writes into a generated schema, so
+    every case in the function body was measured against postgres:15-alpine and
+    then verified against the installed function — 14/14 byte-identical,
+    including the cases that are easy to get wrong: no parentheses when there is
+    no modifier (`character varying`, `numeric`), and `???` for an unknown OID.
+    """
+
+    def test_all_three_are_registered_for_installation(self):
+        from iris_pgwire.catalog.functions import CATALOG_FUNCTIONS
+
+        names = {function.name for function in CATALOG_FUNCTIONS}
+        assert {"FORMAT_TYPE", "PG_GET_EXPR", "COL_DESCRIPTION"} <= names
+
+    def test_the_translator_maps_the_unqualified_calls(self):
+        from iris_pgwire.sql_translator.pg_functions import PG_FUNCTION_MAP
+
+        assert PG_FUNCTION_MAP["format_type"] == "PGWire.FORMAT_TYPE"
+        assert PG_FUNCTION_MAP["pg_get_expr"] == "PGWire.PG_GET_EXPR"
+        assert PG_FUNCTION_MAP["col_description"] == "PGWire.COL_DESCRIPTION"
+
+    @pytest.mark.parametrize(
+        "rendering",
+        [
+            "integer",
+            "bigint",
+            "boolean",
+            "character varying",
+            "numeric",
+            "double precision",
+            "timestamp without time zone",
+            "time without time zone",
+        ],
+    )
+    def test_format_type_carries_postgresqls_own_spelling(self, rendering):
+        """`double precision`, not `float8`; the ORM writes this string out."""
+        from iris_pgwire.catalog.functions import FORMAT_TYPE
+
+        assert f'"{rendering}"' in FORMAT_TYPE.body
+
+    def test_the_modifier_offset_is_removed_when_rendering(self):
+        from iris_pgwire.catalog.functions import FORMAT_TYPE
+
+        assert "(mod - 4)" in FORMAT_TYPE.body, (
+            "varchar(100) arrives as atttypmod 104; rendering 104 would be wrong"
+        )
+
+    def test_an_unknown_oid_renders_as_postgresql_does(self):
+        from iris_pgwire.catalog.functions import FORMAT_TYPE
+
+        assert '"???"' in FORMAT_TYPE.body, "measured: format_type(99999, -1) is '???'"
+
+    def test_col_description_returns_null_rather_than_inventing_text(self):
+        from iris_pgwire.catalog.functions import COL_DESCRIPTION
+
+        assert 'quit ""' in COL_DESCRIPTION.body

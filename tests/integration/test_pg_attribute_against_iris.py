@@ -193,3 +193,68 @@ class TestPrismasJoinShape:
             f"WHERE relname = '{TABLE.lower()}'"
         )
         assert cursor.fetchall()[0][0] == 6, "all six columns of the fixture table"
+
+
+class TestFormatTypeMatchesPostgreSQL:
+    """The rendered type string is what an ORM writes into a generated schema.
+
+    Every expectation is what postgres:15-alpine printed for the same arguments,
+    measured rather than recalled. The easy mistakes are covered deliberately: no
+    parentheses when there is no modifier, and PostgreSQL's own spellings
+    (`double precision`, not `float8`).
+    """
+
+    @pytest.mark.parametrize(
+        ("type_oid", "type_mod", "expected"),
+        [
+            (23, -1, "integer"),
+            (20, -1, "bigint"),
+            (16, -1, "boolean"),
+            (25, -1, "text"),
+            (701, -1, "double precision"),
+            (1082, -1, "date"),
+            (1083, -1, "time without time zone"),
+            (1114, -1, "timestamp without time zone"),
+            (1043, 104, "character varying(100)"),
+            (1043, -1, "character varying"),
+            (1042, 14, "character(10)"),
+            (1700, 655366, "numeric(10,2)"),
+            (1700, -1, "numeric"),
+            (99999, -1, "???"),
+        ],
+    )
+    def test_each_rendering_is_byte_identical(self, cursor, type_oid, type_mod, expected):
+        cursor.execute(f"SELECT PGWire.FORMAT_TYPE({type_oid}, {type_mod})")
+        assert cursor.fetchall()[0][0] == expected
+
+    def test_it_renders_the_fixture_tables_own_columns(self, cursor):
+        """End to end: pg_attribute's atttypmod through format_type."""
+        cursor.execute(
+            "SELECT a.attname, PGWire.FORMAT_TYPE(a.atttypid, a.atttypmod) AS rendered "
+            "FROM pg_catalog.pg_attribute a "
+            "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
+            f"WHERE c.relname = '{TABLE.lower()}' ORDER BY a.attnum"
+        )
+        rendered = dict(cursor.fetchall())
+        assert rendered["id"] == "integer"
+        assert rendered["label"] == "character varying(100)"
+        assert rendered["wide"] == "character varying(200)"
+        assert rendered["amount"] == "numeric(10,2)"
+        assert rendered["stamp"] == "timestamp without time zone"
+
+
+class TestTheOtherTwoFunctions:
+    def test_pg_get_expr_returns_the_default_it_is_given(self, cursor):
+        cursor.execute(
+            "SELECT PGWire.PG_GET_EXPR(d.adbin, d.adrelid) AS rendered "
+            "FROM pg_catalog.pg_attrdef d "
+            "JOIN pg_catalog.pg_class c ON c.oid = d.adrelid "
+            f"WHERE c.relname = '{TABLE.lower()}'"
+        )
+        rows = cursor.fetchall()
+        assert len(rows) == 1
+        assert "new" in str(rows[0][0]), "the default has to survive the round trip"
+
+    def test_col_description_is_null_not_invented(self, cursor):
+        cursor.execute("SELECT PGWire.COL_DESCRIPTION(1, 1)")
+        assert cursor.fetchall()[0][0] is None
