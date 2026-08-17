@@ -174,6 +174,27 @@ A stale catalog produces confusing results.
   Note the boundary is the query's shape, not whether the object exists: `\d no_such_table` returns
   **zero rows** in PostgreSQL, because the name is a literal in a `WHERE` clause rather than a
   relation reference. Measured.
+
+- **FR-008d**: An error originating in IRIS MUST be surfaced to the client as a protocol error. The
+  system is **not** required to work around IRIS defects — if IRIS fails where PostgreSQL would
+  succeed, passing the failure through is acceptable. *(Decided 2026-08-17, CHK046.)*
+
+  The boundary this does **not** cross: pass-through applies to *error versus clean error*, never to
+  *correct versus wrong*. Where an untranslated construct returns **wrong data**, a translation is
+  required by FR-004 and FR-008b regardless. T011d is the worked example — `relispartition = 'f'`
+  untranslated returns **0 rows where the correct answer is 5** when the predicate is flat, and
+  crashes only when it is nested. It is a correctness fix that also happens to avoid a crash, so
+  FR-008d does not retire it. Measured both ways.
+
+- **FR-008e**: A passed-through error MUST be **classified** so a client can tell whose fault it is.
+  A database internal failure MUST NOT be reported with a SQLSTATE that blames the client's SQL.
+  *(This is the precondition that makes FR-008d safe, and it is currently unmet — see T027.)*
+
+  Measured against PostgreSQL 15: syntax error `42601`, undefined column `42703`, undefined table
+  `42P01`, undefined function `42883`; internal failure is documented as `XX000`. iris-pgwire today
+  returns `42000` for **all** of them, including an IRIS fatal — so a client cannot distinguish "your
+  query is wrong" from "the database broke", and retry logic keyed on the SQLSTATE class will draw the
+  wrong conclusion.
 - **FR-009**: Setup MUST fail loudly and early if the catalog objects cannot be created.
 
 **Migration**

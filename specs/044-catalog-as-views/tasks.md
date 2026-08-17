@@ -44,10 +44,18 @@ Legend: `[P]` = parallelisable · `[X]` = done
   Unqualified calls are pointed at the PGWire schema (`sql_translator/pg_functions.py`), which is
   the mechanism `format_type` will use for T013.
 - [X] **T011d** **Boolean literals against catalog boolean columns.** `relispartition = 'f'` → `= 0`.
-  Not cosmetic: comparing one of these constant-valued view columns to the string `'f'` inside a
-  nested predicate group **crashes** IRIS (SQLCODE -400 fatal) rather than erroring, and that is the
-  exact shape Prisma emits. Flat it is fine, `= 0` nested is fine, the same shape over a real table
-  is fine. Reproduced with pgwire out of the path, so it is an IRIS defect worth reporting.
+  **A correctness fix, not merely crash-avoidance** — which matters, because CHK046 later decided
+  that passing an IRIS crash through is acceptable, and that decision does not retire this task.
+  Measured straight against IRIS with pgwire out of the path:
+
+  | untranslated | result | correct |
+  |---|---|---|
+  | `relispartition = 'f'` flat | **0 rows, silently** | 5 |
+  | `relispartition = 'f'` nested | SQLCODE -400 fatal | 5 |
+  | `relispartition = 0` either way | 5 rows | 5 |
+
+  So the flat form is a wrong answer of exactly the kind FR-008b forbids, and the crash is a second,
+  separate symptom. The IRIS crash itself remains worth reporting upstream.
 - [X] **T011e** **ORDER BY alias expansion was not idempotent.** The refiner replaced a select-list
   alias with its expression using a `\b` pattern, once per alias. The extended protocol translates
   at Parse, Describe *and* Execute, so Prisma's `namespace.nspname AS namespace ... ORDER BY
@@ -104,6 +112,15 @@ inherited by "Phase 4".
 - [ ] **T025** Edge cases from spec §Edge Cases with no coverage: schema and table names differing
   only by case; an IRIS object with no PostgreSQL equivalent (must be omitted or mapped, never
   surfaced as a broken row).
+- [ ] **T027** **SQLSTATE classification (FR-008e).** The precondition that makes the CHK046
+  pass-through decision safe. Every failure currently reaches the client as `42000`
+  (`syntax_error_or_access_rule_violation`), so an IRIS fatal is indistinguishable from the client's
+  own bad SQL, and a client's retry logic — which keys on the SQLSTATE class — concludes "fix your
+  query" when the database broke. Measured against PostgreSQL 15: syntax `42601`, undefined column
+  `42703`, undefined table `42P01`, undefined function `42883`; internal failure documented as
+  `XX000`. Map at minimum: IRIS fatal/internal → `XX000`; unknown field → `42703`; unknown
+  table/view → `42P01`; unknown function → `42883`; parse failure → `42601`. Not catalog-specific,
+  but the catalog path is where it was found and where it misleads most.
 - [X] **T026** **SC-009** — measure what the translation gates cost per statement.
   `tests/unit/test_translation_gate_budget.py`: 0.09 ms plain, 0.62 ms paren-heavy (12.4% of the
   5 ms Principle V budget), with a 25% ceiling enforced so it cannot drift.

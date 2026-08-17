@@ -60,9 +60,8 @@ unjustified violation a merge blocker.
       "SqlProc" has been replaced by an installed SQL function? [Consistency, Plan §Design 1]
 - [ ] CHK015 Do the spec's Assumptions still hold as written, given the `.cls` approach they were
       verified against has been replaced? [Consistency, Spec §Assumptions]
-- [ ] CHK016 Does any requirement conflict with the constitution's Principle I duty to error rather
-      than degrade, in the case where IRIS itself crashes on a construct (T011d, SQLCODE -400)?
-      [Conflict, Constitution §I]
+- [x] CHK016 **Resolved 2026-08-17** by FR-008d: no conflict. Principle I constrains *our* behaviour
+      — an error surfaced as an error satisfies it, whatever its origin. [Constitution §I, Spec §FR-008d]
 - [ ] CHK017 Are the phase exits in plan.md and the task groupings in tasks.md consistent after
       Phase 2b and Phase 3.5 were inserted? [Consistency, Plan §Phases vs Tasks]
 
@@ -150,8 +149,11 @@ unjustified violation a merge blocker.
       (`spikes/probe_pg_empty_vs_error.py`): 5/5 evaluable-but-non-matching shapes return empty,
       5/5 unanswerable shapes error. The enforceable half is FR-008c — pgwire must never *fabricate*
       an empty result, which is what all three original defects did. [Conflict, resolved]
-- [ ] CHK046 Resolve CHK016: when IRIS crashes rather than erroring, is a pgwire workaround the
-      required behaviour, or is passing the failure through acceptable? [Conflict, Constitution §I]
+- [x] CHK046 **Resolved 2026-08-17: passing it through is acceptable** (FR-008d). Two things the
+      decision does *not* license, both now written down: it does not excuse a **wrong answer**
+      (T011d returns 0 rows where 5 is correct when untranslated — measured, so it stays), and it
+      does not excuse **misattributing blame** — pgwire currently reports an IRIS fatal with the same
+      SQLSTATE 42000 as the client's own bad SQL. FR-008e and T027. [Resolved]
 - [ ] CHK047 Resolve CHK011: state the admission test for FR-015 scope, so the next construct does
       not need a judgement call. [Ambiguity, Spec §FR-015]
 - [ ] CHK048 Is a requirement/AC ID scheme established and used consistently — FR-*, SC-*, T* are in
