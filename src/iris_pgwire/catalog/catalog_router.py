@@ -486,7 +486,20 @@ class CatalogRouter:
 
         if self.can_handle(sql):
             target = self.get_target_catalog(sql)
-            logger.info(f"Intercepting {target} query (empty fallback)", session_id=session_id)
+            # FR-008c forbids this branch: it fabricates a zero-row, zero-column
+            # answer for any catalog query can_handle() claims but no handler
+            # recognises, so a client cannot tell an empty schema from an
+            # unimplemented one. T020 removes it. Until then the log has to name
+            # the statement, or the only trace of a swallowed query is the target
+            # table it was misattributed to — which is how four of Prisma's
+            # twelve statements went unnoticed.
+            logger.warning(
+                "Fabricating empty catalog result (FR-008c violation, T020)",
+                target=target,
+                primary_relation=self.primary_catalog_relation(sql),
+                sql_preview=" ".join(sql.split())[:220],
+                session_id=session_id,
+            )
             return {
                 "success": True,
                 "rows": [],

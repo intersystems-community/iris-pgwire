@@ -200,18 +200,40 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
   **Verified end to end**: `prisma db pull` goes from 6 statements to **12** — the whole introspection
   sequence: views, enums, base types, columns, foreign keys, indexes, procedures.
-- [ ] **T015b** **The columns query is the next blocker** (this is T012/T013's ground, now reached).
-  Prisma's statement 8 is the one that matters and it needs four things we do not have:
-  `pg_attribute` as a view, `format_type(atttypid, atttypmod)`, `pg_get_expr(adbin, adrelid)` for
-  column defaults, and `col_description(attrelid, ordinal_position)`. Introspection ends in **P1014
-  "The underlying table for model `(not available)` does not exist"** — Prisma has the tables but no
-  columns for them.
+- [ ] **T015b** **Two statements are swallowed, and three separate things must change.** Measured, not
+  inferred: of Prisma's twelve statements, exactly two are answered by the FR-008c "empty fallback"
+  with **zero rows and zero columns** — statement 8 (columns) and statement 9 (foreign keys), each
+  twice, at Describe and at Execute. That is why introspection ends in P1014: Prisma has the tables
+  and no columns or relations for them. The fallback log line now names the statement it swallows
+  (`primary_relation`, `sql_preview`), which is how these two were finally identified; before that its
+  only trace was the table it had misattributed the query to.
 
-  Also newly reached, and each legitimately unserved: `pg_enum`/`pg_type` (statements 6–7),
-  `pg_index` with `unnest`/`generate_subscripts` over `indkey` (statement 10 — note it needs real
-  array columns, not the NULLs the views currently carry), and `pg_proc` with
-  `pg_get_functiondef` (statement 11). `pg_proc` currently reaches IRIS and is reported as `42P01`,
-  which is the honest answer the routing invariant now guarantees.
+  What each needs, measured against IRIS 2026.2:
+
+  1. **`WHERE reltype > 0` excludes every row.** Prisma's columns query filters the pg_class subquery
+     on `reltype > 0`; our view hardcodes `0 AS reltype`. Measured: **0 of 9 rows survive**. So the
+     columns query returns nothing even with everything else perfect. `reltype` needs a real OID —
+     `PG_OID('<schema>:rowtype:<table>')` would do, distinct from the table's own OID as PostgreSQL's
+     is.
+  2. **The schema names do not match, and no literal rewrite can fix it.**
+     `INFORMATION_SCHEMA.COLUMNS.TABLE_SCHEMA` is `'SQLUSER'`; `pg_namespace.nspname` is `'public'`.
+     Prisma joins `namespace = info.table_schema` — a **column-to-column** comparison, so the
+     translation layer's `'public'` → IRIS-schema rewrite never applies. `information_schema.columns`
+     therefore has to become a **view** that reports `public`, which is also what would let the
+     `pg_attribute` join work. *Open question needing measurement first*: will IRIS accept a view
+     created in its own `INFORMATION_SCHEMA` schema, or does the emulation need a different home?
+  3. **`udt_schema` and `udt_name` do not exist** in IRIS's `INFORMATION_SCHEMA.COLUMNS` (measured
+     against the full column list; the other twelve columns Prisma selects are all present). Prisma
+     reads `udt_name` as `full_data_type` — it is how the ORM decides a field's type — so the view has
+     to synthesise both.
+
+  Then the pieces already named: `pg_attribute` and `pg_attrdef` views, and `format_type`,
+  `pg_get_expr`, `col_description` as installed SQL functions.
+
+  Statement 9 is harder and should be scoped separately: it uses `unnest(con1.conkey)` and
+  `generate_subscripts(con1.conkey, 1)`, set-returning functions over an array. IRIS has neither, and
+  `conkey` is a text `'{2}'` rather than a real array. This is a translation problem rather than a
+  view problem, and `JSON_TABLE` is the likely tool.
 - [X] **T015c** **The DBAPI type codes were being thrown away.** `_map_dbapi_type_to_oid` did
   `str(dbapi_type).upper()` on a **numeric** ODBC code and grepped it for `INT`/`CHAR`/`DATE`/`TIME`,
   so `str(12).upper() == "12"` matched nothing and every column was declared varchar — bigint, bit,
@@ -331,7 +353,8 @@ Introspection now gets materially further than it did:
 | Views enumeration (`pg_views`) | answered with pg_class's columns | ✅ `pg_catalog.pg_views`, T015a |
 | A handler answering for a table the query is not about | happened, silently | ✅ only the `FROM` relation's handler may answer |
 | Introspection statements Prisma completes | 4 of 12 | **12 of 12 issued**, 8 answered |
-| Column enumeration | never reached | ❌ **T015b — current blocker** (`format_type`, `pg_attribute`) |
+| Column enumeration | never reached | ❌ **T015b** — swallowed by the empty fallback; `reltype > 0`, schema mismatch, `udt_name` |
+| Relation enumeration | never reached | ❌ **T015b** — same, plus `unnest`/`generate_subscripts` over `conkey` |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
 instance rather than by reasoning:
