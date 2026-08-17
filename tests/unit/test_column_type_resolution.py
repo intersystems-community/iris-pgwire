@@ -1,8 +1,8 @@
 """T011h: a column's declared type must not depend on whether rows came back.
 
-The `dbapi` backend took every column type from `cursor.description` — where IRIS
-reports type_code 4, so everything is varchar — and then *refined* the varchars
-from the first row's Python value. A statement Describe runs the query with dummy
+The `dbapi` backend took every column type from `cursor.description`, which
+arrived as varchar for every column, and then *refined* the varchars from the
+first row's Python value. A statement Describe runs the query with dummy
 parameters, which match nothing, so there is no first row and no refinement:
 
     Execute  (7 rows) -> is_partition 16,   has_row_level_security 23
@@ -12,6 +12,11 @@ A client that reads the statement Describe (Prisma's driver does) then decodes
 DataRow bytes encoded per Execute: one byte of bool under a varchar declaration.
 Measured with a raw wire client in
 `specs/044-catalog-as-views/spikes/probe_statement_describe.py`.
+
+Those varchars were our own `_map_dbapi_type_to_oid` discarding good numeric type
+codes, not a driver limitation — this file originally said IRIS reported
+type_code 4 for everything, which measurement disproved (T015c). The module is
+needed either way: no type code can say that a 0/1 integer is a PostgreSQL bool.
 
 The cure is to resolve what the SQL already says, independent of any row, so the
 two paths agree by construction. This pins that resolver.

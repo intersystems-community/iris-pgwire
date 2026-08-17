@@ -2,10 +2,17 @@
 
 A column's declared type must not depend on whether the query happened to return
 rows — but on the `dbapi` backend it did. `DBAPIExecutor` took every type from
-`cursor.description` (IRIS DBAPI reports type_code 4, so varchar for everything)
-and then refined the varchars from the *first row's Python value*. A statement
-Describe runs the query with dummy parameters, which match nothing, so there was
-no first row and no refinement:
+`cursor.description`, which arrived as varchar for every column, and then refined
+the varchars from the *first row's Python value*.
+
+(The varchars were our own doing, not the driver's: `_map_dbapi_type_to_oid`
+stringified a numeric ODBC code and grepped it for `INT`/`CHAR`. Measured, IRIS
+reports distinct correct codes and reports them identically at 0 rows — see
+T015c. This module is still required regardless: no ODBC code can say that
+`relrowsecurity`, stored 0/1 and reported as an integer, is a PostgreSQL `bool`.)
+
+A statement Describe runs the query with dummy parameters, which match nothing, so
+there was no first row and no refinement:
 
     Execute  (7 rows) -> is_partition 16,   has_row_level_security 23
     Describe (0 rows) -> is_partition 1043, has_row_level_security 1043

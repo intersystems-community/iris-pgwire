@@ -99,9 +99,9 @@ Legend: `[P]` = parallelisable · `[X]` = done
   Root cause, and it is worth stating plainly: **T011g fixed one of two executors.** The `dbapi`
   backend does not use `IRISExecutor` — `backend_selector` builds a separate `DBAPIExecutor`, which
   has its own metadata code. There, `_fetch_standard_results` takes every type from
-  `cursor.description` (IRIS DBAPI reports type_code 4, hence 1043 for everything) and then
-  *refines* the 1043s **from the first row's Python value** — `if rows`. Describe runs the statement
-  with dummy parameters, which match nothing, so there is no first row and no refinement:
+  `cursor.description`, which arrived as 1043 for every column, and then *refines* the 1043s **from
+  the first row's Python value** — `if rows`. Describe runs the statement with dummy parameters,
+  which match nothing, so there is no first row and no refinement:
 
   * Execute (7 rows) → `is_partition` 16, `has_row_level_security` 23
   * Describe (0 rows) → both 1043
@@ -117,6 +117,18 @@ Legend: `[P]` = parallelisable · `[X]` = done
   both still do. Value-based refinement stays as the last resort. 29 unit tests; the raw-wire probe
   goes from 7 mismatches to PASS, with `has_row_level_security` now encoded as one byte to match its
   bool declaration.
+
+  **Correction, 2026-08-17 (T015c).** This task originally recorded the cause of the all-1043
+  description as "IRIS DBAPI reports type_code 4". **That was wrong**, and the mistake was mine: I
+  inferred it rather than measuring it. Measured directly, IRIS 2026.2 reports **distinct, correct
+  codes** — 4 INT, -5 BIGINT, -7 BIT, 12 VARCHAR, 8 DOUBLE, 1093 TIMESTAMP — and reports them
+  *identically whether the query returns rows or not*. The 1043s were produced by
+  `_map_dbapi_type_to_oid`, five lines of ours that called `str(code).upper()` on a number and
+  grepped it for `INT`/`CHAR`. The driver was never the variable, and the value-based refinement
+  existed to repair damage we had caused. The fix in this task stands and is still needed — no ODBC
+  code can say that `relrowsecurity`, stored 0/1 and reported as an integer, is a PostgreSQL `bool` —
+  but its stated cause is corrected here and in the module and test docstrings. Found by the feature
+  045 investigation and verified independently before amending this record.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.
@@ -200,6 +212,29 @@ Legend: `[P]` = parallelisable · `[X]` = done
   array columns, not the NULLs the views currently carry), and `pg_proc` with
   `pg_get_functiondef` (statement 11). `pg_proc` currently reaches IRIS and is reported as `42P01`,
   which is the honest answer the routing invariant now guarantees.
+- [X] **T015c** **The DBAPI type codes were being thrown away.** `_map_dbapi_type_to_oid` did
+  `str(dbapi_type).upper()` on a **numeric** ODBC code and grepped it for `INT`/`CHAR`/`DATE`/`TIME`,
+  so `str(12).upper() == "12"` matched nothing and every column was declared varchar — bigint, bit,
+  double, timestamp alike. Measured: `12→1043`, `-7→1043`, `-5→1043`, `8→1043`, `1093→1043`.
+
+  The code map is now built from measurement rather than from the ODBC specification, which matters
+  because IRIS's date and time codes are 1091/1092/1093 where ODBC's are 91/92/93. Full measured set
+  in `tests/unit/test_dbapi_type_code_mapping.py`, 26 tests.
+
+  **Code 4 is deliberately left as varchar.** IRIS reports 4 for a literal of *any* type — measured:
+  `SELECT 'abc'`, `SELECT 1.5` and `SELECT 0` all report 4 — so mapping it to int4 would declare text
+  as an integer, and a client reading binary results would fail on it. Declaring an integer as text is
+  the safer of the two errors. Resolving the ambiguity needs the select list rather than the code, so
+  it stays open rather than being guessed at: see T015d.
+- [ ] **T015d** **Code 4 is ambiguous, and an int column is still declared varchar because of it.**
+  With T015c done, every reported code except 4 maps correctly. 4 means "INT column" *and* "literal of
+  any type", so it cannot be mapped without consulting the select list. Consequence today: an ordinary
+  `INT` column is declared varchar at Describe and refined to int4 at Execute only when rows come
+  back — the same Describe/Execute divergence T011h fixed for catalog booleans, still live for plain
+  integer columns. `sql_translator/column_types.py` is where the select list is already parsed, so
+  that is where a literal can be told from a column reference. Needs its own measurement over the wire
+  first: does a client actually fail on it, or does the SQL-based override already cover the shapes
+  that reach us?
 - [ ] **T016** `pg_index` view.
 - [ ] **T017** E2E: generated schema carries PKs and FK relations (SC-002).
 

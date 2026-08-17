@@ -1239,7 +1239,43 @@ class DBAPIExecutor:
     # ------------------------------------------------------------------
 
     def _map_dbapi_type_to_oid(self, dbapi_type: Any) -> int:
-        """Map DBAPI type to PostgreSQL OID."""
+        """Map what `cursor.description[1]` holds to a PostgreSQL type OID.
+
+        IRIS reports a **numeric** ODBC-style code here. This used to stringify it
+        and grep for `INT`/`CHAR`, so `str(12).upper() == "12"` matched nothing and
+        every column — bigint, bit, double, timestamp alike — was declared varchar.
+
+        The codes below were measured against IRIS 2026.2 by creating a table with
+        each declared type and reading the description back; they are not taken
+        from the ODBC specification, whose date and time codes are 91/92/93 where
+        IRIS reports 1091/1092/1093. They do **not** vary with the row count.
+
+        Code 4 is deliberately *not* mapped to int4. IRIS reports 4 for a literal
+        of any type — measured: `SELECT 'abc'`, `SELECT 1.5` and `SELECT 0` all
+        report 4 — so treating it as an integer would declare text as int4, and a
+        client reading binary results would fail on it. Declaring an integer as
+        text is the safer of the two errors, and a length-prefixed string is the
+        one declaration that cannot corrupt a value. Resolving that ambiguity
+        needs the select list, not the code.
+        """
+        _ODBC_CODE_TO_OID = {
+            -5: 20,  # BIGINT   -> int8
+            5: 21,  # SMALLINT -> int2
+            -6: 21,  # TINYINT  -> int2 (PostgreSQL has nothing narrower)
+            12: 1043,  # VARCHAR, CHAR
+            -1: 25,  # LONGVARCHAR -> text
+            8: 701,  # DOUBLE   -> float8
+            2: 1700,  # NUMERIC
+            -7: 16,  # BIT — how IRIS spells boolean; one byte in binary format
+            1091: 1082,  # DATE
+            1092: 1083,  # TIME
+            1093: 1114,  # TIMESTAMP, POSIXTIME
+            11: 1114,  # what CURRENT_TIMESTAMP reports
+        }
+        if isinstance(dbapi_type, int) and not isinstance(dbapi_type, bool):
+            return _ODBC_CODE_TO_OID.get(dbapi_type, 1043)
+
+        # Some paths pass a type *name* rather than a code.
         type_str = str(dbapi_type).upper()
         if "INT" in type_str:
             return 23
