@@ -309,6 +309,32 @@ class CatalogRouter:
 
         return self._regclass_pattern.sub(replace_regclass, query)
 
+    # The relation a statement is about: the first catalog table after FROM, or
+    # after a JOIN only if no FROM relation is a catalog table at all. Optional
+    # schema qualifier, optional quotes, optional alias.
+    _FROM_RELATION = re.compile(
+        r"\bFROM\s+(?:(?:\"?\w+\"?)\s*\.\s*)?\"?(\w+)\"?",
+        re.IGNORECASE,
+    )
+
+    def primary_catalog_relation(self, query: str) -> str | None:
+        """The catalog table the query is *about*, or None if it is about none.
+
+        Distinct from :meth:`get_target_catalog`, which returns the highest-
+        priority catalog table mentioned *anywhere*. That is the right question
+        for "which emulator knows most about this statement" and the wrong one
+        for "which table's columns should the answer have": Prisma's pg_views
+        query mentions pg_class in a JOIN, and answering with pg_class's shape
+        made the client fail (T015a).
+        """
+        for match in self._FROM_RELATION.finditer(query):
+            name = match.group(1).lower()
+            if name in self.CATALOG_TABLES or (
+                name.startswith("pg_") and len(name) > 3
+            ):
+                return name
+        return None
+
     def get_target_catalog(self, query: str) -> str | None:
         """
         Get primary catalog table targeted by query.
@@ -406,10 +432,48 @@ class CatalogRouter:
             return None
 
         tables = self.extract_catalog_tables(sql)
+
+        # A handler may only answer for the relation the query is *about*.
+        #
+        # The loop below walks a priority list and takes the first handler whose
+        # table appears anywhere in the statement — a JOIN partner included. So a
+        # question about pg_views, which names pg_class only in a JOIN, was
+        # answered by the pg_class handler with pg_class's own 32 columns, and
+        # the client failed on `relfrozenxid` typed `xid`. The same happened to
+        # Prisma's constraints query before pg_constraint became a view, and
+        # would happen to the next catalog table with no path of its own.
+        #
+        # Declining is the honest alternative: IRIS then reports the relation it
+        # cannot find, which reaches the client as 42P01 (spec FR-008a). What is
+        # never acceptable is a confidently wrong shape.
+        # Scoped deliberately to the *substitution* case: the primary relation has
+        # no handler, but some other table in the statement does, so falling
+        # through would answer with that other table's columns. A statement whose
+        # only catalog table is unhandled still reaches the "empty fallback"
+        # below — that fabricated empty result is a separate defect (FR-008c),
+        # already located, and removing it is T020's own verification pass rather
+        # than something to smuggle in here.
+        primary = self.primary_catalog_relation(sql)
+        substitutes = primary is not None and primary not in self._catalog_handler_map
+        if substitutes and any(
+            table != primary and table in self._catalog_handler_map for table in tables
+        ):
+            logger.debug(
+                "Declining: would answer with another relation's columns",
+                primary=primary,
+                targeted=sorted(tables),
+                session_id=session_id,
+            )
+            return None
+
         guard_token = _IN_CATALOG_HANDLER.set(True)
         try:
             for table in self.CATALOG_HANDLER_PRIORITY:
                 if table not in tables:
+                    continue
+                # Same rule inside the loop: only the primary relation's handler
+                # may answer, so priority order cannot substitute a JOIN partner.
+                if primary is not None and table != primary:
                     continue
                 handler = self._catalog_handler_map.get(table)
                 if not handler:

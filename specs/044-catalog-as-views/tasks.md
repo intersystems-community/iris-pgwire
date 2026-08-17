@@ -156,20 +156,50 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
   **Verified end to end**: `prisma db pull` answers the constraints query with its own 7 columns and
   moves on. The `xid` error is gone from that statement.
-- [ ] **T015a** **`pg_views`, and the general defect it exposes.** With T015 done, `prisma db pull`
-  advances to a sixth statement — `SELECT views.viewname, views.definition … FROM
-  pg_catalog.pg_views` — and fails with the *same* `xid` message for the same underlying reason:
-  `pg_views` has **no view and no handler**, so the router's fallback hands it to the pg_class
-  handler, which answers with pg_class's 32 columns.
+- [X] **T015a** **`pg_views`, and the routing invariant its absence exposed.** With T015 done,
+  `prisma db pull` advanced to `SELECT views.viewname, views.definition … FROM pg_catalog.pg_views`
+  and failed with the *same* `xid` message. The cause was structural rather than particular to any
+  table: `handle_catalog_query` walked a priority list and called the first handler whose table
+  appeared **anywhere** in the statement, so `pg_class` — named only in a JOIN — answered a question
+  about `pg_views` with pg_class's own 32 columns. The same mechanism produced T015's failure, and
+  would have produced the next one.
 
-  So the wrong-column-set defect was never specific to `pg_constraint`. It is what happens to *any*
-  catalog table with no path of its own — exactly the case CHK004 records as unspecified. Two parts,
-  the second being the more important:
+  Two parts:
 
-  * a `pg_views` view over `INFORMATION_SCHEMA.VIEWS`;
-  * a requirement, and its enforcement, that a catalog table with no path of its own is **never**
-    answered with another table's columns. Declining, and letting IRIS report the missing relation, is
-    closer to FR-008 than a confidently wrong shape.
+  * **`pg_views`** over `INFORMATION_SCHEMA.VIEWS`, four columns measured against
+    postgres:15-alpine (`schemaname`, `viewname`, `viewowner`, `definition`). `schemaname` comes from
+    `PGWire.PG_PUBLIC_SCHEMA()` for the same reason pg_namespace's does. The `TABLE_SCHEMA` filter is
+    load-bearing: the instance genuinely contains `pg_catalog.pg_class` and friends, and without it an
+    ORM would generate models for pgwire's own emulation — asserted directly.
+  * **`primary_catalog_relation()`** — the catalog table a statement is *about*, its `FROM` relation,
+    as distinct from `get_target_catalog()`'s highest-priority table mentioned anywhere. A handler may
+    only answer for the primary relation, so a JOIN partner can never substitute its column set.
+
+  **Scoped deliberately.** The invariant fires only on the *substitution* case: the primary relation
+  has no handler and some other table in the statement does. A statement whose only catalog table is
+  unhandled (`SELECT * FROM pg_roles`) still receives the fabricated empty result — that is FR-008c's
+  defect, already located, and removing it is **T020**'s own verification pass rather than something
+  to smuggle in under this scope. The first draft of the fix removed it as a side effect and broke
+  `test_fallback_empty_response_for_unrecognized_pg_table`; narrowing it was the right call, and a
+  test now records the boundary so it reads as a decision.
+
+  14 unit tests, 7 integration tests against real IRIS (all made against a view the test creates, so
+  an always-empty view could not pass, plus a guard that empty means "none" not "broken").
+
+  **Verified end to end**: `prisma db pull` goes from 6 statements to **12** — the whole introspection
+  sequence: views, enums, base types, columns, foreign keys, indexes, procedures.
+- [ ] **T015b** **The columns query is the next blocker** (this is T012/T013's ground, now reached).
+  Prisma's statement 8 is the one that matters and it needs four things we do not have:
+  `pg_attribute` as a view, `format_type(atttypid, atttypmod)`, `pg_get_expr(adbin, adrelid)` for
+  column defaults, and `col_description(attrelid, ordinal_position)`. Introspection ends in **P1014
+  "The underlying table for model `(not available)` does not exist"** — Prisma has the tables but no
+  columns for them.
+
+  Also newly reached, and each legitimately unserved: `pg_enum`/`pg_type` (statements 6–7),
+  `pg_index` with `unnest`/`generate_subscripts` over `indkey` (statement 10 — note it needs real
+  array columns, not the NULLs the views currently carry), and `pg_proc` with
+  `pg_get_functiondef` (statement 11). `pg_proc` currently reaches IRIS and is reported as `42P01`,
+  which is the honest answer the routing invariant now guarantees.
 - [ ] **T016** `pg_index` view.
 - [ ] **T017** E2E: generated schema carries PKs and FK relations (SC-002).
 
@@ -263,7 +293,10 @@ Introspection now gets materially further than it did:
 | Statement Describe declares usable types | varchar for a bool, whatever the row count | ✅ resolved from the SQL, T011h |
 | Constraints / relations | never reached | ✅ answered by `pg_catalog.pg_constraint`, T015 |
 | `pg_get_constraintdef` | unknown function, statement failed at prepare | ✅ installed, renders PK/UNIQUE/FK |
-| Views enumeration (`pg_views`) | never reached | ❌ **T015a — current blocker**, answered with pg_class's columns |
+| Views enumeration (`pg_views`) | answered with pg_class's columns | ✅ `pg_catalog.pg_views`, T015a |
+| A handler answering for a table the query is not about | happened, silently | ✅ only the `FROM` relation's handler may answer |
+| Introspection statements Prisma completes | 4 of 12 | **12 of 12 issued**, 8 answered |
+| Column enumeration | never reached | ❌ **T015b — current blocker** (`format_type`, `pg_attribute`) |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
 instance rather than by reasoning:

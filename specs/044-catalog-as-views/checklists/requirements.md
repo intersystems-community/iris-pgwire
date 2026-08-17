@@ -29,11 +29,13 @@ unjustified violation a merge blocker.
       joins a view-backed table to a handler-backed one? FR-010 permits coexistence and FR-011
       demands one path per table, but neither covers a query spanning both. [Gap, Spec §FR-010/011]
 - [ ] CHK004 Is the required behaviour written down for a catalog table with **no** view and **no**
-      handler? **Now demonstrated, not hypothetical** (2026-08-17): with `pg_constraint` served by a
-      view, `prisma db pull` reaches `pg_views`, which has neither, and the router's fallback answers
-      it with **pg_class's 32 columns** — so the client fails on `relfrozenxid` typed `xid` exactly as
-      it did for constraints. The wrong-column-set defect belongs to this gap, not to any one table.
-      T015a. [Gap, Spec §Edge Cases]
+      handler? **Half closed 2026-08-17 by T015a.** The half that was demonstrated is fixed: the
+      router answered a question about `pg_views` with **pg_class's 32 columns**, because a handler
+      could answer for any table merely *mentioned* in the statement. Only the `FROM` relation's
+      handler may answer now, so an unserved table is declined and IRIS reports it as `42P01`. The
+      half still unwritten is the requirement itself — nothing in the spec yet *says* this, and the
+      remaining fabricated-empty case (`SELECT * FROM pg_roles`) is deliberately left to **T020**.
+      [Gap, Spec §Edge Cases]
 - [ ] CHK005 Are requirements stated for the read-only guarantee — what happens when a client
       attempts a catalog **write**? Out of Scope says the surface is read-only but no requirement says
       how an attempt is answered. [Gap, Spec §Out of Scope]

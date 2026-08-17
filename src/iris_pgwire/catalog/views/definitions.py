@@ -294,12 +294,43 @@ PG_CONSTRAINT = CatalogView(
 )
 
 
+# --- pg_views ----------------------------------------------------------------
+# PostgreSQL's pg_views is itself a view, over pg_class and pg_rewrite: four
+# columns, measured against postgres:15-alpine. IRIS keeps the same facts in
+# INFORMATION_SCHEMA.VIEWS, VIEW_DEFINITION included.
+#
+# `schemaname` comes from PGWire.PG_PUBLIC_SCHEMA() for the same reason
+# pg_namespace does: a literal 'public' in view DDL is rewritten to the IRIS
+# schema name on its way in, so the view would report 'SQLUser' to clients.
+#
+# The TABLE_SCHEMA filter is not incidental. The instance genuinely contains
+# pg_catalog.pg_class, pg_catalog.pg_constraint and pg_catalog.pg_namespace —
+# pgwire's own emulation — and without the filter an ORM would generate models
+# for them.
+_PG_VIEWS_BODY = f"""
+SELECT
+    PGWire.PG_PUBLIC_SCHEMA() AS schemaname,
+    LOWER(v.TABLE_NAME) AS viewname,
+    'irisowner' AS viewowner,
+    v.VIEW_DEFINITION AS definition
+FROM INFORMATION_SCHEMA.VIEWS v
+WHERE v.TABLE_SCHEMA = '{IRIS_SCHEMA}'
+""".strip()
+
+PG_VIEWS = CatalogView(
+    name="pg_views",
+    columns=("schemaname", "viewname", "viewowner", "definition"),
+    body=_PG_VIEWS_BODY,
+)
+
+
 # Ordered so dependencies are created first. pg_namespace has no dependencies;
-# pg_class and pg_constraint reference its OIDs by value.
+# pg_class, pg_constraint and pg_views reference its OIDs or its schema name.
 CATALOG_VIEWS: tuple[CatalogView, ...] = (
     PG_NAMESPACE,
     PG_CLASS,
     PG_CONSTRAINT,
+    PG_VIEWS,
 )
 
 # Tables now served by views. CatalogRouter declines these so exactly one path
