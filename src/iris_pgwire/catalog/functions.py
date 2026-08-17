@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from iris_pgwire.schema_mapper import IRIS_SCHEMA
+
 CATALOG_SCHEMA = "PGWire"
 
 # PostgreSQL reserves OIDs below this for system objects.
@@ -174,9 +176,70 @@ OBJ_DESCRIPTION = CatalogFunction(
 }""",
 )
 
+# Prisma's constraints query calls `pg_get_constraintdef(constr.oid)`. An unknown
+# function fails the statement at *prepare* time (SQLCODE -359), whatever the
+# result set would have been — so this has to exist even for a query that returns
+# no rows, and returning NULL for a constraint that does exist would be the kind
+# of fabricated answer FR-008c forbids (spec FR-020).
+#
+# Our OIDs are a one-way hash, so there is nothing to look an object back up by.
+# The lookup instead recomputes PG_OID over the constraint names and matches —
+# O(constraints) per call, which is the trade the spec's "introspection is a
+# development-time operation" assumption exists to permit.
+#
+# The rendering follows what PostgreSQL emits for the three kinds IRIS supports,
+# verified side by side against real metadata:
+#
+#   PRIMARY KEY (cid)
+#   UNIQUE (code)
+#   FOREIGN KEY (parent_id) REFERENCES t015parent(id) ON DELETE CASCADE
+#
+# `NO ACTION` is PostgreSQL's default and is left implicit, as PostgreSQL does.
+# The referenced table is lowercased to match `pg_class.relname`, which the
+# pg_class view also lowercases — a client compares the two as text.
+PG_GET_CONSTRAINTDEF = CatalogFunction(
+    name="PG_GET_CONSTRAINTDEF",
+    signature="constraintOid INTEGER",
+    returns="VARCHAR(4000)",
+    purpose="the DDL text of a constraint, as pg_get_constraintdef renders it",
+    body=f"""{{
+  new cname, ctype, cols, reftable, refcols, delrule, updrule, text
+  set cname = ""
+  &sql(SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE INTO :cname, :ctype
+       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+       WHERE TABLE_SCHEMA = '{IRIS_SCHEMA}'
+         AND PGWire.PG_OID('{IRIS_SCHEMA.lower()}' _ ':constraint:'
+             || LOWER(CONSTRAINT_NAME)) = :constraintOid)
+  if (SQLCODE '= 0) || (cname = "") {{ quit "" }}
+  set cols = ""
+  &sql(SELECT LIST(COLUMN_NAME) INTO :cols
+       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+       WHERE CONSTRAINT_SCHEMA = '{IRIS_SCHEMA}' AND CONSTRAINT_NAME = :cname)
+  if ctype = "PRIMARY KEY" {{ quit "PRIMARY KEY (" _ cols _ ")" }}
+  if ctype = "UNIQUE" {{ quit "UNIQUE (" _ cols _ ")" }}
+  if ctype '= "FOREIGN KEY" {{ quit ctype }}
+  set reftable = "", refcols = "", delrule = "", updrule = ""
+  &sql(SELECT UNIQUE_CONSTRAINT_TABLE, UPDATE_RULE, DELETE_RULE
+       INTO :reftable, :updrule, :delrule
+       FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+       WHERE CONSTRAINT_SCHEMA = '{IRIS_SCHEMA}' AND CONSTRAINT_NAME = :cname)
+  &sql(SELECT LIST(REFERENCED_COLUMN_NAME) INTO :refcols
+       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+       WHERE CONSTRAINT_SCHEMA = '{IRIS_SCHEMA}' AND CONSTRAINT_NAME = :cname
+         AND REFERENCED_COLUMN_NAME IS NOT NULL)
+  set text = "FOREIGN KEY (" _ cols _ ") REFERENCES "
+      _ $zconvert(reftable, "L") _ "(" _ refcols _ ")"
+  if (updrule '= "") && (updrule '= "NO ACTION") {{ set text = text _ " ON UPDATE " _ updrule }}
+  if (delrule '= "") && (delrule '= "NO ACTION") {{ set text = text _ " ON DELETE " _ delrule }}
+  quit text
+}}""",
+)
+
 CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     PG_OID,
     PG_PUBLIC_SCHEMA,
     PG_ARRAY,
     OBJ_DESCRIPTION,
+    # After PG_OID: the body calls it.
+    PG_GET_CONSTRAINTDEF,
 )

@@ -207,6 +207,37 @@ A stale catalog produces confusing results.
   reported by IRIS as "failed validation", so both are `22000` rather than one of `22001`/`22P02`.
 - **FR-009**: Setup MUST fail loudly and early if the catalog objects cannot be created.
 
+**Constraints** *(added 2026-08-17, closing CHK002 for `pg_constraint`)*
+
+CHK002 found that Phase 3's catalog tables were named as entities and never specified. Written now,
+from what the client actually asks for rather than from the whole of PostgreSQL's catalog. Prisma's
+constraints query, captured verbatim off the wire
+(`spikes/probe_statement_describe.py`'s sibling capture), selects `conname`, `contype`,
+`condeferrable`, `condeferred`, calls `pg_get_constraintdef(constr.oid)`, joins `conrelid` to
+`pg_class.oid`, and filters `contype NOT IN ('p','u','f')`.
+
+- **FR-016**: `pg_constraint` MUST report one row per constraint, sourced from IRIS metadata at
+  query time, covering primary keys, unique constraints and foreign keys. `contype` MUST use
+  PostgreSQL's codes: `p`, `u`, `f`, `c`.
+- **FR-017**: `conrelid` MUST equal the `pg_class.oid` of the constrained table, and `confrelid` the
+  `pg_class.oid` of the referenced table for a foreign key (`0` otherwise), so a join between the two
+  views resolves. This is what makes relation discovery possible at all.
+- **FR-018**: `conkey` and `confkey` MUST carry **table-relative** column positions — the same
+  numbers `pg_attribute.attnum` reports — in PostgreSQL's `int2[]` text format. IRIS's
+  `KEY_COLUMN_USAGE.ORDINAL_POSITION` is the position *within the constraint*, not within the table,
+  so it MUST NOT be used directly.
+- **FR-019**: Foreign-key referential actions MUST be mapped to PostgreSQL's codes
+  (`a` no action, `r` restrict, `c` cascade, `n` set null, `d` set default), and the match type to
+  `s`/`f`/`p`.
+- **FR-020**: `pg_get_constraintdef` MUST exist as a callable function and MUST return the
+  constraint's definition text. A client's query fails at *prepare* time if the function is unknown,
+  whatever the result set would have been, so existence is not optional — and per FR-008c a stub
+  answering NULL for a real constraint would be a fabricated answer, not an absent one.
+- **FR-021**: A constraint kind IRIS does not support MUST yield **zero rows**, not an error: the
+  question is evaluable and the answer is "none". IRIS 2026.2 rejects
+  `CONSTRAINT c CHECK (qty > 0)` outright (measured, SQLCODE -1), so Prisma's
+  `contype NOT IN ('p','u','f')` is legitimately empty — the CHK045 rule applied.
+
 **Migration**
 
 - **FR-010**: The new surface and the existing handlers MUST be able to coexist, one catalog table

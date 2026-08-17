@@ -44,7 +44,7 @@ SCHEMA_COLUMNS = frozenset({"table_schema", "schema_name", "nspname"})
 # imports IRIS_SCHEMA from this one, so importing back would be circular. The
 # test suite asserts the two stay in agreement.
 CATALOG_SCHEMA = "pg_catalog"
-VIEW_BACKED_TABLES = frozenset({"pg_namespace", "pg_class"})
+VIEW_BACKED_TABLES = frozenset({"pg_namespace", "pg_class", "pg_constraint"})
 
 
 def translate_input_schema(sql: str) -> str:

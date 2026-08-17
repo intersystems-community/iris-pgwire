@@ -22,12 +22,18 @@ unjustified violation a merge blocker.
       unwritten requirement? [Completeness, Spec §Success Criteria]
 - [ ] CHK002 Are requirements defined for the catalog tables Phase 3 and 4 will add — `pg_constraint`,
       `pg_index`, `pg_type`, `pg_attrdef`, `pg_enum`, `pg_extension` — beyond naming them as entities?
-      [Gap, Spec §Key Entities]
+      **Partially closed 2026-08-17**: `pg_constraint` is now specified as FR-016…FR-021, written from
+      the query a client actually sends rather than from the whole PostgreSQL catalog. `pg_index` and
+      the Phase 4 tables remain unspecified. [Gap, Spec §Key Entities]
 - [ ] CHK003 Does any requirement state what a *partially migrated* catalog must do when a query
       joins a view-backed table to a handler-backed one? FR-010 permits coexistence and FR-011
       demands one path per table, but neither covers a query spanning both. [Gap, Spec §FR-010/011]
 - [ ] CHK004 Is the required behaviour written down for a catalog table with **no** view and **no**
-      handler? [Gap, Spec §Edge Cases]
+      handler? **Now demonstrated, not hypothetical** (2026-08-17): with `pg_constraint` served by a
+      view, `prisma db pull` reaches `pg_views`, which has neither, and the router's fallback answers
+      it with **pg_class's 32 columns** — so the client fails on `relfrozenxid` typed `xid` exactly as
+      it did for constraints. The wrong-column-set defect belongs to this gap, not to any one table.
+      T015a. [Gap, Spec §Edge Cases]
 - [ ] CHK005 Are requirements stated for the read-only guarantee — what happens when a client
       attempts a catalog **write**? Out of Scope says the surface is read-only but no requirement says
       how an attempt is answered. [Gap, Spec §Out of Scope]

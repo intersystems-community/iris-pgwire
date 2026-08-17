@@ -162,11 +162,144 @@ PG_CLASS = CatalogView(
 )
 
 
+# --- pg_constraint -----------------------------------------------------------
+# One row per constraint (spec FR-016…FR-021). Sources, measured on IRIS 2026.2:
+#
+#   TABLE_CONSTRAINTS        one row per constraint: name, type, table, deferrability
+#   KEY_COLUMN_USAGE         one row per constrained column, plus the REFERENCED_* side
+#   REFERENTIAL_CONSTRAINTS  UPDATE_RULE, DELETE_RULE, MATCH_OPTION, referenced table
+#   COLUMNS                  ORDINAL_POSITION — the number pg_attribute.attnum reports
+#
+# Two things here are easy to get wrong and were verified against real metadata:
+#
+# * `conkey` must carry **table-relative** column positions. IRIS's
+#   KEY_COLUMN_USAGE.ORDINAL_POSITION is the position *within the constraint* — 1
+#   for every single-column key, whatever the column's place in the table — so the
+#   position comes from INFORMATION_SCHEMA.COLUMNS instead. Measured: the foreign
+#   key on T015Child.parent_id (the table's 2nd column) yields conkey {2}, which
+#   ORDINAL_POSITION alone would have reported as {1} (spec FR-018).
+#
+# * IRIS has no `LIST_AGG`. `LIST()` exists and joins with commas, which is exactly
+#   what PostgreSQL's int2[] text format needs inside braces.
+#
+# IRIS 2026.2 rejects `CONSTRAINT c CHECK (…)` outright (SQLCODE -1), so no CHECK
+# rows can exist. The 'c' mapping is kept because the code belongs to the wire
+# contract, and a client asking only for check constraints then gets zero rows —
+# an answer, not an error (spec FR-021, the CHK045 rule).
+_PG_CONSTRAINT_BODY = f"""
+SELECT
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:constraint:' || LOWER(tc.CONSTRAINT_NAME)) AS oid,
+    tc.CONSTRAINT_NAME AS conname,
+    {PUBLIC_OID} AS connamespace,
+    CASE tc.CONSTRAINT_TYPE
+        WHEN 'PRIMARY KEY' THEN 'p'
+        WHEN 'FOREIGN KEY' THEN 'f'
+        WHEN 'UNIQUE' THEN 'u'
+        WHEN 'CHECK' THEN 'c'
+        ELSE 'x'
+    END AS contype,
+    CASE WHEN tc.IS_DEFERRABLE = 'YES' THEN 1 ELSE 0 END AS condeferrable,
+    CASE WHEN tc.INITIALLY_DEFERRED = 'YES' THEN 1 ELSE 0 END AS condeferred,
+    1 AS convalidated,
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(tc.TABLE_NAME)) AS conrelid,
+    0 AS contypid,
+    0 AS conindid,
+    0 AS conparentid,
+    CASE WHEN rc.UNIQUE_CONSTRAINT_TABLE IS NULL THEN 0
+         ELSE PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(rc.UNIQUE_CONSTRAINT_TABLE))
+    END AS confrelid,
+    CASE rc.UPDATE_RULE
+        WHEN 'CASCADE' THEN 'c'
+        WHEN 'SET NULL' THEN 'n'
+        WHEN 'SET DEFAULT' THEN 'd'
+        WHEN 'RESTRICT' THEN 'r'
+        ELSE 'a'
+    END AS confupdtype,
+    CASE rc.DELETE_RULE
+        WHEN 'CASCADE' THEN 'c'
+        WHEN 'SET NULL' THEN 'n'
+        WHEN 'SET DEFAULT' THEN 'd'
+        WHEN 'RESTRICT' THEN 'r'
+        ELSE 'a'
+    END AS confdeltype,
+    CASE rc.MATCH_OPTION
+        WHEN 'FULL' THEN 'f'
+        WHEN 'PARTIAL' THEN 'p'
+        ELSE 's'
+    END AS confmatchtype,
+    1 AS conislocal,
+    0 AS coninhcount,
+    1 AS connoinherit,
+    (SELECT '{{' || LIST(col.ORDINAL_POSITION) || '}}'
+       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+       JOIN INFORMATION_SCHEMA.COLUMNS col
+         ON col.TABLE_SCHEMA = k.TABLE_SCHEMA
+        AND col.TABLE_NAME = k.TABLE_NAME
+        AND col.COLUMN_NAME = k.COLUMN_NAME
+      WHERE k.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+        AND k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME) AS conkey,
+    (SELECT '{{' || LIST(col.ORDINAL_POSITION) || '}}'
+       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+       JOIN INFORMATION_SCHEMA.COLUMNS col
+         ON col.TABLE_SCHEMA = k.REFERENCED_TABLE_SCHEMA
+        AND col.TABLE_NAME = k.REFERENCED_TABLE_NAME
+        AND col.COLUMN_NAME = k.REFERENCED_COLUMN_NAME
+      WHERE k.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+        AND k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+        AND k.REFERENCED_COLUMN_NAME IS NOT NULL) AS confkey,
+    NULL AS conpfeqop,
+    NULL AS conppeqop,
+    NULL AS conffeqop,
+    NULL AS confdelsetcols,
+    NULL AS conexclop,
+    NULL AS conbin
+FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+       ON rc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+      AND rc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+WHERE tc.TABLE_SCHEMA = '{IRIS_SCHEMA}'
+""".strip()
+
+PG_CONSTRAINT = CatalogView(
+    name="pg_constraint",
+    columns=(
+        "oid",
+        "conname",
+        "connamespace",
+        "contype",
+        "condeferrable",
+        "condeferred",
+        "convalidated",
+        "conrelid",
+        "contypid",
+        "conindid",
+        "conparentid",
+        "confrelid",
+        "confupdtype",
+        "confdeltype",
+        "confmatchtype",
+        "conislocal",
+        "coninhcount",
+        "connoinherit",
+        "conkey",
+        "confkey",
+        "conpfeqop",
+        "conppeqop",
+        "conffeqop",
+        "confdelsetcols",
+        "conexclop",
+        "conbin",
+    ),
+    body=_PG_CONSTRAINT_BODY,
+)
+
+
 # Ordered so dependencies are created first. pg_namespace has no dependencies;
-# pg_class references its OIDs by value.
+# pg_class and pg_constraint reference its OIDs by value.
 CATALOG_VIEWS: tuple[CatalogView, ...] = (
     PG_NAMESPACE,
     PG_CLASS,
+    PG_CONSTRAINT,
 )
 
 # Tables now served by views. CatalogRouter declines these so exactly one path
@@ -212,6 +345,7 @@ BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
         "condeferred",
         "convalidated",
         "conislocal",
+        "connoinherit",
     }
 )
 
@@ -236,7 +370,18 @@ CATALOG_COLUMN_TYPE_OIDS: dict[str, int] = {
     "nspacl": 1009,
     "relpartbound": 1009,
     "indoption": 1009,
-    "indkey": 1009,
-    "conkey": 1009,
-    "confkey": 1009,
+    # int2[], not text[]: these carry column positions. Declaring 1009 for them
+    # would hand a typed client the wrong element type.
+    "indkey": 1005,
+    "conkey": 1005,
+    "confkey": 1005,
+    # `"char"` — a single byte, not a string. PostgreSQL declares contype and the
+    # foreign-key action codes this way, and a client decodes one byte for it.
+    "contype": 18,
+    "confupdtype": 18,
+    "confdeltype": 18,
+    "confmatchtype": 18,
+    "relpersistence": 18,
+    "relkind": 18,
+    "relreplident": 18,
 }

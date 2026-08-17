@@ -80,7 +80,7 @@ Legend: `[P]` = parallelisable · `[X]` = done
   * `_masked` blanked quoted identifiers to *whitespace*, so `"col" AS x` began with spaces and the
     alias separator matched at position 0, returning an empty expression. Masks to a filler now, so
     positions survive.
-- [ ] **T011h** **The declared column type depends on whether the query happened to return rows.**
+- [X] **T011h** **The declared column type depends on whether the query happened to return rows.**
   Found while starting T015: `prisma db pull` does not reach a constraints query at all, so the
   `xid` failure recorded under T015 is not the current blocker. Prisma now fails on the *tables*
   query:
@@ -107,27 +107,69 @@ Legend: `[P]` = parallelisable · `[X]` = done
   * Describe (0 rows) → both 1043
 
   So the declared type is a function of the row count. That is not catalog-specific: any query whose
-  Describe returns no rows is described wrongly on this backend. It is the gate on T015's own
-  verification, since nothing downstream of the tables query is reachable.
+  Describe returns no rows is described wrongly on this backend. It gated T015's own verification,
+  since nothing downstream of the tables query was reachable.
 
-  Fix direction: resolve types from the **SQL** — cast, known catalog column, boolean expression —
-  in one shared place both executors call, so Describe and Execute agree by construction and the
-  "fixed one of two" trap does not recur. Value-based refinement stays as the last resort.
+  **Fixed** in `sql_translator/column_types.py`: each select-list item is resolved from the statement
+  text — explicit cast, then known catalog column, then boolean expression — and `None` ("no opinion")
+  otherwise, leaving whatever IRIS reported in place. It lives outside both executors because the
+  defect was precisely that the logic existed in only one of them; both call it, and a test asserts
+  both still do. Value-based refinement stays as the last resort. 29 unit tests; the raw-wire probe
+  goes from 7 mismatches to PASS, with `has_row_level_security` now encoded as one byte to match its
+  bool declaration.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.
 
 ## Phase 3 — Relations
 
-- [ ] **T015** `pg_constraint` view (primary and foreign keys). **Now the blocker, and it is not
-  merely missing — the handler is actively harmful.** Prisma's constraints query joins
-  `pg_constraint` (handler-backed) to `pg_class` and `pg_namespace` (view-backed). The "a mixed
-  query stays with the handler" rule then hands it to the **pg_class** handler, which answers with
-  pg_class's own 32 columns — including `relfrozenxid` and `relminmxid`, typed `xid` — and Prisma
-  fails with "Column type 'xid' could not be deserialized". Answering a query with a different
-  table's column set is wrong however the views progress, so `test_a_mixed_query_stays_with_the_handler`
-  needs revisiting alongside this: declining (and letting IRIS report the missing table) is closer to
-  FR-008 than returning the wrong shape.
+- [X] **T015** `pg_constraint` view (primary and foreign keys). Requirements written first, closing
+  CHK002 for this table: **FR-016…FR-021**, drawn from the query Prisma actually sends rather than
+  from the whole PostgreSQL catalog.
+
+  All 26 PostgreSQL 15 columns, in attnum order, over `TABLE_CONSTRAINTS` joined to
+  `REFERENTIAL_CONSTRAINTS`, with correlated `LIST()` subqueries for `conkey`/`confkey` (IRIS has no
+  `LIST_AGG`). `PGWire.PG_GET_CONSTRAINTDEF` installed alongside, because an unknown function fails
+  the statement at *prepare* time whatever the result set would be. 27 unit tests, **15 integration
+  tests against real IRIS**.
+
+  Three things the work turned up, none of them the recorded diagnosis on its own:
+
+  1. **`conkey` cannot come from `KEY_COLUMN_USAGE.ORDINAL_POSITION`.** That is the column's position
+     *within the constraint* — 1 for every single-column key. It has to be the table-relative position
+     `pg_attribute.attnum` reports, so it comes from `INFORMATION_SCHEMA.COLUMNS`. Measured: the
+     foreign key on `T015Child.parent_id`, the table's second column, yields `{2}`; the naive version
+     reported a plausible-looking `{1}`.
+  2. **A `pg_*` *function* name counted as a targeted catalog table.** `extract_catalog_tables`
+     matched any word with a `pg_` prefix, so `pg_get_constraintdef(constr.oid)` made the targeted set
+     larger than the view-backed set, the decline never fired, and the pg_class handler answered
+     regardless. That, not the missing view, was the immediate cause of the `xid` failure — an earlier
+     version of the routing test passed precisely because it omitted the function call. A name
+     followed by `(` is now read as a call.
+  3. **`schema_mapper.VIEW_BACKED_TABLES` is a second list** that must also name the table, or a bare
+     `pg_constraint` is never qualified to `pg_catalog` and IRIS answers `-30 Table or view not found`
+     (reported as `42P01` thanks to T027, which Prisma surfaced as P1014).
+
+  The superseded handler tests are rewritten to assert the decline, following the pattern established
+  when pg_class became a view — including one that hands the router an executor that raises, since a
+  fallback answering with an empty result would tell a client the schema has no constraints at all.
+
+  **Verified end to end**: `prisma db pull` answers the constraints query with its own 7 columns and
+  moves on. The `xid` error is gone from that statement.
+- [ ] **T015a** **`pg_views`, and the general defect it exposes.** With T015 done, `prisma db pull`
+  advances to a sixth statement — `SELECT views.viewname, views.definition … FROM
+  pg_catalog.pg_views` — and fails with the *same* `xid` message for the same underlying reason:
+  `pg_views` has **no view and no handler**, so the router's fallback hands it to the pg_class
+  handler, which answers with pg_class's 32 columns.
+
+  So the wrong-column-set defect was never specific to `pg_constraint`. It is what happens to *any*
+  catalog table with no path of its own — exactly the case CHK004 records as unspecified. Two parts,
+  the second being the more important:
+
+  * a `pg_views` view over `INFORMATION_SCHEMA.VIEWS`;
+  * a requirement, and its enforcement, that a catalog table with no path of its own is **never**
+    answered with another table's columns. Declining, and letting IRIS report the missing relation, is
+    closer to FR-008 than a confidently wrong shape.
 - [ ] **T016** `pg_index` view.
 - [ ] **T017** E2E: generated schema carries PKs and FK relations (SC-002).
 
@@ -218,7 +260,10 @@ Introspection now gets materially further than it did:
 | `nspname = ANY($1)` | never reached | ✅ `%INLIST PGWire.PG_ARRAY(?)`, both backends |
 | Boolean value in a projection | never reached | ✅ `CAST(CASE WHEN … AS BIT)`, both backends |
 | Table enumeration through a real client | hard error | ✅ Prisma receives all 5 tables |
-| Constraints / relations | never reached | ❌ **T015 — current blocker** |
+| Statement Describe declares usable types | varchar for a bool, whatever the row count | ✅ resolved from the SQL, T011h |
+| Constraints / relations | never reached | ✅ answered by `pg_catalog.pg_constraint`, T015 |
+| `pg_get_constraintdef` | unknown function, statement failed at prepare | ✅ installed, renders PK/UNIQUE/FK |
+| Views enumeration (`pg_views`) | never reached | ❌ **T015a — current blocker**, answered with pg_class's columns |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
 instance rather than by reasoning:

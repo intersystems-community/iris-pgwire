@@ -177,12 +177,20 @@ class CatalogRouter:
         Returns:
             Set of catalog table names (lowercase)
         """
-        words = set(re.findall(r"\b(\w+)\b", query.lower()))
+        lowered = query.lower()
+        words = set(re.findall(r"\b(\w+)\b", lowered))
+        # A pg_* name followed by `(` is a function call, not a table. Without
+        # this, `pg_get_constraintdef(constr.oid)` counted as a catalog table, so
+        # the set of targeted tables was never a subset of the view-backed ones
+        # and the decline below never fired — the pg_class handler then answered
+        # Prisma's constraints query with pg_class's own 32 columns, including
+        # relfrozenxid typed `xid`. Measured: that is the whole of the failure.
+        called = set(re.findall(r"\b(pg_\w+)\s*\(", lowered))
         tables: set[str] = set()
 
         # Find pg_* references
         for word in words:
-            if word.startswith("pg_"):
+            if word.startswith("pg_") and word not in called:
                 if word in self.CATALOG_TABLES or len(word) > 3:
                     tables.add(word)
 

@@ -12,7 +12,7 @@ is theirs.
 
 This is the mechanism the remaining catalog functions will use as they are
 needed. `catalog/catalog_functions.py` holds Python implementations of several
-(`format_type`, `pg_get_constraintdef`, …) written for feature 033, but nothing
+(`format_type`, …) written for feature 033, but nothing
 calls it any more: it worked when a handler answered the whole query in Python,
 which stopped being true once catalog tables became real IRIS views. Those will
 have to be installed as SQL functions to be reachable from inside a query.
@@ -30,6 +30,7 @@ import re
 # installed by catalog/functions.py.
 PG_FUNCTION_MAP: dict[str, str] = {
     "obj_description": "PGWire.OBJ_DESCRIPTION",
+    "pg_get_constraintdef": "PGWire.PG_GET_CONSTRAINTDEF",
 }
 
 # `name(` not preceded by a dot or word character, so a qualified call
