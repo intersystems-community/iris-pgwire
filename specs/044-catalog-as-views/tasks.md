@@ -200,7 +200,7 @@ Legend: `[P]` = parallelisable · `[X]` = done
 
   **Verified end to end**: `prisma db pull` goes from 6 statements to **12** — the whole introspection
   sequence: views, enums, base types, columns, foreign keys, indexes, procedures.
-- [ ] **T015b** **Two statements are swallowed, and three separate things must change.** Measured, not
+- [~] **T015b** **Two statements are swallowed, and three separate things must change.** *Partly done.* Measured, not
   inferred: of Prisma's twelve statements, exactly two are answered by the FR-008c "empty fallback"
   with **zero rows and zero columns** — statement 8 (columns) and statement 9 (foreign keys), each
   twice, at Describe and at Execute. That is why introspection ends in P1014: Prisma has the tables
@@ -234,6 +234,37 @@ Legend: `[P]` = parallelisable · `[X]` = done
   `generate_subscripts(con1.conkey, 1)`, set-returning functions over an array. IRIS has neither, and
   `conkey` is a text `'{2}'` rather than a real array. This is a translation problem rather than a
   view problem, and `JSON_TABLE` is the likely tool.
+
+  **Progress 2026-08-17.** Three of the pieces are in and verified against real IRIS:
+
+  * **`reltype`** now derives from `PG_OID('<schema>:rowtype:<table>')`, a distinct object from the
+    table's own OID as PostgreSQL's is. Measured: **9 of 9 rows survive `reltype > 0`**, up from 0.
+  * **`pg_attribute`** as a view, 26 columns. `atttypmod` matches PostgreSQL's measured encoding —
+    `varchar(100)` → 104, `varchar(200)` → 204, `numeric(10,2)` → 655366 — because `format_type`
+    decodes it and a wrong value misreports a column's width silently.
+  * **`pg_attrdef`** as a view, one row per defaulted column. `adbin` carries the default *text*:
+    PostgreSQL stores a parse tree and renders it with `pg_get_expr`, and text is the honest rendering
+    of what IRIS actually knows.
+
+  Both handlers are unregistered, so exactly one path serves each table (FR-011). 22 unit tests and
+  13 integration tests against real IRIS. **Seven** superseded tests updated across four files — and
+  worth noting: three of them had *already* been moved to `pg_attribute` when `pg_namespace` became a
+  view, so they now assert their premise (`"pg_type" in router._catalog_handler_map`) instead of
+  trusting a hardcoded table that keeps getting overtaken.
+
+  **Measured effect.** `prisma db pull` moves off P1014. Statement 9 (foreign keys) is no longer
+  swallowed — with `pg_attribute` view-backed the statement is fully view-backed, the router declines,
+  and IRIS answers honestly: `User defined SQL function 'SQLUSER.UNNEST' does not exist`. That is the
+  `unnest`/`generate_subscripts` problem, now visible instead of silent.
+
+  Still to do here: `format_type`, `pg_get_expr` and `col_description` as installed functions, and the
+  columns view — statement 8 remains the one query the empty fallback swallows.
+
+  **New finding, unrelated to Prisma**: one of *pgwire's own* metadata queries is being caught by the
+  empty fallback — `SELECT COLUMN_NAME, COLUMN_DEFAULT, IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE UPPER(TABLE…`. It names `information_schema.columns`, so `can_handle()` claims it. The
+  re-entrancy guard exists for exactly this and did not cover it. Its own task, since it means an
+  internal lookup is silently getting no rows.
 - [X] **T015c** **The DBAPI type codes were being thrown away.** `_map_dbapi_type_to_oid` did
   `str(dbapi_type).upper()` on a **numeric** ODBC code and grepped it for `INT`/`CHAR`/`DATE`/`TIME`,
   so `str(12).upper() == "12"` matched nothing and every column was declared varchar — bigint, bit,

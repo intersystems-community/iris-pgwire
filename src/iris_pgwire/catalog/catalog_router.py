@@ -141,10 +141,8 @@ class CatalogRouter:
             "pg_namespace": self._handle_pg_namespace,
             "pg_class": self._handle_pg_class,
             "information_schema.columns": self._handle_information_schema_columns,
-            "pg_attribute": self._handle_pg_attribute,
             "pg_constraint": self._handle_pg_constraint,
             "pg_index": self._handle_pg_index,
-            "pg_attrdef": self._handle_pg_attrdef,
         }
 
     def can_handle(self, query: str) -> bool:

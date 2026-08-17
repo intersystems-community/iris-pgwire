@@ -154,11 +154,15 @@ class TestTheRoutingInvariant:
         assert result["rows"] == []
 
     def test_a_handled_table_queried_directly_still_answers(self):
-        """The invariant must not disable the handlers that remain in use."""
+        """The invariant must not disable the handlers that remain in use.
+
+        pg_type is one of the few left: pg_attribute and pg_attrdef became views
+        in T015b, pg_class and pg_namespace before them.
+        """
         router = CatalogRouter()
         result = asyncio.run(
             router.handle_catalog_query(
-                "SELECT attname, atttypid FROM pg_attribute WHERE attrelid = 1",
+                "SELECT typname FROM pg_type WHERE typname = 'int4'",
                 session_id="t",
             )
         )

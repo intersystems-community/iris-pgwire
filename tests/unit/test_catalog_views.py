@@ -150,10 +150,10 @@ class TestExactlyOnePathPerTable:
                 True,
             ),
             # Not yet view-backed — the handler must still answer these.
-            ("SELECT attname FROM pg_attribute", False),
+            ("SELECT attname FROM pg_attribute", True),
             (
                 "SELECT c.relname FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid",
-                False,
+                True,
             ),
         ],
     )
@@ -175,8 +175,18 @@ class TestExactlyOnePathPerTable:
         )
         assert result is None, "the qualifier must not block declining a view-backed table"
 
-    def test_a_mixed_query_stays_with_the_handler(self):
-        """Declining a query the views cannot fully answer would lose the join."""
+    def test_a_query_across_two_view_backed_tables_is_declined(self):
+        """Both sides of this join are views now, so IRIS evaluates it.
+
+        This test previously asserted the opposite — that a query the views could
+        not *fully* answer stayed with a handler, "or the join would be lost". The
+        premise was wrong, and expensively so: a handler cannot answer a join it
+        does not understand, and what it did instead was reply with one table's
+        column set for a question about another. That is how Prisma's constraints
+        query received pg_class's 32 columns and failed on `relfrozenxid` typed
+        `xid` (T015), and how its views query did the same (T015a). Declining and
+        letting IRIS evaluate the join is the whole point of the feature.
+        """
         router = CatalogRouter()
         result = asyncio.run(
             router.handle_catalog_query(
@@ -187,7 +197,7 @@ class TestExactlyOnePathPerTable:
                 None,
             )
         )
-        assert result is not None
+        assert result is None
 
 
 class TestInstallerContract:

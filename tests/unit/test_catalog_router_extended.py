@@ -625,13 +625,11 @@ class TestHandleCatalogQuery:
         assert await router.handle_catalog_query(sql, executor=None) is None
 
     @pytest.mark.asyncio
-    async def test_handle_pg_attribute(self):
+    async def test_pg_attribute_is_declined(self):
+        """Served by an IRIS view since T015b; the emulator no longer runs."""
         router = make_router()
         sql = "SELECT attname, atttypid FROM pg_attribute WHERE attrelid = 1"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
+        assert await router.handle_catalog_query(sql) is None
 
     @pytest.mark.asyncio
     async def test_handle_pg_constraint_is_declined(self):
@@ -666,12 +664,11 @@ class TestHandleCatalogQuery:
         assert result["rows"] == []
 
     @pytest.mark.asyncio
-    async def test_handle_pg_attrdef(self):
+    async def test_pg_attrdef_is_declined(self):
+        """Served by an IRIS view since T015b; the emulator no longer runs."""
         router = make_router()
         sql = "SELECT * FROM pg_attrdef WHERE adrelid = 1"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(sql) is None
 
     @pytest.mark.asyncio
     async def test_fallback_empty_response_for_unrecognized_pg_table(self):

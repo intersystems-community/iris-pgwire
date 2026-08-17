@@ -88,7 +88,14 @@ SELECT
     PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(t.TABLE_NAME)) AS oid,
     LOWER(t.TABLE_NAME) AS relname,
     {PUBLIC_OID} AS relnamespace,
-    0 AS reltype,
+    -- Every table has a composite row type, and `reltype` is *that* object's OID
+    -- — a different object from the table, so a different identity string.
+    --
+    -- This was 0, and Prisma's columns query filters its pg_class subquery on
+    -- `reltype > 0`. Measured: 0 of 9 rows survived, so the columns query
+    -- returned nothing however correct pg_attribute and format_type were. Nothing
+    -- downstream of it was observable until this stopped being a constant.
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:rowtype:' || LOWER(t.TABLE_NAME)) AS reltype,
     0 AS reloftype,
     10 AS relowner,
     0 AS relam,
@@ -324,13 +331,172 @@ PG_VIEWS = CatalogView(
 )
 
 
+# --- pg_attribute ------------------------------------------------------------
+# One row per user column, over INFORMATION_SCHEMA.COLUMNS. 26 columns, measured
+# against postgres:15-alpine.
+#
+# `atttypmod` is not a free choice — `format_type` decodes it, and the encoding
+# was measured rather than recalled: `varchar(100)` is `104` (length + 4) and
+# `numeric(10,2)` is `655366` (precision × 65536 + scale + 4). Types without a
+# modifier report -1. A wrong value here makes a client report the wrong column
+# width, silently.
+#
+# `attname` is lowercased because PostgreSQL folds unquoted identifiers and
+# because Prisma joins `att.attname = info.column_name` — both sides have to fold
+# the same way or every column disappears from the join.
+#
+# `attlen` and `attbyval` follow from the type: fixed-size types have a positive
+# length and are passed by value, varlena types are -1 and by reference.
+_PG_ATTRIBUTE_BODY = f"""
+SELECT
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(c.TABLE_NAME)) AS attrelid,
+    LOWER(c.COLUMN_NAME) AS attname,
+    CASE UPPER(c.DATA_TYPE)
+        WHEN 'INTEGER' THEN 23
+        WHEN 'INT' THEN 23
+        WHEN 'BIGINT' THEN 20
+        WHEN 'SMALLINT' THEN 21
+        WHEN 'TINYINT' THEN 21
+        WHEN 'VARCHAR' THEN 1043
+        WHEN 'CHARACTER VARYING' THEN 1043
+        WHEN 'CHAR' THEN 1042
+        WHEN 'LONGVARCHAR' THEN 25
+        WHEN 'NUMERIC' THEN 1700
+        WHEN 'DECIMAL' THEN 1700
+        WHEN 'DOUBLE' THEN 701
+        WHEN 'FLOAT' THEN 701
+        WHEN 'BIT' THEN 16
+        WHEN 'DATE' THEN 1082
+        WHEN 'TIME' THEN 1083
+        WHEN 'TIMESTAMP' THEN 1114
+        WHEN 'POSIXTIME' THEN 1114
+        ELSE 1043
+    END AS atttypid,
+    -1 AS attstattarget,
+    CASE UPPER(c.DATA_TYPE)
+        WHEN 'INTEGER' THEN 4
+        WHEN 'INT' THEN 4
+        WHEN 'BIGINT' THEN 8
+        WHEN 'SMALLINT' THEN 2
+        WHEN 'TINYINT' THEN 2
+        WHEN 'DOUBLE' THEN 8
+        WHEN 'FLOAT' THEN 8
+        WHEN 'BIT' THEN 1
+        WHEN 'DATE' THEN 4
+        WHEN 'TIME' THEN 8
+        WHEN 'TIMESTAMP' THEN 8
+        WHEN 'POSIXTIME' THEN 8
+        ELSE -1
+    END AS attlen,
+    c.ORDINAL_POSITION AS attnum,
+    0 AS attndims,
+    -1 AS attcacheoff,
+    CASE
+        WHEN UPPER(c.DATA_TYPE) IN ('VARCHAR', 'CHARACTER VARYING', 'CHAR')
+             AND c.CHARACTER_MAXIMUM_LENGTH IS NOT NULL
+            THEN c.CHARACTER_MAXIMUM_LENGTH + 4
+        WHEN UPPER(c.DATA_TYPE) IN ('NUMERIC', 'DECIMAL')
+             AND c.NUMERIC_PRECISION IS NOT NULL
+            THEN (c.NUMERIC_PRECISION * 65536) + COALESCE(c.NUMERIC_SCALE, 0) + 4
+        ELSE -1
+    END AS atttypmod,
+    CASE UPPER(c.DATA_TYPE)
+        WHEN 'VARCHAR' THEN 0
+        WHEN 'CHARACTER VARYING' THEN 0
+        WHEN 'CHAR' THEN 0
+        WHEN 'LONGVARCHAR' THEN 0
+        WHEN 'NUMERIC' THEN 0
+        WHEN 'DECIMAL' THEN 0
+        ELSE 1
+    END AS attbyval,
+    'i' AS attalign,
+    'p' AS attstorage,
+    '' AS attcompression,
+    CASE WHEN UPPER(c.IS_NULLABLE) = 'NO' THEN 1 ELSE 0 END AS attnotnull,
+    CASE WHEN c.COLUMN_DEFAULT IS NULL THEN 0 ELSE 1 END AS atthasdef,
+    0 AS atthasmissing,
+    '' AS attidentity,
+    '' AS attgenerated,
+    0 AS attisdropped,
+    1 AS attislocal,
+    0 AS attinhcount,
+    0 AS attcollation,
+    NULL AS attacl,
+    NULL AS attoptions,
+    NULL AS attfdwoptions,
+    NULL AS attmissingval
+FROM INFORMATION_SCHEMA.COLUMNS c
+WHERE UPPER(c.TABLE_SCHEMA) = '{IRIS_SCHEMA.upper()}'
+""".strip()
+
+PG_ATTRIBUTE = CatalogView(
+    name="pg_attribute",
+    columns=(
+        "attrelid",
+        "attname",
+        "atttypid",
+        "attstattarget",
+        "attlen",
+        "attnum",
+        "attndims",
+        "attcacheoff",
+        "atttypmod",
+        "attbyval",
+        "attalign",
+        "attstorage",
+        "attcompression",
+        "attnotnull",
+        "atthasdef",
+        "atthasmissing",
+        "attidentity",
+        "attgenerated",
+        "attisdropped",
+        "attislocal",
+        "attinhcount",
+        "attcollation",
+        "attacl",
+        "attoptions",
+        "attfdwoptions",
+        "attmissingval",
+    ),
+    body=_PG_ATTRIBUTE_BODY,
+)
+
+
+# --- pg_attrdef --------------------------------------------------------------
+# Column defaults, one row per column that has one. PostgreSQL stores a parse
+# tree in `adbin` and renders it with `pg_get_expr`; we have the expression text
+# and no parse tree, so `adbin` carries the text and `pg_get_expr` returns it.
+# That is an honest rendering of what IRIS knows, and it is what a client writes
+# into a generated schema.
+_PG_ATTRDEF_BODY = f"""
+SELECT
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:attrdef:' || LOWER(c.TABLE_NAME)
+        || ':' || LOWER(c.COLUMN_NAME)) AS oid,
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(c.TABLE_NAME)) AS adrelid,
+    c.ORDINAL_POSITION AS adnum,
+    c.COLUMN_DEFAULT AS adbin
+FROM INFORMATION_SCHEMA.COLUMNS c
+WHERE UPPER(c.TABLE_SCHEMA) = '{IRIS_SCHEMA.upper()}'
+  AND c.COLUMN_DEFAULT IS NOT NULL
+""".strip()
+
+PG_ATTRDEF = CatalogView(
+    name="pg_attrdef",
+    columns=("oid", "adrelid", "adnum", "adbin"),
+    body=_PG_ATTRDEF_BODY,
+)
+
+
 # Ordered so dependencies are created first. pg_namespace has no dependencies;
-# pg_class, pg_constraint and pg_views reference its OIDs or its schema name.
+# the rest reference its OIDs or its schema name by value.
 CATALOG_VIEWS: tuple[CatalogView, ...] = (
     PG_NAMESPACE,
     PG_CLASS,
     PG_CONSTRAINT,
     PG_VIEWS,
+    PG_ATTRIBUTE,
+    PG_ATTRDEF,
 )
 
 # Tables now served by views. CatalogRouter declines these so exactly one path

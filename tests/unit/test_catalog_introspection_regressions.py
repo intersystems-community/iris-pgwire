@@ -56,10 +56,15 @@ class TestCommandCompleteTag:
         assert build_command_tag(command, row_count) == expected
 
     def test_catalog_router_tag_survives_the_protocol_layer(self):
-        """The router's own tag must pass through unchanged."""
+        """The router's own tag must pass through unchanged.
+
+        Needs a table the router still answers for; pg_attribute became a view in
+        T015b.
+        """
         router = CatalogRouter()
+        assert "pg_type" in router._catalog_handler_map, "pick a still-handled table"
         result = asyncio.run(
-            router.handle_catalog_query("SELECT attname FROM pg_attribute", None, "t", None)
+            router.handle_catalog_query("SELECT typname FROM pg_type", None, "t", None)
         )
         assert result is not None
         tag = result["command_tag"]
@@ -160,12 +165,18 @@ class TestUnevaluableExpressionsFallThrough:
     def test_plain_catalog_queries_are_still_intercepted(self):
         """The guard must not disable ordinary catalog emulation.
 
-        Uses pg_attribute: pg_namespace moved to a view in feature 044 and is
-        now legitimately declined, which would make this assertion vacuous.
+        Needs a table that is still handler-backed, or the assertion is vacuous.
+        This probe has now been moved twice — pg_namespace became a view in
+        feature 044, then pg_attribute in T015b — so the table is chosen from
+        the handler map rather than named, and the test says why.
         """
         router = CatalogRouter()
+        assert "pg_type" in router._catalog_handler_map, (
+            "pg_type is no longer handler-backed; pick another still-handled table "
+            "or this test proves nothing"
+        )
         result = asyncio.run(
-            router.handle_catalog_query("SELECT attname FROM pg_attribute", None, "t", None)
+            router.handle_catalog_query("SELECT typname FROM pg_type", None, "t", None)
         )
         assert result is not None, "handler-backed tables must still be intercepted"
 
@@ -218,10 +229,12 @@ class TestNestedCatalogQueryGuard:
         """
         router = CatalogRouter()
 
-        # pg_attribute, not pg_namespace: the latter is view-backed since
-        # feature 044 and is declined for that reason, which would mask whether
-        # the guard is task-scoped.
-        probe = "SELECT attname FROM pg_attribute"
+        # Must be a table that is still handler-backed, or a decline for the
+        # *other* reason would mask whether the guard is task-scoped. pg_namespace
+        # became a view in feature 044 and pg_attribute in T015b, so this asserts
+        # the premise rather than trusting it.
+        assert "pg_type" in router._catalog_handler_map, "pick a still-handled table"
+        probe = "SELECT typname FROM pg_type"
 
         async def nested_holder():
             token = cr._IN_CATALOG_HANDLER.set(True)
