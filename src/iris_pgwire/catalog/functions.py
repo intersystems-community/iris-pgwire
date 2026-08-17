@@ -156,4 +156,27 @@ PG_ARRAY = CatalogFunction(
 }""",
 )
 
-CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (PG_OID, PG_PUBLIC_SCHEMA, PG_ARRAY)
+# Clients project a comment for the object they are describing. IRIS has no
+# equivalent that is reachable from an OID — our OIDs are a one-way hash, so
+# there is nothing to look the object back up by — and PostgreSQL returns NULL
+# for an object with no comment, which is the honest answer here. Returning
+# NULL is what lets the introspection query succeed; inventing a description
+# would put made-up text in a generated schema file.
+#
+# `quit ""` reaches SQL as NULL (measured), so no special casing is needed.
+OBJ_DESCRIPTION = CatalogFunction(
+    name="OBJ_DESCRIPTION",
+    signature="objectOid INTEGER, catalogName VARCHAR(64)",
+    returns="VARCHAR(4000)",
+    purpose="the comment on a catalog object; always NULL, as IRIS records none",
+    body="""{
+  quit ""
+}""",
+)
+
+CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
+    PG_OID,
+    PG_PUBLIC_SCHEMA,
+    PG_ARRAY,
+    OBJ_DESCRIPTION,
+)

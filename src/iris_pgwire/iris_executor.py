@@ -30,6 +30,16 @@ from .schema_mapper import (
     IRIS_SCHEMA,
     translate_output_schema,
 )  # Feature 030: PostgreSQL schema mapping
+from .sql_translator.pg_functions import (
+    has_pg_function_call,
+    rewrite_pg_function_calls,
+)
+from .sql_translator.boolean_expr import (
+    has_boolean_literal_comparison,
+    has_boolean_projection,
+    rewrite_boolean_literal_comparisons,
+    rewrite_boolean_projections,
+)
 from .sql_translator.array_params import (
     encode_inlist_params,
     expand_array_literals,
@@ -1015,6 +1025,27 @@ class IRISExecutor:
             if has_array_param(sql):
                 sql = expand_array_literals(rewrite_any_to_inlist(sql))
                 params = encode_inlist_params(sql, params)
+
+            # Rewrite a boolean expression used as a projected value into
+            # CAST(CASE WHEN ... AS BIT). IRIS has no boolean type and takes
+            # AND/OR only in a predicate, so `(a AND b = 1) AS flag` fails at
+            # parse time with "ERROR: ) expected, AND found". Prisma's table
+            # query projects two of these.
+            if has_boolean_projection(sql):
+                sql = rewrite_boolean_projections(sql)
+
+            # Point unqualified catalog function calls at the PGWire schema.
+            # IRIS resolves `obj_description(...)` against the default schema
+            # and reports SQLUSER.OBJ_DESCRIPTION does not exist.
+            if has_pg_function_call(sql):
+                sql = rewrite_pg_function_calls(sql)
+
+            # `relispartition = 'f'` -> `relispartition = 0`. The views hold 0/1
+            # for the columns PostgreSQL declares bool, and comparing one to the
+            # string 'f' inside a nested predicate group crashes IRIS outright
+            # (SQLCODE -400) rather than erroring — the shape Prisma emits.
+            if has_boolean_literal_comparison(sql):
+                sql = rewrite_boolean_literal_comparisons(sql)
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(

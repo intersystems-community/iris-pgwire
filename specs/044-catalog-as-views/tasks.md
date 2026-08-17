@@ -31,11 +31,34 @@ Legend: `[P]` = parallelisable · `[X]` = done
   encoded as a `$LIST`. Research and measurements: [research-t011a.md](research-t011a.md).
   Verified end-to-end through the wire protocol on **both** backends — 8/8 cases including the
   empty array, negation, a mixed array + scalar parameter list, and the Prisma join shape.
-- [ ] **T011b** **Boolean expressions in a projection.** The next thing `prisma db pull` hits once
-  T011a is out of the way. Prisma's table query projects a boolean *value*:
-  `(tbl.relhassubclass and tbl.relkind = 'p') as is_partition`. IRIS allows `AND` only in a
-  predicate, and answers `ERROR: ) expected, AND found`. Needs a translation to `CASE WHEN … THEN 1
-  ELSE 0 END`, applied to boolean expressions appearing in a select list.
+- [X] **T011b** **Boolean expressions in a projection.** `(a and b = 'x') AS flag` →
+  `CAST(CASE WHEN a <> 0 AND b = 'x' THEN 1 ELSE 0 END AS BIT)`. Two rewrites, not one: a bare
+  column cannot stand alone as a predicate operand either (SQLCODE -14), and Prisma's first operand
+  is exactly that. `sql_translator/boolean_expr.py`, 44 unit tests, both backends.
+- [X] **T011c** **`obj_description`.** Installed as `PGWire.OBJ_DESCRIPTION`, returning NULL — IRIS
+  records no comment reachable from an OID, and PostgreSQL returns NULL for an uncommented object.
+  Unqualified calls are pointed at the PGWire schema (`sql_translator/pg_functions.py`), which is
+  the mechanism `format_type` will use for T013.
+- [X] **T011d** **Boolean literals against catalog boolean columns.** `relispartition = 'f'` → `= 0`.
+  Not cosmetic: comparing one of these constant-valued view columns to the string `'f'` inside a
+  nested predicate group **crashes** IRIS (SQLCODE -400 fatal) rather than erroring, and that is the
+  exact shape Prisma emits. Flat it is fine, `= 0` nested is fine, the same shape over a real table
+  is fine. Reproduced with pgwire out of the path, so it is an IRIS defect worth reporting.
+- [X] **T011e** **ORDER BY alias expansion was not idempotent.** The refiner replaced a select-list
+  alias with its expression using a `\b` pattern, once per alias. The extended protocol translates
+  at Parse, Describe *and* Execute, so Prisma's `namespace.nspname AS namespace ... ORDER BY
+  namespace` became `ORDER BY NAMESPACE.NSPNAME.NSPNAME.NSPNAME`. Now a single pass that skips any
+  occurrence already part of a qualified reference.
+- [X] **T011f** **Binary array parameters were rendered, not decoded.** `_decode_array_binary_parameter`
+  built a pgvector literal for *every* element type, so a `text[]` bound in binary format — which is
+  what Prisma sends — arrived as the string `"[public]"` and was encoded as a one-element set
+  containing that text. `= ANY($1)` matched nothing, silently. Now returns a list for every element
+  type except float4/float8, where the vector path needs the literal.
+- [ ] **T011g** **Boolean columns are reported as int4.** The current blocker. `is_partition` goes
+  out with type OID 23 while the client requested binary format and reads it as `bool` — four bytes
+  where it expects one. Prisma receives all 5 tables and then exits silently without writing a
+  schema. `CAST(… AS BIT)` gives the DBAPI driver a real boolean (ODBC type -7) but the embedded
+  path still reports int4, so the fix is in how column metadata maps a BIT result to an OID.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.

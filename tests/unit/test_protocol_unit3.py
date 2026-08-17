@@ -1005,13 +1005,30 @@ class TestDecodeBinaryParameter:
         result = protocol._decode_binary_parameter(data, 0)
         assert "hello" in result
 
-    def test_array_null_element(self, protocol):
-        """Array with NULL element."""
-        data = struct.pack("!III", 1, 1, 25)
+    def test_text_array_null_element(self, protocol):
+        """A text[] decodes to a list, with NULL as None.
+
+        This used to assert `"NULL" in result`, pinning a *rendered* pgvector
+        literal for a text array. That rendering is why `nspname = ANY($1)`
+        matched nothing for Prisma: the string "[public]" was bound as a
+        one-element set containing that text, with no error and no rows. Only
+        float arrays are vectors; every other element type needs its elements.
+        """
+        data = struct.pack("!III", 1, 1, 25)  # ndim, has_null, element oid 25 = text
         data += struct.pack("!II", 1, 1)
         data += struct.pack("!I", 0xFFFFFFFF)  # NULL
         result = protocol._decode_binary_parameter(data, 0)
-        assert "NULL" in result
+        assert result == [None]
+
+    def test_float_array_still_renders_as_a_vector_literal(self, protocol):
+        """The vector path depends on the literal text form; leave it alone."""
+        data = struct.pack("!III", 1, 1, 701)  # element oid 701 = float8
+        data += struct.pack("!II", 2, 1)
+        for value in (1.5, 2.5):
+            data += struct.pack("!I", 8) + struct.pack("!d", value)
+        result = protocol._decode_binary_parameter(data, 0)
+        assert isinstance(result, str)
+        assert result.startswith("[") and result.endswith("]")
 
     def test_1byte_fallback_no_oid(self, protocol):
         """1-byte data with no matching OID falls back to bool-like decode."""

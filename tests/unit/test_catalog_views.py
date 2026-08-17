@@ -339,6 +339,25 @@ class TestArrayMembershipRewrite:
         )
         assert params == ["scalar", "1|1:x", 7]
 
+    def test_a_binary_array_must_arrive_as_a_list_not_a_vector_literal(self):
+        """Prisma binds text[] in *binary* format; the decoder used to stringify it.
+
+        `_decode_array_binary_parameter` renders a pgvector literal, which is
+        right for float arrays and wrong for every other element type: the
+        string "[public]" was then encoded as a one-element set containing that
+        text, so `nspname = ANY($1)` matched nothing. No error, no rows — after
+        the construct itself already worked.
+        """
+        import inspect
+
+        from iris_pgwire import protocol
+
+        source = inspect.getsource(protocol.PGWireProtocol._decode_array_binary_parameter)
+        assert "element_oid not in (700, 701)" in source, (
+            "the binary decoder must return elements as a list for non-vector "
+            "arrays; a rendered literal binds as a single element"
+        )
+
     def test_array_arrives_from_bind_as_text_and_is_still_encoded(self):
         """Bind decodes a text[] to the string `{a,b}`, never to a Python list.
 

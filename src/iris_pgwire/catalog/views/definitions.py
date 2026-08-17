@@ -173,3 +173,44 @@ CATALOG_VIEWS: tuple[CatalogView, ...] = (
 # answers any catalog table (spec FR-011). Adding a view without adding its name
 # here would leave the old handler intercepting and the view unreachable.
 VIEW_BACKED_TABLES: frozenset[str] = frozenset(view.name for view in CATALOG_VIEWS)
+
+# The catalog columns PostgreSQL declares as `bool`. Clients compare them
+# against PostgreSQL boolean literals — Prisma writes `relispartition = 'f'` —
+# and the views expose them as 0/1 integers, so the literal has to be translated
+# (sql_translator/boolean_expr.rewrite_boolean_literal_comparisons).
+#
+# This is not cosmetic. Comparing one of these constant-valued columns to the
+# string 'f' *crashes* IRIS with SQLCODE -400 when it sits inside a nested
+# predicate group — `((relkind='r' AND relispartition='f') OR relkind='p')`,
+# which is exactly the shape Prisma emits. Flat, the same comparison is fine;
+# with `= 0` the nested form is fine; over a real table the nested form is fine.
+# Measured on IRIS 2026.2, with and without pgwire in the path.
+BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
+    {
+        "relhasindex",
+        "relisshared",
+        "relhasrules",
+        "relhastriggers",
+        "relhassubclass",
+        "relrowsecurity",
+        "relforcerowsecurity",
+        "relispopulated",
+        "relispartition",
+        "nspacl",
+        "attnotnull",
+        "atthasdef",
+        "attisdropped",
+        "attislocal",
+        "attgenerated",
+        "indisunique",
+        "indisprimary",
+        "indisexclusion",
+        "indimmediate",
+        "indisclustered",
+        "indisvalid",
+        "condeferrable",
+        "condeferred",
+        "convalidated",
+        "conislocal",
+    }
+)

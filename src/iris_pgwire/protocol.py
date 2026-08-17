@@ -3774,7 +3774,7 @@ class PGWireProtocol:
 
         return False, None
 
-    def _decode_array_binary_parameter(self, data: bytes, param_index: int) -> str:
+    def _decode_array_binary_parameter(self, data: bytes, param_index: int) -> str | list:
         pos = 0
         ndim = struct.unpack("!I", data[pos : pos + 4])[0]
         pos += 4
@@ -3784,7 +3784,9 @@ class PGWireProtocol:
         pos += 4
 
         if ndim == 0:
-            return "[]"
+            # An empty array. As a list for the membership path, where "[]" would
+            # be read as a one-element set containing the text "[]".
+            return "[]" if element_oid in (700, 701) else []
 
         dimensions: list[int] = []
         for _ in range(ndim):
@@ -3834,6 +3836,25 @@ class PGWireProtocol:
                 elements.append(str(value))
             else:
                 elements.append(elem_data.decode("utf-8", errors="replace"))
+
+        # A float array is a pgvector value and its consumers downstream expect
+        # the literal text form. Anything else is an ordinary array — text[],
+        # int[], oid[], name[] — and the only thing that ever asks for one is a
+        # membership test, which needs the elements, not a rendering of them.
+        #
+        # Returning the literal for those too is why `nspname = ANY($1)` came
+        # back empty for Prisma even after the construct itself worked: the
+        # string "[public]" was bound as a single one-element set, so nothing
+        # matched. No error — just no rows.
+        if element_oid not in (700, 701):
+            logger.debug(
+                "Decoded binary array parameter",
+                param_index=param_index,
+                dimensions=dimensions,
+                element_count=len(elements),
+                element_oid=element_oid,
+            )
+            return [None if element == "NULL" else element for element in elements]
 
         vector_text = "[" + ",".join(elements) + "]"
 

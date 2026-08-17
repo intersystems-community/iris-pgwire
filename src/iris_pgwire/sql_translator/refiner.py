@@ -99,16 +99,33 @@ class SQLRefiner:
             return sql
 
         order_by_clause = order_by_match.group(1)
-        modified_order_by = order_by_clause
+
+        # One pass over the whole clause, not one pass per alias, and matching
+        # only an alias that stands alone — neither preceded nor followed by a
+        # dot or word character.
+        #
+        # Both properties are needed for idempotence, and idempotence is needed
+        # because the extended query protocol translates the same statement at
+        # Parse, Describe and Execute. Prisma projects `namespace.nspname AS
+        # namespace`, so substituting per-alias with a \b pattern found its own
+        # output and produced ORDER BY NAMESPACE.NSPNAME.NSPNAME.NSPNAME —
+        # "Label 'NSPNAME.NSPNAME' is not listed among the applicable tables".
+        # A single pass also stops one alias's expansion being rewritten by
+        # another alias that happens to share its name.
+        alternation = "|".join(re.escape(alias) for alias in sorted(aliases, key=len, reverse=True))
+        pattern = re.compile(rf"(?<![\w.])({alternation})(?![\w.])", re.IGNORECASE)
 
         changed = False
-        for alias, expression in aliases.items():
-            pattern = rf"\b{re.escape(alias)}\b"
-            if re.search(pattern, modified_order_by, re.IGNORECASE):
-                modified_order_by = re.sub(
-                    pattern, expression, modified_order_by, flags=re.IGNORECASE
-                )
-                changed = True
+
+        def _substitute(match: re.Match) -> str:
+            nonlocal changed
+            expression = aliases.get(match.group(1).lower())
+            if expression is None:
+                return match.group(0)
+            changed = True
+            return expression
+
+        modified_order_by = pattern.sub(_substitute, order_by_clause)
 
         if changed:
             logger.info("🔧 Fixed ORDER BY aliases for IRIS compatibility")
