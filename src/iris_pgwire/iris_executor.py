@@ -412,27 +412,50 @@ class IRISExecutor:
     def _detect_catalog_column_type_oid(self, sql: str, item_index: int) -> int | None:
         """PostgreSQL type OID for the catalog column at `item_index`, if it is one.
 
-        Resolves the output alias back to the expression it came from: a client
-        renames these freely, and the type belongs to the column selected rather
-        than to the name given to it. Only a plain (optionally qualified,
-        optionally quoted) column reference counts — `COUNT(relrowsecurity)` is
-        no longer that column, and claiming a type for it would be worse than
-        declining to.
+        Delegates to the shared resolver. This logic used to live here alone,
+        which is exactly how the dbapi backend — a *different* executor class —
+        kept declaring varchar for catalog booleans long after this was fixed
+        (T011h). One implementation, both callers.
         """
-        from .catalog.views.definitions import CATALOG_COLUMN_TYPE_OIDS
-        from .sql_translator.boolean_expr import select_list_items
+        from .sql_translator.column_types import catalog_column_type_oid
 
-        items = select_list_items(sql)
-        if not (0 <= item_index < len(items)):
-            return None
+        return catalog_column_type_oid(sql, item_index)
 
-        expression = items[item_index][0]
-        match = re.fullmatch(r'(?:(?:"[^"]+"|\w+)\s*\.\s*)?(?:"([^"]+)"|(\w+))', expression.strip())
-        if not match:
-            return None
+    def _override_types_from_sql(
+        self, columns: list[dict[str, Any]], sql: str
+    ) -> list[dict[str, Any]]:
+        """Apply the types the statement settles, over whatever IRIS reported.
 
-        column = (match.group(1) or match.group(2)).lower()
-        return CATALOG_COLUMN_TYPE_OIDS.get(column)
+        Applied last and on every materialization path, so a Describe (which
+        executes with dummy parameters and so may return no rows) declares the
+        same types as an Execute that returns several — T011h.
+
+        Skipped when the counts differ: a `SELECT *` expansion would otherwise
+        land an override on the wrong column.
+        """
+        if not columns or not sql:
+            return columns
+        resolved = self._resolve_sql_column_type_oids(sql)
+        if len(resolved) != len(columns):
+            return columns
+        return [
+            {**col, "type_oid": oid} if oid is not None else col
+            for col, oid in zip(columns, resolved)
+        ]
+
+    def _resolve_sql_column_type_oids(self, sql: str) -> list[int | None]:
+        """Per select-list item: the type the statement itself settles, or None.
+
+        Row-count independent, so a Describe that returns no rows declares the
+        same types as an Execute that returns several.
+        """
+        from .sql_translator.column_types import resolve_column_type_oids
+
+        try:
+            return resolve_column_type_oids(sql)
+        except Exception as exc:  # noqa: BLE001 — never fail a query over metadata
+            logger.debug("SQL column-type resolution failed", error=str(exc))
+            return []
 
     def has_returning_clause(self, query: str) -> bool:
         """
@@ -2414,6 +2437,7 @@ class IRISExecutor:
             elif optimized_sql_upper.startswith("SELECT"):
                 columns = self._discover_metadata(sql, session_id)
 
+        columns = self._override_types_from_sql(columns, optimized_sql)
         self._postprocess_rows(rows, columns)
         return rows, columns
 
@@ -3028,6 +3052,7 @@ class IRISExecutor:
             elif optimized_sql_upper.startswith("SELECT"):
                 columns = self._discover_metadata(sql, session_id)
 
+        columns = self._override_types_from_sql(columns, optimized_sql)
         self._postprocess_rows(rows, columns)
         return rows, columns
 

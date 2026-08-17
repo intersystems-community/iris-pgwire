@@ -587,7 +587,7 @@ class DBAPIExecutor:
         )
 
         if not plan.has_returning:
-            rows, columns = self._fetch_standard_results(cursor)
+            rows, columns = self._fetch_standard_results(cursor, plan.stripped_sql)
             return rows, columns, max(row_count, len(rows))
 
         if plan.operation == "DELETE":
@@ -602,7 +602,9 @@ class DBAPIExecutor:
         )
         return rows, columns, len(rows)
 
-    def _fetch_standard_results(self, cursor: Any) -> tuple[list[Any], list[dict[str, Any]]]:
+    def _fetch_standard_results(
+        self, cursor: Any, sql: str | None = None
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Fetch rows and column metadata from a cursor with results."""
         if not cursor.description:
             return [], []
@@ -610,7 +612,38 @@ class DBAPIExecutor:
         columns = self._build_metadata_from_description(cursor.description)
         if rows:
             columns = self._refine_column_types_from_rows(columns, rows)
+        # Last, so it wins: what the SQL says does not depend on a row existing.
+        if sql:
+            columns = self._apply_sql_column_types(columns, sql)
         return rows, columns
+
+    @staticmethod
+    def _apply_sql_column_types(columns: list[dict], sql: str) -> list[dict]:
+        """Override types the statement itself settles (T011h / FR-004).
+
+        Value-based refinement below can only run when a row came back, so a
+        statement Describe — which executes with dummy parameters that match
+        nothing — declared varchar for every column while Execute declared bool.
+        A client reading the Describe then cannot decode the DataRow. Resolving
+        from the SQL is row-count independent, so the two paths agree.
+        """
+        from .sql_translator.column_types import resolve_column_type_oids
+
+        try:
+            resolved = resolve_column_type_oids(sql)
+        except Exception as exc:  # noqa: BLE001 — never fail a query over metadata
+            logger.debug("SQL column-type resolution failed", error=str(exc))
+            return columns
+
+        if len(resolved) != len(columns):
+            # Positions must line up or an override lands on the wrong column;
+            # a SELECT * expansion is the usual reason they do not.
+            return columns
+
+        return [
+            {**col, "type_oid": oid} if oid is not None else col
+            for col, oid in zip(columns, resolved)
+        ]
 
     def _refine_column_types_from_rows(
         self, columns: list[dict], rows: list
@@ -620,6 +653,10 @@ class DBAPIExecutor:
         IRIS DBAPI often returns type_code=4 for all columns regardless of type.
         Use the actual Python type of the first row's values to assign correct OIDs.
         Only refines columns that currently have the generic VARCHAR OID (1043).
+
+        A last resort only: it cannot run when a query returns no rows, which is
+        what made the declared type depend on the row count (see
+        `_apply_sql_column_types`).
         """
         if not rows or not columns:
             return columns
@@ -1017,6 +1054,7 @@ class DBAPIExecutor:
             columns = self._build_metadata_from_description(cur.description)
             if rows:
                 columns = self._refine_column_types_from_rows(columns, rows)
+            columns = self._apply_sql_column_types(columns, query)
             return rows, columns
         finally:
             try:

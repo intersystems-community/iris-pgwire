@@ -80,6 +80,39 @@ Legend: `[P]` = parallelisable · `[X]` = done
   * `_masked` blanked quoted identifiers to *whitespace*, so `"col" AS x` began with spaces and the
     alias separator matched at position 0, returning an empty expression. Masks to a filler now, so
     positions survive.
+- [ ] **T011h** **The declared column type depends on whether the query happened to return rows.**
+  Found while starting T015: `prisma db pull` does not reach a constraints query at all, so the
+  `xid` failure recorded under T015 is not the current blocker. Prisma now fails on the *tables*
+  query:
+
+  ```
+  called `Result::unwrap()` on an `Err` value: "Getting is_partition from ResultRow
+  { types: [Text, …], values: [Text(Some("\0")), …] } as bool failed"
+  ```
+
+  Measured with a raw wire client that sends Prisma's exact message order
+  (`spikes/probe_statement_describe.py` — psycopg3 cannot reproduce it, because it describes the
+  *portal* after Bind and so takes the other route): the statement Describe declares **1043 for all
+  seven columns**, while the DataRow carries a 1-byte bool for `is_partition` and a 4-byte int for
+  `has_row_level_security`. A client that reads the Describe cannot decode the row it is then sent.
+
+  Root cause, and it is worth stating plainly: **T011g fixed one of two executors.** The `dbapi`
+  backend does not use `IRISExecutor` — `backend_selector` builds a separate `DBAPIExecutor`, which
+  has its own metadata code. There, `_fetch_standard_results` takes every type from
+  `cursor.description` (IRIS DBAPI reports type_code 4, hence 1043 for everything) and then
+  *refines* the 1043s **from the first row's Python value** — `if rows`. Describe runs the statement
+  with dummy parameters, which match nothing, so there is no first row and no refinement:
+
+  * Execute (7 rows) → `is_partition` 16, `has_row_level_security` 23
+  * Describe (0 rows) → both 1043
+
+  So the declared type is a function of the row count. That is not catalog-specific: any query whose
+  Describe returns no rows is described wrongly on this backend. It is the gate on T015's own
+  verification, since nothing downstream of the tables query is reachable.
+
+  Fix direction: resolve types from the **SQL** — cast, known catalog column, boolean expression —
+  in one shared place both executors call, so Describe and Execute agree by construction and the
+  "fixed one of two" trap does not recur. Value-based refinement stays as the last resort.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.
