@@ -179,6 +179,40 @@ class TestAliasHandling:
             assert rewritten.rstrip().endswith(f"{alias} FROM t") or alias in rewritten
 
 
+class TestQuotedIdentifiers:
+    """A quoted identifier must not shift the positions the splitter relies on.
+
+    Masking a quoted run to *whitespace* made `"col" AS x` begin with spaces, so
+    the alias separator matched at position 0 and the expression came back empty.
+    Found while resolving aliases back to catalog columns for T011g.
+    """
+
+    def test_a_quoted_first_column_splits_correctly(self):
+        from iris_pgwire.sql_translator.boolean_expr import select_list_items
+
+        items = select_list_items('SELECT "relrowsecurity" AS flag FROM t')
+        assert items == [('"relrowsecurity"', "AS flag")]
+
+    def test_a_quoted_qualified_column(self):
+        from iris_pgwire.sql_translator.boolean_expr import select_list_items
+
+        items = select_list_items('SELECT tbl."My Col" AS x, b FROM t tbl')
+        assert items[0] == ('tbl."My Col"', "AS x")
+        assert items[1] == ("b", "")
+
+    def test_an_inner_as_inside_a_cast_is_not_the_alias(self):
+        from iris_pgwire.sql_translator.boolean_expr import select_list_items
+
+        items = select_list_items("SELECT CAST(x AS BIT) AS flag FROM t")
+        assert items == [("CAST(x AS BIT)", "AS flag")]
+
+    def test_a_literal_containing_the_word_as(self):
+        from iris_pgwire.sql_translator.boolean_expr import select_list_items
+
+        items = select_list_items("SELECT 'value AS other' AS label FROM t")
+        assert items == [("'value AS other'", "AS label")]
+
+
 class TestBothExecutorsWireItUp:
     def test_both_backends_rewrite_boolean_projections(self):
         """Principle IV: a construct must not work on only one backend."""

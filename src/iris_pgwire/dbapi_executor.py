@@ -37,11 +37,11 @@ from iris_pgwire.sql_translator.boolean_expr import (
     rewrite_boolean_literal_comparisons,
     rewrite_boolean_projections,
 )
+from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.pg_functions import (
     has_pg_function_call,
     rewrite_pg_function_calls,
 )
-from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 from iris_pgwire.sql_translator.verbatim import is_verbatim
 

@@ -214,3 +214,29 @@ BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
         "conislocal",
     }
 )
+
+
+# The PostgreSQL type of each catalog column whose type the views cannot convey.
+#
+# The views hold 0/1 for booleans and NULL for the array-valued columns, and the
+# embedded backend infers a column's type from the value it got back — which is a
+# Python int even for a CAST(… AS BIT) column (measured). So without this the
+# columns go out as int4/varchar and a client reading them at their documented
+# types gets the wrong width: bool is one byte in binary format, int4 is four.
+#
+# Keyed by the catalog column name, looked up through the expression behind an
+# output alias, because clients rename these freely — Prisma writes
+# `tbl.relrowsecurity as has_row_level_security`.
+CATALOG_COLUMN_TYPE_OIDS: dict[str, int] = {
+    **{column: 16 for column in BOOLEAN_CATALOG_COLUMNS},
+    # text[] in PostgreSQL. Always NULL here, but the declared type still has to
+    # match or a typed client refuses the column.
+    "reloptions": 1009,
+    "relacl": 1009,
+    "nspacl": 1009,
+    "relpartbound": 1009,
+    "indoption": 1009,
+    "indkey": 1009,
+    "conkey": 1009,
+    "confkey": 1009,
+}

@@ -103,11 +103,23 @@ def _split_top_level_commas(text: str) -> list[str]:
 def _masked(text: str) -> str:
     """`text` with literal contents and nested parens blanked out.
 
-    Used for operator detection so only the top level of an expression counts.
+    Used for operator detection so only the top level of an expression counts,
+    and for finding positions, so the result is always the same length as the
+    input.
+
+    Nested parentheses become spaces; quoted runs become a filler letter. The
+    difference matters: blanking a quoted identifier to whitespace made
+    `"relrowsecurity" AS flag` begin with spaces, so a search for the alias
+    separator matched at position 0 and the expression came back empty.
     """
     out = []
     for _, char, depth in _scan_top_level(text):
-        out.append(char if depth == 0 else " ")
+        if depth == 0:
+            out.append(char)
+        elif depth < 0:
+            out.append("x")  # inside a literal or quoted name
+        else:
+            out.append(" ")  # inside nested parentheses
     return "".join(out)
 
 
@@ -204,6 +216,24 @@ def _rewrite_item(item: str) -> str:
 
     leading = expression[: len(expression) - len(expression.lstrip())]
     return f"{leading}{_CAST_TEMPLATE.format(_fix_bare_operands(inner))}{alias}"
+
+
+def select_list_items(sql: str) -> list[tuple[str, str]]:
+    """Split the top-level select list into (expression, alias) pairs.
+
+    Exposed because column-type inference needs the expression behind an output
+    alias: a client is free to rename a catalog column, and the type belongs to
+    what it selected, not to what it called it.
+    """
+    bounds = _select_list_bounds(sql)
+    if bounds is None:
+        return []
+    start, end = bounds
+    items: list[tuple[str, str]] = []
+    for item in _split_top_level_commas(sql[start:end]):
+        expression, alias = _split_alias(item)
+        items.append((expression.strip(), alias.strip()))
+    return items
 
 
 def has_boolean_projection(sql: str) -> bool:

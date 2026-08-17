@@ -6,8 +6,8 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 """
 
 import asyncio
-import contextvars
 import concurrent.futures
+import contextvars
 import datetime as dt
 import re
 import threading
@@ -30,9 +30,17 @@ from .schema_mapper import (
     IRIS_SCHEMA,
     translate_output_schema,
 )  # Feature 030: PostgreSQL schema mapping
-from .sql_translator.pg_functions import (
-    has_pg_function_call,
-    rewrite_pg_function_calls,
+from .sql_translator import (
+    SQLInterceptor,
+    SQLPipeline,
+    TransactionTranslator,
+)  # Feature 022: PostgreSQL transaction verb translation
+from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
+from .sql_translator.array_params import (
+    encode_inlist_params,
+    expand_array_literals,
+    has_array_param,
+    rewrite_any_to_inlist,
 )
 from .sql_translator.boolean_expr import (
     has_boolean_literal_comparison,
@@ -40,21 +48,13 @@ from .sql_translator.boolean_expr import (
     rewrite_boolean_literal_comparisons,
     rewrite_boolean_projections,
 )
-from .sql_translator.array_params import (
-    encode_inlist_params,
-    expand_array_literals,
-    has_array_param,
-    rewrite_any_to_inlist,
-)
-from .sql_translator import (
-    SQLInterceptor,
-    SQLPipeline,
-    TransactionTranslator,
-)  # Feature 022: PostgreSQL transaction verb translation
-from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
 from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
+from .sql_translator.pg_functions import (
+    has_pg_function_call,
+    rewrite_pg_function_calls,
+)
 from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.verbatim import is_verbatim
 from .type_mapping import (
@@ -372,16 +372,67 @@ class IRISExecutor:
             cast_type = match.group(1).lower()
             return type_map.get(cast_type)
 
-        # Pattern 2: CAST function (CAST(? AS type) AS column_name)
-        # Match: "CAST(? AS BIT) AS flag" or "CAST(? AS INTEGER) AS num"
-        cast_func_pattern = rf"CAST\(\?\s+AS\s+(\w+)\)\s+AS\s+{re.escape(column_name.upper())}"
-        match = re.search(cast_func_pattern, sql_upper)
-
-        if match:
-            cast_type = match.group(1).lower()
-            return type_map.get(cast_type)
+        # Pattern 2: CAST of any expression, not just a parameter.
+        #
+        # This used to require CAST(? AS type), which covered the asyncpg case it
+        # was written for and missed the one the boolean-projection rewrite
+        # produces:
+        #
+        #   CAST(CASE WHEN a <> 0 AND b = 'p' THEN 1 ELSE 0 END AS BIT) AS is_partition
+        #
+        # so that column was described as int4. A client that asked for binary
+        # results and reads it as bool then gets four bytes where it expects one.
+        #
+        # Anchor on the tail — `AS <type>) AS <column>` — then walk back to the
+        # matching open paren and confirm CAST precedes it, rather than trusting
+        # the shape. `(SELECT b AS c) AS flag` matches the tail but is not a cast.
+        tail_pattern = rf"\bAS\s+(\w+)\s*\)\s+AS\s+{re.escape(column_name.upper())}\b"
+        for match in re.finditer(tail_pattern, sql_upper):
+            # Start inside the type word: the closing paren belongs to the
+            # CAST we are trying to identify, so counting it would consume it.
+            if self._encloses_a_cast(sql_upper, match.end(1) - 1):
+                return type_map.get(match.group(1).lower())
 
         return None
+
+    @staticmethod
+    def _encloses_a_cast(sql_upper: str, position: int) -> bool:
+        """True if the parenthesis closing at/after `position` was opened by CAST."""
+        depth = 0
+        for index in range(position, -1, -1):
+            char = sql_upper[index]
+            if char == ")":
+                depth += 1
+            elif char == "(":
+                if depth == 0:
+                    return sql_upper[:index].rstrip().endswith("CAST")
+                depth -= 1
+        return False
+
+    def _detect_catalog_column_type_oid(self, sql: str, item_index: int) -> int | None:
+        """PostgreSQL type OID for the catalog column at `item_index`, if it is one.
+
+        Resolves the output alias back to the expression it came from: a client
+        renames these freely, and the type belongs to the column selected rather
+        than to the name given to it. Only a plain (optionally qualified,
+        optionally quoted) column reference counts — `COUNT(relrowsecurity)` is
+        no longer that column, and claiming a type for it would be worse than
+        declining to.
+        """
+        from .catalog.views.definitions import CATALOG_COLUMN_TYPE_OIDS
+        from .sql_translator.boolean_expr import select_list_items
+
+        items = select_list_items(sql)
+        if not (0 <= item_index < len(items)):
+            return None
+
+        expression = items[item_index][0]
+        match = re.fullmatch(r'(?:(?:"[^"]+"|\w+)\s*\.\s*)?(?:"([^"]+)"|(\w+))', expression.strip())
+        if not match:
+            return None
+
+        column = (match.group(1) or match.group(2)).lower()
+        return CATALOG_COLUMN_TYPE_OIDS.get(column)
 
     def has_returning_clause(self, query: str) -> bool:
         """
@@ -2834,6 +2885,13 @@ class IRISExecutor:
                 cast_oid = self._detect_cast_type_oid(sql, col_name)
                 if cast_oid:
                     inferred_type = cast_oid
+                else:
+                    # A catalog column carries its PostgreSQL type even when the
+                    # value cannot show it — bool and text[] both arrive as an
+                    # int or None from IRIS.
+                    catalog_oid = self._detect_catalog_column_type_oid(sql, i)
+                    if catalog_oid:
+                        inferred_type = catalog_oid
 
                 # Handle CURRENT_TIMESTAMP
                 if "CURRENT_TIMESTAMP" in sql_upper and inferred_type == 1043:

@@ -54,18 +54,35 @@ Legend: `[P]` = parallelisable · `[X]` = done
   what Prisma sends — arrived as the string `"[public]"` and was encoded as a one-element set
   containing that text. `= ANY($1)` matched nothing, silently. Now returns a list for every element
   type except float4/float8, where the vector path needs the literal.
-- [ ] **T011g** **Boolean columns are reported as int4.** The current blocker. `is_partition` goes
-  out with type OID 23 while the client requested binary format and reads it as `bool` — four bytes
-  where it expects one. Prisma receives all 5 tables and then exits silently without writing a
-  schema. `CAST(… AS BIT)` gives the DBAPI driver a real boolean (ODBC type -7) but the embedded
-  path still reports int4, so the fix is in how column metadata maps a BIT result to an OID.
+- [X] **T011g** **Catalog columns reported at the wrong PostgreSQL type.** `is_partition` went out
+  as int4 while the client had asked for binary results and reads it as `bool` — four bytes where it
+  expects one — so Prisma read all five tables and exited without writing a schema, printing
+  nothing. Three parts:
+  * `_detect_cast_type_oid` only matched `CAST(? AS BIT)`, a cast of a *parameter*. Generalised to a
+    cast of any expression, verifying the enclosing call really is a `CAST` by walking back to the
+    matching paren rather than trusting the shape.
+  * A plain catalog column has no cast to read, and the embedded backend infers a type from the
+    *value* — which is a Python `int` even for a `CAST(… AS BIT)` column (measured). And clients
+    rename these (`tbl.relrowsecurity as has_row_level_security`), so the output name is no help.
+    Added `CATALOG_COLUMN_TYPE_OIDS` and resolve the alias back to the expression behind it.
+  * `_masked` blanked quoted identifiers to *whitespace*, so `"col" AS x` began with spaces and the
+    alias separator matched at position 0, returning an empty expression. Masks to a filler now, so
+    positions survive.
 - [ ] **T012** `pg_attribute` view over `INFORMATION_SCHEMA.COLUMNS`.
 - [ ] **T013** Test: column types and ordinal positions match what clients expect.
 - [ ] **T014** E2E: `prisma db pull` generates models with columns (SC-001), both backends.
 
 ## Phase 3 — Relations
 
-- [ ] **T015** `pg_constraint` view (primary and foreign keys).
+- [ ] **T015** `pg_constraint` view (primary and foreign keys). **Now the blocker, and it is not
+  merely missing — the handler is actively harmful.** Prisma's constraints query joins
+  `pg_constraint` (handler-backed) to `pg_class` and `pg_namespace` (view-backed). The "a mixed
+  query stays with the handler" rule then hands it to the **pg_class** handler, which answers with
+  pg_class's own 32 columns — including `relfrozenxid` and `relminmxid`, typed `xid` — and Prisma
+  fails with "Column type 'xid' could not be deserialized". Answering a query with a different
+  table's column set is wrong however the views progress, so `test_a_mixed_query_stays_with_the_handler`
+  needs revisiting alongside this: declining (and letting IRIS report the missing table) is closer to
+  FR-008 than returning the wrong shape.
 - [ ] **T016** `pg_index` view.
 - [ ] **T017** E2E: generated schema carries PKs and FK relations (SC-002).
 
