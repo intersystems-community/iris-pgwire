@@ -32,6 +32,7 @@ from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
+from .sql_translator.sqlstate import classify_iris_error
 from .vector_optimizer import VectorQueryOptimizer
 
 logger = structlog.get_logger()
@@ -1294,8 +1295,11 @@ class PGWireProtocol:
 
         except Exception as e:
             logger.error("Query handling failed", connection_id=self.connection_id, error=str(e))
+            sqlstate, condition = classify_iris_error(
+                str(e), default=("08000", "connection_exception")
+            )
             await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"Query processing failed: {e}"
+                "ERROR", sqlstate, condition, f"Query processing failed: {e}"
             )
             # CRITICAL: Send ReadyForQuery after exception in Simple Query Protocol
             await self.send_ready_for_query()
@@ -1421,9 +1425,11 @@ class PGWireProtocol:
                     }
                     await self.send_query_result(fake_result, send_ready=send_ready)
                 else:
-                    await self.send_error_response(
-                        "ERROR", "42000", "syntax_error", error_msg
-                    )
+                    # FR-008e: classify rather than blaming the client for
+                    # everything. An IRIS crash is XX000, not the caller's
+                    # syntax error.
+                    sqlstate, condition = classify_iris_error(error_msg)
+                    await self.send_error_response("ERROR", sqlstate, condition, error_msg)
                     # CRITICAL: Send ReadyForQuery after error (only if last statement)
                     if send_ready:
                         await self.send_ready_for_query()
@@ -1432,8 +1438,14 @@ class PGWireProtocol:
             logger.error(
                 "Single statement handling failed", connection_id=self.connection_id, error=str(e)
             )
+            # FR-008e: an IRIS SQL error arriving as a Python exception is still
+            # an IRIS SQL error. Only a genuinely unrecognised failure keeps
+            # 08000, which claims the connection itself is broken.
+            sqlstate, condition = classify_iris_error(
+                str(e), default=("08000", "connection_exception")
+            )
             await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"Statement processing failed: {e}"
+                "ERROR", sqlstate, condition, f"Statement processing failed: {e}"
             )
             # CRITICAL: Send ReadyForQuery after exception (only if last statement)
             if send_ready:
@@ -2412,7 +2424,10 @@ class PGWireProtocol:
             )
         except Exception as e:
             logger.error("Batch flush failed", connection_id=self.connection_id, error=str(e))
-            await self.send_error_response("ERROR", "XX000", "internal_error", f"Batch failed: {e}")
+            # FR-008e: a duplicate key in a batched INSERT is 23505, which is the
+            # one an ORM actually recognises. XX000 stays the fallback.
+            sqlstate, condition = classify_iris_error(str(e), default=("XX000", "internal_error"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Batch failed: {e}")
 
     async def handle_parse_message(self, body: bytes):
         """
@@ -3217,9 +3232,10 @@ class PGWireProtocol:
             logger.error(
                 "Describe message handling failed", connection_id=self.connection_id, error=str(e)
             )
-            await self.send_error_response(
-                "ERROR", "42P02", "undefined_object", f"Describe failed: {e}"
-            )
+            # Describe runs the statement to discover its shape, so an IRIS SQL
+            # error here is the client's query failing, not an unknown object.
+            sqlstate, condition = classify_iris_error(str(e), default=("42P02", "undefined_object"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Describe failed: {e}")
 
     async def _resolve_returning_columns(
         self, plan: ReturningPlan
@@ -3490,9 +3506,10 @@ class PGWireProtocol:
                     result, send_ready=False, send_row_description=needs_row_desc
                 )
             else:
-                await self.send_error_response(
-                    "ERROR", "42000", "syntax_error", result.get("error", "Query execution failed")
-                )
+                # FR-008e: same classification on the extended-protocol path.
+                error_msg = result.get("error", "Query execution failed")
+                sqlstate, condition = classify_iris_error(error_msg)
+                await self.send_error_response("ERROR", sqlstate, condition, error_msg)
 
             logger.info(
                 "Executed portal",
@@ -3505,9 +3522,10 @@ class PGWireProtocol:
             logger.error(
                 "Execute message handling failed", connection_id=self.connection_id, error=str(e)
             )
-            await self.send_error_response(
-                "ERROR", "42P03", "undefined_cursor", f"Execute failed: {e}"
-            )
+            # FR-008e: 42P03 means "no such cursor"; an IRIS error raised while
+            # executing the portal is not that.
+            sqlstate, condition = classify_iris_error(str(e), default=("42P03", "undefined_cursor"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Execute failed: {e}")
 
     async def handle_sync_message(self, body: bytes):
         """

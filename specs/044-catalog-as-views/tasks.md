@@ -112,15 +112,33 @@ inherited by "Phase 4".
 - [ ] **T025** Edge cases from spec §Edge Cases with no coverage: schema and table names differing
   only by case; an IRIS object with no PostgreSQL equivalent (must be omitted or mapped, never
   surfaced as a broken row).
-- [ ] **T027** **SQLSTATE classification (FR-008e).** The precondition that makes the CHK046
-  pass-through decision safe. Every failure currently reaches the client as `42000`
-  (`syntax_error_or_access_rule_violation`), so an IRIS fatal is indistinguishable from the client's
-  own bad SQL, and a client's retry logic — which keys on the SQLSTATE class — concludes "fix your
+- [X] **T027** **SQLSTATE classification (FR-008e).** The precondition that makes the CHK046
+  pass-through decision safe. Every failure used to reach the client as `42000`
+  (`syntax_error_or_access_rule_violation`), so an IRIS fatal was indistinguishable from the client's
+  own bad SQL, and a client's retry logic — which keys on the SQLSTATE class — concluded "fix your
   query" when the database broke. Measured against PostgreSQL 15: syntax `42601`, undefined column
-  `42703`, undefined table `42P01`, undefined function `42883`; internal failure documented as
-  `XX000`. Map at minimum: IRIS fatal/internal → `XX000`; unknown field → `42703`; unknown
-  table/view → `42P01`; unknown function → `42883`; parse failure → `42601`. Not catalog-specific,
-  but the catalog path is where it was found and where it misleads most.
+  `42703`, undefined table `42P01`, undefined function `42883`; internal failure `XX000`.
+
+  `src/iris_pgwire/sql_translator/sqlstate.py` maps 11 measured IRIS SQLCODEs plus the backend's
+  message wording; `tests/unit/test_sqlstate_classification.py` (53 tests) pins it.
+  **9/9 over the wire** (`spikes/verify_sqlstate_e2e.py`) and **13/13 on the embedded backend**
+  (`spikes/probe_embedded_error_wording.py`). Three findings changed the shape of the task:
+
+  1. **The two hardcoded `42000` sites were not the ones that mattered.** IRIS errors on the query
+     path arrive as *Python exceptions*, not as `result["error"]`, so they reached the generic
+     handler and were reported as **`08000` connection_exception** — worse than `42000`, because a
+     driver may discard the session over a plain typo. Five sites now classify, each keeping its own
+     code as the fallback for a genuinely unrecognised failure.
+  2. **The backends do not word errors alike.** DB-API delivers `[SQLCODE: <-30>:<Table or view not
+     found>]`; the embedded backend raises `Table 'SQLUSER.X' not found` with **no SQLCODE at all**.
+     A SQLCODE-only classifier measured 2/5 on embedded. Both wordings are matched for every family.
+  3. **Two more SQLCODEs measured while verifying**: `-1` invalid SQL statement (`SELECT FROM WHERE`
+     is `-1`, not `-4`) and `-149` error inside an installed SQL function → `XX000`, since IRIS does
+     not surface the inner condition.
+
+  Where IRIS gives no way to tell two conditions apart — an over-length string and an unparseable
+  number are both "failed validation" — the shared class `22000` is used rather than guessing
+  between PostgreSQL's `22001` and `22P02`.
 - [X] **T026** **SC-009** — measure what the translation gates cost per statement.
   `tests/unit/test_translation_gate_budget.py`: 0.09 ms plain, 0.62 ms paren-heavy (12.4% of the
   5 ms Principle V budget), with a 25% ceiling enforced so it cannot drift.

@@ -188,13 +188,23 @@ A stale catalog produces confusing results.
 
 - **FR-008e**: A passed-through error MUST be **classified** so a client can tell whose fault it is.
   A database internal failure MUST NOT be reported with a SQLSTATE that blames the client's SQL.
-  *(This is the precondition that makes FR-008d safe, and it is currently unmet — see T027.)*
+  *(This is the precondition that makes FR-008d safe. Met by T027.)*
 
   Measured against PostgreSQL 15: syntax error `42601`, undefined column `42703`, undefined table
-  `42P01`, undefined function `42883`; internal failure is documented as `XX000`. iris-pgwire today
-  returns `42000` for **all** of them, including an IRIS fatal — so a client cannot distinguish "your
-  query is wrong" from "the database broke", and retry logic keyed on the SQLSTATE class will draw the
-  wrong conclusion.
+  `42P01`, undefined function `42883`; internal failure is documented as `XX000`. iris-pgwire used to
+  return `42000` for all of them — and on the query path, where an IRIS error arrives as a Python
+  exception, `08000` connection_exception, which additionally tells the client the *connection* is
+  broken. A client could not distinguish "your query is wrong" from "the database broke", and retry
+  logic keyed on the SQLSTATE class drew the wrong conclusion.
+
+  Classification MUST hold on **both backends**. This is not automatic: the embedded backend raises
+  `Table 'SQLUSER.X' not found` with no SQLCODE anywhere, where DB-API delivers
+  `[SQLCODE: <-30>:<Table or view not found>]`, so a classifier that reads only SQLCODEs satisfies
+  this requirement on one backend and silently fails it on the default one.
+
+  Where IRIS does not distinguish two conditions PostgreSQL distinguishes, the **shared class** MUST
+  be used rather than a guess between them: an over-length string and an unparseable number are both
+  reported by IRIS as "failed validation", so both are `22000` rather than one of `22001`/`22P02`.
 - **FR-009**: Setup MUST fail loudly and early if the catalog objects cannot be created.
 
 **Migration**

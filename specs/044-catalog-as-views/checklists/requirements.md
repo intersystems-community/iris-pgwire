@@ -152,8 +152,11 @@ unjustified violation a merge blocker.
 - [x] CHK046 **Resolved 2026-08-17: passing it through is acceptable** (FR-008d). Two things the
       decision does *not* license, both now written down: it does not excuse a **wrong answer**
       (T011d returns 0 rows where 5 is correct when untranslated — measured, so it stays), and it
-      does not excuse **misattributing blame** — pgwire currently reports an IRIS fatal with the same
-      SQLSTATE 42000 as the client's own bad SQL. FR-008e and T027. [Resolved]
+      does not excuse **misattributing blame** — pgwire reported an IRIS fatal with the same
+      SQLSTATE 42000 as the client's own bad SQL. FR-008e and T027, both now closed: 9/9 over the
+      wire, 13/13 on the embedded backend. The blame half turned out to be worse than recorded here
+      — the query path reported `08000` (connection failure), not `42000` — and backend-dependent:
+      the embedded backend carries no SQLCODE at all. [Resolved]
 - [ ] CHK047 Resolve CHK011: state the admission test for FR-015 scope, so the next construct does
       not need a judgement call. [Ambiguity, Spec §FR-015]
 - [ ] CHK048 Is a requirement/AC ID scheme established and used consistently — FR-*, SC-*, T* are in
