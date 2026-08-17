@@ -112,7 +112,20 @@ inherited by "Phase 4".
 
 - [ ] **T018** Remaining views: `pg_type`, `pg_attrdef`, `pg_enum`, `pg_extension`.
 - [ ] **T019** E2E with a second ORM (SC-005).
-- [ ] **T020** Error-not-empty audit: unsatisfiable catalog queries error (FR-008, SC-004).
+- [ ] **T020** Error-not-empty audit against the rule CHK045 settled (**FR-008a/b/c**, SC-004).
+  Two halves, and the second is the one that bites:
+  1. an unanswerable catalog query errors and names what was missing (FR-008a);
+  2. **no code path fabricates a zero-row catalog result** (FR-008c). **Already located**:
+     `catalog/catalog_router.py:415-425`, the branch whose own log line calls it the
+     "empty fallback". Any catalog query that `can_handle()` claims but no handler recognises gets
+     `{"success": True, "rows": [], "columns": [], "command_tag": "SELECT 0"}`. It is the exact
+     mechanism behind three of the original six defects, and `columns: []` makes it worse than
+     empty — the client cannot even see a result shape.
+     Removing it is a **behaviour change** for every unrecognised catalog query (empty → whatever
+     IRIS says), so it needs its own verification pass rather than being slipped in: enumerate what
+     currently reaches it, confirm each either has a view, has a handler, or should error.
+  The oracle is `spikes/probe_pg_empty_vs_error.py`, which records what PostgreSQL 15 does for the
+  same ten query shapes.
 - [ ] **T021** Performance: 50-table introspection under 10 s (SC-007).
 - [ ] **T022** Remove handlers whose tables are fully served by views. Includes deleting
   `catalog/catalog_functions.py` — Python implementations of `format_type`,

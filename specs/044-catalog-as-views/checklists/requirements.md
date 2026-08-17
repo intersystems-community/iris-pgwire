@@ -41,9 +41,9 @@ unjustified violation a merge blocker.
 - [ ] CHK008 Does FR-004 say whether "types" means the wire type OID, the declared IRIS type, or
       both? T011g turned on exactly this distinction and the requirement does not disambiguate it.
       [Ambiguity, Spec §FR-004]
-- [ ] CHK009 Is "cannot be satisfied" in FR-008 defined precisely enough to tell an *empty but
-      correct* answer from an *unanswerable* query? Zero namespaces and "no such table" are both
-      zero rows. [Ambiguity, Spec §FR-008]
+- [x] CHK009 **Resolved 2026-08-17.** "Cannot be satisfied" was the ambiguous phrase and is gone.
+      FR-008 now turns on whether the query can be *evaluated*, split into FR-008a/b/c, measured
+      against PostgreSQL 15. [Ambiguity, Spec §FR-008]
 - [ ] CHK010 Is "fail loudly and early" in FR-009 quantified — refuse to start, or start degraded and
       log? [Clarity, Spec §FR-009]
 - [ ] CHK011 Does FR-015's "well enough for a catalog query to reach IRIS and be answered" state a
@@ -88,10 +88,9 @@ unjustified violation a merge blocker.
 
 - [ ] CHK025 Are requirements written for the **primary** flow (introspect a populated schema)?
       [Coverage, Spec §US1]
-- [ ] CHK026 Are requirements written for the **alternate** flow of an *empty* schema, and does
-      "reports an empty database rather than failing" (US1 scenario 3) sit consistently with FR-008's
-      duty to error rather than return empty? These are the same shape on the wire.
-      [Coverage, Conflict, Spec §US1 vs §FR-008]
+- [x] CHK026 **Resolved 2026-08-17.** No longer a conflict: US1 scenario 3 is an evaluable query
+      with no matching rows, so FR-008b requires zero rows and the scenario is consistent as written.
+      [Coverage, Spec §US1 vs §FR-008b]
 - [ ] CHK027 Are requirements written for the **exception** flow where the catalog objects cannot be
       created? [Coverage, Spec §FR-009]
 - [ ] CHK028 Are **recovery** requirements written — if installation fails midway, what state is the
@@ -145,8 +144,12 @@ unjustified violation a merge blocker.
 
 ## Ambiguities & Conflicts to Resolve
 
-- [ ] CHK045 Resolve CHK009 + CHK026 together: an empty result is required in one place and forbidden
-      in another. Which wins, and on what signal? [Conflict, Spec §FR-008 vs §US1]
+- [x] CHK045 **Resolved 2026-08-17.** Neither wins; the requirements had failed to draw a
+      distinction. **Empty is an answer, error is a refusal, and the question's shape decides —
+      never the row count.** Grounded in what real PostgreSQL 15 does rather than in preference
+      (`spikes/probe_pg_empty_vs_error.py`): 5/5 evaluable-but-non-matching shapes return empty,
+      5/5 unanswerable shapes error. The enforceable half is FR-008c — pgwire must never *fabricate*
+      an empty result, which is what all three original defects did. [Conflict, resolved]
 - [ ] CHK046 Resolve CHK016: when IRIS crashes rather than erroring, is a pgwire workaround the
       required behaviour, or is passing the failure through acceptable? [Conflict, Constitution §I]
 - [ ] CHK047 Resolve CHK011: state the admission test for FR-015 scope, so the next construct does

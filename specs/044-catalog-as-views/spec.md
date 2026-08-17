@@ -60,7 +60,8 @@ through iris-pgwire, and compare the generated schema against the tables that ex
 2. **Given** the same tables, **When** introspection completes, **Then** primary keys and foreign
    key relations appear in the generated schema.
 3. **Given** an empty schema, **When** introspection runs, **Then** it reports an empty database
-   rather than failing.
+   rather than failing. *(Consistent with FR-008b: the query is evaluable, so zero rows is the
+   answer.)*
 4. **Given** either backend (embedded or DBAPI), **When** the same introspection runs, **Then** the
    result is identical.
 
@@ -149,8 +150,30 @@ A stale catalog produces confusing results.
 
 **Behaviour under failure**
 
-- **FR-008**: A catalog query that cannot be satisfied MUST return an error. It MUST NOT return an
-  empty result set. *(This is the property whose absence caused three of the six known defects.)*
+- **FR-008**: Whether a catalog query is answered with rows, with zero rows, or with an error MUST
+  depend on whether the query can be **evaluated** — never on how many rows the answer contains.
+  *(Resolved 2026-08-17, CHK045. The original wording — "a query that cannot be satisfied MUST
+  return an error, MUST NOT return an empty result" — conflicted with User Story 1 scenario 3, which
+  requires an empty schema to report as empty rather than failing. On the wire those are the same
+  thing. Measured against real PostgreSQL 15 rather than argued: `spikes/probe_pg_empty_vs_error.py`,
+  10 shapes, a clean 5/5 split.)*
+
+  - **FR-008a**: A query naming a catalog table, column or function the system does not provide, or
+    using a construct it cannot translate, MUST return an error that names what was missing.
+    PostgreSQL does this for a missing relation, a missing column, a missing function, bad syntax and
+    wrong arity alike.
+  - **FR-008b**: A query that is fully evaluated and matches nothing MUST return zero rows. That is
+    an **answer**, not a failure — PostgreSQL returns empty for a non-matching filter, an empty
+    schema, a table with no constraints, and `= ANY('{}')`. `psql \dt` on an empty schema prints
+    "Did not find any relations." and exits 0.
+  - **FR-008c**: The system MUST NOT manufacture a zero-row catalog result. Zero rows may arise only
+    from the database evaluating the query. *This is the enforceable form of the requirement, and the
+    one the original defects violated: three separate handlers returned a synthetic empty success for
+    a query shape they did not recognise. Emptiness was never the bug — fabricating it was.*
+
+  Note the boundary is the query's shape, not whether the object exists: `\d no_such_table` returns
+  **zero rows** in PostgreSQL, because the name is a literal in a `WHERE` clause rather than a
+  relation reference. Measured.
 - **FR-009**: Setup MUST fail loudly and early if the catalog objects cannot be created.
 
 **Migration**
