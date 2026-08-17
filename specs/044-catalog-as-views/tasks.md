@@ -67,7 +67,7 @@ Introspection now gets materially further than it did:
 | Table enumeration | 0 rows | ✅ 4 tables |
 | Projection honoured | 32 columns for a 2-column request | ✅ exactly what was asked |
 | Aliased JOIN + filter | not answerable | ✅ correct rows |
-| `nspname = ANY($1)` | never reached | ✅ `%INLIST` with a bound `$LIST`, both backends |
+| `nspname = ANY($1)` | never reached | ✅ `%INLIST PGWire.PG_ARRAY(?)`, both backends |
 | Boolean value in a projection | never reached | ❌ **T011b — current blocker** |
 
 Three defects were found and fixed *while building this*, each caught by running against a real
@@ -94,3 +94,23 @@ instance rather than by reasoning:
 
 Task order follows what unblocks introspection, not the catalog's alphabetical order. Phases 1–2
 are the minimum that makes `prisma db pull` produce a usable schema.
+
+## Progress — 2026-08-17
+
+T011a landed, then its implementation was replaced. The first version reproduced IRIS's `$LIST`
+byte format in Python, inferred from `IRISList.getBuffer()` output. It passed every test, but the
+format is undocumented and — as the skip list showed — the parity tests that were supposed to guard
+it were skipping in the unit run. `PGWire.PG_ARRAY`, a `CREATE FUNCTION … LANGUAGE OBJECTSCRIPT`
+that builds the list with `$LISTBUILD`, costs 4.6 µs per query and uses nothing private.
+
+Three more defects surfaced while making that change, none of them from review:
+
+5. **Nothing installed the ObjectScript the views depend on.** Loaded by hand during development,
+   so it worked here and would have aborted startup anywhere else.
+6. **pgwire translated its own DDL.** The pipeline uppercased ObjectScript function bodies,
+   producing `%SYSTEM.ENCRYPTION` (class names are case-sensitive) and a parameter cased
+   differently from its uses. Both installed cleanly and failed on every call. Fixed with a
+   verbatim-SQL guard.
+7. **That guard did nothing at first.** The embedded backend runs its executor through
+   `loop.run_in_executor`, which does not carry ContextVars into the worker thread the way
+   `asyncio.to_thread` does. Now wrapped in an explicit `contextvars.copy_context()`.

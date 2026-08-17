@@ -1,7 +1,7 @@
 # T011a research: making `col = ANY($n)` work through the extended protocol
 
-**Status**: research complete, recommendation firm.
-**Date**: 2026-08-16 · **Instance**: IRIS 2026.2 CE in `iris-pgwire-db`, both backends.
+**Status**: implemented; recommendation revised once, see §5.
+**Date**: 2026-08-16, revised 2026-08-17 · **Instance**: IRIS 2026.2 CE in `iris-pgwire-db`, both backends.
 
 ## Evidence standard
 
@@ -262,3 +262,79 @@ be made to work by telling the client about a statement other than the one that 
   where one was given.
 * **Nested and multidimensional arrays** have no `%INLIST` equivalent. They should error rather than
   flatten.
+
+
+---
+
+## 5. Revision, 2026-08-17: the `$LIST` encoder is gone
+
+The first implementation of option C encoded the `$LIST` byte format in Python
+(`sql_translator/iris_list.py`). That format is undocumented. It was derived by
+calling `IRISList.getBuffer()` — a public method on a package pgwire already
+depends on — and reading the bytes it returned for around thirty inputs. No
+decompilation, but the distinction does not matter much: it is a private layout
+inferred from samples, and four of its rules only surfaced because a sample
+disagreed with a guess.
+
+Two facts settled it:
+
+* **The safety net was not running.** The parity tests were written to compare
+  against `IRISList.getBuffer()` on every run. In the unit suite all 48 of them
+  **skipped** — `iris.IRISList unavailable` — so the guarantee held only in the
+  ad-hoc script that first produced it.
+* **There is a supported route, and it is cheap.** `CREATE FUNCTION …
+  LANGUAGE OBJECTSCRIPT` is ordinary SQL DDL. A function that takes the
+  elements as one plain string and assembles the list with `$LISTBUILD` costs
+  **4.6 µs per query** (measured, 1000 executions each, against a budget of
+  5 ms) and uses nothing undocumented.
+
+So the shape is now:
+
+    col = ANY($1)   ->   col %INLIST PGWire.PG_ARRAY($1)
+
+with the parameter carrying `2|6:public10:pg_catalog` — a count, then each
+element length-prefixed. Length-prefixed rather than delimited so no value needs
+escaping and none can be misread, which is what rules out `$LISTFROMSTRING`. The
+count lets `PG_ARRAY` reject a desynchronised parse instead of returning
+plausible wrong rows.
+
+`sql_translator/iris_list.py` and its tests are deleted. Nothing in pgwire
+reproduces an IRIS-internal format any more.
+
+### What this uncovered
+
+**The functions were never installed by anything.** `PGWire.Catalog.cls` had to
+be loaded by hand with `$SYSTEM.OBJ.Load`, and no code did it. Feature 044
+shipped with every catalog view depending on `PGWire.PG_OID` — so it worked on
+this instance, where the class had been loaded manually during development, and
+would have failed at startup on any fresh one. Installing the functions over SQL
+removes the manual step and works on both backends, where loading a class file
+needs the source on the *server's* filesystem.
+
+**Translating our own DDL corrupted it.** Two rules for writing ObjectScript
+inside SQL DDL, each of which cost a debugging round:
+
+| | Symptom |
+|---|---|
+| `for i = 1:1:4` | The SQL parser reads `:1` as a host variable — "Parameter Name error, First value cannot be a digit". Use `while`. |
+| `RETURNS %Library.List` | Uppercased in transit to `%LIBRARY.LIST`; class names are case-sensitive. Use a SQL type name. |
+
+And the pipeline uppercased the function *bodies* too, turning
+`$SYSTEM.Encryption` into `%SYSTEM.ENCRYPTION` and casing a declared parameter
+differently from its uses. Both installed cleanly and failed on every call.
+Fixed with a verbatim-SQL guard (`sql_translator/verbatim.py`): SQL pgwire wrote
+itself is not client SQL and must not be translated.
+
+**ContextVars do not cross `run_in_executor`.** The first attempt at that guard
+did nothing, because the embedded backend hands `_sync_execute` to
+`loop.run_in_executor`, which — unlike `asyncio.to_thread` — does not carry the
+context into the worker thread, and `_prepare_sql` reads the guard in there. It
+now runs through an explicit `contextvars.copy_context()`. Worth knowing for any
+future ContextVar on that path.
+
+### Verified
+
+From a namespace with the functions dropped, the views dropped and the
+ObjectScript class deleted, the server installs its own catalog at startup and
+answers **8/8** end-to-end cases on **both** backends. `PGWire.PG_OID` returns
+3909377549 and 1128014727, matching Python's `OIDGenerator` exactly.

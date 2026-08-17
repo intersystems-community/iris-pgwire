@@ -4,8 +4,14 @@ PostgreSQL clients bind a whole array to one placeholder and test membership
 with `= ANY($n)`. IRIS has the same idea under a different name — the `%INLIST`
 predicate, which takes its whole match set as one bound value in `$LIST` format:
 
-    col = ANY($1)   ->   col %INLIST $1        (bound as $LIST bytes)
-    col <> ALL($1)  ->   NOT (col %INLIST $1)
+    col = ANY($1)   ->   col %INLIST PGWire.PG_ARRAY($1)
+    col <> ALL($1)  ->   NOT (col %INLIST PGWire.PG_ARRAY($1))
+
+The parameter stays a plain string; `PGWire.PG_ARRAY` turns it into a `$LIST`
+inside IRIS (see catalog/functions.py). Encoding the `$LIST` byte format in
+Python would work — it was tried — but that format is undocumented, and
+reproducing someone else's private layout from observed output is not a thing
+to build on.
 
 The rewrite has to happen *before* preparation, not at execution. `Describe` on
 a prepared statement discovers the row description by running the query with
@@ -20,7 +26,7 @@ only shape that keeps one placeholder in the source and one in the target, so
 the parameter count the client was told at `Describe` still holds at `Bind`.
 
 `specs/044-catalog-as-views/research-t011a.md` records the measurements behind
-that choice, including why the alternatives were rejected.
+both choices, including why the alternatives were rejected.
 
 Array *literals* (`= ANY('{a,b}')`) are a separate case: they arrive already
 written into the SQL, there is no parameter to bind, and IRIS has no `$LIST`
@@ -32,7 +38,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .iris_list import encode_iris_list
+from .pg_array import encode_pg_array
 
 # The operand has to be a placeholder. `ANY (SELECT …)` is standard SQL that
 # IRIS understands natively and must not be touched.
@@ -49,9 +55,14 @@ _ALL_PARAM = re.compile(rf"({_COLUMN})\s*(?:<>|!=)\s*ALL\s*\(\s*{_PLACEHOLDER}\s
 # `= ANY('{a,b}')` — an array written out in the statement text.
 _ANY_LITERAL = re.compile(r"=\s*ANY\s*\(\s*'(\{.*?\})'\s*\)", re.IGNORECASE | re.DOTALL)
 
-# Placeholders already rewritten into a `%INLIST`, used to find which bound
-# parameters have to be encoded as $LISTs.
-_INLIST_PLACEHOLDER = re.compile(rf"%INLIST\s+{_PLACEHOLDER}", re.IGNORECASE)
+# The SQL function that turns the bound string into a $LIST inside IRIS.
+PG_ARRAY_FUNCTION = "PGWire.PG_ARRAY"
+
+# Placeholders already wrapped in a `%INLIST`, used to find which bound
+# parameters have to be encoded for PG_ARRAY.
+_INLIST_PLACEHOLDER = re.compile(
+    rf"%INLIST\s+{re.escape(PG_ARRAY_FUNCTION)}\s*\(\s*{_PLACEHOLDER}\s*\)", re.IGNORECASE
+)
 
 
 def has_array_param(sql: str) -> bool:
@@ -77,8 +88,10 @@ def rewrite_any_to_inlist(sql: str) -> str:
     if "ANY" not in sql.upper() and "ALL" not in sql.upper():
         return sql
 
-    sql = _ALL_PARAM.sub(lambda m: f"NOT ({m.group(1)} %INLIST {m.group(2)})", sql)
-    return _ANY_PARAM.sub(lambda m: f"%INLIST {m.group(1)}", sql)
+    sql = _ALL_PARAM.sub(
+        lambda m: f"NOT ({m.group(1)} %INLIST {PG_ARRAY_FUNCTION}({m.group(2)}))", sql
+    )
+    return _ANY_PARAM.sub(lambda m: f"%INLIST {PG_ARRAY_FUNCTION}({m.group(1)})", sql)
 
 
 def expand_array_literals(sql: str) -> str:
@@ -133,16 +146,13 @@ def inlist_param_indexes(sql: str) -> list[int]:
 
 
 def encode_inlist_params(sql: str, params: list | tuple | None) -> list | None:
-    """Encode every parameter feeding a `%INLIST` as IRIS `$LIST` bytes.
+    """Encode every parameter feeding a `%INLIST` for `PGWire.PG_ARRAY`.
 
-    Neither Python path can hand IRIS a list: the DBAPI rejects both a Python
-    list and its own `IRISList` with "Unsupported argument type", and the
-    embedded path accepts a Python list but silently matches nothing. Raw
-    `$LIST` bytes are the one representation both accept.
-
-    An empty array binds as `None`. An empty `$LIST` is zero bytes, and binding
-    those fails with SQLCODE -400 (`<LIST>`), whereas a NULL operand returns no
-    rows on both backends — which is what `= ANY('{}')` means.
+    The value stays an ordinary string; IRIS builds the `$LIST` from it. That
+    keeps the undocumented `$LIST` byte format out of this codebase, and it
+    means the empty array needs no special case — `"0|"` builds an empty list,
+    where an empty `$LIST` bound directly is zero bytes and errors with
+    SQLCODE -400.
     """
     if params is None:
         return None
@@ -151,16 +161,18 @@ def encode_inlist_params(sql: str, params: list | tuple | None) -> list | None:
     for index in inlist_param_indexes(sql):
         if not (0 <= index < len(values)):
             continue
-        values[index] = _as_iris_list(values[index])
+        values[index] = _as_pg_array(values[index])
     return values
 
 
-def _as_iris_list(value: Any) -> Any:
-    if value is None or isinstance(value, bytes):
+def _as_pg_array(value: Any) -> Any:
+    # Describe prepares the statement with a dummy NULL. PG_ARRAY is never
+    # reached in that case — IRIS short-circuits the predicate — so leave it.
+    if value is None:
         return value
 
     if isinstance(value, (list, tuple, set)):
-        elements: list | None = list(value)
+        elements: list = list(value)
     elif isinstance(value, str):
         parsed = parse_pg_array_literal(value)
         # A bare scalar bound against a membership test is a one-element set.
@@ -168,9 +180,7 @@ def _as_iris_list(value: Any) -> Any:
     else:
         elements = [value]
 
-    if not elements:
-        return None
-    return encode_iris_list(elements)
+    return encode_pg_array(elements)
 
 
 # ---------------------------------------------------------------------------

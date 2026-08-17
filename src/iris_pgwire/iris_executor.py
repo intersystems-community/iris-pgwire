@@ -6,6 +6,7 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 """
 
 import asyncio
+import contextvars
 import concurrent.futures
 import datetime as dt
 import re
@@ -45,6 +46,7 @@ from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
+from .sql_translator.verbatim import is_verbatim
 from .type_mapping import (
     load_type_mappings_from_file,
 )  # Configurable type mapping
@@ -272,6 +274,11 @@ class IRISExecutor:
         return value
 
     def _get_normalized_sql(self, sql: str, execution_path: str = "direct") -> str:
+        # SQL pgwire authored itself is already in IRIS's dialect. Normalising it
+        # corrupts ObjectScript function bodies — see sql_translator/verbatim.py.
+        if is_verbatim():
+            return sql
+
         if not self.enable_query_cache:
             return self.sql_translator.normalize_sql(
                 sql, execution_path=execution_path, executor=self
@@ -2537,10 +2544,18 @@ class IRISExecutor:
                     "execution_time_ms": 0,
                 }
 
-        # Execute in thread pool to avoid blocking event loop
+        # Execute in thread pool to avoid blocking event loop.
+        #
+        # Through a copied context, because run_in_executor does not carry
+        # ContextVars into the worker thread the way asyncio.to_thread does —
+        # and _prepare_sql, which runs in there, reads one. Without this the
+        # verbatim-SQL guard silently read its default and the catalog function
+        # installer's ObjectScript bodies were translated after all.
         loop = asyncio.get_event_loop()
+        context = contextvars.copy_context()
         return await loop.run_in_executor(
-            self._get_executor(session_id), _sync_execute, sql, params, session_id
+            self._get_executor(session_id),
+            lambda: context.run(_sync_execute, sql, params, session_id),
         )
 
     def _discover_metadata_with_limit_zero(

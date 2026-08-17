@@ -34,7 +34,7 @@ class TestOidParity:
     disagree, a client joining pg_class to pg_attribute across the two paths
     silently matches nothing.
 
-    The ObjectScript side (src/iris_pgwire/objectscript/PGWire.Catalog.cls) is
+    The SQL side (PGWire.PG_OID, installed from catalog/functions.py) is
     verified against these same values in the E2E suite; what is pinned here is
     the contract it has to meet.
     """
@@ -253,7 +253,9 @@ class TestArrayMembershipRewrite:
         sql = rewrite_any_to_inlist(
             "SELECT nspname FROM pg_namespace WHERE nspname = ANY($1)"
         )
-        assert sql == "SELECT nspname FROM pg_namespace WHERE nspname %INLIST $1"
+        assert sql == (
+            "SELECT nspname FROM pg_namespace WHERE nspname %INLIST PGWire.PG_ARRAY($1)"
+        )
 
     def test_rewrite_does_not_need_the_values(self):
         """The whole point: it must work at Describe, before anything is bound."""
@@ -266,13 +268,15 @@ class TestArrayMembershipRewrite:
         from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
 
         sql = rewrite_any_to_inlist("SELECT a FROM t WHERE b = $1 AND a = ANY($2) AND c = $3")
-        assert sql == "SELECT a FROM t WHERE b = $1 AND a %INLIST $2 AND c = $3"
+        assert sql == (
+            "SELECT a FROM t WHERE b = $1 AND a %INLIST PGWire.PG_ARRAY($2) AND c = $3"
+        )
 
     def test_not_all_becomes_negated_inlist(self):
         from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
 
         sql = rewrite_any_to_inlist("SELECT a FROM t WHERE t.k <> ALL($1)")
-        assert sql == "SELECT a FROM t WHERE NOT (t.k %INLIST $1)"
+        assert sql == "SELECT a FROM t WHERE NOT (t.k %INLIST PGWire.PG_ARRAY($1))"
 
     def test_any_over_a_subquery_is_left_alone(self):
         """`ANY (SELECT …)` is standard SQL that IRIS understands natively."""
@@ -312,26 +316,23 @@ class TestArrayMembershipRewrite:
         assert rewrite_any_to_inlist(sql) == sql
         assert encode_inlist_params(sql, [5]) == [5]
 
-    def test_bound_array_is_encoded_as_an_iris_list(self):
+    def test_bound_array_is_encoded_for_pg_array(self):
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
-        from iris_pgwire.sql_translator.iris_list import encode_iris_list
 
         params = encode_inlist_params(
-            "SELECT nspname FROM pg_namespace WHERE nspname %INLIST $1",
+            "SELECT nspname FROM pg_namespace WHERE nspname %INLIST PGWire.PG_ARRAY($1)",
             [["public", "pg_catalog"]],
         )
-        assert params == [encode_iris_list(["public", "pg_catalog"])]
+        assert params == ["2|6:public10:pg_catalog"]
 
     def test_only_the_inlist_parameter_is_encoded(self):
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
 
         params = encode_inlist_params(
-            "SELECT a FROM t WHERE b = $1 AND a %INLIST $2 AND c = $3",
+            "SELECT a FROM t WHERE b = $1 AND a %INLIST PGWire.PG_ARRAY($2) AND c = $3",
             ["scalar", ["x"], 7],
         )
-        assert params[0] == "scalar"
-        assert isinstance(params[1], bytes)
-        assert params[2] == 7
+        assert params == ["scalar", "1|1:x", 7]
 
     def test_array_arrives_from_bind_as_text_and_is_still_encoded(self):
         """Bind decodes a text[] to the string `{a,b}`, never to a Python list.
@@ -340,25 +341,26 @@ class TestArrayMembershipRewrite:
         against a value the protocol layer does not produce.
         """
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
-        from iris_pgwire.sql_translator.iris_list import encode_iris_list
 
         params = encode_inlist_params(
-            "SELECT a FROM t WHERE a %INLIST $1", ["{public,pg_catalog}"]
+            "SELECT a FROM t WHERE a %INLIST PGWire.PG_ARRAY($1)", ["{public,pg_catalog}"]
         )
-        assert params == [encode_iris_list(["public", "pg_catalog"])]
+        assert params == ["2|6:public10:pg_catalog"]
 
-    def test_empty_array_binds_as_null(self):
-        """An empty $LIST is zero bytes, which IRIS rejects with SQLCODE -400."""
+    def test_empty_array_needs_no_special_case(self):
+        """`0|` builds an empty list, so it matches nothing without a NULL detour."""
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
 
-        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", [[]]) == [None]
-        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", ["{}"]) == [None]
+        sql = "SELECT a FROM t WHERE a %INLIST PGWire.PG_ARRAY($1)"
+        assert encode_inlist_params(sql, [[]]) == ["0|"]
+        assert encode_inlist_params(sql, ["{}"]) == ["0|"]
 
     def test_describe_dummy_parameter_survives(self):
         """Describe prepares with None; that must stay None, not become bytes."""
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
 
-        assert encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", [None]) == [None]
+        sql = "SELECT a FROM t WHERE a %INLIST PGWire.PG_ARRAY($1)"
+        assert encode_inlist_params(sql, [None]) == [None]
 
     def test_both_executors_rewrite_array_membership(self):
         """Principle IV: a construct must not work on only one backend."""
@@ -460,7 +462,8 @@ class TestPostgresArrayLiteralParsing:
 
     def test_a_bare_scalar_is_treated_as_a_one_element_set(self):
         from iris_pgwire.sql_translator.array_params import encode_inlist_params
-        from iris_pgwire.sql_translator.iris_list import encode_iris_list
 
-        params = encode_inlist_params("SELECT a FROM t WHERE a %INLIST $1", ["public"])
-        assert params == [encode_iris_list(["public"])]
+        params = encode_inlist_params(
+            "SELECT a FROM t WHERE a %INLIST PGWire.PG_ARRAY($1)", ["public"]
+        )
+        assert params == ["1|6:public"]

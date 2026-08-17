@@ -33,6 +33,7 @@ from iris_pgwire.sql_translator.array_params import (
 )
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
+from iris_pgwire.sql_translator.verbatim import is_verbatim
 
 logger = structlog.get_logger(__name__)
 
@@ -132,6 +133,12 @@ class DBAPIExecutor:
 
     def _translate_placeholders(self, sql: str) -> str:
         """Translate PostgreSQL $1, $2 placeholders to DBAPI ? placeholders."""
+        # SQL pgwire authored itself is left exactly as written. This backend
+        # does far less rewriting than the embedded one, but an ObjectScript
+        # function body is not PostgreSQL and must not be pattern-matched as
+        # though it were. See sql_translator/verbatim.py.
+        if is_verbatim():
+            return sql
         return re.sub(r"\$\d+", "?", sql)
 
     def _convert_params_for_iris(self, params: Any) -> Any:
