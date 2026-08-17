@@ -1,6 +1,7 @@
 # T011a research: making `col = ANY($n)` work through the extended protocol
 
-**Status**: implemented; recommendation revised once, see §5.
+**Status**: implemented; recommendation revised once (§5), then re-checked against the
+built-in alternatives (§6).
 **Date**: 2026-08-16, revised 2026-08-17 · **Instance**: IRIS 2026.2 CE in `iris-pgwire-db`, both backends.
 
 ## Evidence standard
@@ -338,3 +339,80 @@ From a namespace with the functions dropped, the views dropped and the
 ObjectScript class deleted, the server installs its own catalog at startup and
 answers **8/8** end-to-end cases on **both** backends. `PGWire.PG_OID` returns
 3909377549 and 1128014727, matching Python's `OIDGenerator` exactly.
+
+
+---
+
+## 6. The built-in list constructs, measured
+
+Prompted by a search of `community.intersystems.com`. That host is egress-blocked here as well, so
+again the prose comes from search extracts; every behavioural claim below was then measured on the
+instance (`spikes/probe_list_constructs.py`).
+
+The community's own idiom for this problem is the one we implement:
+
+> `%INLIST` takes a single `$LISTBUILD()` as parameter with a variable number of values that you pass
+> at runtime by only 1 "?" placeholder, while `IN (p1,p2,p3,p4)` or `IN (?,?,?,?)` requires a fixed
+> static number of parameters during execution.
+
+Four constructs exist for getting that list, and all four work. What separates them:
+
+| Construct | Installed code | ms/query | Verdict |
+|---|---|---|---|
+| `%INLIST PGWire.PG_ARRAY(?)` | one SQL function | **0.202** | shipped |
+| `= ANY (SELECT v FROM JSON_TABLE(?, …))` | none | 0.992 | viable; see below |
+| `%INLIST (SELECT %DLIST(v) FROM JSON_TABLE(?, …))` | none | — | works, but `= ANY` with extra steps |
+| `%INLIST $LISTFROMSTRING(?, ',')` | none | — | **unsafe** |
+
+300 executions each, one element, against `plain IN ('public')` at 0.342 ms for scale.
+
+### `$LISTFROMSTRING` is the trap
+
+It is the obvious shortcut and it fails silently:
+
+```
+two clean values                    -> ['pg_catalog', 'public']
+a value containing the delimiter    -> []
+```
+
+No error — the row simply does not come back. Any delimiter can occur in a catalog value, so there
+is no safe choice of one. This is exactly the silent-empty class of failure feature 044 exists to
+remove, so it is rejected outright rather than treated as a fallback.
+
+### `JSON_TABLE` is a genuine zero-install alternative
+
+`= ANY (subquery)` is standard SQL that IRIS parses natively — confirmed, which also retires an
+assumption the rewrite's guard was resting on untested. Combined with `JSON_TABLE` it needs **no
+installed function at all**, and JSON escaping is a solved problem, so there is no format of ours to
+get wrong. It handled everything: one value, several, the empty array, negation, the `IN` form, a
+numeric column against string elements, a NULL parameter (what Describe binds), commas, embedded
+quotes, `café`, an astral character, elements of 10 000 characters with no truncation, and 5 000
+elements. Cached-query count: 0 added across four different list lengths, same as PG_ARRAY.
+
+It is not chosen, for two reasons and one non-reason:
+
+* **5× the cost** — 0.992 ms against 0.202 ms. Database-side execution, so it does not touch the
+  constitutional 5 ms *translation* budget, but ORM introspection issues these constantly.
+* **The installer is not avoidable.** `PG_OID` and `PG_PUBLIC_SCHEMA` have to be installed for any
+  view to compile, so "zero install" saves one function in a mechanism that must exist regardless.
+  This is what makes the argument for JSON_TABLE much weaker than it first appears.
+* **Not** the IRIS version floor. `JSON_TABLE` arrived in 2024.1 and this project already targets
+  2024.2+, so that objection does not hold — worth stating because it was the first thing assumed.
+
+One hazard if it is ever adopted: a nested array silently produces garbage rather than an error
+(`[["a","b"]]` returned two rows of `1`). `parse_pg_array_literal` already declines nested arrays
+before they reach IRIS, and that guard would have to stay.
+
+### `%DLIST` — noted for later
+
+`%DLIST(expr)` is an aggregate that builds a real `$LIST` from query results, verified here
+(`$LISTLENGTH(%DLIST(nspname))` = 3). Not useful for this problem — `= ANY (subquery)` does the same
+job more directly — but it is the right tool for **T015–T018**, where `pg_index` and `pg_constraint`
+need a column list aggregated server-side.
+
+### Conclusion
+
+Keep `PG_ARRAY`. It is the cheapest option, it uses only documented API, and it rides an installer
+the feature needs anyway. `JSON_TABLE` is recorded as a tested fallback rather than a discarded
+idea; the honest summary is that the two are close and the deciding factor is that the installer
+exists either way.

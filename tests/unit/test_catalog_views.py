@@ -39,7 +39,7 @@ class TestOidParity:
     the contract it has to meet.
     """
 
-    # Verified equal against PGWire.Catalog.PgOid on IRIS 2026.2.
+    # Verified equal against the installed PGWire.PG_OID on IRIS 2026.2.
     KNOWN_VALUES = {
         ("table", "customer", "sqluser"): 3909377549,
         ("table", "orderline", "sqluser"): 1128014727,
@@ -51,7 +51,7 @@ class TestOidParity:
         actual = OIDGenerator().get_oid(object_type, object_name, namespace)
         assert actual == expected, (
             "Python and ObjectScript OID implementations have diverged; "
-            "PGWire.Catalog.PgOid must produce the same value"
+            "PGWire.PG_OID must produce the same value"
         )
 
     def test_oids_are_stable(self):
@@ -279,7 +279,12 @@ class TestArrayMembershipRewrite:
         assert sql == "SELECT a FROM t WHERE NOT (t.k %INLIST PGWire.PG_ARRAY($1))"
 
     def test_any_over_a_subquery_is_left_alone(self):
-        """`ANY (SELECT …)` is standard SQL that IRIS understands natively."""
+        """`ANY (SELECT …)` is standard SQL that IRIS parses natively.
+
+        Verified against real IRIS rather than assumed — see the C0 case in
+        spikes/probe_list_constructs.py. Rewriting it would break a construct
+        that already works.
+        """
         from iris_pgwire.sql_translator.array_params import rewrite_any_to_inlist
 
         original = "SELECT a FROM t WHERE a = ANY (SELECT k FROM u)"
