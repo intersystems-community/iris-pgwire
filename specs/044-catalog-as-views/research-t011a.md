@@ -416,3 +416,50 @@ Keep `PG_ARRAY`. It is the cheapest option, it uses only documented API, and it 
 the feature needs anyway. `JSON_TABLE` is recorded as a tested fallback rather than a discarded
 idea; the honest summary is that the two are close and the deciding factor is that the installer
 exists either way.
+
+
+---
+
+## 7. What the drift test found
+
+`PG_ARRAY` replaced a Python encoder for someone else's private format with a Python encoder for our
+own. That is a real improvement — correctness now rests only on `$LISTBUILD`, which is documented —
+but it does not remove the need to check the two halves agree. The unit tests compare
+`encode_pg_array` against `decode_pg_array`, a **Python mirror** of the ObjectScript. A mirror is not
+the thing: if the two drift, every unit test still passes.
+
+That is precisely what made the old `$LIST` parity tests worthless, so
+`tests/integration/test_pg_array_against_iris.py` drives the function **actually installed in IRIS**,
+and treats a missing function as a failure rather than a skip.
+
+It found two defects on its first run, both in the empty-string case, and both silent:
+
+**IRIS SQL spells the empty string as `$CHAR(0)`.** Measured by inspecting the bytes a function
+actually receives:
+
+| bound value | what the function sees |
+|---|---|
+| `''` | one byte, `$CHAR(0)` |
+| `NULL` | genuinely empty, length 0 |
+| `'x'` | one byte, `x` |
+
+An empty column value is stored the same way. Two consequences:
+
+1. **`PG_ARRAY('')` raised "missing element count".** The guard tested `encoded = ""`, which is false
+   for a bound empty string, so it fell through to the parser. Now `(encoded = "") || (encoded =
+   $char(0))`.
+2. **A zero-length element could never match.** `$LISTBUILD($EXTRACT(…))` for a zero-length element
+   builds a true ObjectScript `""`, which is a different value from the `$CHAR(0)` an empty column
+   holds — so `x = ANY('{""}')` returned nothing, with no error. Now built as `$char(0)`.
+
+Neither was reachable from Python: `decode_pg_array` agreed with the encoder perfectly, because both
+were reasoning about logical values while IRIS was storing a different byte.
+
+A third, smaller finding: `$LIST` throws `<NULL VALUE>` on a null element, so the test itself has to
+use `$LISTGET` — otherwise a NULL in the array reads as a decoder failure.
+
+### Standing gap
+
+`decode_pg_array` remains a mirror and can still drift from the ObjectScript. It is only used by
+tests, and the integration suite above is what actually pins the contract. Anyone changing the
+ObjectScript body must run that suite; the unit tests alone will not catch it.

@@ -113,6 +113,14 @@ PG_PUBLIC_SCHEMA = CatalogFunction(
 # the empty string are not malformed: they build an empty list, which is both
 # what `= ANY('{}')` means and what Describe needs, since it prepares the
 # statement with a dummy NULL bound.
+#
+# `$char(0)` appears twice because that is how IRIS SQL spells the empty string
+# (measured: binding '' delivers a one-byte \x00 here, binding NULL delivers a
+# genuinely empty string, and an empty column value is stored as \x00). So the
+# guard has to accept it as "nothing bound", and a zero-length *element* has to
+# be built as $char(0) or it will never match an empty column value — silently,
+# which is why the integration test that found this drives the installed
+# function rather than a Python mirror of it.
 PG_ARRAY = CatalogFunction(
     name="PG_ARRAY",
     signature="encoded VARCHAR(32000)",
@@ -122,7 +130,7 @@ PG_ARRAY = CatalogFunction(
     returns="VARCHAR(32000)",
     purpose="build the match set for %INLIST from one bound string parameter",
     body="""{
-  if encoded = "" { quit "" }
+  if (encoded = "") || (encoded = $char(0)) { quit "" }
   set bar = $find(encoded, "|")
   if bar = 0 { throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "PG_ARRAY: missing element count") }
   set expected = $extract(encoded, 1, bar - 2)
@@ -137,7 +145,9 @@ PG_ARRAY = CatalogFunction(
       set pos = colon
     } else {
       if (colon + count - 1) > len { throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "PG_ARRAY: element overruns input") }
-      set list = list _ $listbuild($extract(encoded, colon, colon + count - 1))
+      set value = $extract(encoded, colon, colon + count - 1)
+      if value = "" { set value = $char(0) }
+      set list = list _ $listbuild(value)
       set pos = colon + count
     }
   }

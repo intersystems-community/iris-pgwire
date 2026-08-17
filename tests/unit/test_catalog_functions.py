@@ -77,8 +77,22 @@ class TestDefinitions:
         assert PG_ARRAY.body.count("throw") >= 3
 
     def test_pg_array_accepts_the_describe_dummy(self):
-        """Describe prepares the statement with a NULL bound; that must not throw."""
-        assert 'if encoded = "" { quit "" }' in PG_ARRAY.body
+        """Describe prepares the statement with a NULL bound; that must not throw.
+
+        Both spellings must be accepted: IRIS SQL delivers a bound `''` as a
+        one-byte $CHAR(0) and a bound NULL as a genuinely empty string, so
+        checking only for `""` let `PG_ARRAY('')` raise "missing element count".
+        """
+        assert '(encoded = "") || (encoded = $char(0))' in PG_ARRAY.body
+
+    def test_pg_array_builds_an_empty_element_the_way_sql_spells_it(self):
+        """A zero-length element must be $CHAR(0), not a true ObjectScript "".
+
+        IRIS stores an empty column value as $CHAR(0); an element built as ""
+        is a different value and matches nothing, with no error. Caught by the
+        integration test that drives the installed function.
+        """
+        assert 'if value = "" { set value = $char(0) }' in PG_ARRAY.body
 
     def test_pg_public_schema_takes_no_arguments(self):
         assert PG_PUBLIC_SCHEMA.signature == ""
