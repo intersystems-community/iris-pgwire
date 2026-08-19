@@ -244,11 +244,57 @@ class PGWireServer:
                 await writer.wait_closed()
             logger.info("Client connection closed", connection_id=connection_id)
 
+    async def _install_catalog_functions(self):
+        """Create the PGWire SQL functions the catalog views are defined in terms of.
+
+        Must run before the views: every one of them calls PGWire.PG_OID or
+        PGWire.PG_PUBLIC_SCHEMA, so without these the view DDL cannot compile.
+        """
+        from .catalog.function_installer import (
+            CatalogFunctionInstaller,
+            CatalogFunctionInstallError,
+        )
+
+        installer = CatalogFunctionInstaller(self.iris_executor)
+        try:
+            installed = await installer.install()
+        except CatalogFunctionInstallError:
+            logger.error(
+                "Catalog function installation failed - refusing to start",
+                hint="the account needs privileges to CREATE FUNCTION in the PGWire schema",
+            )
+            raise
+        logger.info("Catalog functions ready", count=len(installed))
+
+    async def _install_catalog_views(self):
+        """Create the emulated pg_catalog views, aborting startup on failure."""
+        from .catalog.views import CatalogViewInstaller, CatalogViewInstallError
+
+        installer = CatalogViewInstaller(self.iris_executor)
+        try:
+            installed = await installer.install()
+        except CatalogViewInstallError:
+            logger.error(
+                "Catalog view installation failed - refusing to start",
+                hint="the account needs privileges to create views in a pg_catalog schema",
+            )
+            raise
+        logger.info("Catalog views ready", count=len(installed))
+
     async def start(self):
         """Start the PGWire server"""
         try:
             # Test IRIS connectivity before starting
             await self.iris_executor.test_connection()
+
+            # Converge the emulated pg_catalog before accepting clients. Done
+            # here rather than as a migration step so a fresh container or a new
+            # namespace needs no manual setup, and identically on both backends.
+            # A failure aborts startup: serving a half-installed catalog would
+            # answer introspection with empty results instead of errors, which
+            # is the failure mode feature 044 exists to remove.
+            await self._install_catalog_functions()
+            await self._install_catalog_views()
 
             # Setup SSL if enabled
             self.ssl_context = await self.setup_ssl_context()

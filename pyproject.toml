@@ -100,7 +100,13 @@ iris = [
     # "intersystems-iris>=3.6.0",
 ]
 ai = [
-    "iris-agentic-dev>=1.0",
+    # IRIS-aware agent tooling. iris-agentic-dev is a Rust binary and is NOT
+    # published on PyPI, so it cannot be declared as a dependency here — doing
+    # so made `pip install iris-pgwire[ai]` fail outright. Install it directly:
+    #   Linux:  curl -fsSL https://github.com/intersystems-community/iris-agentic-dev/releases/latest/download/iris-agentic-dev-linux-x86_64 \
+    #             -o /usr/local/bin/iris-agentic-dev && chmod +x /usr/local/bin/iris-agentic-dev
+    #   macOS:  brew install https://raw.githubusercontent.com/intersystems-community/iris-agentic-dev/master/Formula/iris-agentic-dev.rb
+    # See docs/iris-pgwire-iad-setup-issues.md and AGENTS.md.
 ]
 kerberos = [
     # Kerberos GSSAPI authentication (optional - not implemented in wire protocol yet)

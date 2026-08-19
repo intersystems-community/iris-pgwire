@@ -197,18 +197,33 @@ Configure iad for iris-pgwire's container in `.iris-agentic-dev.toml`:
 ```toml
 [connections.iris-pgwire-db]
 host = "localhost"
-port = 2972
+web_port = 52776   # iad connects over the Atelier REST API on the WEB port,
+                   # not the SQL port. Use the host port mapped to IRIS 52773.
 namespace = "USER"
 username = "_SYSTEM"
 password = "SYS"
 ```
 
+> **Do not put the SQL port here.** `port` is accepted as an alias for `web_port`, so
+> `port = 2972` parses cleanly and silently points iad at the SQL port, producing a confusing
+> connection error rather than a config complaint.
+
 ---
 
 ## Agent Skills
 
-Install `iris-agentic-dev` for IRIS-aware development (`pip install iris-pgwire[ai]`),
-then load these skills:
+Install `iris-agentic-dev` for IRIS-aware development, then load these skills.
+It is a Rust binary and is **not on PyPI** — `pip install iris-pgwire[ai]` does not resolve it
+(see [bug report](iris-agentic-dev-bug-report.md)). Use a released binary:
+
+```bash
+# Linux x86-64
+curl -fsSL https://github.com/intersystems-community/iris-agentic-dev/releases/latest/download/iris-agentic-dev-linux-x86_64 \
+  -o /usr/local/bin/iris-agentic-dev && chmod +x /usr/local/bin/iris-agentic-dev
+
+# macOS (Apple Silicon)
+brew install https://raw.githubusercontent.com/intersystems-community/iris-agentic-dev/master/Formula/iris-agentic-dev.rb
+```
 
 - **iris-connectivity** — IRIS connection patterns (DBAPI, embedded, TCP params)
 - **iris-sql** — IRIS SQL quirks that affect pgwire translation (dates, identifiers,

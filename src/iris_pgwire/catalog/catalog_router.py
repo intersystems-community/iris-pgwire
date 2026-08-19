@@ -15,7 +15,9 @@ import structlog
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 from iris_pgwire.type_mapping import get_type_mapping
 
+from ._reentrancy import _IN_CATALOG_HANDLER
 from .oid_generator import OIDGenerator
+from .views.definitions import CATALOG_SCHEMA, VIEW_BACKED_TABLES
 from .pg_attrdef import PgAttrdefEmulator
 from .pg_attribute import PgAttributeEmulator
 from .pg_class import PgClassEmulator
@@ -25,6 +27,7 @@ from .pg_namespace import PgNamespaceEmulator
 from .pg_type import PgTypeEmulator
 
 logger = structlog.get_logger(__name__)
+
 
 
 @dataclass
@@ -138,10 +141,8 @@ class CatalogRouter:
             "pg_namespace": self._handle_pg_namespace,
             "pg_class": self._handle_pg_class,
             "information_schema.columns": self._handle_information_schema_columns,
-            "pg_attribute": self._handle_pg_attribute,
             "pg_constraint": self._handle_pg_constraint,
             "pg_index": self._handle_pg_index,
-            "pg_attrdef": self._handle_pg_attrdef,
         }
 
     def can_handle(self, query: str) -> bool:
@@ -174,12 +175,20 @@ class CatalogRouter:
         Returns:
             Set of catalog table names (lowercase)
         """
-        words = set(re.findall(r"\b(\w+)\b", query.lower()))
+        lowered = query.lower()
+        words = set(re.findall(r"\b(\w+)\b", lowered))
+        # A pg_* name followed by `(` is a function call, not a table. Without
+        # this, `pg_get_constraintdef(constr.oid)` counted as a catalog table, so
+        # the set of targeted tables was never a subset of the view-backed ones
+        # and the decline below never fired — the pg_class handler then answered
+        # Prisma's constraints query with pg_class's own 32 columns, including
+        # relfrozenxid typed `xid`. Measured: that is the whole of the failure.
+        called = set(re.findall(r"\b(pg_\w+)\s*\(", lowered))
         tables: set[str] = set()
 
         # Find pg_* references
         for word in words:
-            if word.startswith("pg_"):
+            if word.startswith("pg_") and word not in called:
                 if word in self.CATALOG_TABLES or len(word) > 3:
                     tables.add(word)
 
@@ -298,6 +307,32 @@ class CatalogRouter:
 
         return self._regclass_pattern.sub(replace_regclass, query)
 
+    # The relation a statement is about: the first catalog table after FROM, or
+    # after a JOIN only if no FROM relation is a catalog table at all. Optional
+    # schema qualifier, optional quotes, optional alias.
+    _FROM_RELATION = re.compile(
+        r"\bFROM\s+(?:(?:\"?\w+\"?)\s*\.\s*)?\"?(\w+)\"?",
+        re.IGNORECASE,
+    )
+
+    def primary_catalog_relation(self, query: str) -> str | None:
+        """The catalog table the query is *about*, or None if it is about none.
+
+        Distinct from :meth:`get_target_catalog`, which returns the highest-
+        priority catalog table mentioned *anywhere*. That is the right question
+        for "which emulator knows most about this statement" and the wrong one
+        for "which table's columns should the answer have": Prisma's pg_views
+        query mentions pg_class in a JOIN, and answering with pg_class's shape
+        made the client fail (T015a).
+        """
+        for match in self._FROM_RELATION.finditer(query):
+            name = match.group(1).lower()
+            if name in self.CATALOG_TABLES or (
+                name.startswith("pg_") and len(name) > 3
+            ):
+                return name
+        return None
+
     def get_target_catalog(self, query: str) -> str | None:
         """
         Get primary catalog table targeted by query.
@@ -330,6 +365,17 @@ class CatalogRouter:
         # Return first found
         return next(iter(tables))
 
+    # Expressions the row emulators cannot evaluate. They can project and
+    # filter columns over emulated rows; they cannot compute EXISTS(...) or
+    # call scalar functions. Queries containing these must fall through to
+    # SQLInterceptor, which has purpose-built handlers for them — notably
+    # Prisma's schema probe:
+    #   SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1),
+    #          version(), current_setting('server_version_num')
+    # Intercepting that returned raw namespace rows, so Prisma read it as
+    # "public does not exist" and issued CREATE SCHEMA "public".
+    UNEVALUABLE_EXPRESSIONS = ("EXISTS(", "EXISTS (", "VERSION()", "CURRENT_SETTING(")
+
     async def handle_catalog_query(
         self,
         sql: str,
@@ -349,20 +395,109 @@ class CatalogRouter:
             session_id=session_id,
         )
 
+        # Tables served by real IRIS views are answered by the database, which
+        # evaluates projections, aliases, joins and CTEs correctly. Declining
+        # here is what makes exactly one path answer a given catalog table
+        # (spec 044 FR-011). Without it the old handler would intercept first
+        # and the view would be unreachable.
+        # extract_catalog_tables() matches anything with a pg_ prefix, so the
+        # schema qualifier in "pg_catalog.pg_class" comes back looking like a
+        # table. Drop it before deciding, or no qualified query would ever be
+        # declined.
+        targeted = {t for t in self.extract_catalog_tables(sql) if t != CATALOG_SCHEMA}
+        if targeted and targeted <= set(VIEW_BACKED_TABLES):
+            logger.debug(
+                "Declining catalog query served by IRIS views",
+                tables=sorted(targeted),
+                session_id=session_id,
+            )
+            return None
+
+        if _IN_CATALOG_HANDLER.get():
+            logger.debug(
+                "Declining nested catalog query issued by a handler",
+                sql_preview=sql[:120],
+                session_id=session_id,
+            )
+            return None
+
+        if any(token in sql_upper for token in self.UNEVALUABLE_EXPRESSIONS):
+            logger.debug(
+                "Declining catalog query with unevaluable expression",
+                sql_preview=sql[:120],
+                session_id=session_id,
+            )
+            return None
+
         tables = self.extract_catalog_tables(sql)
-        for table in self.CATALOG_HANDLER_PRIORITY:
-            if table not in tables:
-                continue
-            handler = self._catalog_handler_map.get(table)
-            if not handler:
-                continue
-            result = await handler(sql, sql_upper, params, session_id, executor)
-            if result is not None:
-                return result
+
+        # A handler may only answer for the relation the query is *about*.
+        #
+        # The loop below walks a priority list and takes the first handler whose
+        # table appears anywhere in the statement — a JOIN partner included. So a
+        # question about pg_views, which names pg_class only in a JOIN, was
+        # answered by the pg_class handler with pg_class's own 32 columns, and
+        # the client failed on `relfrozenxid` typed `xid`. The same happened to
+        # Prisma's constraints query before pg_constraint became a view, and
+        # would happen to the next catalog table with no path of its own.
+        #
+        # Declining is the honest alternative: IRIS then reports the relation it
+        # cannot find, which reaches the client as 42P01 (spec FR-008a). What is
+        # never acceptable is a confidently wrong shape.
+        # Scoped deliberately to the *substitution* case: the primary relation has
+        # no handler, but some other table in the statement does, so falling
+        # through would answer with that other table's columns. A statement whose
+        # only catalog table is unhandled still reaches the "empty fallback"
+        # below — that fabricated empty result is a separate defect (FR-008c),
+        # already located, and removing it is T020's own verification pass rather
+        # than something to smuggle in here.
+        primary = self.primary_catalog_relation(sql)
+        substitutes = primary is not None and primary not in self._catalog_handler_map
+        if substitutes and any(
+            table != primary and table in self._catalog_handler_map for table in tables
+        ):
+            logger.debug(
+                "Declining: would answer with another relation's columns",
+                primary=primary,
+                targeted=sorted(tables),
+                session_id=session_id,
+            )
+            return None
+
+        guard_token = _IN_CATALOG_HANDLER.set(True)
+        try:
+            for table in self.CATALOG_HANDLER_PRIORITY:
+                if table not in tables:
+                    continue
+                # Same rule inside the loop: only the primary relation's handler
+                # may answer, so priority order cannot substitute a JOIN partner.
+                if primary is not None and table != primary:
+                    continue
+                handler = self._catalog_handler_map.get(table)
+                if not handler:
+                    continue
+                result = await handler(sql, sql_upper, params, session_id, executor)
+                if result is not None:
+                    return result
+        finally:
+            _IN_CATALOG_HANDLER.reset(guard_token)
 
         if self.can_handle(sql):
             target = self.get_target_catalog(sql)
-            logger.info(f"Intercepting {target} query (empty fallback)", session_id=session_id)
+            # FR-008c forbids this branch: it fabricates a zero-row, zero-column
+            # answer for any catalog query can_handle() claims but no handler
+            # recognises, so a client cannot tell an empty schema from an
+            # unimplemented one. T020 removes it. Until then the log has to name
+            # the statement, or the only trace of a swallowed query is the target
+            # table it was misattributed to — which is how four of Prisma's
+            # twelve statements went unnoticed.
+            logger.warning(
+                "Fabricating empty catalog result (FR-008c violation, T020)",
+                target=target,
+                primary_relation=self.primary_catalog_relation(sql),
+                sql_preview=" ".join(sql.split())[:220],
+                session_id=session_id,
+            )
             return {
                 "success": True,
                 "rows": [],
@@ -494,7 +629,14 @@ class CatalogRouter:
     ) -> dict[str, Any] | None:
         is_simple_pg_namespace = (
             "PG_NAMESPACE" in sql_upper
-            and re.search(r"\bFROM\s+PG_NAMESPACE\b", sql_upper)
+            # Accept the schema-qualified form too. Real clients emit
+            # "FROM pg_catalog.pg_namespace"; requiring the bare name sent every
+            # qualified query to the empty fallback, which returns zero rows.
+            # Prisma's schema-existence probe is
+            #   SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)
+            # so an empty result reads as "the public schema does not exist" and
+            # introspection reports the database as empty.
+            and re.search(r"\bFROM\s+(?:PG_CATALOG\.)?PG_NAMESPACE\b", sql_upper)
             and "JOIN" not in sql_upper
             and len(re.findall(r"\bFROM\b", sql_upper)) <= 2
         )

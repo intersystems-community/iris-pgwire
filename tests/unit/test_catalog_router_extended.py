@@ -596,75 +596,63 @@ class TestHandleCatalogQuery:
         assert "extname" in col_names
 
     @pytest.mark.asyncio
-    async def test_handle_pg_namespace_simple(self):
-        router = make_router()
-        sql = "SELECT oid, nspname FROM pg_namespace"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_handle_pg_namespace_with_join_returns_none(self):
-        """pg_namespace with JOIN should not match the simple handler."""
-        router = make_router()
-        sql = (
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT oid, nspname FROM pg_namespace",
+            "SELECT oid, relname FROM pg_class",
+            "SELECT oid, relname FROM pg_class WHERE relkind = 'r'",
             "SELECT n.oid, n.nspname FROM pg_namespace n "
-            "JOIN pg_class c ON c.relnamespace = n.oid"
-        )
-        # With JOIN this doesn't match the simple pg_namespace handler,
-        # but pg_class may match. Let's just check it doesn't error.
-        result = await router.handle_catalog_query(sql)
-        # result could be from pg_class handler or the fallback
-        # either way it should be a dict or None (but can_handle=True so dict)
-        assert result is not None
+            "JOIN pg_class c ON c.relnamespace = n.oid",
+            "SELECT conname, contype FROM pg_constraint",
+            # Prisma's own shape: a pg_* *function* name in the select list used
+            # to count as a targeted catalog table, so this was not recognised as
+            # fully view-backed and the pg_class handler answered it.
+            "SELECT c.conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
+            "JOIN pg_class t ON t.oid = c.conrelid "
+            "JOIN pg_namespace n ON n.oid = t.relnamespace",
+        ],
+    )
+    async def test_view_backed_tables_are_declined_not_answered(self, sql):
+        """Feature 044 moved pg_namespace, pg_class and pg_constraint to IRIS views.
 
-    @pytest.mark.asyncio
-    async def test_handle_pg_class_no_executor(self):
+        These used to be answered by row emulators here. They are now declined
+        so the query reaches IRIS, which can evaluate projections, aliases and
+        joins the emulators could only approximate. Answering them again would
+        make the views dead code.
+        """
         router = make_router()
-        sql = "SELECT oid, relname FROM pg_class"
-        result = await router.handle_catalog_query(sql, executor=None)
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
+        assert await router.handle_catalog_query(sql, executor=None) is None
 
     @pytest.mark.asyncio
-    async def test_handle_pg_class_with_executor(self):
-        router = make_router()
-        executor = make_executor(
-            tables_rows=[("users", "BASE TABLE", IRIS_SCHEMA)],
-        )
-        sql = "SELECT oid, relname FROM pg_class WHERE relkind = 'r'"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_handle_pg_attribute(self):
+    async def test_pg_attribute_is_declined(self):
+        """Served by an IRIS view since T015b; the emulator no longer runs."""
         router = make_router()
         sql = "SELECT attname, atttypid FROM pg_attribute WHERE attrelid = 1"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
+        assert await router.handle_catalog_query(sql) is None
 
     @pytest.mark.asyncio
-    async def test_handle_pg_constraint_no_executor(self):
+    async def test_handle_pg_constraint_is_declined(self):
+        """pg_constraint is served by an IRIS view since T015.
+
+        The emulator these two tests exercised no longer runs. What must hold is
+        that the router declines, so the query reaches the view — the handler
+        answering was not merely redundant: on Prisma's constraints query, which
+        also names pg_class, it replied with pg_class's own 32 columns and the
+        client failed on `relfrozenxid` typed `xid`.
+        """
         router = make_router()
         sql = "SELECT conname, contype FROM pg_constraint WHERE conrelid = 1"
-        result = await router.handle_catalog_query(sql, executor=None)
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(sql, executor=None) is None
 
     @pytest.mark.asyncio
-    async def test_handle_pg_constraint_check_constraint_query(self):
+    async def test_handle_pg_constraint_check_constraint_query_is_declined(self):
         router = make_router()
         sql = (
             "SELECT conname FROM pg_constraint "
             "WHERE contype NOT IN ('P','U','F') AND CONTYPE = 'c'"
         )
-        result = await router.handle_catalog_query(sql, executor=None)
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(sql, executor=None) is None
 
     @pytest.mark.asyncio
     async def test_handle_pg_index(self):
@@ -676,12 +664,11 @@ class TestHandleCatalogQuery:
         assert result["rows"] == []
 
     @pytest.mark.asyncio
-    async def test_handle_pg_attrdef(self):
+    async def test_pg_attrdef_is_declined(self):
+        """Served by an IRIS view since T015b; the emulator no longer runs."""
         router = make_router()
         sql = "SELECT * FROM pg_attrdef WHERE adrelid = 1"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(sql) is None
 
     @pytest.mark.asyncio
     async def test_fallback_empty_response_for_unrecognized_pg_table(self):
@@ -739,8 +726,25 @@ class TestHandlePgTypeFiltering:
 
 
 class TestBuildPgConstraintRows:
+    """pg_constraint is served by an IRIS view since T015 (spec FR-016…FR-021).
+
+    Same shape as TestBuildPgClassResponse below: the row builder no longer
+    runs, so what is worth asserting is that the table is declined whatever
+    executor the router is handed — including one that would raise, since a
+    fallback answering with an empty result would tell a client the schema has
+    no constraints at all.
+    """
+
     @pytest.mark.asyncio
-    async def test_constraint_rows_with_executor(self):
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT conname, contype FROM pg_constraint WHERE conrelid = 1",
+            "SELECT conname FROM pg_constraint WHERE conrelid = 1",
+            "SELECT conname, conkey, confkey FROM pg_constraint WHERE contype = 'f'",
+        ],
+    )
+    async def test_pg_constraint_is_declined(self, sql):
         router = make_router()
         executor = make_executor(
             constraints_rows=[
@@ -749,34 +753,20 @@ class TestBuildPgConstraintRows:
             ],
             columns_rows=[("id",)],
         )
-        sql = "SELECT conname, contype FROM pg_constraint WHERE conrelid = 1"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(sql, executor=executor) is None
 
     @pytest.mark.asyncio
-    async def test_constraint_rows_executor_failure(self):
-        router = make_router()
-        executor = make_executor(success=False)
-        sql = "SELECT conname FROM pg_constraint WHERE conrelid = 1"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True  # falls back to empty emulator
-
-    @pytest.mark.asyncio
-    async def test_constraint_rows_executor_exception(self):
-        router = make_router()
-
+    async def test_declining_happens_before_the_executor_is_touched(self):
         async def bad_execute(sql, session_id=None):
-            raise RuntimeError("DB error")
+            raise AssertionError("the router must not query for a view-backed table")
 
         executor = MagicMock()
         executor.execute_query = bad_execute
 
-        sql = "SELECT conname FROM pg_constraint WHERE conrelid = 1"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True  # falls back to empty emulator
+        router = make_router()
+        assert await router.handle_catalog_query(
+            "SELECT conname FROM pg_constraint WHERE conrelid = 1", executor=executor
+        ) is None
 
 
 # ---------------------------------------------------------------------------
@@ -785,52 +775,41 @@ class TestBuildPgConstraintRows:
 
 
 class TestBuildPgClassResponse:
-    @pytest.mark.asyncio
-    async def test_pg_class_with_multiple_schemas(self):
-        router = make_router()
-        executor = make_executor(
-            tables_rows=[
-                ("users", "BASE TABLE", IRIS_SCHEMA),
-                ("SomeView", "VIEW", IRIS_SCHEMA),
-                ("pg_stat", "VIEW", "%Library"),
-                ("is_table", "BASE TABLE", "INFORMATION_SCHEMA"),
-            ]
-        )
-        sql = "SELECT oid, relname, relkind FROM pg_class"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True
+    """pg_class is served by an IRIS view since feature 044.
+
+    The row emulator that these tests exercised no longer runs. What has to
+    hold now is that the router declines the table under every shape, whatever
+    executor it is handed — including one that would raise, since a fallback
+    that answered with an empty result would look to a client like a database
+    with no tables in it.
+    """
 
     @pytest.mark.asyncio
-    async def test_pg_class_executor_exception_falls_back(self):
+    @pytest.mark.parametrize(
+        ("sql", "params"),
+        [
+            ("SELECT oid, relname, relkind FROM pg_class", None),
+            ("SELECT oid, relname FROM pg_class", None),
+            ("SELECT oid, relname FROM pg_class", [["public"]]),
+        ],
+    )
+    async def test_pg_class_is_declined(self, sql, params):
         router = make_router()
+        executor = make_executor(tables_rows=[("users", "BASE TABLE", IRIS_SCHEMA)])
+        assert await router.handle_catalog_query(sql, params=params, executor=executor) is None
 
+    @pytest.mark.asyncio
+    async def test_declining_happens_before_the_executor_is_touched(self):
         async def bad_execute(sql, session_id=None):
-            raise RuntimeError("fail")
+            raise AssertionError("the router must not query for a view-backed table")
 
         executor = MagicMock()
         executor.execute_query = bad_execute
 
-        sql = "SELECT oid, relname FROM pg_class"
-        result = await router.handle_catalog_query(sql, executor=executor)
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
-
-    @pytest.mark.asyncio
-    async def test_pg_class_namespace_filter(self):
         router = make_router()
-        executor = make_executor(
-            tables_rows=[
-                ("users", "BASE TABLE", IRIS_SCHEMA),
-            ]
-        )
-        sql = "SELECT oid, relname FROM pg_class"
-        result = await router.handle_catalog_query(
-            sql, params=[["public"]], executor=executor
-        )
-        assert result is not None
-        assert result["success"] is True
+        assert await router.handle_catalog_query(
+            "SELECT oid, relname FROM pg_class", executor=executor
+        ) is None
 
 
 # ---------------------------------------------------------------------------

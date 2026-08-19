@@ -1,0 +1,13 @@
+# iris-agentic-dev workspace config for iris-pgwire development.
+# Container: iris-pgwire-db (intersystems/iris-community:latest-cd, IRIS 2026.2)
+
+[connections.iris-pgwire-db]
+host = "localhost"
+web-port = 52773
+namespace = "USER"
+username = "_SYSTEM"
+password = "SYS"
+container = "iris-pgwire-db"
+
+[default]
+connection = "iris-pgwire-db"

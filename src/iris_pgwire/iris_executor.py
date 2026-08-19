@@ -7,6 +7,7 @@ Based on patterns from caretdev/sqlalchemy-iris for proven IRIS integration.
 
 import asyncio
 import concurrent.futures
+import contextvars
 import datetime as dt
 import re
 import threading
@@ -35,10 +36,27 @@ from .sql_translator import (
     TransactionTranslator,
 )  # Feature 022: PostgreSQL transaction verb translation
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
+from .sql_translator.array_params import (
+    encode_inlist_params,
+    expand_array_literals,
+    has_array_param,
+    rewrite_any_to_inlist,
+)
+from .sql_translator.boolean_expr import (
+    has_boolean_literal_comparison,
+    has_boolean_projection,
+    rewrite_boolean_literal_comparisons,
+    rewrite_boolean_projections,
+)
 from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
+from .sql_translator.pg_functions import (
+    has_pg_function_call,
+    rewrite_pg_function_calls,
+)
 from .sql_translator.returning_plan import ReturningPlan
+from .sql_translator.verbatim import is_verbatim
 from .type_mapping import (
     load_type_mappings_from_file,
 )  # Configurable type mapping
@@ -266,6 +284,11 @@ class IRISExecutor:
         return value
 
     def _get_normalized_sql(self, sql: str, execution_path: str = "direct") -> str:
+        # SQL pgwire authored itself is already in IRIS's dialect. Normalising it
+        # corrupts ObjectScript function bodies — see sql_translator/verbatim.py.
+        if is_verbatim():
+            return sql
+
         if not self.enable_query_cache:
             return self.sql_translator.normalize_sql(
                 sql, execution_path=execution_path, executor=self
@@ -349,16 +372,90 @@ class IRISExecutor:
             cast_type = match.group(1).lower()
             return type_map.get(cast_type)
 
-        # Pattern 2: CAST function (CAST(? AS type) AS column_name)
-        # Match: "CAST(? AS BIT) AS flag" or "CAST(? AS INTEGER) AS num"
-        cast_func_pattern = rf"CAST\(\?\s+AS\s+(\w+)\)\s+AS\s+{re.escape(column_name.upper())}"
-        match = re.search(cast_func_pattern, sql_upper)
-
-        if match:
-            cast_type = match.group(1).lower()
-            return type_map.get(cast_type)
+        # Pattern 2: CAST of any expression, not just a parameter.
+        #
+        # This used to require CAST(? AS type), which covered the asyncpg case it
+        # was written for and missed the one the boolean-projection rewrite
+        # produces:
+        #
+        #   CAST(CASE WHEN a <> 0 AND b = 'p' THEN 1 ELSE 0 END AS BIT) AS is_partition
+        #
+        # so that column was described as int4. A client that asked for binary
+        # results and reads it as bool then gets four bytes where it expects one.
+        #
+        # Anchor on the tail — `AS <type>) AS <column>` — then walk back to the
+        # matching open paren and confirm CAST precedes it, rather than trusting
+        # the shape. `(SELECT b AS c) AS flag` matches the tail but is not a cast.
+        tail_pattern = rf"\bAS\s+(\w+)\s*\)\s+AS\s+{re.escape(column_name.upper())}\b"
+        for match in re.finditer(tail_pattern, sql_upper):
+            # Start inside the type word: the closing paren belongs to the
+            # CAST we are trying to identify, so counting it would consume it.
+            if self._encloses_a_cast(sql_upper, match.end(1) - 1):
+                return type_map.get(match.group(1).lower())
 
         return None
+
+    @staticmethod
+    def _encloses_a_cast(sql_upper: str, position: int) -> bool:
+        """True if the parenthesis closing at/after `position` was opened by CAST."""
+        depth = 0
+        for index in range(position, -1, -1):
+            char = sql_upper[index]
+            if char == ")":
+                depth += 1
+            elif char == "(":
+                if depth == 0:
+                    return sql_upper[:index].rstrip().endswith("CAST")
+                depth -= 1
+        return False
+
+    def _detect_catalog_column_type_oid(self, sql: str, item_index: int) -> int | None:
+        """PostgreSQL type OID for the catalog column at `item_index`, if it is one.
+
+        Delegates to the shared resolver. This logic used to live here alone,
+        which is exactly how the dbapi backend — a *different* executor class —
+        kept declaring varchar for catalog booleans long after this was fixed
+        (T011h). One implementation, both callers.
+        """
+        from .sql_translator.column_types import catalog_column_type_oid
+
+        return catalog_column_type_oid(sql, item_index)
+
+    def _override_types_from_sql(
+        self, columns: list[dict[str, Any]], sql: str
+    ) -> list[dict[str, Any]]:
+        """Apply the types the statement settles, over whatever IRIS reported.
+
+        Applied last and on every materialization path, so a Describe (which
+        executes with dummy parameters and so may return no rows) declares the
+        same types as an Execute that returns several — T011h.
+
+        Skipped when the counts differ: a `SELECT *` expansion would otherwise
+        land an override on the wrong column.
+        """
+        if not columns or not sql:
+            return columns
+        resolved = self._resolve_sql_column_type_oids(sql)
+        if len(resolved) != len(columns):
+            return columns
+        return [
+            {**col, "type_oid": oid} if oid is not None else col
+            for col, oid in zip(columns, resolved)
+        ]
+
+    def _resolve_sql_column_type_oids(self, sql: str) -> list[int | None]:
+        """Per select-list item: the type the statement itself settles, or None.
+
+        Row-count independent, so a Describe that returns no rows declares the
+        same types as an Execute that returns several.
+        """
+        from .sql_translator.column_types import resolve_column_type_oids
+
+        try:
+            return resolve_column_type_oids(sql)
+        except Exception as exc:  # noqa: BLE001 — never fail a query over metadata
+            logger.debug("SQL column-type resolution failed", error=str(exc))
+            return []
 
     def has_returning_clause(self, query: str) -> bool:
         """
@@ -991,6 +1088,38 @@ class IRISExecutor:
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
+
+            # Rewrite `col = ANY($n)` to `col %INLIST $n`. IRIS has no
+            # ANY(array) construct — it reaches the parser as
+            # "SELECT expected, ? found" — and the rewrite has to happen
+            # whether or not values are bound, because Describe prepares the
+            # statement with nothing bound. Applied to every statement rather
+            # than only intercepted ones: catalog tables served by IRIS views
+            # reach the database for real (feature 044).
+            if has_array_param(sql):
+                sql = expand_array_literals(rewrite_any_to_inlist(sql))
+                params = encode_inlist_params(sql, params)
+
+            # Rewrite a boolean expression used as a projected value into
+            # CAST(CASE WHEN ... AS BIT). IRIS has no boolean type and takes
+            # AND/OR only in a predicate, so `(a AND b = 1) AS flag` fails at
+            # parse time with "ERROR: ) expected, AND found". Prisma's table
+            # query projects two of these.
+            if has_boolean_projection(sql):
+                sql = rewrite_boolean_projections(sql)
+
+            # Point unqualified catalog function calls at the PGWire schema.
+            # IRIS resolves `obj_description(...)` against the default schema
+            # and reports SQLUSER.OBJ_DESCRIPTION does not exist.
+            if has_pg_function_call(sql):
+                sql = rewrite_pg_function_calls(sql)
+
+            # `relispartition = 'f'` -> `relispartition = 0`. The views hold 0/1
+            # for the columns PostgreSQL declares bool, and comparing one to the
+            # string 'f' inside a nested predicate group crashes IRIS outright
+            # (SQLCODE -400) rather than erroring — the shape Prisma emits.
+            if has_boolean_literal_comparison(sql):
+                sql = rewrite_boolean_literal_comparisons(sql)
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(
@@ -2308,6 +2437,7 @@ class IRISExecutor:
             elif optimized_sql_upper.startswith("SELECT"):
                 columns = self._discover_metadata(sql, session_id)
 
+        columns = self._override_types_from_sql(columns, optimized_sql)
         self._postprocess_rows(rows, columns)
         return rows, columns
 
@@ -2520,10 +2650,18 @@ class IRISExecutor:
                     "execution_time_ms": 0,
                 }
 
-        # Execute in thread pool to avoid blocking event loop
+        # Execute in thread pool to avoid blocking event loop.
+        #
+        # Through a copied context, because run_in_executor does not carry
+        # ContextVars into the worker thread the way asyncio.to_thread does —
+        # and _prepare_sql, which runs in there, reads one. Without this the
+        # verbatim-SQL guard silently read its default and the catalog function
+        # installer's ObjectScript bodies were translated after all.
         loop = asyncio.get_event_loop()
+        context = contextvars.copy_context()
         return await loop.run_in_executor(
-            self._get_executor(session_id), _sync_execute, sql, params, session_id
+            self._get_executor(session_id),
+            lambda: context.run(_sync_execute, sql, params, session_id),
         )
 
     def _discover_metadata_with_limit_zero(
@@ -2771,6 +2909,13 @@ class IRISExecutor:
                 cast_oid = self._detect_cast_type_oid(sql, col_name)
                 if cast_oid:
                     inferred_type = cast_oid
+                else:
+                    # A catalog column carries its PostgreSQL type even when the
+                    # value cannot show it — bool and text[] both arrive as an
+                    # int or None from IRIS.
+                    catalog_oid = self._detect_catalog_column_type_oid(sql, i)
+                    if catalog_oid:
+                        inferred_type = catalog_oid
 
                 # Handle CURRENT_TIMESTAMP
                 if "CURRENT_TIMESTAMP" in sql_upper and inferred_type == 1043:
@@ -2907,6 +3052,7 @@ class IRISExecutor:
             elif optimized_sql_upper.startswith("SELECT"):
                 columns = self._discover_metadata(sql, session_id)
 
+        columns = self._override_types_from_sql(columns, optimized_sql)
         self._postprocess_rows(rows, columns)
         return rows, columns
 

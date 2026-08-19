@@ -32,9 +32,32 @@ from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
+from .sql_translator.sqlstate import classify_iris_error
 from .vector_optimizer import VectorQueryOptimizer
 
 logger = structlog.get_logger()
+
+
+def build_command_complete_tag(command: str, row_count: int) -> str:
+    """Build a PostgreSQL CommandComplete tag.
+
+    `command` arrives in two shapes. Most executors pass a bare verb
+    ("SELECT") and expect the row count appended. The catalog router passes a
+    complete tag that already carries its count ("SELECT 0"). Appending to the
+    latter produced "SELECT 0 0", which is not a valid tag — clients reject the
+    whole result with "could not interpret result from server", so every
+    emulated pg_catalog query failed at the protocol level rather than
+    returning rows.
+
+    Kept as a module-level pure function so the tag rules can be tested without
+    a socket.
+    """
+    stripped = command.strip()
+    if stripped and stripped.split()[-1].isdigit():
+        return stripped
+    if stripped.upper() == "SELECT":
+        return f"SELECT {row_count}"
+    return f"{stripped} {row_count}"
 
 
 # PostgreSQL protocol constants
@@ -1272,8 +1295,11 @@ class PGWireProtocol:
 
         except Exception as e:
             logger.error("Query handling failed", connection_id=self.connection_id, error=str(e))
+            sqlstate, condition = classify_iris_error(
+                str(e), default=("08000", "connection_exception")
+            )
             await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"Query processing failed: {e}"
+                "ERROR", sqlstate, condition, f"Query processing failed: {e}"
             )
             # CRITICAL: Send ReadyForQuery after exception in Simple Query Protocol
             await self.send_ready_for_query()
@@ -1399,9 +1425,11 @@ class PGWireProtocol:
                     }
                     await self.send_query_result(fake_result, send_ready=send_ready)
                 else:
-                    await self.send_error_response(
-                        "ERROR", "42000", "syntax_error", error_msg
-                    )
+                    # FR-008e: classify rather than blaming the client for
+                    # everything. An IRIS crash is XX000, not the caller's
+                    # syntax error.
+                    sqlstate, condition = classify_iris_error(error_msg)
+                    await self.send_error_response("ERROR", sqlstate, condition, error_msg)
                     # CRITICAL: Send ReadyForQuery after error (only if last statement)
                     if send_ready:
                         await self.send_ready_for_query()
@@ -1410,8 +1438,14 @@ class PGWireProtocol:
             logger.error(
                 "Single statement handling failed", connection_id=self.connection_id, error=str(e)
             )
+            # FR-008e: an IRIS SQL error arriving as a Python exception is still
+            # an IRIS SQL error. Only a genuinely unrecognised failure keeps
+            # 08000, which claims the connection itself is broken.
+            sqlstate, condition = classify_iris_error(
+                str(e), default=("08000", "connection_exception")
+            )
             await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"Statement processing failed: {e}"
+                "ERROR", sqlstate, condition, f"Statement processing failed: {e}"
             )
             # CRITICAL: Send ReadyForQuery after exception (only if last statement)
             if send_ready:
@@ -1562,10 +1596,7 @@ class PGWireProtocol:
         logger.info("🔵 STEP 3: DataRows sent", connection_id=self.connection_id)
 
     async def _send_command_complete(self, command: str, row_count: int):
-        if command.upper() == "SELECT":
-            tag = f"SELECT {row_count}\x00".encode()
-        else:
-            tag = f"{command} {row_count}\x00".encode()
+        tag = f"{build_command_complete_tag(command, row_count)}\x00".encode()
 
         cmd_complete_length = 4 + len(tag)
         cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
@@ -2393,7 +2424,10 @@ class PGWireProtocol:
             )
         except Exception as e:
             logger.error("Batch flush failed", connection_id=self.connection_id, error=str(e))
-            await self.send_error_response("ERROR", "XX000", "internal_error", f"Batch failed: {e}")
+            # FR-008e: a duplicate key in a batched INSERT is 23505, which is the
+            # one an ORM actually recognises. XX000 stays the fallback.
+            sqlstate, condition = classify_iris_error(str(e), default=("XX000", "internal_error"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Batch failed: {e}")
 
     async def handle_parse_message(self, body: bytes):
         """
@@ -3198,9 +3232,10 @@ class PGWireProtocol:
             logger.error(
                 "Describe message handling failed", connection_id=self.connection_id, error=str(e)
             )
-            await self.send_error_response(
-                "ERROR", "42P02", "undefined_object", f"Describe failed: {e}"
-            )
+            # Describe runs the statement to discover its shape, so an IRIS SQL
+            # error here is the client's query failing, not an unknown object.
+            sqlstate, condition = classify_iris_error(str(e), default=("42P02", "undefined_object"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Describe failed: {e}")
 
     async def _resolve_returning_columns(
         self, plan: ReturningPlan
@@ -3471,9 +3506,10 @@ class PGWireProtocol:
                     result, send_ready=False, send_row_description=needs_row_desc
                 )
             else:
-                await self.send_error_response(
-                    "ERROR", "42000", "syntax_error", result.get("error", "Query execution failed")
-                )
+                # FR-008e: same classification on the extended-protocol path.
+                error_msg = result.get("error", "Query execution failed")
+                sqlstate, condition = classify_iris_error(error_msg)
+                await self.send_error_response("ERROR", sqlstate, condition, error_msg)
 
             logger.info(
                 "Executed portal",
@@ -3486,9 +3522,10 @@ class PGWireProtocol:
             logger.error(
                 "Execute message handling failed", connection_id=self.connection_id, error=str(e)
             )
-            await self.send_error_response(
-                "ERROR", "42P03", "undefined_cursor", f"Execute failed: {e}"
-            )
+            # FR-008e: 42P03 means "no such cursor"; an IRIS error raised while
+            # executing the portal is not that.
+            sqlstate, condition = classify_iris_error(str(e), default=("42P03", "undefined_cursor"))
+            await self.send_error_response("ERROR", sqlstate, condition, f"Execute failed: {e}")
 
     async def handle_sync_message(self, body: bytes):
         """
@@ -3755,7 +3792,7 @@ class PGWireProtocol:
 
         return False, None
 
-    def _decode_array_binary_parameter(self, data: bytes, param_index: int) -> str:
+    def _decode_array_binary_parameter(self, data: bytes, param_index: int) -> str | list:
         pos = 0
         ndim = struct.unpack("!I", data[pos : pos + 4])[0]
         pos += 4
@@ -3765,7 +3802,9 @@ class PGWireProtocol:
         pos += 4
 
         if ndim == 0:
-            return "[]"
+            # An empty array. As a list for the membership path, where "[]" would
+            # be read as a one-element set containing the text "[]".
+            return "[]" if element_oid in (700, 701) else []
 
         dimensions: list[int] = []
         for _ in range(ndim):
@@ -3815,6 +3854,25 @@ class PGWireProtocol:
                 elements.append(str(value))
             else:
                 elements.append(elem_data.decode("utf-8", errors="replace"))
+
+        # A float array is a pgvector value and its consumers downstream expect
+        # the literal text form. Anything else is an ordinary array — text[],
+        # int[], oid[], name[] — and the only thing that ever asks for one is a
+        # membership test, which needs the elements, not a rendering of them.
+        #
+        # Returning the literal for those too is why `nspname = ANY($1)` came
+        # back empty for Prisma even after the construct itself worked: the
+        # string "[public]" was bound as a single one-element set, so nothing
+        # matched. No error — just no rows.
+        if element_oid not in (700, 701):
+            logger.debug(
+                "Decoded binary array parameter",
+                param_index=param_index,
+                dimensions=dimensions,
+                element_count=len(elements),
+                element_oid=element_oid,
+            )
+            return [None if element == "NULL" else element for element in elements]
 
         vector_text = "[" + ",".join(elements) + "]"
 

@@ -24,9 +24,26 @@ from iris_pgwire.models.backend_config import BackendConfig
 from iris_pgwire.models.connection_pool_state import ConnectionPoolState
 from iris_pgwire.models.vector_query_request import VectorQueryRequest
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
-from iris_pgwire.sql_translator import SQLPipeline
+from iris_pgwire.sql_translator import SQLInterceptor, SQLPipeline
+from iris_pgwire.sql_translator.array_params import (
+    encode_inlist_params,
+    expand_array_literals,
+    has_array_param,
+    rewrite_any_to_inlist,
+)
+from iris_pgwire.sql_translator.boolean_expr import (
+    has_boolean_literal_comparison,
+    has_boolean_projection,
+    rewrite_boolean_literal_comparisons,
+    rewrite_boolean_projections,
+)
 from iris_pgwire.sql_translator.parser import get_parser
+from iris_pgwire.sql_translator.pg_functions import (
+    has_pg_function_call,
+    rewrite_pg_function_calls,
+)
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
+from iris_pgwire.sql_translator.verbatim import is_verbatim
 
 logger = structlog.get_logger(__name__)
 
@@ -98,6 +115,13 @@ class DBAPIExecutor:
         self.sql_translator = self.sql_pipeline.translator
         self.sql_parser = get_parser()
         self.catalog_router = CatalogRouter()
+        # Handles scalar session functions (version(), current_database(), ...)
+        # that IRIS has no equivalent for. The embedded executor has always had
+        # this; without it here, DBAPI passed them through to IRIS SQL, which
+        # resolved version() as SQLUser.VERSION and errored. That broke every
+        # ORM introspection on this backend and violated Principle IV, which
+        # requires both backends stay functional.
+        self.sql_interceptor = SQLInterceptor(self)
 
         self._total_queries = 0
         self._total_query_time_ms = 0.0
@@ -119,6 +143,12 @@ class DBAPIExecutor:
 
     def _translate_placeholders(self, sql: str) -> str:
         """Translate PostgreSQL $1, $2 placeholders to DBAPI ? placeholders."""
+        # SQL pgwire authored itself is left exactly as written. This backend
+        # does far less rewriting than the embedded one, but an ObjectScript
+        # function body is not PostgreSQL and must not be pattern-matched as
+        # though it were. See sql_translator/verbatim.py.
+        if is_verbatim():
+            return sql
         return re.sub(r"\$\d+", "?", sql)
 
     def _convert_params_for_iris(self, params: Any) -> Any:
@@ -188,6 +218,42 @@ class DBAPIExecutor:
             )
             if catalog_result is not None:
                 return catalog_result
+
+            intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
+            if intercept_result.intercepted:
+                return intercept_result.result
+
+            # Rewrite `col = ANY($n)` to `col %INLIST $n`. IRIS has no
+            # ANY(array) construct — it reaches the parser as
+            # "SELECT expected, ? found" — and the rewrite has to happen
+            # whether or not values are bound, because Describe prepares the
+            # statement with nothing bound. Applied to every statement rather
+            # than only intercepted ones: catalog tables served by IRIS views
+            # reach the database for real (feature 044).
+            if has_array_param(sql):
+                sql = expand_array_literals(rewrite_any_to_inlist(sql))
+                params = encode_inlist_params(sql, params)
+
+            # Rewrite a boolean expression used as a projected value into
+            # CAST(CASE WHEN ... AS BIT). IRIS has no boolean type and takes
+            # AND/OR only in a predicate, so `(a AND b = 1) AS flag` fails at
+            # parse time with "ERROR: ) expected, AND found". Prisma's table
+            # query projects two of these.
+            if has_boolean_projection(sql):
+                sql = rewrite_boolean_projections(sql)
+
+            # Point unqualified catalog function calls at the PGWire schema.
+            # IRIS resolves `obj_description(...)` against the default schema
+            # and reports SQLUSER.OBJ_DESCRIPTION does not exist.
+            if has_pg_function_call(sql):
+                sql = rewrite_pg_function_calls(sql)
+
+            # `relispartition = 'f'` -> `relispartition = 0`. The views hold 0/1
+            # for the columns PostgreSQL declares bool, and comparing one to the
+            # string 'f' inside a nested predicate group crashes IRIS outright
+            # (SQLCODE -400) rather than erroring — the shape Prisma emits.
+            if has_boolean_literal_comparison(sql):
+                sql = rewrite_boolean_literal_comparisons(sql)
 
             sql = self._translate_placeholders(sql)
             plan = ReturningPlan.from_sql(sql)
@@ -521,7 +587,7 @@ class DBAPIExecutor:
         )
 
         if not plan.has_returning:
-            rows, columns = self._fetch_standard_results(cursor)
+            rows, columns = self._fetch_standard_results(cursor, plan.stripped_sql)
             return rows, columns, max(row_count, len(rows))
 
         if plan.operation == "DELETE":
@@ -536,7 +602,9 @@ class DBAPIExecutor:
         )
         return rows, columns, len(rows)
 
-    def _fetch_standard_results(self, cursor: Any) -> tuple[list[Any], list[dict[str, Any]]]:
+    def _fetch_standard_results(
+        self, cursor: Any, sql: str | None = None
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Fetch rows and column metadata from a cursor with results."""
         if not cursor.description:
             return [], []
@@ -544,7 +612,38 @@ class DBAPIExecutor:
         columns = self._build_metadata_from_description(cursor.description)
         if rows:
             columns = self._refine_column_types_from_rows(columns, rows)
+        # Last, so it wins: what the SQL says does not depend on a row existing.
+        if sql:
+            columns = self._apply_sql_column_types(columns, sql)
         return rows, columns
+
+    @staticmethod
+    def _apply_sql_column_types(columns: list[dict], sql: str) -> list[dict]:
+        """Override types the statement itself settles (T011h / FR-004).
+
+        Value-based refinement below can only run when a row came back, so a
+        statement Describe — which executes with dummy parameters that match
+        nothing — declared varchar for every column while Execute declared bool.
+        A client reading the Describe then cannot decode the DataRow. Resolving
+        from the SQL is row-count independent, so the two paths agree.
+        """
+        from .sql_translator.column_types import resolve_column_type_oids
+
+        try:
+            resolved = resolve_column_type_oids(sql)
+        except Exception as exc:  # noqa: BLE001 — never fail a query over metadata
+            logger.debug("SQL column-type resolution failed", error=str(exc))
+            return columns
+
+        if len(resolved) != len(columns):
+            # Positions must line up or an override lands on the wrong column;
+            # a SELECT * expansion is the usual reason they do not.
+            return columns
+
+        return [
+            {**col, "type_oid": oid} if oid is not None else col
+            for col, oid in zip(columns, resolved)
+        ]
 
     def _refine_column_types_from_rows(
         self, columns: list[dict], rows: list
@@ -554,6 +653,10 @@ class DBAPIExecutor:
         IRIS DBAPI often returns type_code=4 for all columns regardless of type.
         Use the actual Python type of the first row's values to assign correct OIDs.
         Only refines columns that currently have the generic VARCHAR OID (1043).
+
+        A last resort only: it cannot run when a query returns no rows, which is
+        what made the declared type depend on the row count (see
+        `_apply_sql_column_types`).
         """
         if not rows or not columns:
             return columns
@@ -951,6 +1054,7 @@ class DBAPIExecutor:
             columns = self._build_metadata_from_description(cur.description)
             if rows:
                 columns = self._refine_column_types_from_rows(columns, rows)
+            columns = self._apply_sql_column_types(columns, query)
             return rows, columns
         finally:
             try:
@@ -1135,7 +1239,43 @@ class DBAPIExecutor:
     # ------------------------------------------------------------------
 
     def _map_dbapi_type_to_oid(self, dbapi_type: Any) -> int:
-        """Map DBAPI type to PostgreSQL OID."""
+        """Map what `cursor.description[1]` holds to a PostgreSQL type OID.
+
+        IRIS reports a **numeric** ODBC-style code here. This used to stringify it
+        and grep for `INT`/`CHAR`, so `str(12).upper() == "12"` matched nothing and
+        every column — bigint, bit, double, timestamp alike — was declared varchar.
+
+        The codes below were measured against IRIS 2026.2 by creating a table with
+        each declared type and reading the description back; they are not taken
+        from the ODBC specification, whose date and time codes are 91/92/93 where
+        IRIS reports 1091/1092/1093. They do **not** vary with the row count.
+
+        Code 4 is deliberately *not* mapped to int4. IRIS reports 4 for a literal
+        of any type — measured: `SELECT 'abc'`, `SELECT 1.5` and `SELECT 0` all
+        report 4 — so treating it as an integer would declare text as int4, and a
+        client reading binary results would fail on it. Declaring an integer as
+        text is the safer of the two errors, and a length-prefixed string is the
+        one declaration that cannot corrupt a value. Resolving that ambiguity
+        needs the select list, not the code.
+        """
+        _ODBC_CODE_TO_OID = {
+            -5: 20,  # BIGINT   -> int8
+            5: 21,  # SMALLINT -> int2
+            -6: 21,  # TINYINT  -> int2 (PostgreSQL has nothing narrower)
+            12: 1043,  # VARCHAR, CHAR
+            -1: 25,  # LONGVARCHAR -> text
+            8: 701,  # DOUBLE   -> float8
+            2: 1700,  # NUMERIC
+            -7: 16,  # BIT — how IRIS spells boolean; one byte in binary format
+            1091: 1082,  # DATE
+            1092: 1083,  # TIME
+            1093: 1114,  # TIMESTAMP, POSIXTIME
+            11: 1114,  # what CURRENT_TIMESTAMP reports
+        }
+        if isinstance(dbapi_type, int) and not isinstance(dbapi_type, bool):
+            return _ODBC_CODE_TO_OID.get(dbapi_type, 1043)
+
+        # Some paths pass a type *name* rather than a code.
         type_str = str(dbapi_type).upper()
         if "INT" in type_str:
             return 23
