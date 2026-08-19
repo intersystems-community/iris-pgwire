@@ -49,9 +49,11 @@ class CatalogFunction:
 
     @property
     def qualified_name(self) -> str:
+        """Return the schema-qualified function name."""
         return f"{CATALOG_SCHEMA}.{self.name}"
 
     def create_sql(self) -> str:
+        """Return the CREATE OR REPLACE FUNCTION DDL string."""
         return (
             f"CREATE OR REPLACE FUNCTION {self.qualified_name}({self.signature}) "
             f"RETURNS {self.returns} LANGUAGE OBJECTSCRIPT {self.body}"

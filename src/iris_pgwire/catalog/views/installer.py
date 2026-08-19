@@ -55,6 +55,7 @@ class CatalogViewInstaller:
         return installed
 
     async def _install_one(self, view: CatalogView, session_id: str | None) -> None:
+        """Drop then recreate one view, raising CatalogViewInstallError on CREATE failure."""
         # DROP is expected to fail the first time; only CREATE failure matters.
         await self._execute(view.drop_sql(), session_id, tolerate_failure=True)
         result = await self._execute(view.create_sql(), session_id, tolerate_failure=False)
@@ -67,6 +68,7 @@ class CatalogViewInstaller:
             )
 
     async def _execute(self, sql: str, session_id: str | None, *, tolerate_failure: bool) -> dict:
+        """Run one DDL statement, optionally swallowing errors."""
         try:
             return await self._executor.execute_query(sql, session_id=session_id)
         except Exception as exc:  # noqa: BLE001 — re-raised below unless tolerated

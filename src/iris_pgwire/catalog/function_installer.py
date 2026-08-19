@@ -64,6 +64,7 @@ class CatalogFunctionInstaller:
         return installed
 
     async def _install_one(self, function: CatalogFunction, session_id: str | None) -> None:
+        """Execute CREATE OR REPLACE for one function, raising on failure."""
         try:
             result = await self._executor.execute_query(
                 function.create_sql(), session_id=session_id

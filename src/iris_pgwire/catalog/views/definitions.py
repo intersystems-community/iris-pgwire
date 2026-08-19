@@ -44,12 +44,15 @@ class CatalogView:
 
     @property
     def qualified_name(self) -> str:
+        """Return the schema-qualified view name."""
         return f"{CATALOG_SCHEMA}.{self.name}"
 
     def create_sql(self) -> str:
+        """Return the CREATE VIEW DDL string."""
         return f"CREATE VIEW {self.qualified_name} AS {self.body}"
 
     def drop_sql(self) -> str:
+        """Return the DROP VIEW DDL string."""
         return f"DROP VIEW {self.qualified_name}"
 
 
