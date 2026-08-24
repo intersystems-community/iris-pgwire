@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Test coverage**: 41 new tests added (35 unit + 6 E2E) covering surp SQL translation, new catalog functions, new views, and router routing.
+- **Test coverage**: 90% line coverage (16,273/18,082 lines). 232 new unit tests covering surp SQL translation, new catalog functions, new views, router routing, and module-level edge cases.
 - **SQLSTATE classification** (`v1.5.x` carry-forward): DBAPI type fixes and SQLSTATE error code classification landed in the `feat(catalog+sync)` commit included in this release.
 
 ## [1.5.9] - 2026-07-19
