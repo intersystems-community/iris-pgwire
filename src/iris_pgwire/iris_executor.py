@@ -36,10 +36,12 @@ from .sql_translator import (
     TransactionTranslator,
 )  # Feature 022: PostgreSQL transaction verb translation
 from .sql_translator.alias_extractor import AliasExtractor  # Column alias preservation
+from .sql_translator.array_literal import rewrite_array_literals
 from .sql_translator.array_params import (
     encode_inlist_params,
     expand_array_literals,
     has_array_param,
+    rewrite_any_col_to_instr,
     rewrite_any_to_inlist,
 )
 from .sql_translator.boolean_expr import (
@@ -1089,6 +1091,10 @@ class IRISExecutor:
             if intercept_result.intercepted:
                 return intercept_result.result
 
+            # Rewrite ARRAY['a','b'] constructor syntax to '{a,b}' before IRIS
+            # sees the query — IRIS cannot parse the constructor at all (feature 047).
+            sql = rewrite_array_literals(sql)
+
             # Rewrite `col = ANY($n)` to `col %INLIST $n`. IRIS has no
             # ANY(array) construct — it reaches the parser as
             # "SELECT expected, ? found" — and the rewrite has to happen
@@ -1099,6 +1105,10 @@ class IRISExecutor:
             if has_array_param(sql):
                 sql = expand_array_literals(rewrite_any_to_inlist(sql))
                 params = encode_inlist_params(sql, params)
+
+            # Rewrite `expr = ANY(col)` where col is a bare column reference
+            # (catalog array columns like conkey/indkey stored as text).
+            sql = rewrite_any_col_to_instr(sql)
 
             # Rewrite a boolean expression used as a projected value into
             # CAST(CASE WHEN ... AS BIT). IRIS has no boolean type and takes

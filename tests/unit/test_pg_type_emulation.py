@@ -80,9 +80,7 @@ async def test_pg_type_performance_overhead():
 
 @pytest.mark.asyncio
 async def test_pg_extension_interception_empty():
-    """
-    Test that pg_extension returns an empty result set.
-    """
+    """pg_extension is view-backed since feature 047; router declines it."""
     oid_gen = OIDGenerator()
     router = CatalogRouter(oid_gen)
     executor = MagicMock()
@@ -90,8 +88,4 @@ async def test_pg_extension_interception_empty():
     sql = "SELECT * FROM pg_catalog.pg_extension"
     result = await router.handle_catalog_query(sql, session_id="test-session", executor=executor)
 
-    assert result is not None
-    assert result["success"] is True
-    assert len(result["rows"]) == 0
-    # Should have some column metadata even if empty
-    assert len(result["columns"]) > 0
+    assert result is None

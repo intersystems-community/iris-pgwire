@@ -29,3 +29,10 @@ See `.specify/memory/constitution.md` for full project principles including:
 3. **Container Restarts**: Docker containers do NOT hot-reload Python changes. ALWAYS restart after code changes.
 
 4. **Performance**: Query translation overhead must NOT exceed 5ms per query.
+
+## Active Technologies
+- Python 3.11 (irispython / CPython both supported) + existing iris-pgwire stack — `sql_translator/`, `catalog/`, (047-surp-lint-support)
+- IRIS catalog views (SQL DDL installed via `CatalogViewInstaller`); SQL (047-surp-lint-support)
+
+## Recent Changes
+- 047-surp-lint-support: Added Python 3.11 (irispython / CPython both supported) + existing iris-pgwire stack — `sql_translator/`, `catalog/`,

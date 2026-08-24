@@ -235,6 +235,49 @@ def parse_pg_array_literal(text: str) -> list | None:
     return elements
 
 
+# ---------------------------------------------------------------------------
+# Column-reference ANY rewrite  (feature 047)
+# ---------------------------------------------------------------------------
+
+# Matches  expr = ANY(col)  where the ANY operand is a bare column reference
+# (optionally schema-qualified), NOT a $n placeholder (handled by
+# rewrite_any_to_inlist) and NOT a quoted string literal (handled by
+# expand_array_literals). The lhs expr may itself be qualified.
+_ANY_COL = re.compile(
+    r"(\w+(?:\.\w+)?)\s*=\s*ANY\s*\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def rewrite_any_col_to_instr(sql: str) -> str:
+    """Rewrite  expr = ANY(col)  to an INSTR membership check.
+
+    Catalog columns like `conkey` and `indkey` are stored as PostgreSQL array
+    text format `{1,2,...}`. IRIS has no native array operator, so the test is
+    emulated by stripping the outer braces and using INSTR on a
+    comma-delimited string.
+
+        attnum = ANY(con.conkey)
+        →  INSTR(',' || REPLACE(REPLACE(con.conkey, '{', ''), '}', '') || ',',
+                 ',' || CAST(attnum AS VARCHAR) || ',') > 0
+
+    Applied after rewrite_any_to_inlist (which handles $n) and
+    expand_array_literals (which handles string literals).
+    """
+    if "ANY" not in sql.upper():
+        return sql
+
+    def _replace(m: re.Match) -> str:
+        expr = m.group(1)
+        col = m.group(2)
+        return (
+            f"INSTR(',' || REPLACE(REPLACE({col}, '{{', ''), '}}', '') || ',',"
+            f" ',' || CAST({expr} AS VARCHAR) || ',') > 0"
+        )
+
+    return _ANY_COL.sub(_replace, sql)
+
+
 def _array_element(raw: str, quoted: bool) -> Any:
     if quoted:
         return raw

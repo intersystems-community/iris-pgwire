@@ -323,6 +323,172 @@ COL_DESCRIPTION = CatalogFunction(
 }""",
 )
 
+# PostgreSQL format(pattern, arg...) — feature 047.
+#
+# IRIS SQL functions cannot be variadic, so this ships as two fixed-arity
+# variants. The rewriter in sql_translator/pg_functions.py counts arguments
+# and routes to the right one.
+#
+# Substitution modes (spec FR-001):
+#   %s -> arg as-is
+#   %I -> "identifier" — wrap in double-quotes, escape internal double-quotes
+#   %L -> 'literal'   — wrap in single-quotes, escape internal single-quotes
+#   %% -> literal %
+#
+# NULL handling: PostgreSQL format() returns NULL if any argument is NULL.
+# NULL arrives as "" from IRIS SQL, so "" is treated as NULL and returns "".
+#
+# ObjectScript loop note: no colons in loop syntax — use `while`, not `for i=1:1:n`.
+FORMAT2 = CatalogFunction(
+    name="FORMAT2",
+    signature="pattern VARCHAR(4096), arg1 VARCHAR(4096)",
+    returns="VARCHAR(4096)",
+    purpose="PostgreSQL format(pattern, arg) — %s/%I/%L substitution",
+    body="""{
+  set result = "", i = 1, len = $length(pattern)
+  if arg1 '= "" {
+    while i <= len {
+      set ch = $extract(pattern, i)
+      if ch '= "%" {
+        set result = result _ ch
+        set i = i + 1
+      } else {
+        set i = i + 1
+        if i > len {
+          set result = result _ "%"
+          set i = len + 1
+        } else {
+          set spec = $extract(pattern, i)
+          set i = i + 1
+          if spec = "%" {
+            set result = result _ "%"
+          } elseif spec = "s" {
+            set result = result _ arg1
+          } elseif spec = "I" {
+            set dq = $char(34)
+            set escaped = $replace(arg1, dq, dq _ dq)
+            set result = result _ dq _ escaped _ dq
+          } elseif spec = "L" {
+            set escaped = $replace(arg1, "'", "''")
+            set result = result _ "'" _ escaped _ "'"
+          } else {
+            throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "FORMAT2: unknown format code %" _ spec)
+          }
+        }
+      }
+    }
+  }
+  quit result
+}""",
+)
+
+FORMAT3 = CatalogFunction(
+    name="FORMAT3",
+    signature="pattern VARCHAR(4096), arg1 VARCHAR(4096), arg2 VARCHAR(4096)",
+    returns="VARCHAR(4096)",
+    purpose="PostgreSQL format(pattern, arg1, arg2) — %s/%I/%L substitution",
+    body="""{
+  set result = "", i = 1, len = $length(pattern), argidx = 0, gotnull = 0
+  while i <= len {
+    set ch = $extract(pattern, i)
+    if ch '= "%" {
+      set result = result _ ch
+      set i = i + 1
+    } else {
+      set i = i + 1
+      if i > len {
+        set result = result _ "%"
+        set i = len + 1
+      } else {
+        set spec = $extract(pattern, i)
+        set i = i + 1
+        if spec = "%" {
+          set result = result _ "%"
+        } elseif (spec = "s") || (spec = "I") || (spec = "L") {
+          set argidx = argidx + 1
+          set curarg = $select(argidx = 1: arg1, 1: arg2)
+          if curarg = "" {
+            set gotnull = 1
+            set i = len + 1
+          } else {
+            if spec = "s" {
+              set result = result _ curarg
+            } elseif spec = "I" {
+              set dq = $char(34)
+              set escaped = $replace(curarg, dq, dq _ dq)
+              set result = result _ dq _ escaped _ dq
+            } else {
+              set escaped = $replace(curarg, "'", "''")
+              set result = result _ "'" _ escaped _ "'"
+            }
+          }
+        } else {
+          throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "FORMAT3: unknown format code %" _ spec)
+        }
+      }
+    }
+  }
+  quit $select(gotnull = 1: "", 1: result)
+}""",
+)
+
+# PostgreSQL jsonb_build_object(k, v, ...) — feature 047.
+#
+# Returns a JSON object string. Wire type is declared VARCHAR but the
+# pg_functions rewriter annotates it as OID 114 (json) in
+# CATALOG_COLUMN_TYPE_OIDS if needed. surp reads it as a string so the
+# distinction is invisible in practice.
+#
+# NULL values render as JSON null.
+# Keys must not be NULL (PostgreSQL raises an error; we do the same).
+JSONB_BUILD_OBJECT4 = CatalogFunction(
+    name="JSONB_BUILD_OBJECT4",
+    signature="k1 VARCHAR(512), v1 VARCHAR(4096), k2 VARCHAR(512), v2 VARCHAR(4096)",
+    returns="VARCHAR(32767)",
+    purpose="PostgreSQL jsonb_build_object(k1,v1,k2,v2) — returns JSON object string",
+    # $char(34) = double-quote character. Used instead of "" escaping to avoid
+    # Python string quoting confusion with the triple-quoted body string.
+    body="""{
+  new dq, bs
+  set dq = $char(34), bs = $char(92)
+  if (k1 = "") || (k2 = "") {
+    throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "JSONB_BUILD_OBJECT4: key must not be NULL")
+  }
+  set ek1 = $replace(k1, dq, bs _ dq)
+  set ek2 = $replace(k2, dq, bs _ dq)
+  set ev1 = $replace($replace(v1, bs, bs _ bs), dq, bs _ dq)
+  set ev2 = $replace($replace(v2, bs, bs _ bs), dq, bs _ dq)
+  set jv1 = $select(v1 = "": "null", 1: dq _ ev1 _ dq)
+  set jv2 = $select(v2 = "": "null", 1: dq _ ev2 _ dq)
+  quit "{" _ dq _ ek1 _ dq _ ":" _ jv1 _ "," _ dq _ ek2 _ dq _ ":" _ jv2 _ "}"
+}""",
+)
+
+JSONB_BUILD_OBJECT6 = CatalogFunction(
+    name="JSONB_BUILD_OBJECT6",
+    signature="k1 VARCHAR(512), v1 VARCHAR(4096), k2 VARCHAR(512), v2 VARCHAR(4096), k3 VARCHAR(512), v3 VARCHAR(4096)",
+    returns="VARCHAR(32767)",
+    purpose="PostgreSQL jsonb_build_object(k1,v1,k2,v2,k3,v3) — returns JSON object string",
+    body="""{
+  new dq, bs
+  set dq = $char(34), bs = $char(92)
+  if (k1 = "") || (k2 = "") || (k3 = "") {
+    throw ##class(%Exception.SQL).CreateFromSQLCODE(-400, "JSONB_BUILD_OBJECT6: key must not be NULL")
+  }
+  set ek1 = $replace(k1, dq, bs _ dq)
+  set ek2 = $replace(k2, dq, bs _ dq)
+  set ek3 = $replace(k3, dq, bs _ dq)
+  set ev1 = $replace($replace(v1, bs, bs _ bs), dq, bs _ dq)
+  set ev2 = $replace($replace(v2, bs, bs _ bs), dq, bs _ dq)
+  set ev3 = $replace($replace(v3, bs, bs _ bs), dq, bs _ dq)
+  set jv1 = $select(v1 = "": "null", 1: dq _ ev1 _ dq)
+  set jv2 = $select(v2 = "": "null", 1: dq _ ev2 _ dq)
+  set jv3 = $select(v3 = "": "null", 1: dq _ ev3 _ dq)
+  quit "{" _ dq _ ek1 _ dq _ ":" _ jv1 _ "," _ dq _ ek2 _ dq _ ":" _ jv2 _ "," _ dq _ ek3 _ dq _ ":" _ jv3 _ "}"
+}""",
+)
+
+
 CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     PG_OID,
     PG_PUBLIC_SCHEMA,
@@ -333,4 +499,9 @@ CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     FORMAT_TYPE,
     PG_GET_EXPR,
     COL_DESCRIPTION,
+    # Feature 047: surp lint/ERD support
+    FORMAT2,
+    FORMAT3,
+    JSONB_BUILD_OBJECT4,
+    JSONB_BUILD_OBJECT6,
 )
