@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-24
+
+### Added
+
+- **surp / Neovim Supabase TUI compatibility** (`sql_translator/`): iris-pgwire now runs [surp](https://github.com/kcmyang/surp) — a Neovim TUI for Supabase-compatible databases — against IRIS without patching the client.
+
+  - **`ARRAY[...]` constructor rewrite** (`array_literal.py`): PostgreSQL `ARRAY['a','b']` syntax is rewritten to `'{a,b}'` string literals that IRIS accepts.
+  - **`ANY(col)` column membership rewrite** (`array_params.py`): `col = ANY(column_ref)` patterns are translated to `INSTR`-based substring lookup, enabling surp's `no_primary_key` lint CTE.
+  - **Variadic function dispatch** (`pg_functions.py`): `format()` and `jsonb_build_object()` calls with 2 or 3 arguments are dispatched to new fixed-arity `PGWire.FORMAT2`, `PGWire.FORMAT3`, and `PGWire.JSONB_BUILD_OBJECT4/6` SQL functions, since IRIS does not support variadic SQL functions.
+
+- **Four new ObjectScript SQL functions** (`catalog/functions.py`): `FORMAT2`, `FORMAT3`, `JSONB_BUILD_OBJECT4`, and `JSONB_BUILD_OBJECT6`, installed at startup via `CREATE OR REPLACE FUNCTION … LANGUAGE OBJECTSCRIPT`. Implements PostgreSQL `%I` (quoted identifier) and `%L` (quoted literal) format specifiers for `FORMAT2`/`FORMAT3`.
+
+- **Five new catalog views** (`catalog/views/definitions.py`): `pg_depend`, `pg_extension`, `pg_index`, `pg_policy`, and `pg_rewrite`. These are required by surp's ERD and lint queries (`splinter.sql`). All five use the `CatalogViewInstaller` DDL path and are added to `VIEW_BACKED_TABLES` in `schema_mapper.py`.
+
+- **Local-first sync research** (`docs/sync/`): Evaluation of PGlite, Electric's HTTP shape protocol, Replicache push semantics, and IRIS change-feed substrates (trigger outbox, journal CDC, version-column polling, Interoperability/Kafka). Includes verified IRIS journal CDC patterns and a phased implementation plan.
+
+### Fixed
+
+- **CTE alias qualified as user table** (`schema_mapper.py`): The bare-table schema mapper now extracts CTE names from `WITH … AS (…)` clauses and skips qualifying them. Previously, `FROM no_primary_key` in a multi-CTE lint query was rewritten to `FROM SQLUser."NO_PRIMARY_KEY"`, causing IRIS table-not-found errors.
+
+- **`pg_class` interceptor fired on multi-CTE queries** (`catalog/catalog_router.py`): The `is_simple_pg_class` guard now excludes queries whose text begins with `WITH`, preventing surp's 5-branch `splinter.sql` CTE from being intercepted by the Python-side handler rather than executed against the view.
+
+- **`pg_index` and `pg_extension` handler-backed intercept removed**: Both tables are now view-backed; unit tests updated to assert `result is None` (declined by router) rather than a Python-emulated result.
+
+- **`LIST(col, sep)` separator argument** (`catalog/views/definitions.py`): IRIS `LIST()` aggregate does not accept a separator argument. Changed `LIST(col.ORDINAL_POSITION, ' ')` to `LIST(col.ORDINAL_POSITION)` in the `pg_index` view body.
+
+- **Prisma 6 → 7 upgrade** (`examples/prisma-iris-demo`): Prisma 7.9.1 removes the indirect `deepmerge-ts/<8.0.0` risk surface introduced in 6.13+. Chevrotain pinned to `^10.5.0`.
+
+### Changed
+
+- **Test coverage**: 41 new tests added (35 unit + 6 E2E) covering surp SQL translation, new catalog functions, new views, and router routing.
+- **SQLSTATE classification** (`v1.5.x` carry-forward): DBAPI type fixes and SQLSTATE error code classification landed in the `feat(catalog+sync)` commit included in this release.
+
 ## [1.5.9] - 2026-07-19
 
 ### Fixed
