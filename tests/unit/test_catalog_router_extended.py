@@ -587,13 +587,11 @@ class TestHandleCatalogQuery:
 
     @pytest.mark.asyncio
     async def test_handle_pg_extension(self):
+        """pg_extension is view-backed since feature 047; router declines it."""
         router = make_router()
         sql = "SELECT * FROM pg_extension"
         result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-        col_names = [c["name"] for c in result["columns"]]
-        assert "extname" in col_names
+        assert result is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -656,12 +654,11 @@ class TestHandleCatalogQuery:
 
     @pytest.mark.asyncio
     async def test_handle_pg_index(self):
+        """pg_index is view-backed since feature 047; router declines it."""
         router = make_router()
         sql = "SELECT * FROM pg_index WHERE indrelid = 1"
         result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_pg_attrdef_is_declined(self):

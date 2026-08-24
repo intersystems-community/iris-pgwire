@@ -43,19 +43,94 @@ _CALL_PATTERNS: dict[str, re.Pattern[str]] = {
     for name in PG_FUNCTION_MAP
 }
 
+# Variadic functions that need argument-count-based dispatch (feature 047).
+# format(pattern, arg)       -> PGWire.FORMAT2(pattern, arg)
+# format(pattern, arg1, arg2)-> PGWire.FORMAT3(pattern, arg1, arg2)
+# jsonb_build_object(k,v,k,v)  -> PGWire.JSONB_BUILD_OBJECT4(...)
+# jsonb_build_object(k,v,k,v,k,v) -> PGWire.JSONB_BUILD_OBJECT6(...)
+_FORMAT_CALL = re.compile(r"(?<![\w.])format\s*\(", re.IGNORECASE)
+_JSONB_CALL = re.compile(r"(?<![\w.])jsonb_build_object\s*\(", re.IGNORECASE)
+
+_VARIADIC_NAMES = {"format", "jsonb_build_object"}
+
+# Dispatch tables: arg count -> replacement name (None = pass through)
+_FORMAT_DISPATCH: dict[int, str | None] = {
+    2: "PGWire.FORMAT2",
+    3: "PGWire.FORMAT3",
+}
+_JSONB_DISPATCH: dict[int, str | None] = {
+    4: "PGWire.JSONB_BUILD_OBJECT4",
+    6: "PGWire.JSONB_BUILD_OBJECT6",
+}
+
+
+def _count_args(args_text: str) -> int:
+    """Count top-level comma-separated arguments in a function arg list.
+
+    Handles nested parentheses so commas inside sub-expressions are not
+    counted as argument separators.
+    """
+    if not args_text.strip():
+        return 0
+    depth = 0
+    count = 1
+    for char in args_text:
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth -= 1
+        elif char == "," and depth == 0:
+            count += 1
+    return count
+
+
+def _rewrite_variadic_calls(sql: str) -> str:
+    """Rewrite format() and jsonb_build_object() to fixed-arity PGWire variants."""
+    for pattern, dispatch in ((_FORMAT_CALL, _FORMAT_DISPATCH), (_JSONB_CALL, _JSONB_DISPATCH)):
+        result = []
+        pos = 0
+        for m in pattern.finditer(sql):
+            result.append(sql[pos:m.start()])
+            # Find the matching close-paren to extract the argument list text
+            open_pos = m.end()  # position just after the '('
+            depth = 1
+            i = open_pos
+            while i < len(sql) and depth > 0:
+                if sql[i] == "(":
+                    depth += 1
+                elif sql[i] == ")":
+                    depth -= 1
+                i += 1
+            close_pos = i - 1  # position of the matching ')'
+            args_text = sql[open_pos:close_pos]
+            n = _count_args(args_text)
+            replacement = dispatch.get(n)
+            if replacement is None:
+                # Unsupported arity — pass through unchanged
+                result.append(sql[m.start():i])
+            else:
+                result.append(f"{replacement}({args_text})")
+            pos = i
+        result.append(sql[pos:])
+        sql = "".join(result)
+    return sql
+
 
 def has_pg_function_call(sql: str) -> bool:
     """True if the statement calls a catalog function pgwire has to redirect."""
     if "(" not in sql:
         return False
     lowered = sql.lower()
-    return any(name in lowered for name in PG_FUNCTION_MAP)
+    return any(name in lowered for name in {**PG_FUNCTION_MAP, **{n: n for n in _VARIADIC_NAMES}})
 
 
 def rewrite_pg_function_calls(sql: str) -> str:
     """Qualify unqualified catalog function calls with the PGWire schema."""
     if not has_pg_function_call(sql):
         return sql
+
+    # Variadic dispatch first (produces qualified names, so simple-map pass won't touch them)
+    sql = _rewrite_variadic_calls(sql)
 
     for name, replacement in PG_FUNCTION_MAP.items():
         sql = _CALL_PATTERNS[name].sub(f"{replacement}(", sql)

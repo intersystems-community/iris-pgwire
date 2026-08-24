@@ -491,6 +491,131 @@ PG_ATTRDEF = CatalogView(
 )
 
 
+# --- pg_depend ---------------------------------------------------------------
+# IRIS has no extension dependency tracking, so this is always empty.
+# The schema must match PostgreSQL exactly so LEFT JOINs on oid columns resolve
+# (surp's lint SQL joins pg_depend to exclude extension-owned objects).
+_PG_DEPEND_BODY = """
+SELECT 0 AS classid, 0 AS objid, 0 AS objsubid,
+       0 AS refclassid, 0 AS refobjid, 0 AS refobjsubid,
+       '' AS deptype
+WHERE 1=0
+""".strip()
+
+PG_DEPEND = CatalogView(
+    name="pg_depend",
+    columns=("classid", "objid", "objsubid", "refclassid", "refobjid", "refobjsubid", "deptype"),
+    body=_PG_DEPEND_BODY,
+)
+
+
+# --- pg_extension ------------------------------------------------------------
+# IRIS has no loadable extensions; always empty.
+_PG_EXTENSION_BODY = """
+SELECT 0 AS oid, '' AS extname, 0 AS extowner, 0 AS extnamespace,
+       0 AS extrelocatable, '' AS extversion
+WHERE 1=0
+""".strip()
+
+PG_EXTENSION = CatalogView(
+    name="pg_extension",
+    columns=("oid", "extname", "extowner", "extnamespace", "extrelocatable", "extversion"),
+    body=_PG_EXTENSION_BODY,
+)
+
+
+# --- pg_index ----------------------------------------------------------------
+# Data-backed from INFORMATION_SCHEMA.TABLE_CONSTRAINTS (PK and UNIQUE).
+# `indkey` stored as space-separated attnum text (e.g. "1 2"), mirroring
+# PostgreSQL int2vector serialisation so `indkey::text` casts are no-ops.
+#
+# The ERD query joins pg_index to resolve which columns are part of each index;
+# the no_primary_key and duplicate_index lint checks use indisprimary/indisunique.
+_PG_INDEX_BODY = f"""
+SELECT
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:index:' || LOWER(tc.CONSTRAINT_NAME)) AS indexrelid,
+    PGWire.PG_OID('{IRIS_SCHEMA.lower()}:table:' || LOWER(tc.TABLE_NAME)) AS indrelid,
+    COUNT(kcu.COLUMN_NAME) AS indnatts,
+    COUNT(kcu.COLUMN_NAME) AS indnkeyatts,
+    CASE WHEN tc.CONSTRAINT_TYPE = 'UNIQUE' THEN 1 ELSE 0 END AS indisunique,
+    CASE WHEN tc.CONSTRAINT_TYPE = 'PRIMARY KEY' THEN 1 ELSE 0 END AS indisprimary,
+    0 AS indisexclusion,
+    1 AS indimmediate,
+    0 AS indisclustered,
+    1 AS indisvalid,
+    0 AS indcheckxmin,
+    1 AS indisready,
+    1 AS indislive,
+    0 AS indisreplident,
+    LIST(col.ORDINAL_POSITION) AS indkey,
+    NULL AS indpred
+FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+  ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+ AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+JOIN INFORMATION_SCHEMA.COLUMNS col
+  ON col.TABLE_SCHEMA = kcu.TABLE_SCHEMA
+ AND col.TABLE_NAME = kcu.TABLE_NAME
+ AND col.COLUMN_NAME = kcu.COLUMN_NAME
+WHERE tc.TABLE_SCHEMA = '{IRIS_SCHEMA}'
+  AND tc.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
+GROUP BY tc.CONSTRAINT_NAME, tc.TABLE_NAME, tc.CONSTRAINT_TYPE
+""".strip()
+
+PG_INDEX = CatalogView(
+    name="pg_index",
+    columns=(
+        "indexrelid",
+        "indrelid",
+        "indnatts",
+        "indnkeyatts",
+        "indisunique",
+        "indisprimary",
+        "indisexclusion",
+        "indimmediate",
+        "indisclustered",
+        "indisvalid",
+        "indcheckxmin",
+        "indisready",
+        "indislive",
+        "indisreplident",
+        "indkey",
+        "indpred",
+    ),
+    body=_PG_INDEX_BODY,
+)
+
+
+# --- pg_policy ---------------------------------------------------------------
+# IRIS has no row-level security; always empty.
+_PG_POLICY_BODY = """
+SELECT 0 AS oid, '' AS polname, 0 AS polrelid, '' AS polcmd,
+       0 AS polpermissive, '' AS polroles, '' AS polqual, '' AS polwithcheck
+WHERE 1=0
+""".strip()
+
+PG_POLICY = CatalogView(
+    name="pg_policy",
+    columns=("oid", "polname", "polrelid", "polcmd", "polpermissive", "polroles", "polqual", "polwithcheck"),
+    body=_PG_POLICY_BODY,
+)
+
+
+# --- pg_rewrite --------------------------------------------------------------
+# IRIS has no rule system; always empty.
+_PG_REWRITE_BODY = """
+SELECT 0 AS oid, '' AS rulename, 0 AS ev_class, '' AS ev_type,
+       '' AS ev_enabled, 0 AS is_instead, '' AS ev_qual, '' AS ev_action
+WHERE 1=0
+""".strip()
+
+PG_REWRITE = CatalogView(
+    name="pg_rewrite",
+    columns=("oid", "rulename", "ev_class", "ev_type", "ev_enabled", "is_instead", "ev_qual", "ev_action"),
+    body=_PG_REWRITE_BODY,
+)
+
+
 # Ordered so dependencies are created first. pg_namespace has no dependencies;
 # the rest reference its OIDs or its schema name by value.
 CATALOG_VIEWS: tuple[CatalogView, ...] = (
@@ -500,6 +625,12 @@ CATALOG_VIEWS: tuple[CatalogView, ...] = (
     PG_VIEWS,
     PG_ATTRIBUTE,
     PG_ATTRDEF,
+    # Feature 047: surp lint/ERD support
+    PG_DEPEND,
+    PG_EXTENSION,
+    PG_INDEX,
+    PG_POLICY,
+    PG_REWRITE,
 )
 
 # Tables now served by views. CatalogRouter declines these so exactly one path
@@ -546,6 +677,12 @@ BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
         "convalidated",
         "conislocal",
         "connoinherit",
+        # pg_policy (feature 047)
+        "polpermissive",
+        # pg_rewrite (feature 047)
+        "is_instead",
+        # pg_extension (feature 047)
+        "extrelocatable",
     }
 )
 
@@ -562,7 +699,7 @@ BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
 # output alias, because clients rename these freely — Prisma writes
 # `tbl.relrowsecurity as has_row_level_security`.
 CATALOG_COLUMN_TYPE_OIDS: dict[str, int] = {
-    **{column: 16 for column in BOOLEAN_CATALOG_COLUMNS},
+    **dict.fromkeys(BOOLEAN_CATALOG_COLUMNS, 16),
     # text[] in PostgreSQL. Always NULL here, but the declared type still has to
     # match or a typed client refuses the column.
     "reloptions": 1009,
@@ -584,4 +721,11 @@ CATALOG_COLUMN_TYPE_OIDS: dict[str, int] = {
     "relpersistence": 18,
     "relkind": 18,
     "relreplident": 18,
+    # pg_depend (feature 047)
+    "deptype": 18,
+    # pg_policy (feature 047)
+    "polcmd": 18,
+    # pg_rewrite (feature 047)
+    "ev_type": 18,
+    "ev_enabled": 18,
 }

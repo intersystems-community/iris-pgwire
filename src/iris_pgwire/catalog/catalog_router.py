@@ -17,7 +17,6 @@ from iris_pgwire.type_mapping import get_type_mapping
 
 from ._reentrancy import _IN_CATALOG_HANDLER
 from .oid_generator import OIDGenerator
-from .views.definitions import CATALOG_SCHEMA, VIEW_BACKED_TABLES
 from .pg_attrdef import PgAttrdefEmulator
 from .pg_attribute import PgAttributeEmulator
 from .pg_class import PgClassEmulator
@@ -25,6 +24,7 @@ from .pg_constraint import PgConstraintEmulator
 from .pg_index import PgIndexEmulator
 from .pg_namespace import PgNamespaceEmulator
 from .pg_type import PgTypeEmulator
+from .views.definitions import CATALOG_SCHEMA, VIEW_BACKED_TABLES
 
 logger = structlog.get_logger(__name__)
 
@@ -675,6 +675,7 @@ class CatalogRouter:
             and "PG_ATTRIBUTE" not in sql_upper
             and "ATT.ATTTYPID" not in sql_upper
             and "INFO.COLUMN_NAME" not in sql_upper
+            and not sql_upper.lstrip().startswith("WITH")
         )
 
         if not is_simple_pg_class:

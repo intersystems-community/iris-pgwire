@@ -45,7 +45,10 @@ SCHEMA_COLUMNS = frozenset({"table_schema", "schema_name", "nspname"})
 # test suite asserts the two stay in agreement.
 CATALOG_SCHEMA = "pg_catalog"
 VIEW_BACKED_TABLES = frozenset(
-    {"pg_namespace", "pg_class", "pg_constraint", "pg_views", "pg_attribute", "pg_attrdef"}
+    {
+        "pg_namespace", "pg_class", "pg_constraint", "pg_views", "pg_attribute", "pg_attrdef",
+        "pg_depend", "pg_extension", "pg_index", "pg_policy", "pg_rewrite",
+    }
 )
 
 
@@ -86,6 +89,17 @@ def translate_input_schema(sql: str) -> str:
     processed_sql = re.sub(schema_pattern, replace_schema, protected_sql)
 
     # 3. Handle bare table names (e.g., FROM table -> FROM SQLUser."TABLE")
+    # Extract CTE names so they are not schema-qualified (they are local aliases).
+    cte_names: set[str] = {
+        m.upper()
+        for m in re.findall(r"(?i)\bWITH\s+(\w+)\s+AS\s*\(", protected_sql)
+    }
+    # Multi-CTE: also match , name AS (
+    cte_names.update(
+        m.upper()
+        for m in re.findall(r"(?i),\s*(\w+)\s+AS\s*\(", protected_sql)
+    )
+
     table_keywords = r"FROM|JOIN|UPDATE|INTO|TABLE|DELETE\s+FROM"
     # Improved pattern: keyword followed by identifier, ensuring it's not already prefixed
     # even if there's whitespace around the dot.
@@ -101,6 +115,10 @@ def translate_input_schema(sql: str) -> str:
         prefix_candidate = processed_sql[max(0, full_match_start - 20) : full_match_start].rstrip()
 
         if prefix_candidate.endswith(".") or prefix_candidate.upper().endswith(IRIS_SCHEMA.upper()):
+            return match.group(0)
+
+        # Skip CTE aliases — they are defined in WITH clauses, not real tables
+        if table_name.upper() in cte_names:
             return match.group(0)
 
         # Skip if it's a known SQL keyword
