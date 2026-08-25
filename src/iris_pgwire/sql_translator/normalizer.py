@@ -128,6 +128,10 @@ class SQLTranslator:
                 ):
                     expr = expr_content
 
+            # jsonb/json are hint-only PG types; IRIS stores as VARCHAR — strip cast
+            if pg_type in ("jsonb", "json"):
+                return expr
+
             # Special handling for vector casts
             if pg_type == "vector":
                 # IRIS uses TO_VECTOR instead of CAST(? AS VECTOR)
@@ -482,7 +486,7 @@ def _translate_ilike(sql: str) -> str:
 #    or:  <lhs_expr>          @>  <rhs_expr>
 # where lhs/rhs can be: identifier (foo, t.col, "quoted"), param (? or $N),
 #                        or single-quoted literal
-# The ::jsonb casts are stripped; @> → PGWire.JSONB_CONTAINS(lhs, rhs).
+# The ::jsonb casts are stripped; @> → PGWire.JSONB_CONTAINS(lhs, rhs) = 1.
 # <@ is handled by swapping arguments.
 
 _JSONB_OPERAND = (
@@ -507,15 +511,17 @@ _JSONB_CONTAINED_BY_PATTERN = re.compile(
 
 
 def _translate_jsonb_containment(sql: str) -> str:
-    """Rewrite @> to PGWire.JSONB_CONTAINS(lhs, rhs) and <@ with swapped args.
+    """Rewrite @> to PGWire.JSONB_CONTAINS(lhs, rhs) = 1 and <@ with swapped args.
 
     IRIS has no @> / <@ operators. PGWire.JSONB_CONTAINS is an ObjectScript
     stored procedure that implements PostgreSQL containment semantics.
+    The = 1 suffix is required because IRIS SQL does not treat INTEGER return
+    values as boolean predicates in WHERE / ON clauses.
     """
     sql = _JSONB_CONTAINS_PATTERN.sub(
-        lambda m: f"PGWire.JSONB_CONTAINS({m.group(1)}, {m.group(2)})", sql
+        lambda m: f"PGWire.JSONB_CONTAINS({m.group(1)}, {m.group(2)}) = 1", sql
     )
     sql = _JSONB_CONTAINED_BY_PATTERN.sub(
-        lambda m: f"PGWire.JSONB_CONTAINS({m.group(2)}, {m.group(1)})", sql
+        lambda m: f"PGWire.JSONB_CONTAINS({m.group(2)}, {m.group(1)}) = 1", sql
     )
     return sql
