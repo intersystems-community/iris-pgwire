@@ -190,3 +190,51 @@ class TestStreamValueUnwrapping:
 
     def test_empty_string_returns_none(self):
         assert self._normalize("") is None
+
+
+# ---------------------------------------------------------------------------
+# Bug 8 — ON CONFLICT DO NOTHING must be stripped before execute_many
+# (IRIS has no upsert syntax; the clause causes "Input (ON) encountered")
+# ---------------------------------------------------------------------------
+
+
+class TestOnConflictStripping:
+    def _strip(self, sql: str) -> str:
+        """Exercise the ON CONFLICT stripping path in execute_many."""
+        import re
+        from iris_pgwire.sql_translator.returning_plan import ReturningPlan
+
+        if re.search(r"\bON\s+CONFLICT\b", sql, re.IGNORECASE):
+            plan = ReturningPlan.from_sql(sql)
+            sql = ReturningPlan._strip_clauses(
+                sql, plan.returning_clause, plan.on_conflict_clause
+            )
+            sql = sql.strip().rstrip(";")
+        return sql
+
+    def test_on_conflict_do_nothing_stripped(self):
+        sql = "INSERT INTO t (id, v) VALUES (1, 'x') ON CONFLICT DO NOTHING"
+        result = self._strip(sql)
+        assert "ON CONFLICT" not in result
+        assert "INSERT INTO" in result
+
+    def test_on_conflict_on_column_stripped(self):
+        sql = "INSERT INTO t (id, v) VALUES (1, 'x') ON CONFLICT (id) DO NOTHING"
+        result = self._strip(sql)
+        assert "ON CONFLICT" not in result
+
+    def test_on_conflict_do_update_stripped(self):
+        sql = "INSERT INTO t (id, v) VALUES (1, 'x') ON CONFLICT (id) DO UPDATE SET v = excluded.v"
+        result = self._strip(sql)
+        assert "ON CONFLICT" not in result
+
+    def test_no_conflict_clause_unchanged(self):
+        sql = "INSERT INTO t (id, v) VALUES (1, 'x')"
+        result = self._strip(sql)
+        assert result == sql
+
+    def test_on_conflict_with_returning_both_stripped(self):
+        sql = "INSERT INTO t (id) VALUES (1) ON CONFLICT DO NOTHING RETURNING id"
+        result = self._strip(sql)
+        assert "ON CONFLICT" not in result
+        assert "RETURNING" not in result

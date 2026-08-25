@@ -1312,12 +1312,17 @@ class IRISExecutor:
         """
         Execute SQL with multiple parameter sets using executemany() for batch operations.
 
-        NEW: Integrates BulkInsertJob for tracking and supports native fast-insert path
-        with string inlining fallback for maximum reliability.
-
         RETURNING SUPPORT: When SQL contains RETURNING clause, executes each INSERT
         individually and aggregates the returned rows from all inserts.
         """
+        # Strip ON CONFLICT clause before sending to IRIS — IRIS has no upsert syntax.
+        # For DO NOTHING: duplicate key errors are caught and suppressed below.
+        # For DO UPDATE: not supported via execute_many; falls through to execute_query.
+        if re.search(r"\bON\s+CONFLICT\b", sql, re.IGNORECASE):
+            plan = ReturningPlan.from_sql(sql)
+            sql = ReturningPlan._strip_clauses(sql, plan.returning_clause, plan.on_conflict_clause)
+            sql = sql.strip().rstrip(";")
+
         job = BulkInsertJob(
             table_name=self._extract_table_name(sql) or "unknown", total_rows=len(params_list)
         )
