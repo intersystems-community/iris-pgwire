@@ -69,6 +69,86 @@ POSIXTIME_MAX = POSIXTIME_OFFSET + 7258118400000000  # ~2200-01-01
 
 logger = structlog.get_logger()
 
+# Pre-compiled patterns for LIMIT/OFFSET parameter detection (used by inline_limit_offset_params)
+_LIMIT_OFFSET_Q = re.compile(r"\bLIMIT\s+\?\s+OFFSET\s+\?", re.IGNORECASE)
+_LIMIT_Q_COMMA_Q = re.compile(r"\bLIMIT\s+\?\s*,\s*\?", re.IGNORECASE)
+_LIMIT_Q = re.compile(r"\bLIMIT\s+\?", re.IGNORECASE)
+_OFFSET_Q = re.compile(r"\bOFFSET\s+\?", re.IGNORECASE)
+
+
+def inline_limit_offset_params(sql: str, params: list) -> tuple[str, list]:
+    """Inline LIMIT/OFFSET ? placeholders with their bound values.
+
+    IRIS does not support parameterized LIMIT or OFFSET.  The parameter
+    values must be substituted as integer literals before the query reaches
+    the IRIS SQL engine.  All other (non-LIMIT/OFFSET) ? placeholders and
+    their corresponding params are left untouched.
+
+    Returns (new_sql, new_params) where LIMIT/OFFSET placeholders have been
+    replaced with literals and removed from params.
+    """
+    if not params or "?" not in sql:
+        return sql, params
+
+    params = list(params)
+
+    def _placeholder_index(query: str, abs_pos: int) -> int:
+        return query[:abs_pos].count("?")
+
+    # Identify which 0-based param indexes are LIMIT / OFFSET positions
+    limit_idxs: set[int] = set()
+    offset_idxs: set[int] = set()
+
+    for m in _LIMIT_OFFSET_Q.finditer(sql):
+        local = m.group(0)
+        fq = local.find("?")
+        sq = local.find("?", fq + 1)
+        limit_idxs.add(_placeholder_index(sql, m.start() + fq))
+        offset_idxs.add(_placeholder_index(sql, m.start() + sq))
+
+    for m in _LIMIT_Q_COMMA_Q.finditer(sql):
+        local = m.group(0)
+        fq = local.find("?")
+        sq = local.find("?", fq + 1)
+        # MySQL-style: LIMIT offset, count
+        offset_idxs.add(_placeholder_index(sql, m.start() + fq))
+        limit_idxs.add(_placeholder_index(sql, m.start() + sq))
+
+    for m in _LIMIT_Q.finditer(sql):
+        local = m.group(0)
+        fq = local.find("?")
+        idx = _placeholder_index(sql, m.start() + fq)
+        if idx not in offset_idxs:
+            limit_idxs.add(idx)
+
+    for m in _OFFSET_Q.finditer(sql):
+        local = m.group(0)
+        fq = local.find("?")
+        idx = _placeholder_index(sql, m.start() + fq)
+        if idx not in limit_idxs:
+            offset_idxs.add(idx)
+
+    inline_idxs = limit_idxs | offset_idxs
+    if not inline_idxs:
+        return sql, params
+
+    # Replace placeholders in order (right-to-left to preserve offsets)
+    q_positions = [m.start() for m in re.finditer(r"\?", sql)]
+    result = list(sql)
+    removed: set[int] = set()
+
+    for q_order, q_pos in enumerate(q_positions):
+        if q_order in inline_idxs and q_order < len(params):
+            value = params[q_order]
+            if value is None:
+                continue  # Don't inline NULL — leave as ?
+            result[q_pos] = str(int(value))
+            removed.add(q_order)
+
+    new_sql = "".join(result)
+    new_params = [v for i, v in enumerate(params) if i not in removed]
+    return new_sql, new_params
+
 
 class MockResult:
     """Mock result object for RETURNING emulation"""
@@ -282,6 +362,14 @@ class IRISExecutor:
             # Pattern: '13@%SYS.Python', '6@%SYS.Python', etc.
             if "@%SYS.Python" in value:
                 return None
+
+        # IRIS LONGVARCHAR/CLOB columns are returned as stream objects with a .read() method.
+        # Convert them to strings so the wire protocol can serialize them as text.
+        if hasattr(value, "read") and callable(value.read):
+            try:
+                return value.read()
+            except Exception:
+                return str(value)
 
         return value
 
@@ -1130,6 +1218,10 @@ class IRISExecutor:
             # (SQLCODE -400) rather than erroring — the shape Prisma emits.
             if has_boolean_literal_comparison(sql):
                 sql = rewrite_boolean_literal_comparisons(sql)
+
+            # IRIS does not accept parameterized LIMIT/OFFSET — inline them.
+            if params and re.search(r"\b(?:LIMIT|OFFSET)\s+\?", sql, re.IGNORECASE):
+                sql, params = inline_limit_offset_params(sql, params)
 
             # Performance tracking for constitutional compliance
             with PerformanceTracker(
