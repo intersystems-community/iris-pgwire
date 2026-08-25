@@ -1318,7 +1318,8 @@ class IRISExecutor:
         # Strip ON CONFLICT clause before sending to IRIS — IRIS has no upsert syntax.
         # For DO NOTHING: duplicate key errors are caught and suppressed below.
         # For DO UPDATE: not supported via execute_many; falls through to execute_query.
-        if re.search(r"\bON\s+CONFLICT\b", sql, re.IGNORECASE):
+        _had_on_conflict = bool(re.search(r"\bON\s+CONFLICT\b", sql, re.IGNORECASE))
+        if _had_on_conflict:
             plan = ReturningPlan.from_sql(sql)
             sql = ReturningPlan._strip_clauses(sql, plan.returning_clause, plan.on_conflict_clause)
             sql = sql.strip().rstrip(";")
@@ -1348,6 +1349,14 @@ class IRISExecutor:
                 if self.has_returning_clause(sql):
                     result = await self._execute_many_with_returning(sql, params_list, session_id)
                     job.mark_completed(rows_inserted=result.get("rows_affected", len(params_list)))
+                elif _had_on_conflict:
+                    # ON CONFLICT was present: use per-row execution with duplicate suppression.
+                    # Native executemany() has no per-row error isolation, so we must use
+                    # the fallback path which iterates rows individually.
+                    result = await self._execute_many_inline_fallback(
+                        sql, params_list, session_id, suppress_duplicate_keys=True
+                    )
+                    job.mark_completed(rows_inserted=result.get("rows_affected", 0))
                 else:
                     # ALWAYS try native fast-insert path first
                     try:
@@ -1498,27 +1507,52 @@ class IRISExecutor:
         return await self._execute_many_external_async(sql, params_list, session_id)
 
     async def _execute_many_inline_fallback(
-        self, sql: str, params_list: list[list], session_id: str | None = None
+        self,
+        sql: str,
+        params_list: list[list],
+        session_id: str | None = None,
+        suppress_duplicate_keys: bool = False,
     ) -> dict[str, Any]:
-        """Fallback to string inlining for batch operations."""
+        """Fallback to per-row execution for batch operations.
+
+        When suppress_duplicate_keys=True (ON CONFLICT DO NOTHING was stripped),
+        IRIS duplicate key errors (5804) are caught per row and counted as skipped
+        rather than propagated as batch failures.
+        """
         if self.embedded_mode:
-            return await self._execute_many_embedded_async(sql, params_list, session_id)
+            return await self._execute_many_embedded_async(
+                sql, params_list, session_id, suppress_duplicate_keys=suppress_duplicate_keys
+            )
         else:
-            # NEW: Implement robust fallback for external mode
-            # This executes each INSERT individually in the sequence
             logger.warning(
                 "Using sequential fallback for external batch operation",
                 session_id=session_id,
                 batch_size=len(params_list),
+                suppress_duplicate_keys=suppress_duplicate_keys,
             )
             rows_affected = 0
+            skipped = 0
             for params in params_list:
-                await self.execute_query(sql, params, session_id)
-                rows_affected += 1
+                try:
+                    await self.execute_query(sql, params, session_id)
+                    rows_affected += 1
+                except Exception as row_err:
+                    err_str = str(row_err)
+                    if suppress_duplicate_keys and (
+                        "Duplicate key" in err_str or "5804" in err_str or "duplicate key" in err_str
+                    ):
+                        skipped += 1
+                        logger.debug(
+                            "Duplicate key suppressed (ON CONFLICT DO NOTHING)",
+                            session_id=session_id,
+                        )
+                    else:
+                        raise
 
             return {
                 "success": True,
                 "rows_affected": rows_affected,
+                "skipped": skipped,
                 "_execution_path": "execute_many_sequential_fallback",
             }
 
@@ -1562,7 +1596,11 @@ class IRISExecutor:
         return None
 
     async def _execute_many_embedded_async(
-        self, sql: str, params_list: list[list], session_id: str | None = None
+        self,
+        sql: str,
+        params_list: list[list],
+        session_id: str | None = None,
+        suppress_duplicate_keys: bool = False,
     ) -> dict[str, Any]:
         """
         Execute batch SQL using IRIS embedded Python executemany() with proper async threading.
@@ -1634,6 +1672,7 @@ class IRISExecutor:
                 start_time = time.perf_counter()
 
                 rows_affected = 0
+                skipped = 0
                 for row_params in params_list:
                     # Normalize parameters for IRIS (e.g. ISO timestamps)
                     normalized_row_params = self._normalize_parameters(row_params)
@@ -1661,20 +1700,33 @@ class IRISExecutor:
                         iris.sql.exec(inline_sql)
                         rows_affected += 1
                     except Exception as row_error:
-                        logger.error(
-                            f"Failed to execute row {rows_affected + 1}: {row_error}",
-                            params=row_params[:3] if len(row_params) > 3 else row_params,
-                            inline_sql_preview=(
-                                inline_sql[:200] if "inline_sql" in locals() else "N/A"
-                            ),
-                        )
-                        raise
+                        err_str = str(row_error)
+                        if suppress_duplicate_keys and (
+                            "Duplicate key" in err_str
+                            or "5804" in err_str
+                            or "duplicate key" in err_str
+                        ):
+                            skipped += 1
+                            logger.debug(
+                                "Duplicate key suppressed (ON CONFLICT DO NOTHING)",
+                                session_id=session_id,
+                            )
+                        else:
+                            logger.error(
+                                f"Failed to execute row {rows_affected + 1}: {row_error}",
+                                params=row_params[:3] if len(row_params) > 3 else row_params,
+                                inline_sql_preview=(
+                                    inline_sql[:200] if "inline_sql" in locals() else "N/A"
+                                ),
+                            )
+                            raise
 
                 execution_time = (time.perf_counter() - start_time) * 1000
 
                 logger.info(
                     "✅ Batch execution COMPLETE (loop-based)",
                     rows_affected=rows_affected,
+                    skipped=skipped,
                     execution_time_ms=execution_time,
                     throughput_rows_per_sec=(
                         int(rows_affected / (execution_time / 1000)) if execution_time > 0 else 0
@@ -1685,6 +1737,7 @@ class IRISExecutor:
                 return {
                     "success": True,
                     "rows_affected": rows_affected,
+                    "skipped": skipped,
                     "execution_time_ms": execution_time,
                     "batch_size": len(params_list),
                     "rows": [],  # Batch operations don't return rows
