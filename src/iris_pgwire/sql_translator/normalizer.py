@@ -257,6 +257,7 @@ class SQLTranslator:
         normalized_sql, vector_fn_count = self._translate_vector_functions(normalized_sql)
         normalized_sql = self._translate_vector_types(normalized_sql)
         normalized_sql = self.default_values_translator.translate(normalized_sql, executor=executor)
+        normalized_sql = _translate_ilike(normalized_sql)
 
         # Call comprehensive mapping registries for HNSW and complex filters
         normalized_sql, construct_mappings = translate_sql_constructs(normalized_sql)
@@ -447,3 +448,27 @@ class SQLTranslator:
             }
         """
         return self._last_metrics.copy()
+
+
+# ILIKE patterns — must be outside the class to avoid state, defined once at module load
+_ILIKE_PATTERN = re.compile(
+    r"((?:[A-Za-z_][\w.]*(?:\s*\([^)]*\))?|\?|'\w+')\s+)"  # left operand
+    r"(NOT\s+)?ILIKE\s+"  # optional NOT + ILIKE
+    r"((?:[A-Za-z_][\w.]*(?:\s*\([^)]*\))?|\?|'[^']*'))",    # right operand
+    re.IGNORECASE,
+)
+
+
+def _translate_ilike(sql: str) -> str:
+    """Rewrite ILIKE / NOT ILIKE to LOWER(lhs) [NOT] LIKE LOWER(rhs).
+
+    IRIS has no ILIKE keyword.  The rewrite is applied to operands that are
+    identifiers, parameter placeholders (?), or single-quoted literals.
+    """
+    def _replace(m: re.Match) -> str:
+        lhs = m.group(1).rstrip()
+        not_kw = "NOT " if m.group(2) else ""
+        rhs = m.group(3)
+        return f"LOWER({lhs}) {not_kw}LIKE LOWER({rhs})"
+
+    return _ILIKE_PATTERN.sub(_replace, sql)

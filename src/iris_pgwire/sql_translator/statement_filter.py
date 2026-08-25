@@ -37,6 +37,7 @@ class SkipReason(Enum):
     GENERATED_COLUMN = "generated_column"
     CHECK_CONSTRAINT = "check_constraint"
     SKIPPED_TABLE_INDEX = "skipped_table_index"
+    CREATE_EXTENSION = "create_extension"
 
 
 @dataclass
@@ -100,6 +101,9 @@ class StatementFilter:
     # Feature 036: ADD CONSTRAINT ... CHECK
     _CHECK_CONSTRAINT_PATTERN = re.compile(r"\bADD\s+CONSTRAINT\b.*\bCHECK\s*\(", re.IGNORECASE)
 
+    # CREATE EXTENSION — IRIS has no extension system; swallow silently
+    _CREATE_EXTENSION_PATTERN = re.compile(r"^\s*CREATE\s+EXTENSION\b", re.IGNORECASE)
+
     def __init__(
         self,
         enum_registry: EnumTypeRegistry,
@@ -147,6 +151,12 @@ class StatementFilter:
             logger = logging.getLogger("iris_pgwire.sql_translator.statement_filter")
             logger.warning(DDL_SKIP_FORMAT.format(warning_msg))
             return FilterResult(should_skip=True, reason=reason, command_tag=command_tag)
+
+        # CREATE EXTENSION — IRIS has no extension mechanism; return success silently
+        if self._CREATE_EXTENSION_PATTERN.search(sql):
+            return FilterResult(
+                should_skip=True, reason=SkipReason.CREATE_EXTENSION, command_tag="CREATE EXTENSION"
+            )
 
         # Check CREATE TYPE ... AS ENUM
         match = self._CREATE_TYPE_ENUM_PATTERN.search(sql)
