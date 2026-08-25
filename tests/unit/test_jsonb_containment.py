@@ -1,8 +1,8 @@
 """Regression tests for Bug 5 — jsonb @> and <@ containment operator translation.
 
 The SQL translator must rewrite:
-  col::jsonb @> '{"k":"v"}'::jsonb  →  PGWire.JSONB_CONTAINS(col, '{"k":"v"}')
-  '{"k":"v"}'::jsonb <@ col::jsonb  →  PGWire.JSONB_CONTAINS(col, '{"k":"v"}')
+  col::jsonb @> '{"k":"v"}'::jsonb  →  PGWire.JSONB_CONTAINS(col, '{"k":"v"}') = 1
+  '{"k":"v"}'::jsonb <@ col::jsonb  →  PGWire.JSONB_CONTAINS(col, '{"k":"v"}') = 1
 
 Also verifies Python reference implementation for JSONB_CONTAINS semantics.
 """
