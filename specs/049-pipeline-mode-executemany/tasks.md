@@ -2,116 +2,111 @@
 
 **Input**: Design documents from `specs/049-pipeline-mode-executemany/`
 **Prerequisites**: spec.md ✅, plan.md ✅
+**Constitution note**: Tests must use real IRIS (no mocks). Unit tests cover pure-Python logic only (stripping, regex). All executor + protocol behavior tested via skip-guarded integration tests with real psycopg3 + real IRIS.
 
 ---
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Source Audit (inline findings — no artifacts needed)
 
-**Purpose**: Understand existing execute_many / flush_batch / handle_sync_message internals
+Research findings (already captured in plan.md Research Notes):
+- `execute_many()` in `iris_executor.py:1309` — ON CONFLICT strip added in 048; per-row duplicate suppression NOT yet implemented.
+- `flush_batch()` in `protocol.py:2393` — flushes DML batch on Sync ✅.
+- `handle_sync_message()` in `protocol.py:3532` — calls `flush_batch()` before ReadyForQuery ✅.
+- `handle_flush_message()` in `protocol.py:3597` — does NOT send ReadyForQuery ✅ (already correct).
+- `_execute_many_inline_fallback()` in `iris_executor.py:1500` — iterates rows one-by-one; wrapping in per-row try/except here is the correct duplicate suppression point.
 
-- [ ] T001 Read `src/iris_pgwire/iris_executor.py` execute_many() and _execute_many_native() to map current duplicate key error handling
-- [ ] T002 Read `src/iris_pgwire/protocol.py` flush_batch(), handle_sync_message(), handle_flush_message() to map current Sync/Flush behaviour
-- [ ] T003 Grep for IRIS duplicate key error strings in `src/iris_pgwire/` to know exact error text to catch
+**Conclusion**: Sync/Flush sequencing is already correct. Work needed: per-row duplicate suppression in `_execute_many_inline_fallback()` + accurate row count.
 
 ---
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 2: Foundational
 
-**Purpose**: Create test file skeleton and verify test infrastructure
-
-- [ ] T004 Create `tests/unit/test_pipeline_executemany.py` with class stubs and no test bodies — verify pytest collects 0 tests, no import errors
+- [ ] T001 Create `tests/unit/test_pipeline_executemany.py` with class stubs for pure-Python logic tests; create `tests/integration/test_psycopg3_pipeline.py` stub with `@pytest.mark.skipif` guard — verify pytest collects 0 tests, no import errors.
 
 ---
 
 ## Phase 3: User Story 1 — executemany ON CONFLICT + row count (P1) 🎯 MVP
 
-**Goal**: executemany with ON CONFLICT DO NOTHING completes without error; row count in result is accurate.
+**Goal**: executemany with ON CONFLICT DO NOTHING suppresses duplicate key errors per row; `rows_affected` equals successfully inserted rows.
 
-**Independent Test**: `pytest tests/unit/test_pipeline_executemany.py::TestExecuteManyOnConflict` passes with zero IRIS dependency.
+**Independent Test** (unit): Pure-Python logic tests on `_execute_many_inline_fallback` behavior — no IRIS needed.
+**Phase gate** (integration): `pytest tests/integration/test_psycopg3_pipeline.py::test_executemany_on_conflict` on real IRIS.
 
 ### Tests for User Story 1 ⚠️ WRITE FIRST
 
-- [ ] T005 [US1] Write `TestExecuteManyOnConflict` unit tests in `tests/unit/test_pipeline_executemany.py`:
-  - `test_on_conflict_stripped_before_each_row` — verify SQL reaching IRIS has no ON CONFLICT
-  - `test_duplicate_key_suppressed_with_on_conflict_do_nothing` — mock executor raises duplicate error, verify result is success
-  - `test_no_on_conflict_error_propagates` — without ON CONFLICT, duplicate error reaches caller
-  - `test_row_count_matches_successful_inserts` — verify rows_affected = number of non-duplicate rows
+- [ ] T002 [US1] Write `TestOnConflictFlagPropagation` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests verifying the ON CONFLICT detection flag logic:
+  - `test_on_conflict_detected_in_sql` — `re.search(ON_CONFLICT_PAT, sql)` returns match for `ON CONFLICT DO NOTHING`
+  - `test_no_on_conflict_not_detected` — plain INSERT returns no match
+  - `test_on_conflict_flag_set_after_strip` — verify execute_many() sets `_had_on_conflict=True` on stripped SQL (test via a thin wrapper / returned metadata)
   - Verify ALL FAIL before implementation
 
-- [ ] T006 [US1] Write `TestExecuteManyRowCount` unit tests in `tests/unit/test_pipeline_executemany.py`:
-  - `test_row_count_100_rows` — execute_many returns rows_affected=100 for a 100-row batch
-  - `test_row_count_empty_batch` — empty params_list returns rows_affected=0
+- [ ] T003 [US1] Write `TestRowCountAccuracy` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests on the row count accumulation:
+  - `test_successful_rows_counted` — accumulator increments only on non-error rows
+  - `test_zero_rows_on_all_errors` — accumulator stays 0 when every row would error
+  - These test the counting logic directly, not the IRIS call
   - Verify ALL FAIL before implementation
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] In `src/iris_pgwire/iris_executor.py` `_execute_many_native()`: wrap per-row execution in try/except; on `IRIS error` containing "Duplicate key" or "5804", increment `skipped` counter; continue to next row; return `rows_affected = len(params_list) - skipped`.
-  - Note: `_execute_many_native()` delegates to `_execute_many_external_async()` or `_execute_many_embedded_async()` — the try/except must wrap the bulk call, OR switch to per-row fallback when ON CONFLICT was present.
-  - Simplest safe approach: when `on_conflict_was_present` flag is set (detect from original SQL before stripping), always use per-row execution via `_execute_many_inline_fallback()` which already iterates rows.
+- [ ] T004 [US1] In `src/iris_pgwire/iris_executor.py` `execute_many()`: record `_had_on_conflict` bool from the ON CONFLICT detection (before strip). Pass it to the execution paths.
 
-- [ ] T008 [US1] Pass `on_conflict_present` flag from `execute_many()` to fallback path: if True, use per-row execution and suppress duplicate key errors per row.
+- [ ] T005 [US1] In `_execute_many_inline_fallback()` in `src/iris_pgwire/iris_executor.py`: add `on_conflict_present=False` parameter. When True, wrap each row's execute call in `try/except`; catch errors whose message contains "Duplicate key" or "5804"; increment `skipped` counter; continue. Set `rows_affected = len(params_list) - skipped` in returned dict.
 
-- [ ] T009 [US1] In `_execute_many_inline_fallback()` in `src/iris_pgwire/iris_executor.py`: catch duplicate key errors per row when `on_conflict_present=True`; accumulate `rows_affected` as count of successful rows only.
+- [ ] T006 [US1] In `execute_many()`: when `_had_on_conflict` is True and native executemany raises (IRIS bulk executemany has no per-row error isolation), fall through to `_execute_many_inline_fallback()` with `on_conflict_present=True` instead of re-raising.
 
-- [ ] T010 [US1] Run `pytest tests/unit/test_pipeline_executemany.py::TestExecuteManyOnConflict tests/unit/test_pipeline_executemany.py::TestExecuteManyRowCount` — all must pass.
+- [ ] T007 [US1] Run `pytest tests/unit/test_pipeline_executemany.py` — all tests must pass.
 
-**Checkpoint**: executemany ON CONFLICT works; row count accurate. Story 1 done.
+### Integration gate for User Story 1
+
+- [ ] T008 [US1] Write integration test `test_executemany_on_conflict_do_nothing` in `tests/integration/test_psycopg3_pipeline.py`:
+  - CREATE TABLE t_049(id INT PRIMARY KEY, v TEXT)
+  - `cursor.executemany("INSERT INTO t_049 VALUES (%s, %s) ON CONFLICT DO NOTHING", [(1,'a'),(1,'dup'),(2,'b')])`
+  - Assert: table has 2 rows, no exception raised.
+- [ ] T009 [US1] Write integration test `test_executemany_row_count` in same file:
+  - executemany 100 unique rows, verify result metadata rows_affected == 100.
+
+**Checkpoint**: Phase 3 done when T007 passes + T008/T009 pass on real IRIS (skip-guarded).
 
 ---
 
-## Phase 4: User Story 2 — Pipeline Sync/Flush sequencing (P2)
+## Phase 4: User Story 2 — Pipeline Sync/Flush sequencing confirmed (P2)
 
-**Goal**: Sync sends ReadyForQuery after flushing batch; Flush flushes write buffer only.
+**Goal**: Confirm via integration test that psycopg3 pipeline mode sends correct Sync/Flush sequence and server handles it without hanging or missing RFQ.
 
-**Independent Test**: Unit test mocks verifying Sync sends RFQ and Flush does not.
+**Note from source audit**: `handle_sync_message` and `handle_flush_message` already correct. This phase is confirmation only.
 
-### Tests for User Story 2 ⚠️ WRITE FIRST
+### Integration Tests for User Story 2 ⚠️ WRITE FIRST
 
-- [ ] T011 [US2] Write `TestSyncFlushesBatch` in `tests/unit/test_pipeline_executemany.py`:
-  - `test_sync_sends_ready_for_query` — mock handler, verify ReadyForQuery byte sent after flush_batch() on Sync
-  - `test_flush_does_not_send_ready_for_query` — Flush message, verify no ReadyForQuery
-  - `test_sync_with_empty_batch_still_sends_rfq` — Sync on empty buffer sends RFQ
-  - Verify ALL FAIL before implementation
+- [ ] T010 [US2] Write integration test `test_pipeline_sync_sends_rfq` in `tests/integration/test_psycopg3_pipeline.py`:
+  - Use psycopg3 pipeline context: `with conn.pipeline():` — send 3 INSERTs, call pipeline sync
+  - Verify: all 3 rows land, no client hang, connection still usable after pipeline.
+- [ ] T011 [US2] Write integration test `test_flush_mid_pipeline` in same file:
+  - Use psycopg3 to send Flush (via `conn.pgconn.flush()` or pipeline.communicate())
+  - Verify: no ReadyForQuery sent prematurely, subsequent queries work.
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Read `handle_sync_message()` and `handle_flush_message()` in `src/iris_pgwire/protocol.py` to confirm current RFQ/flush ordering. If already correct, the tests will pass without code changes (document finding).
+- [ ] T012 [US2] Run integration tests T010/T011 against real IRIS. If tests pass with no code changes → document that Sync/Flush is already correct. If tests fail → fix the specific protocol issue uncovered by the test.
 
-- [ ] T013 [US2] If `handle_flush_message()` incorrectly sends ReadyForQuery: remove the RFQ send; add assert in test that confirms no RFQ after Flush.
-
-- [ ] T014 [US2] If `handle_sync_message()` does not flush batch before RFQ: reorder to call `flush_batch()` before sending ReadyForQuery.
-
-- [ ] T015 [US2] Run `pytest tests/unit/test_pipeline_executemany.py::TestSyncFlushesBatch` — all must pass.
-
-**Checkpoint**: Sync/Flush protocol sequencing correct.
+**Checkpoint**: T010/T011 pass on real IRIS.
 
 ---
 
-## Phase 5: Integration Test (requires IRIS container)
+## Phase 5: Polish
 
-**Goal**: psycopg3 executemany end-to-end with real IRIS.
-
-- [ ] T016 Create `tests/integration/test_psycopg3_pipeline.py` with `@pytest.mark.skipif(not iris_available(), ...)` guard.
-- [ ] T017 [P] [US1] Integration test `test_executemany_on_conflict_do_nothing`: CREATE TABLE, executemany 50 unique + 50 duplicate rows with ON CONFLICT DO NOTHING, verify 50 rows in table, no exception.
-- [ ] T018 [P] [US2] Integration test `test_executemany_row_count_accurate`: executemany 100 unique rows, verify result rows_affected == 100.
-
----
-
-## Phase 6: Polish
-
-- [ ] T019 Run full unit suite `pytest tests/unit/ --tb=short -q` and fix any regressions.
-- [ ] T020 Update `CHANGELOG.md` under `[Unreleased]` with fix description.
+- [ ] T013 Run `pytest tests/unit/ --tb=short -q` — all existing tests pass, no regressions.
+- [ ] T014 Update `CHANGELOG.md` under `[Unreleased]` with fix description.
+- [ ] T015 Mark tasks.md tasks complete as each lands.
 
 ---
 
 ## Dependencies & Execution Order
 
-- Phase 1 (research) → Phase 2 (skeleton) → Phase 3 (US1 tests first → US1 impl) → Phase 4 (US2 tests first → US2 impl) → Phase 5 (integration) → Phase 6 (polish)
-- T005/T006 must FAIL before T007–T009
-- T011 must FAIL before T012–T014
-- T017/T018 require IRIS container (skip-guarded)
+- Phase 1 (audit findings, already done above) → Phase 2 (stubs) → Phase 3 (US1 tests-first → impl → integration gate) → Phase 4 (US2 integration confirmation) → Phase 5 (polish)
+- T002/T003 must FAIL before T004–T006
+- T008/T009/T010/T011 require IRIS container (skip-guarded)
 
 ## Implementation Strategy
 
-MVP: Phase 1–3 (US1 only — executemany ON CONFLICT + row count). Delivers the crash fix.
-Full: Add Phase 4 (Sync/Flush sequencing). Delivers pipeline mode correctness.
+MVP: Phase 3 only — per-row duplicate suppression + row count accuracy. The most common crash scenario is fixed.
+Full: Add Phase 4 confirmation — verifies pipeline Sync/Flush works end-to-end. Expected to pass with zero code changes.

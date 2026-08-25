@@ -11,7 +11,7 @@ Fix psycopg3 pipeline mode + executemany to correctly handle batch DML execution
 **Language/Version**: Python 3.11 (irispython and CPython both supported)
 **Primary Dependencies**: asyncio, iris (intersystems-irispython), psycopg3 (client test), pytest
 **Storage**: InterSystems IRIS (SQL via CallIn / DBAPI)
-**Testing**: pytest; unit tests mock wire-protocol; integration tests use real IRIS container
+**Testing**: pytest; unit tests cover pure-Python logic only (no mocks of IRIS or wire protocol); integration tests use real psycopg3 + real IRIS container (skip-guarded)
 **Target Platform**: Linux/macOS server (Docker container for IRIS)
 **Project Type**: Single project
 **Performance Goals**: executemany batch of 1,000 rows completes without error; no latency regression on single-row path
