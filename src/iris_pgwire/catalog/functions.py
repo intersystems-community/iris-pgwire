@@ -489,6 +489,63 @@ JSONB_BUILD_OBJECT6 = CatalogFunction(
 )
 
 
+JSONB_CONTAINS = CatalogFunction(
+    name="JSONB_CONTAINS",
+    signature="leftJson VARCHAR(65535), rightJson VARCHAR(65535)",
+    returns="INTEGER",
+    purpose="PostgreSQL jsonb @> containment operator — returns 1 if rightJson is contained in leftJson, 0 otherwise",
+    body="""{
+  set tResult = 0
+  if (rightJson = "") || (rightJson = "{}") || (rightJson = "[]") { quit 1 }
+  if (leftJson = "") || (leftJson = "null") { quit 0 }
+  set tLeft = "", tRight = ""
+  try {
+    set tLeft = ##class(%DynamicAbstractObject).%FromJSON(leftJson)
+    set tRight = ##class(%DynamicAbstractObject).%FromJSON(rightJson)
+  } catch ex {
+    set tLeft = "", tRight = ""
+  }
+  if $isobject(tRight) = 0 { quit (tLeft = tRight) }
+  if tRight.%IsA("%DynamicObject") {
+    if $isobject(tLeft) = 0 { quit 0 }
+    if 'tLeft.%IsA("%DynamicObject") { quit 0 }
+    set tResult = 1
+    set tIter = tRight.%GetIterator()
+    while tIter.%GetNext(.tKey, .tRVal) && tResult {
+      set tLVal = tLeft.%Get(tKey)
+      if $isobject(tRVal) {
+        if $isobject(tLVal) = 0 { set tResult = 0  quit }
+        if ##class(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(tLVal.%ToJSON(), tRVal.%ToJSON()) = 0 { set tResult = 0 }
+      } else {
+        if (tLVal '= tRVal) { set tResult = 0 }
+      }
+    }
+    quit tResult
+  }
+  if tRight.%IsA("%DynamicArray") {
+    if $isobject(tLeft) = 0 { quit 0 }
+    if 'tLeft.%IsA("%DynamicArray") { quit 0 }
+    set tResult = 1
+    set tIterR = tRight.%GetIterator()
+    while tIterR.%GetNext(, .tRVal) && tResult {
+      set tFound = 0
+      set tIterL = tLeft.%GetIterator()
+      while tIterL.%GetNext(, .tLVal) {
+        if $isobject(tRVal) && $isobject(tLVal) {
+          if ##class(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(tLVal.%ToJSON(), tRVal.%ToJSON()) { set tFound = 1  quit }
+        } elseif (tLVal = tRVal) {
+          set tFound = 1  quit
+        }
+      }
+      if 'tFound { set tResult = 0 }
+    }
+    quit tResult
+  }
+  quit (tLeft = tRight)
+}""",
+)
+
+
 CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     PG_OID,
     PG_PUBLIC_SCHEMA,
@@ -504,4 +561,6 @@ CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     FORMAT3,
     JSONB_BUILD_OBJECT4,
     JSONB_BUILD_OBJECT6,
+    # Feature 050: jsonb @> containment operator
+    JSONB_CONTAINS,
 )
