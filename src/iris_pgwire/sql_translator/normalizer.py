@@ -258,6 +258,7 @@ class SQLTranslator:
         normalized_sql = self._translate_vector_types(normalized_sql)
         normalized_sql = self.default_values_translator.translate(normalized_sql, executor=executor)
         normalized_sql = _translate_ilike(normalized_sql)
+        normalized_sql = _translate_jsonb_containment(normalized_sql)
 
         # Call comprehensive mapping registries for HNSW and complex filters
         normalized_sql, construct_mappings = translate_sql_constructs(normalized_sql)
@@ -472,3 +473,49 @@ def _translate_ilike(sql: str) -> str:
         return f"LOWER({lhs}) {not_kw}LIKE LOWER({rhs})"
 
     return _ILIKE_PATTERN.sub(_replace, sql)
+
+
+# ---------------------------------------------------------------------------
+# JSONB containment operator rewriter (Bug 5 / feature 050)
+# ---------------------------------------------------------------------------
+# Match:  <lhs_expr>::jsonb  @>  <rhs_expr>::jsonb
+#    or:  <lhs_expr>          @>  <rhs_expr>
+# where lhs/rhs can be: identifier (foo, t.col, "quoted"), param (? or $N),
+#                        or single-quoted literal
+# The ::jsonb casts are stripped; @> → PGWire.JSONB_CONTAINS(lhs, rhs).
+# <@ is handled by swapping arguments.
+
+_JSONB_OPERAND = (
+    r"(?:"
+    r"[\w.\"]+(?:\s*\([^)]*\))?"   # identifier or function call
+    r"|'[^']*'"                     # single-quoted literal
+    r"|\$\d+"                       # $N placeholder
+    r"|\?"                          # ? placeholder
+    r")"
+)
+_JSONB_CAST_SUFFIX = r"(?:::(?:jsonb|json|text|varchar(?:\(\d+\))?))?"
+
+_JSONB_CONTAINS_PATTERN = re.compile(
+    rf"({_JSONB_OPERAND}){_JSONB_CAST_SUFFIX}\s*@>\s*({_JSONB_OPERAND}){_JSONB_CAST_SUFFIX}",
+    re.IGNORECASE,
+)
+
+_JSONB_CONTAINED_BY_PATTERN = re.compile(
+    rf"({_JSONB_OPERAND}){_JSONB_CAST_SUFFIX}\s*<@\s*({_JSONB_OPERAND}){_JSONB_CAST_SUFFIX}",
+    re.IGNORECASE,
+)
+
+
+def _translate_jsonb_containment(sql: str) -> str:
+    """Rewrite @> to PGWire.JSONB_CONTAINS(lhs, rhs) and <@ with swapped args.
+
+    IRIS has no @> / <@ operators. PGWire.JSONB_CONTAINS is an ObjectScript
+    stored procedure that implements PostgreSQL containment semantics.
+    """
+    sql = _JSONB_CONTAINS_PATTERN.sub(
+        lambda m: f"PGWire.JSONB_CONTAINS({m.group(1)}, {m.group(2)})", sql
+    )
+    sql = _JSONB_CONTAINED_BY_PATTERN.sub(
+        lambda m: f"PGWire.JSONB_CONTAINS({m.group(2)}, {m.group(1)})", sql
+    )
+    return sql

@@ -489,6 +489,63 @@ JSONB_BUILD_OBJECT6 = CatalogFunction(
 )
 
 
+JSONB_CONTAINS = CatalogFunction(
+    name="JSONB_CONTAINS",
+    signature="left_json VARCHAR(65535), right_json VARCHAR(65535)",
+    returns="INTEGER",
+    purpose="PostgreSQL jsonb @> containment operator — returns 1 if right_json is contained in left_json, 0 otherwise",
+    body="""{
+  // Empty / null right operand is always contained
+  if (right_json = "") || (right_json = "{}") || (right_json = "[]") { quit 1 }
+  if (left_json = "") || (left_json = "null") { quit 0 }
+  try {
+    set tLeft = ##class(%DynamicAbstractObject).%FromJSON(left_json)
+    set tRight = ##class(%DynamicAbstractObject).%FromJSON(right_json)
+  } catch ex {
+    // Malformed JSON — cannot determine containment
+    quit 0
+  }
+  // Object containment: every key-value in tRight must exist with equal value in tLeft
+  if tRight.%IsA("%DynamicObject") {
+    if 'tLeft.%IsA("%DynamicObject") { quit 0 }
+    set tIter = tRight.%GetIterator()
+    while tIter.%GetNext(.tKey, .tRVal) {
+      set tLVal = tLeft.%Get(tKey)
+      // For nested objects/arrays: compare serialized JSON strings
+      if $isobject(tRVal) {
+        set tLSer = $select($isobject(tLVal): tLVal.%ToJSON(), 1: "")
+        set tRSer = tRVal.%ToJSON()
+        if tLSer '= tRSer { quit 0 }
+      } else {
+        if tLVal '= tRVal { quit 0 }
+      }
+    }
+    quit 1
+  }
+  // Array containment: every element of tRight must appear in tLeft
+  if tRight.%IsA("%DynamicArray") {
+    if 'tLeft.%IsA("%DynamicArray") { quit 0 }
+    set tIterR = tRight.%GetIterator()
+    while tIterR.%GetNext(, .tRVal) {
+      set tFound = 0
+      set tIterL = tLeft.%GetIterator()
+      while tIterL.%GetNext(, .tLVal) {
+        if $isobject(tRVal) && $isobject(tLVal) {
+          if tLVal.%ToJSON() = tRVal.%ToJSON() { set tFound = 1  quit }
+        } elseif tLVal = tRVal {
+          set tFound = 1  quit
+        }
+      }
+      if 'tFound { quit 0 }
+    }
+    quit 1
+  }
+  // Scalar equality
+  quit (tLeft = tRight)
+}""",
+)
+
+
 CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     PG_OID,
     PG_PUBLIC_SCHEMA,
@@ -504,4 +561,6 @@ CATALOG_FUNCTIONS: tuple[CatalogFunction, ...] = (
     FORMAT3,
     JSONB_BUILD_OBJECT4,
     JSONB_BUILD_OBJECT6,
+    # Feature 050: jsonb @> containment operator
+    JSONB_CONTAINS,
 )
