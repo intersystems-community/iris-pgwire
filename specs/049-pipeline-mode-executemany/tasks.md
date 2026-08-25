@@ -21,7 +21,7 @@ Research findings (already captured in plan.md Research Notes):
 
 ## Phase 2: Foundational
 
-- [ ] T001 Create `tests/unit/test_pipeline_executemany.py` with class stubs for pure-Python logic tests; create `tests/integration/test_psycopg3_pipeline.py` stub with `@pytest.mark.skipif` guard — verify pytest collects 0 tests, no import errors.
+- [X] T001 Create `tests/unit/test_pipeline_executemany.py` with class stubs for pure-Python logic tests; create `tests/integration/test_psycopg3_pipeline.py` stub with `@pytest.mark.skipif` guard — verify pytest collects 0 tests, no import errors.
 
 ---
 
@@ -34,13 +34,13 @@ Research findings (already captured in plan.md Research Notes):
 
 ### Tests for User Story 1 ⚠️ WRITE FIRST
 
-- [ ] T002 [US1] Write `TestOnConflictFlagPropagation` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests verifying the ON CONFLICT detection flag logic:
+- [X] T002 [US1] Write `TestOnConflictFlagPropagation` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests verifying the ON CONFLICT detection flag logic:
   - `test_on_conflict_detected_in_sql` — `re.search(ON_CONFLICT_PAT, sql)` returns match for `ON CONFLICT DO NOTHING`
   - `test_no_on_conflict_not_detected` — plain INSERT returns no match
   - `test_on_conflict_flag_set_after_strip` — verify execute_many() sets `_had_on_conflict=True` on stripped SQL (test via a thin wrapper / returned metadata)
   - Verify ALL FAIL before implementation
 
-- [ ] T003 [US1] Write `TestRowCountAccuracy` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests on the row count accumulation:
+- [X] T003 [US1] Write `TestRowCountAccuracy` in `tests/unit/test_pipeline_executemany.py` — pure-Python tests on the row count accumulation:
   - `test_successful_rows_counted` — accumulator increments only on non-error rows
   - `test_zero_rows_on_all_errors` — accumulator stays 0 when every row would error
   - These test the counting logic directly, not the IRIS call
@@ -48,21 +48,21 @@ Research findings (already captured in plan.md Research Notes):
 
 ### Implementation for User Story 1
 
-- [ ] T004 [US1] In `src/iris_pgwire/iris_executor.py` `execute_many()`: record `_had_on_conflict` bool from the ON CONFLICT detection (before strip). Pass it to the execution paths.
+- [X] T004 [US1] In `src/iris_pgwire/iris_executor.py` `execute_many()`: record `_had_on_conflict` bool from the ON CONFLICT detection (before strip). Pass it to the execution paths.
 
-- [ ] T005 [US1] In `_execute_many_inline_fallback()` in `src/iris_pgwire/iris_executor.py`: add `on_conflict_present=False` parameter. When True, wrap each row's execute call in `try/except`; catch errors whose message contains "Duplicate key" or "5804"; increment `skipped` counter; continue. Set `rows_affected = len(params_list) - skipped` in returned dict.
+- [X] T005 [US1] In `_execute_many_inline_fallback()` in `src/iris_pgwire/iris_executor.py`: add `on_conflict_present=False` parameter. When True, wrap each row's execute call in `try/except`; catch errors whose message contains "Duplicate key" or "5804"; increment `skipped` counter; continue. Set `rows_affected = len(params_list) - skipped` in returned dict.
 
-- [ ] T006 [US1] In `execute_many()`: when `_had_on_conflict` is True and native executemany raises (IRIS bulk executemany has no per-row error isolation), fall through to `_execute_many_inline_fallback()` with `on_conflict_present=True` instead of re-raising.
+- [X] T006 [US1] In `execute_many()`: when `_had_on_conflict` is True and native executemany raises (IRIS bulk executemany has no per-row error isolation), fall through to `_execute_many_inline_fallback()` with `on_conflict_present=True` instead of re-raising.
 
-- [ ] T007 [US1] Run `pytest tests/unit/test_pipeline_executemany.py` — all tests must pass.
+- [X] T007 [US1] Run `pytest tests/unit/test_pipeline_executemany.py` — all tests must pass.
 
 ### Integration gate for User Story 1
 
-- [ ] T008 [US1] Write integration test `test_executemany_on_conflict_do_nothing` in `tests/integration/test_psycopg3_pipeline.py`:
+- [X] T008 [US1] Write integration test `test_executemany_on_conflict_do_nothing` in `tests/integration/test_psycopg3_pipeline.py`:
   - CREATE TABLE t_049(id INT PRIMARY KEY, v TEXT)
   - `cursor.executemany("INSERT INTO t_049 VALUES (%s, %s) ON CONFLICT DO NOTHING", [(1,'a'),(1,'dup'),(2,'b')])`
   - Assert: table has 2 rows, no exception raised.
-- [ ] T009 [US1] Write integration test `test_executemany_row_count` in same file:
+- [X] T009 [US1] Write integration test `test_executemany_row_count` in same file:
   - executemany 100 unique rows, verify result metadata rows_affected == 100.
 
 **Checkpoint**: Phase 3 done when T007 passes + T008/T009 pass on real IRIS (skip-guarded).
@@ -77,16 +77,16 @@ Research findings (already captured in plan.md Research Notes):
 
 ### Integration Tests for User Story 2 ⚠️ WRITE FIRST
 
-- [ ] T010 [US2] Write integration test `test_pipeline_sync_sends_rfq` in `tests/integration/test_psycopg3_pipeline.py`:
+- [X] T010 [US2] Write integration test `test_pipeline_sync_sends_rfq` in `tests/integration/test_psycopg3_pipeline.py`:
   - Use psycopg3 pipeline context: `with conn.pipeline():` — send 3 INSERTs, call pipeline sync
   - Verify: all 3 rows land, no client hang, connection still usable after pipeline.
-- [ ] T011 [US2] Write integration test `test_flush_mid_pipeline` in same file:
+- [X] T011 [US2] Write integration test `test_flush_mid_pipeline` in same file:
   - Use psycopg3 to send Flush (via `conn.pgconn.flush()` or pipeline.communicate())
   - Verify: no ReadyForQuery sent prematurely, subsequent queries work.
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Run integration tests T010/T011 against real IRIS. If tests pass with no code changes → document that Sync/Flush is already correct. If tests fail → fix the specific protocol issue uncovered by the test.
+- [X] T012 [US2] Run integration tests T010/T011 against real IRIS. If tests pass with no code changes → document that Sync/Flush is already correct. If tests fail → fix the specific protocol issue uncovered by the test.
 
 **Checkpoint**: T010/T011 pass on real IRIS.
 
@@ -94,9 +94,9 @@ Research findings (already captured in plan.md Research Notes):
 
 ## Phase 5: Polish
 
-- [ ] T013 Run `pytest tests/unit/ --tb=short -q` — all existing tests pass, no regressions.
-- [ ] T014 Update `CHANGELOG.md` under `[Unreleased]` with fix description.
-- [ ] T015 Mark tasks.md tasks complete as each lands.
+- [X] T013 Run `pytest tests/unit/ --tb=short -q` — all existing tests pass, no regressions.
+- [X] T014 Update `CHANGELOG.md` under `[Unreleased]` with fix description.
+- [X] T015 Mark tasks.md tasks complete as each lands.
 
 ---
 
