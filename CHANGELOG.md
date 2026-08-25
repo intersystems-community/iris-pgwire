@@ -7,15 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-25
+
 ### Added
 
-- **JSONB containment operator `@>` / `<@`** (feature 050): SQL normalizer now rewrites `col::jsonb @> val` to `PGWire.JSONB_CONTAINS(col, val)` and `<@` with swapped arguments. New `JSONB_CONTAINS` ObjectScript procedure installed at startup via `catalog/functions.py`; implements object, array, and scalar containment semantics. 22 unit tests.
+- **JSONB containment operator `@>` / `<@`** (feature 050): SQL normalizer now rewrites `col::jsonb @> val` to `PGWire.JSONB_CONTAINS(col, val) = 1` and `<@` with swapped arguments. `::jsonb` casts on parameter placeholders are stripped (IRIS stores JSON as VARCHAR). New `JSONB_CONTAINS` ObjectScript stored procedure installed at startup via `catalog/functions.py`; implements recursive object, array, and scalar containment semantics. Verified against [SimpleMem](https://github.com/koaning/simplemem) fork. 22 unit tests + 5 integration tests.
 
 ### Fixed
 
-- **`execute_many()` ON CONFLICT duplicate suppression** (feature 049): When `ON CONFLICT DO NOTHING` is stripped before batch execution, per-row IRIS duplicate key errors (5804) are now suppressed and counted as skipped rather than crashing the entire batch. 17 unit tests + 3 skip-guarded integration tests.
+- **`execute_many()` ON CONFLICT duplicate suppression** (feature 049): When `ON CONFLICT DO NOTHING` is stripped before batch execution, per-row IRIS duplicate key errors (5804) are now suppressed and counted as skipped rather than crashing the entire batch. psycopg3 pipeline-mode Sync/Flush already handled correctly (confirmed by source audit). 17 unit tests + 3 integration tests.
 
-- **SimpleMem compatibility** (feature 048): `LIMIT ?` / `OFFSET ?` inlined as integer literals; `CREATE EXTENSION` silently swallowed; `ILIKE` → `LOWER() LIKE LOWER()`; IRIS LONGVARCHAR/CLOB stream objects unwrapped; `ON CONFLICT` stripped in `execute_many()` path. 27 regression tests.
+- **SimpleMem client compatibility** (feature 048): Five wire-protocol / SQL translation gaps that prevented [SimpleMem](https://github.com/koaning/simplemem) from running against iris-pgwire:
+  - `LIMIT ?` / `OFFSET ?` parameterized clauses are now inlined as integer literals before execution (IRIS rejects `LIMIT ?`)
+  - `CREATE EXTENSION IF NOT EXISTS <name>` is silently accepted (was: syntax error)
+  - `ILIKE` / `NOT ILIKE` rewritten to `LOWER(col) [NOT] LIKE LOWER(val)`
+  - IRIS LONGVARCHAR / CLOB stream objects unwrapped to plain strings in result rows
+  - `ON CONFLICT DO NOTHING` stripped in the `execute_many()` code path (was only stripped in the single-row path)
+  - 27 regression unit tests covering all five cases.
 
 ## [1.6.0] - 2026-08-24
 
