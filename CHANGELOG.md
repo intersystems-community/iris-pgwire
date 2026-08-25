@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **JSONB containment operator `@>` / `<@`** (feature 050): SQL normalizer now rewrites `col::jsonb @> val` to `PGWire.JSONB_CONTAINS(col, val)` and `<@` with swapped arguments. New `JSONB_CONTAINS` ObjectScript procedure installed at startup via `catalog/functions.py`; implements object, array, and scalar containment semantics. 22 unit tests.
+
+### Fixed
+
+- **`execute_many()` ON CONFLICT duplicate suppression** (feature 049): When `ON CONFLICT DO NOTHING` is stripped before batch execution, per-row IRIS duplicate key errors (5804) are now suppressed and counted as skipped rather than crashing the entire batch. 17 unit tests + 3 skip-guarded integration tests.
+
+- **SimpleMem compatibility** (feature 048): `LIMIT ?` / `OFFSET ?` inlined as integer literals; `CREATE EXTENSION` silently swallowed; `ILIKE` → `LOWER() LIKE LOWER()`; IRIS LONGVARCHAR/CLOB stream objects unwrapped; `ON CONFLICT` stripped in `execute_many()` path. 27 regression tests.
+
 ## [1.6.0] - 2026-08-24
 
 ### Added
