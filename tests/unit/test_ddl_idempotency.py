@@ -228,3 +228,21 @@ class TestHandle:
         result = handler.handle(sql, error)
         assert result.success is True
         assert result.skipped is True
+
+    def test_sqlcode_324_skips_without_text_match(self, handler):
+        """SQLError with .sqlcode=-324 triggers skip even if str(e) has no duplicate text."""
+        sql = "CREATE INDEX IF NOT EXISTS bugidx ON t (vec)"
+        # Simulate iris.sql.exec SQLError: str() = plain message, sqlcode attr = -324
+        error = Exception("Class 'User.T' already has index named 'bugidx'.")
+        error.sqlcode = -324  # type: ignore[attr-defined]
+        result = handler.handle(sql, error)
+        assert result.success is True
+        assert result.skipped is True
+
+    def test_sqlcode_324_without_if_not_exists_still_fails(self, handler):
+        """sqlcode=-324 without IF NOT EXISTS should not be silently swallowed."""
+        sql = "CREATE INDEX bugidx ON t (vec)"
+        error = Exception("Class 'User.T' already has index named 'bugidx'.")
+        error.sqlcode = -324  # type: ignore[attr-defined]
+        result = handler.handle(sql, error)
+        assert result.success is False

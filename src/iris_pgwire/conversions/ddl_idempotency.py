@@ -44,8 +44,11 @@ class DdlErrorHandler:
             DdlResult indicating if the operation succeeded, was skipped, or failed
         """
         error_msg = str(error)
+        # iris.sql.exec raises SQLError with a .sqlcode attribute; -324 is the
+        # IRIS SQLCODE for "already has index named" (not always present in str(e)).
+        sqlcode = getattr(error, "sqlcode", None)
 
-        if self._is_duplicate_error(error_msg):
+        if sqlcode == -324 or self._is_duplicate_error(error_msg):
             if self.has_if_not_exists(sql):
                 obj_name = self.extract_object_name(sql)
                 obj_type = self._extract_object_type(sql)
