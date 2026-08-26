@@ -63,7 +63,9 @@ dependencies = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-instrumentation-asyncio>=0.41b0",
     "opentelemetry-exporter-otlp>=1.20.0",
-    "pydantic>=2.0.0",
+    # pydantic>=2.12 requires typing_extensions>=4.14.1; IRIS irispython ships 4.12.2
+    "pydantic>=2.0.0,<2.12",
+    "typing_extensions>=4.12.2,<5",
     "pyyaml>=6.0.0",
     "prometheus-client>=0.17.0",
 ]

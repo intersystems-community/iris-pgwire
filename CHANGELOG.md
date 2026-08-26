@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-08-26
+
+### Fixed
+
+- **IRIS irispython compatibility**: Capped `pydantic<2.12` and added `typing_extensions>=4.12.2,<5` to prevent `pydantic>=2.12` pulling in `typing_extensions>=4.14.1`, which is newer than the `4.12.2` bundled with IRIS irispython (affects IRIS 2024.x and 2025.x). Packages running iris-pgwire inside an IRIS embedded Python environment no longer get a `DistributionNotFound` / version conflict on install.
+
 ## [1.7.0] - 2026-08-25
 
 ### Added
