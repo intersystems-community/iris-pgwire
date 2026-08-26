@@ -491,57 +491,57 @@ JSONB_BUILD_OBJECT6 = CatalogFunction(
 
 JSONB_CONTAINS = CatalogFunction(
     name="JSONB_CONTAINS",
-    signature="leftJson VARCHAR(65535), rightJson VARCHAR(65535)",
+    signature="LEFTJSON VARCHAR(65535), RIGHTJSON VARCHAR(65535)",
     returns="INTEGER",
     purpose="PostgreSQL jsonb @> containment operator — returns 1 if rightJson is contained in leftJson, 0 otherwise",
     body="""{
-  set tResult = 0
-  if (rightJson = "") || (rightJson = "{}") || (rightJson = "[]") { quit 1 }
-  if (leftJson = "") || (leftJson = "null") { quit 0 }
-  set tLeft = "", tRight = ""
-  try {
-    set tLeft = ##class(%DynamicAbstractObject).%FromJSON(leftJson)
-    set tRight = ##class(%DynamicAbstractObject).%FromJSON(rightJson)
-  } catch ex {
-    set tLeft = "", tRight = ""
+  SET TRESULT = 0
+  IF (RIGHTJSON = "") || (RIGHTJSON = "{}") || (RIGHTJSON = "[]") { QUIT 1 }
+  IF (LEFTJSON = "") || ($ZCVT(LEFTJSON,"L") = "null") { QUIT 0 }
+  SET TLEFT = "", TRIGHT = ""
+  TRY {
+    SET TLEFT = ##CLASS(%DynamicAbstractObject).%FromJSON(LEFTJSON)
+    SET TRIGHT = ##CLASS(%DynamicAbstractObject).%FromJSON(RIGHTJSON)
+  } CATCH EX {
+    SET TLEFT = "", TRIGHT = ""
   }
-  if $isobject(tRight) = 0 { quit (tLeft = tRight) }
-  if tRight.%IsA("%DynamicObject") {
-    if $isobject(tLeft) = 0 { quit 0 }
-    if 'tLeft.%IsA("%DynamicObject") { quit 0 }
-    set tResult = 1
-    set tIter = tRight.%GetIterator()
-    while tIter.%GetNext(.tKey, .tRVal) && tResult {
-      set tLVal = tLeft.%Get(tKey)
-      if $isobject(tRVal) {
-        if $isobject(tLVal) = 0 { set tResult = 0  quit }
-        if ##class(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(tLVal.%ToJSON(), tRVal.%ToJSON()) = 0 { set tResult = 0 }
-      } else {
-        if (tLVal '= tRVal) { set tResult = 0 }
+  IF $ISOBJECT(TRIGHT) = 0 { QUIT (TLEFT = TRIGHT) }
+  IF $ZCVT($CLASSNAME(TRIGHT),"U") = "%LIBRARY.DYNAMICOBJECT" {
+    IF $ISOBJECT(TLEFT) = 0 { QUIT 0 }
+    IF $ZCVT($CLASSNAME(TLEFT),"U") '= "%LIBRARY.DYNAMICOBJECT" { QUIT 0 }
+    SET TRESULT = 1
+    SET TITER = TRIGHT.%GetIterator()
+    WHILE TITER.%GetNext(.TKEY, .TRVAL) && TRESULT {
+      SET TLVAL = TLEFT.%Get(TKEY)
+      IF $ISOBJECT(TRVAL) {
+        IF $ISOBJECT(TLVAL) = 0 { SET TRESULT = 0  QUIT }
+        IF ##CLASS(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(TLVAL.%ToJSON(), TRVAL.%ToJSON()) = 0 { SET TRESULT = 0 }
+      } ELSE {
+        IF (TLVAL '= TRVAL) { SET TRESULT = 0 }
       }
     }
-    quit tResult
+    QUIT TRESULT
   }
-  if tRight.%IsA("%DynamicArray") {
-    if $isobject(tLeft) = 0 { quit 0 }
-    if 'tLeft.%IsA("%DynamicArray") { quit 0 }
-    set tResult = 1
-    set tIterR = tRight.%GetIterator()
-    while tIterR.%GetNext(, .tRVal) && tResult {
-      set tFound = 0
-      set tIterL = tLeft.%GetIterator()
-      while tIterL.%GetNext(, .tLVal) {
-        if $isobject(tRVal) && $isobject(tLVal) {
-          if ##class(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(tLVal.%ToJSON(), tRVal.%ToJSON()) { set tFound = 1  quit }
-        } elseif (tLVal = tRVal) {
-          set tFound = 1  quit
+  IF $ZCVT($CLASSNAME(TRIGHT),"U") = "%LIBRARY.DYNAMICARRAY" {
+    IF $ISOBJECT(TLEFT) = 0 { QUIT 0 }
+    IF $ZCVT($CLASSNAME(TLEFT),"U") '= "%LIBRARY.DYNAMICARRAY" { QUIT 0 }
+    SET TRESULT = 1
+    SET TITERR = TRIGHT.%GetIterator()
+    WHILE TITERR.%GetNext(, .TRVAL) && TRESULT {
+      SET TFOUND = 0
+      SET TITERL = TLEFT.%GetIterator()
+      WHILE TITERL.%GetNext(, .TLVAL) {
+        IF $ISOBJECT(TRVAL) && $ISOBJECT(TLVAL) {
+          IF ##CLASS(PGWire.funcJSONBCONTAINS).JSONBCONTAINS(TLVAL.%ToJSON(), TRVAL.%ToJSON()) { SET TFOUND = 1  QUIT }
+        } ELSEIF (TLVAL = TRVAL) {
+          SET TFOUND = 1  QUIT
         }
       }
-      if 'tFound { set tResult = 0 }
+      IF 'TFOUND { SET TRESULT = 0 }
     }
-    quit tResult
+    QUIT TRESULT
   }
-  quit (tLeft = tRight)
+  QUIT (TLEFT = TRIGHT)
 }""",
 )
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-08-26
+
+### Fixed
+
+- **`JSONB_CONTAINS` stored procedure always returning 1**: IRIS SQL DDL compiled the function body with uppercase parameter names (`LEFTJSON`, `RIGHTJSON`) but the function signature used camelCase (`leftJson`, `rightJson`). Since ObjectScript variable names are case-sensitive, the body variables were always undefined at runtime; IRIS treated the `<UNDEFINED>` error in the early-exit check as truthy, short-circuiting to `QUIT 1`. Fixed by aligning the signature to uppercase (`LEFTJSON VARCHAR(65535), RIGHTJSON VARCHAR(65535)`). Also hardened the `"null"` left-operand guard against IRIS string-literal uppercasing by using `$ZCVT(LEFTJSON,"L") = "null"` instead of a bare literal comparison.
+
+- **`CREATE INDEX IF NOT EXISTS` not idempotent**: IRIS raises `"Class 'Schema.Table' already has index named 'IdxName'."` when a duplicate index is created, but `DdlErrorHandler._is_duplicate_error()` did not match this message. Added `r"already\s+has\s+index\s+named"` to the duplicate-error patterns so `IF NOT EXISTS` is honoured correctly.
+
 ## [1.7.1] - 2026-08-26
 
 ### Fixed

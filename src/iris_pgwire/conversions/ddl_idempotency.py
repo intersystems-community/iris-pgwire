@@ -109,6 +109,8 @@ class DdlErrorHandler:
             r"already\s+exists",
             r"Duplicate\s+table\s+name",
             r"Duplicate\s+index\s+name",
+            # IRIS: "Class 'Schema.Table' already has index named 'IdxName'."
+            r"already\s+has\s+index\s+named",
             r"SQLCODE\s*[:\s]\s*<?-?\d+>?",  # IRIS SQLCODEs often indicate duplicates
         ]
         return any(re.search(p, error_msg, re.IGNORECASE) for p in patterns)
