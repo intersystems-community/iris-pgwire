@@ -255,9 +255,10 @@ class IRISSQLConstructRegistry:
 
         # HNSW Index — Form 1: pgvector USING hnsw (col ops) [WITH (...)]
         # Handles schema-qualified table names (schema.table)
+        _HNSW_INE = r"(?:IF\s+NOT\s+EXISTS|/\*\s*IF_NOT_EXISTS\s*\*/)?\s*"
         self.add_construct(
             name="HNSW_INDEX",
-            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s+ON\s+[\w.]+\s+USING\s+hnsw\s*\([^)]+\)(?:\s+WITH\s*\([^)]*\))?",
+            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+" + _HNSW_INE + r"\w+\s+ON\s+[\w.]+\s+USING\s+hnsw\s*\([^)]+\)(?:\s+WITH\s*\([^)]*\))?",
             replacement=None,
             post_process=self._translate_hnsw_index,
             confidence=0.95,
@@ -268,7 +269,7 @@ class IRISSQLConstructRegistry:
         # e.g. CREATE INDEX i ON t (emb) USING HNSW WITH (M=16, Distance='COSINE')
         self.add_construct(
             name="HNSW_INDEX_COL_FIRST",
-            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s+ON\s+[\w.]+\s*\([^)]+\)\s+USING\s+HNSW(?:\s+WITH\s*\([^)]*\))?",
+            pattern=r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+" + _HNSW_INE + r"\w+\s+ON\s+[\w.]+\s*\([^)]+\)\s+USING\s+HNSW(?:\s+WITH\s*\([^)]*\))?",
             replacement=None,
             post_process=self._translate_hnsw_index,
             confidence=0.95,

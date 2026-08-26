@@ -308,3 +308,40 @@ class TestRoundtrip:
         iris_sql = spec.to_iris_sql()
         assert "Distance='DotProduct'" in iris_sql
         assert "M=16" in iris_sql
+
+
+# ---------------------------------------------------------------------------
+# /* IF_NOT_EXISTS */ comment marker (inserted by CREATE_INDEX_IF_NOT_EXISTS
+# construct before HNSW translation runs)
+# ---------------------------------------------------------------------------
+
+
+class TestIfNotExistsCommentMarker:
+    """Regression tests: HNSW parser must accept /* IF_NOT_EXISTS */ marker."""
+
+    def test_form1_comment_marker(self):
+        sql = "CREATE INDEX /* IF_NOT_EXISTS */ idx ON t USING hnsw (vec vector_cosine_ops)"
+        spec = HnswIndexSpec.from_postgres_sql(sql)
+        assert spec is not None
+        assert spec.index_name == "idx"
+        assert spec.if_not_exists is True
+
+    def test_form2_comment_marker(self):
+        sql = "CREATE INDEX /* IF_NOT_EXISTS */ idx ON t (vec) USING HNSW"
+        spec = HnswIndexSpec.from_postgres_sql(sql)
+        assert spec is not None
+        assert spec.index_name == "idx"
+        assert spec.if_not_exists is True
+
+    def test_form1_marker_with_spaces(self):
+        sql = "CREATE INDEX  /* IF_NOT_EXISTS */  idx ON t USING hnsw (vec vector_cosine_ops)"
+        spec = HnswIndexSpec.from_postgres_sql(sql)
+        assert spec is not None
+        assert spec.if_not_exists is True
+
+    def test_form1_marker_roundtrip_produces_clean_iris_sql(self):
+        sql = "CREATE INDEX /* IF_NOT_EXISTS */ idx ON t USING hnsw (vec vector_cosine_ops)"
+        spec = HnswIndexSpec.from_postgres_sql(sql)
+        iris_sql = spec.to_iris_sql()
+        assert "IF_NOT_EXISTS" not in iris_sql
+        assert "CREATE INDEX idx ON t (vec) AS HNSW(Distance='Cosine')" == iris_sql

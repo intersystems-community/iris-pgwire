@@ -65,8 +65,10 @@ class HnswIndexSpec:
         Raises ValueError for unsupported operators (e.g. vector_l2_ops).
         """
         # Form 1: USING hnsw (col ops) [WITH (...)]
+        # (?P<ine>) matches "IF NOT EXISTS" or the /* IF_NOT_EXISTS */ comment marker
+        # that the construct translator inserts before HNSW translation runs.
         form1 = re.search(
-            r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?P<ine>IF\s+NOT\s+EXISTS\s+)?"
+            r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?P<ine>IF\s+NOT\s+EXISTS|/\*\s*IF_NOT_EXISTS\s*\*/)?\s*"
             r"(?P<name>\w+)\s+ON\s+(?P<table>[\w.]+)\s+"
             r"USING\s+hnsw\s*\(\s*(?P<col>\w+)\s+(?P<op>\w+)\s*\)"
             r"(?:\s+WITH\s*\((?P<with>[^)]*)\))?",
@@ -99,7 +101,7 @@ class HnswIndexSpec:
 
         # Form 2: (col) USING HNSW [WITH (...)]
         form2 = re.search(
-            r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?P<ine>IF\s+NOT\s+EXISTS\s+)?"
+            r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?P<ine>IF\s+NOT\s+EXISTS|/\*\s*IF_NOT_EXISTS\s*\*/)?\s*"
             r"(?P<name>\w+)\s+ON\s+(?P<table>[\w.]+)\s*"
             r"\(\s*(?P<col>\w+)\s*\)\s+"
             r"USING\s+HNSW"

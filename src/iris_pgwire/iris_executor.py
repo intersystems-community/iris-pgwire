@@ -1258,7 +1258,10 @@ class IRISExecutor:
                 # Check both for raised exceptions and for success=False results
                 if not result.get("success", True):
                     error_msg = result.get("error", "")
-                    ddl_result = self.ddl_handler.handle(sql, Exception(error_msg))
+                    # Use original_sql (pre-translation) so DdlErrorHandler can see
+                    # IF NOT EXISTS even when HNSW translation strips the marker.
+                    _sql_for_ddl = kwargs.get("original_sql") or sql
+                    ddl_result = self.ddl_handler.handle(_sql_for_ddl, Exception(error_msg))
                     if ddl_result.success and ddl_result.skipped:
                         logger.info(
                             f"DDL idempotency: skipped '{ddl_result.object_name}' because it already exists",
@@ -1956,6 +1959,7 @@ class IRISExecutor:
         is_embedded: bool = True,
         session_id: str | None = None,
         connection: Any = None,
+        original_sql: str | None = None,
     ) -> Any:
         """Execute SQL with DDL idempotency handling."""
         iris = self._import_iris()
@@ -2030,7 +2034,10 @@ class IRISExecutor:
                             pass
                     raise e
         except Exception as e:
-            result = self.ddl_handler.handle(sql, e)
+            # Use original_sql (pre-translation) so DdlErrorHandler sees IF NOT EXISTS
+            # even when HNSW translation strips the marker from the final SQL.
+            _sql_for_ddl = original_sql or sql
+            result = self.ddl_handler.handle(_sql_for_ddl, e)
             if result.success and result.skipped:
                 return NoopCursor()
             raise e
@@ -2479,7 +2486,8 @@ class IRISExecutor:
                 pass
 
     def _execute_embedded_statement_sequence(
-        self, statements: list[str], params: list | None, session_id: str | None
+        self, statements: list[str], params: list | None, session_id: str | None,
+        original_sql: str | None = None,
     ) -> Any:
         """Execute statement sequence for embedded mode and return the final cursor."""
         if not statements:
@@ -2493,10 +2501,15 @@ class IRISExecutor:
             )
 
         for stmt in statements[:-1]:
-            tmp_result = self._safe_execute(stmt, None, is_embedded=True, session_id=session_id)
+            tmp_result = self._safe_execute(
+                stmt, None, is_embedded=True, session_id=session_id, original_sql=original_sql
+            )
             self._close_cursor_if_possible(tmp_result)
 
-        return self._safe_execute(statements[-1], params, is_embedded=True, session_id=session_id)
+        return self._safe_execute(
+            statements[-1], params, is_embedded=True, session_id=session_id,
+            original_sql=original_sql,
+        )
 
     def _resolve_embedded_returning_result(
         self,
@@ -2733,7 +2746,7 @@ class IRISExecutor:
 
                 statements = self._split_sql_statements(optimized_sql)
                 result = self._execute_embedded_statement_sequence(
-                    statements, optimized_params, session_id
+                    statements, optimized_params, session_id, original_sql=original_sql
                 )
 
                 result = self._resolve_embedded_returning_result(
@@ -3314,7 +3327,8 @@ class IRISExecutor:
                 # Execute all statements except the last
                 for stmt in statements[:-1]:
                     tmp_cursor = self._safe_execute(
-                        stmt, None, is_embedded=False, session_id=session_id, connection=conn
+                        stmt, None, is_embedded=False, session_id=session_id, connection=conn,
+                        original_sql=original_sql,
                     )
                     if tmp_cursor:
                         try:
@@ -3332,6 +3346,7 @@ class IRISExecutor:
                         is_embedded=False,
                         session_id=session_id,
                         connection=conn,
+                        original_sql=original_sql,
                     )
                 except Exception as exc:
                     if plan.conflict_action and self._is_unique_violation(exc):

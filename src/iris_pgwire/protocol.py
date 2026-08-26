@@ -1389,6 +1389,7 @@ class PGWireProtocol:
                 session_id=self.connection_id,
                 in_transaction=in_txn,
                 autocommit=autocommit,
+                original_sql=translation_result.get("original_sql", query),
             )
 
             # Add translation metadata to result for debugging/monitoring
@@ -1407,7 +1408,12 @@ class PGWireProtocol:
             else:
                 error_msg = result.get("error", "Query execution failed")
                 if (
-                    VectorQueryOptimizer.sql_has_if_not_exists(final_sql)
+                    (
+                        VectorQueryOptimizer.sql_has_if_not_exists(final_sql)
+                        or VectorQueryOptimizer.sql_has_if_not_exists(
+                            translation_result.get("original_sql", "")
+                        )
+                    )
                     and VectorQueryOptimizer.is_duplicate_object_error(error_msg)
                 ):
                     logger.info(

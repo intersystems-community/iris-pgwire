@@ -788,7 +788,10 @@ class VectorQueryOptimizer:
     @staticmethod
     def is_duplicate_object_error(error_msg: str) -> bool:
         """Return True if error_msg indicates an object-already-exists SQLCODE."""
-        return any(code in error_msg for code in VectorQueryOptimizer._IRIS_DUPLICATE_CODES)
+        if any(code in error_msg for code in VectorQueryOptimizer._IRIS_DUPLICATE_CODES):
+            return True
+        # IRIS text message for duplicate index (no SQLCODE emitted)
+        return bool(re.search(r"already\s+has\s+index\s+named|already\s+exists", error_msg, re.IGNORECASE))
 
     @staticmethod
     def sql_has_if_not_exists(sql: str) -> bool:

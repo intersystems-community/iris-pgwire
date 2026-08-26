@@ -105,6 +105,10 @@ def test_json_operator_wired_through_optimizer(opt):
         "error 5016 occurred",
         "error 5019",
         "error 5002",
+        # IRIS text message for duplicate index (no SQLCODE emitted)
+        "Class 'User.TESTHNSWIDX' already has index named 'TESTHNSWIDXVECIDX'.",
+        "already has index named 'foo'",
+        "Object already exists",
     ],
 )
 def test_is_duplicate_object_error_true(msg):
