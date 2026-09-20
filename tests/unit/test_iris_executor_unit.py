@@ -550,12 +550,28 @@ class TestGetExecutor:
 # ---------------------------------------------------------------------------
 
 class TestDetectIrisEnvironment:
-    def test_embedded_detection_sets_flag(self, iris_mock):
-        from iris_pgwire.iris_executor import IRISExecutor
-        config = {"host": "localhost", "port": 1972, "namespace": "USER",
-                  "username": "SuperUser", "password": "SYS"}
-        ex = IRISExecutor(config)
-        assert ex.embedded_mode is True
+    def test_embedded_detection_sets_flag(self):
+        """A MagicMock no longer passes for embedded, so the stand-in is a module.
+
+        Detection rejects a test double on purpose: the installed host driver
+        hands one out for every attribute, and the old check read that as
+        embedded. See tests/unit/test_embedded_detection_is_not_fooled.py. The
+        rest of this file forces `embedded_mode` rather than detecting it, so
+        only this test needed the realistic shape.
+        """
+        import types
+
+        iris_mod = types.ModuleType("iris")
+        iris_mod.sql = types.SimpleNamespace(exec=lambda statement, *a: iter(()))
+        sys.modules["iris"] = iris_mod
+        try:
+            from iris_pgwire.iris_executor import IRISExecutor
+            config = {"host": "localhost", "port": 1972, "namespace": "USER",
+                      "username": "SuperUser", "password": "SYS"}
+            ex = IRISExecutor(config)
+            assert ex.embedded_mode is True
+        finally:
+            sys.modules.pop("iris", None)
 
     def test_no_iris_module_sets_external(self):
         """When iris module has no sql.exec, embedded_mode is False."""

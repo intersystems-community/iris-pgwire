@@ -290,12 +290,45 @@ class IRISExecutor(IsolationMixin):
             except ImportError:
                 return None
 
+    @staticmethod
+    def _iris_is_embedded(iris) -> bool:
+        """Decide whether `iris` is the embedded module, affirmatively.
+
+        `hasattr` cannot answer this. Measured on both sides: on a host with
+        `iris-embedded-python-wrapper` installed the `iris` module carries a
+        module-level `__getattr__` that returns `MagicMock()` for any name it
+        does not have (the stock driver alone raises `AttributeError`), and the
+        embedded module answers any name with an `iris.package` placeholder — so `hasattr(iris, "sql")` and
+        `hasattr(iris.sql, "exec")` are True in both environments. The old check
+        read that as embedded on a host that cannot be, and then called
+        `MagicMock.exec` for every query: the wrong execution path, chosen
+        silently, answering rather than raising.
+
+        Two properties separate them, both measured (see
+        tests/unit/test_embedded_detection_is_not_fooled.py):
+
+          - the embedded module *declares* `sql`, so it is in `vars(iris)`,
+            where a name manufactured on demand never lands;
+          - the embedded `iris.sql.exec` is a real callable, not a test double.
+        """
+        if iris is None:
+            return False
+        sql = vars(iris).get("sql")
+        if sql is None:
+            return False
+        exec_callable = getattr(sql, "exec", None)
+        if not callable(exec_callable):
+            return False
+        # A double assigned directly clears the declaration check above. Our own
+        # suite assigns one; a deployment never should.
+        return type(exec_callable).__module__.split(".")[0] != "unittest"
+
     def _detect_iris_environment(self):
         """Detect if we're running in IRIS embedded Python environment"""
         iris = self._import_iris()
         if iris:
             # Check if we're in embedded mode by testing for embedded-specific features
-            if hasattr(iris, "sql") and hasattr(iris.sql, "exec"):
+            if self._iris_is_embedded(iris):
                 self.embedded_mode = True
                 print("🚀 IRIS embedded Python detected", flush=True)
                 logger.info("IRIS embedded Python detected")
