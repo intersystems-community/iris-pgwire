@@ -60,19 +60,34 @@ so a transient conflict reached applications as a bug in their SQL.
 "another user" there means another *connection*, so a client shown that text under
 `42000` reads it as a privilege problem with its own query.
 
-Anything unrecognised keeps the historical `42000`. That is deliberate: a wrong
-confident classification is worse than the vague one clients already cope with,
-and the mapping only grows as codes are measured.
+Anything unrecognised gets `XX000` (`internal_error`), PostgreSQL's own code for
+a failure it cannot classify. A wrong confident classification is worse than no
+classification, and the mapping only grows as codes are measured.
+
+This used to be `42000`, defended as the vague answer clients already coped with.
+That was not accurate. `42000` is class 42, which tells a client its statement
+text is at fault, so every code not yet in the table sent clients off to rewrite
+SQL that was fine — the same defect the `-110` and `-114` mappings above fixed,
+left in place as the default. Class XX carries no instruction, which is the
+honest content of an unmeasured error. ODBC's `HY000` would be the equivalent in
+a DB-API layer, but it is not in PostgreSQL's table at all and would reach a
+psycopg client as an unknown class with no condition name.
+
+This is client-visible for every unmapped code: anything matching on `42000` to
+recognise an IRIS error stops matching. Nothing narrows a query's meaning on it —
+the mapped codes above are unaffected, and a call site that supplies its own
+`default` still keeps it.
 """
 
 from __future__ import annotations
 
 import re
 
-# What shipped before this module existed. Unmapped errors keep it, so no client
-# relying on the old behaviour regresses.
-DEFAULT_SQLSTATE = "42000"
-DEFAULT_CONDITION = "syntax_error_or_access_rule_violation"
+# Unmapped errors are reported as unclassified rather than as a syntax error.
+# Class 42 tells a client to rewrite a statement that was fine; class XX tells it
+# nothing, which is the truth when the code has not been measured.
+DEFAULT_SQLSTATE = "XX000"
+DEFAULT_CONDITION = "internal_error"
 
 # IRIS SQLCODE -> (SQLSTATE, PostgreSQL condition name).
 SQLCODE_MAP: dict[int, tuple[str, str]] = {
@@ -217,9 +232,9 @@ def classify_iris_error(
 
     ``default`` lets a call site keep the code it already reported when nothing
     is recognised. That matters where the existing code is *more* specific than
-    `42000` for the non-IRIS case: a genuine transport failure on the query path
-    really is `08000`, and only an IRIS error arriving as a Python exception
-    should be reclassified.
+    the unclassified fallback for the non-IRIS case: a genuine transport failure
+    on the query path really is `08000`, and only an IRIS error arriving as a
+    Python exception should be reclassified.
     """
     fallback = default if default is not None else (DEFAULT_SQLSTATE, DEFAULT_CONDITION)
     if not message:

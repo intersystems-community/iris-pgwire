@@ -36,6 +36,7 @@ from __future__ import annotations
 import pytest
 
 from iris_pgwire.sql_translator.sqlstate import (
+    DEFAULT_CONDITION,
     DEFAULT_SQLSTATE,
     classify_iris_error,
 )
@@ -250,12 +251,37 @@ class TestFallbackIsConservative:
             "no sqlcode here at all",
         ],
     )
-    def test_unknown_errors_keep_the_previous_behaviour(self, message):
+    def test_unknown_errors_fall_back_to_the_default(self, message):
         assert state(message) == DEFAULT_SQLSTATE
 
-    def test_the_default_is_what_shipped_before(self):
-        """Unmapped codes must not change behaviour for anyone relying on it."""
-        assert DEFAULT_SQLSTATE == "42000"
+    def test_the_default_says_nothing_rather_than_something_wrong(self):
+        """`XX000`, not `42000`, for a code this table has not measured.
+
+        The default used to be `42000`, defended as the vague answer clients
+        already coped with. It is not vague: class 42 tells a client its
+        statement text is at fault, so an unmapped error sent a client off to
+        rewrite SQL that was fine. That is the same defect the `-110` / `-114`
+        mappings fixed — class 42 suppressing a retry — left in place for every
+        code not yet measured.
+
+        Class XX is PostgreSQL's own unclassified code and carries no
+        instruction, which is the truth here. Measured against PostgreSQL 16:
+        `XX000` is a real SQLSTATE with the condition name `internal_error`,
+        where ODBC's `HY000` is not in PostgreSQL's table at all and reaches a
+        psycopg client as an unknown class with no condition name.
+        """
+        assert DEFAULT_SQLSTATE == "XX000"
+        assert DEFAULT_CONDITION == "internal_error"
+
+    def test_the_default_is_not_in_a_class_that_directs_the_client(self):
+        """The property that matters, stated independently of the code chosen.
+
+        Class 42 tells a client to fix its statement; class 40 tells it to
+        retry; class 08 tells it the connection is gone. An unmeasured error
+        justifies none of those, so the default must not live in any class that
+        a client acts on.
+        """
+        assert DEFAULT_SQLSTATE[:2] not in {"40", "42", "08", "22", "23"}
 
     def test_a_positive_sqlcode_is_not_an_error(self):
         """100 is 'no more rows', not a failure; it must not be classified."""
