@@ -391,5 +391,17 @@ async def main():
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def cli():
+    """Synchronous entry point for the installed `iris-pgwire` command.
+
+    `[project.scripts]` pointed at `main` directly. A console script calls its
+    target and throws the result away, so the installed command built a
+    coroutine, warned that it was never awaited, and exited without starting
+    anything. Only `python -m iris_pgwire.server` worked, because that path
+    goes through the `asyncio.run` below.
+    """
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

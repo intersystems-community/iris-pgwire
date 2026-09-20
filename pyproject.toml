@@ -117,7 +117,7 @@ kerberos = [
 ]
 
 [project.scripts]
-iris-pgwire = "iris_pgwire.server:main"
+iris-pgwire = "iris_pgwire.server:cli"
 
 [project.urls]
 Homepage = "https://github.com/intersystems-community/iris-pgwire"
