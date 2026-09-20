@@ -74,7 +74,7 @@ class TestMeasuredMappings:
         message = (
             "<SQL ERROR>; Details: [SQLCODE: <-400>:<Fatal error occurred>] "
             "[Location: <ServerLoop>] [%msg: <Error compiling cached query class "
-            "%sqlcq.USER.cls283: ERROR: <UNDEFINED>aptv^%qaqpnl *ptv(\" *** \")>]"
+            '%sqlcq.USER.cls283: ERROR: <UNDEFINED>aptv^%qaqpnl *ptv(" *** ")>]'
         )
         assert state(message) == "XX000", "a database crash must not blame the client's SQL"
 
@@ -85,6 +85,137 @@ class TestMeasuredMappings:
         assert state(crash) != state(syntax)
         assert state(crash).startswith("XX"), "internal error class"
         assert state(syntax).startswith("42"), "client-error class"
+
+
+class TestLockContention:
+    """Measured by forcing a real conflict, not recalled.
+
+    A jobbed process opened a transaction, UPDATEd row 1 and held it; the
+    foreground process then tried the same row. IRIS 2026.2 answered:
+
+        -110  Unable to acquire lock for UPDATE of table 'SQLUser.LkProbe'
+              on row with RowID = '1'
+        -110  Unable to acquire lock for DELETE of table 'SQLUser.LkProbe'
+              on row with RowID = '1'
+
+    IRIS has no MVCC, so a lock timeout is how a write-write conflict surfaces —
+    the same event PostgreSQL reports as `40001`. That class matters: retry logic
+    across every PostgreSQL client keys on `40001`, and none of it retries the
+    `42000` this used to return. A transient conflict was being reported to the
+    application as broken SQL.
+    """
+
+    @pytest.mark.parametrize("verb", ["UPDATE", "DELETE"])
+    def test_lock_timeout_is_retryable(self, verb):
+        message = (
+            f"[SQLCODE: <-110>:<Unable to acquire lock for {verb} of table "
+            f"'SQLUser.LkProbe' on row with RowID = '1'>]"
+        )
+        assert classify_iris_error(message) == ("40001", "serialization_failure")
+
+    def test_recognised_from_wording_alone(self):
+        """The embedded backend delivers messages with no SQLCODE in the text."""
+        message = (
+            "Unable to acquire lock for UPDATE of table 'SQLUser.LkProbe' "
+            "on row with RowID = '1'"
+        )
+        assert classify_iris_error(message) == ("40001", "serialization_failure")
+
+    def test_not_confused_with_a_syntax_error(self):
+        lock = "[SQLCODE: <-110>:<Unable to acquire lock for UPDATE>]"
+        syntax = "[SQLCODE: <-1>:<Invalid SQL statement>]"
+        assert state(lock) != state(syntax)
+        assert state(lock).startswith("40"), "transaction-rollback class"
+
+
+class TestReaderLockContention:
+    """`-114` is the reader's half of the same event, and it needed measuring too.
+
+    `-110` is what a *writer* gets. A reader at READ COMMITTED that meets a row
+    another transaction holds gets `-114` instead, and gets it at *fetch* time
+    rather than at prepare — measured against IRIS 2026.2 in `iris-pgwire-db`,
+    with a jobbed process holding an uncommitted UPDATE:
+
+        prepare      SQLCODE 0
+        after-fetch  SQLCODE -114  Unable to acquire shared lock on table
+                                   SQLUser.Iso114 for RowID value: 2
+
+    The wording is version-dependent. IRIS 2026.1 words the same code
+    "One or more matching rows is locked by another user" (measured
+    independently against dxlab-iris), so both spellings are matched.
+
+    That second wording is also why this must not be passed through unclassified:
+    "another user" means another *connection*, and a PostgreSQL client shown that
+    text under `42000` reads it as a permissions fault in its own SQL.
+    """
+
+    def test_shared_lock_timeout_is_retryable(self):
+        message = (
+            "[SQLCODE: <-114>:<Unable to acquire shared lock on table "
+            "SQLUser.Iso114 for RowID value: 2>]"
+        )
+        assert classify_iris_error(message) == ("40001", "serialization_failure")
+
+    @pytest.mark.parametrize(
+        "wording",
+        [
+            # IRIS 2026.2
+            "Unable to acquire shared lock on table SQLUser.Iso114 for RowID value: 2",
+            # IRIS 2026.1
+            "One or more matching rows is locked by another user",
+        ],
+    )
+    def test_recognised_from_wording_alone(self, wording):
+        """The fetch path surfaces the message without a SQLCODE in the text."""
+        assert classify_iris_error(wording) == ("40001", "serialization_failure")
+
+    def test_reader_and_writer_conflicts_agree(self):
+        reader = "[SQLCODE: <-114>:<Unable to acquire shared lock on table T for RowID value: 1>]"
+        writer = "[SQLCODE: <-110>:<Unable to acquire lock for UPDATE of table 'T'>]"
+        assert classify_iris_error(reader) == classify_iris_error(writer)
+
+    def test_locked_by_another_user_is_not_a_privilege_error(self):
+        """The 2026.1 wording must not be read as "you lack permission"."""
+        sqlstate, _ = classify_iris_error("One or more matching rows is locked by another user")
+        assert not sqlstate.startswith("42"), "a lock wait is not an access-rule violation"
+
+
+class TestUnsupportedFeature:
+    """`-96` is IRIS refusing a feature, not refusing the client's syntax.
+
+    Measured: `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` returns
+    `-96  Specified [level of isolation] is not supported: REPEATABLE READ`.
+    """
+
+    def test_sqlcode_96_is_feature_not_supported(self):
+        message = (
+            "[SQLCODE: <-96>:<Specified [level of isolation] is not supported: " "REPEATABLE READ>]"
+        )
+        assert classify_iris_error(message) == ("0A000", "feature_not_supported")
+
+    def test_recognised_from_wording_alone(self):
+        message = "Specified [level of isolation] is not supported: REPEATABLE READ"
+        assert classify_iris_error(message) == ("0A000", "feature_not_supported")
+
+
+class TestChangingTheLevelTooLate:
+    """PostgreSQL's own wording for a level change that arrived after a query.
+
+    This refusal is ours rather than IRIS's, so it normally carries its SQLSTATE
+    explicitly. Classifying it from the message too means the paths that only ever
+    see an error string — and there are several — cannot turn it into a syntax
+    error, which is what an unrecognised message becomes.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "SET TRANSACTION ISOLATION LEVEL must be called before any query",
+            "SET TRANSACTION ISOLATION LEVEL must not be called in a subtransaction",
+        ],
+    )
+    def test_recognised_from_wording_alone(self, message):
+        assert classify_iris_error(message) == ("25001", "active_sql_transaction")
 
 
 class TestConditionNames:
@@ -280,6 +411,6 @@ class TestWiredIntoTheProtocol:
                 continue
             body = inspect.getsource(method)
             if '"08000"' in body or '"42P03"' in body:
-                assert "classify_iris_error(" in body, (
-                    f"{name} still reports a fixed SQLSTATE for every failure"
-                )
+                assert (
+                    "classify_iris_error(" in body
+                ), f"{name} still reports a fixed SQLSTATE for every failure"

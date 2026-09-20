@@ -22,8 +22,11 @@ IRIS SQLCODE                 PostgreSQL SQLSTATE
 -23  label not listed        42P01  undefined_table
 -29  field not found         42703  undefined_column
 -30  table/view not found    42P01  undefined_table
+-96  feature not supported   0A000  feature_not_supported
 -104 field validation        22000  data_exception
 -108 required field missing  23502  not_null_violation
+-110 writer lock conflict    40001  serialization_failure
+-114 reader lock conflict    40001  serialization_failure
 -119 UNIQUE/PK failed        23505  unique_violation
 -149 error inside a function XX000  internal_error
 -359 function not found      42883  undefined_function
@@ -33,6 +36,29 @@ IRIS SQLCODE                 PostgreSQL SQLSTATE
 `-149` is the code IRIS raises when an installed SQL function throws — one of
 ours, in practice. IRIS does not surface the inner condition, so there is
 nothing to attribute to the client's SQL: `XX000` is the honest answer.
+
+`-110` and `-114` are the two mappings here that cross error *classes* rather than
+refining one, so the reasoning is worth stating. Both were measured by forcing
+real conflicts against a row a jobbed process held with an uncommitted UPDATE:
+
+    -110  the writer's half. A second UPDATE or DELETE of the row: `Unable to
+          acquire lock for UPDATE of table 'X' on row with RowID = '1'`.
+    -114  the reader's half. A SELECT of the row at READ COMMITTED: `Unable to
+          acquire shared lock on table X for RowID value: 2`, raised at *fetch*
+          time with the prepare reporting SQLCODE 0. IRIS 2026.1 words the same
+          code "One or more matching rows is locked by another user".
+
+PostgreSQL would call a lock timeout `55P03 lock_not_available`, but that code
+means "you asked for NOWAIT and I could not comply". IRIS has no MVCC snapshots,
+so a lock timeout is not an edge case — it is the *only* way a conflict is
+reported, which is the event PostgreSQL signals as `40001`. Class 40 also tells
+the client the correct response: roll back and retry. Every PostgreSQL retry
+helper keys on `40001`; none retries `42000`, which is what these used to return,
+so a transient conflict reached applications as a bug in their SQL.
+
+`-114`'s 2026.1 wording is a second reason not to pass it through unclassified:
+"another user" there means another *connection*, so a client shown that text under
+`42000` reads it as a privilege problem with its own query.
 
 Anything unrecognised keeps the historical `42000`. That is deliberate: a wrong
 confident classification is worse than the vague one clients already cope with,
@@ -56,8 +82,11 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
     -23: ("42P01", "undefined_table"),
     -29: ("42703", "undefined_column"),
     -30: ("42P01", "undefined_table"),
+    -96: ("0A000", "feature_not_supported"),
     -104: ("22000", "data_exception"),
     -108: ("23502", "not_null_violation"),
+    -110: ("40001", "serialization_failure"),
+    -114: ("40001", "serialization_failure"),
     -119: ("23505", "unique_violation"),
     -149: ("XX000", "internal_error"),
     -359: ("42883", "undefined_function"),
@@ -73,6 +102,38 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
 # Ordered: the first match wins, so the specific patterns precede the general
 # ones ("Table or view not found" also contains "not found").
 _MESSAGE_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, str]], ...] = (
+    (
+        # Writer, measured: "Unable to acquire lock for UPDATE of table
+        # 'SQLUser.LkProbe' on row with RowID = '1'" (-110). Reader, measured:
+        # "Unable to acquire shared lock on table SQLUser.Iso114 for RowID
+        # value: 2" (-114). The verb varies (UPDATE, DELETE) and the lock is
+        # described as shared, exclusive or table depending on the statement, so
+        # only "unable to acquire ... lock" is required.
+        re.compile(r"unable to acquire\b[^.]{0,40}?\block\b", re.I),
+        ("40001", "serialization_failure"),
+    ),
+    (
+        # IRIS 2026.1 wording for the same reader conflict (-114). "another user"
+        # means another connection; left as `42000` a client reads this as a
+        # privilege problem with its own SQL.
+        re.compile(r"row(?:s)? (?:is|are) locked by another user", re.I),
+        ("40001", "serialization_failure"),
+    ),
+    (
+        # Measured: "Specified [level of isolation] is not supported: REPEATABLE
+        # READ". The bracketed subject varies by feature.
+        re.compile(r"specified \[[^\]]*\] is not supported", re.I),
+        ("0A000", "feature_not_supported"),
+    ),
+    (
+        # This one is ours, not IRIS's: a level change that arrived after the
+        # transaction had already read something, in PostgreSQL 16's wording —
+        # "must be called before any query" or "must not be called in a
+        # subtransaction". Matched here as well as carried explicitly, so the
+        # paths that only see a string do not make it a syntax error.
+        re.compile(r"set transaction isolation level must (?:not\s+)?be called\b", re.I),
+        ("25001", "active_sql_transaction"),
+    ),
     (
         # DB-API: "Table or view not found". Embedded: "Table 'SQLUSER.X' not found".
         re.compile(r"table (or view )?not found|table '[^']*' not found", re.I),

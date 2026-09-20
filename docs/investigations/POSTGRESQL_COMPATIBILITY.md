@@ -10,7 +10,8 @@
 
 IRIS PGWire implements the PostgreSQL wire protocol v3.0 to enable standard PostgreSQL clients to connect to InterSystems IRIS databases. While the protocol implementation is complete, there are important differences between PostgreSQL and IRIS SQL. To address this, the driver includes an automatic DDL transformation layer.
 
-**✅ What Works**: 
+**✅ What Works**:
+
 - Full PostgreSQL wire protocol support (P0-P6 complete)
 - Prepared statements and Transactions
 - COPY protocol for bulk operations
@@ -24,25 +25,27 @@ IRIS PGWire implements the PostgreSQL wire protocol v3.0 to enable standard Post
 ## Quick Start - Connection Examples
 
 ### Node.js (node-postgres)
+
 ```javascript
-import pg from 'pg';
+import pg from "pg";
 const { Client } = pg;
 
 const client = new Client({
-  host: 'localhost',
+  host: "localhost",
   port: 5432,
-  database: 'USER',
-  user: 'test_user',
-  password: 'test',
-  ssl: false
+  database: "USER",
+  user: "test_user",
+  password: "test",
+  ssl: false,
 });
 
 await client.connect();
-const result = await client.query('SELECT 1');
+const result = await client.query("SELECT 1");
 await client.end();
 ```
 
 ### Python (psycopg)
+
 ```python
 import psycopg
 
@@ -53,6 +56,7 @@ with psycopg.connect("host=localhost port=5432 user=test_user dbname=USER") as c
 ```
 
 ### Java (JDBC)
+
 ```java
 String url = "jdbc:postgresql://localhost:5432/USER";
 Properties props = new Properties();
@@ -66,6 +70,7 @@ try (Connection conn = DriverManager.getConnection(url, props)) {
 ```
 
 ### .NET (Npgsql)
+
 ```csharp
 using Npgsql;
 
@@ -78,6 +83,7 @@ await using var reader = await cmd.ExecuteReaderAsync();
 ```
 
 ### Go (pgx)
+
 ```go
 import "github.com/jackc/pgx/v5"
 
@@ -102,16 +108,18 @@ err = conn.QueryRow(context.Background(), "SELECT 1").Scan(&result)
 **Impact**: Tests expecting `?column?` will fail
 
 **Example**:
+
 ```javascript
 // PostgreSQL expectation:
-const result = await client.query('SELECT 1');
-console.log(result.rows[0]['?column?']); // PostgreSQL
+const result = await client.query("SELECT 1");
+console.log(result.rows[0]["?column?"]); // PostgreSQL
 
 // IRIS reality:
-console.log(result.rows[0]['column1']); // IRIS PGWire
+console.log(result.rows[0]["column1"]); // IRIS PGWire
 ```
 
 **Workaround**: Always use explicit column aliases
+
 ```sql
 -- RECOMMENDED: Use explicit aliases
 SELECT 1 AS my_value, 2 AS other_value;
@@ -128,6 +136,7 @@ SELECT 1 AS my_value, 2 AS other_value;
 **PGWire Translation**: ✅ **Automatic** - PostgreSQL clients work without modification
 
 **How It Works**:
+
 ```sql
 -- PostgreSQL client sends:
 SELECT * FROM users WHERE id = $1 AND name = $2
@@ -151,6 +160,7 @@ SELECT * FROM users WHERE id = ? AND name = ?
 **PGWire Translation**: ✅ **Automatic** - PostgreSQL clients work without modification
 
 **How It Works**:
+
 ```sql
 -- PostgreSQL client sends:
 SELECT '42'::int, $1::text
@@ -162,15 +172,16 @@ SELECT CAST('42' AS INTEGER), CAST(? AS VARCHAR)
 ```
 
 **Supported Type Mappings**:
-| PostgreSQL Type | IRIS Type | Note |
-|----------------|-----------|------|
-| `int`, `int4` | `INTEGER` | |
-| `int8` | `BIGINT` | |
-| `text`, `varchar` | `VARCHAR` | |
-| `float`, `float8` | `DOUBLE` | |
-| `bool`, `boolean` | `BIT` | `true`/`false` mapped to `1`/`0` |
-| `enum` | `VARCHAR(64)` | Registered during `CREATE TYPE` skip |
-| `vector(d)` | `VECTOR(FLOAT, d)` | |
+
+| PostgreSQL Type   | IRIS Type          | Note                                 |
+| ----------------- | ------------------ | ------------------------------------ |
+| `int`, `int4`     | `INTEGER`          |                                      |
+| `int8`            | `BIGINT`           |                                      |
+| `text`, `varchar` | `VARCHAR`          |                                      |
+| `float`, `float8` | `DOUBLE`           |                                      |
+| `bool`, `boolean` | `BIT`              | `true`/`false` mapped to `1`/`0`     |
+| `enum`            | `VARCHAR(64)`      | Registered during `CREATE TYPE` skip |
+| `vector(d)`       | `VECTOR(FLOAT, d)` |                                      |
 
 **Result**: Type casts work seamlessly - no client code changes needed.
 
@@ -185,40 +196,57 @@ SELECT CAST('42' AS INTEGER), CAST(? AS VARCHAR)
 **PGWire Translation**: ✅ **Automatic** - SHOW commands intercepted and handled transparently
 
 **How It Works**:
+
 ```sql
 -- PostgreSQL client sends:
-SHOW TRANSACTION ISOLATION LEVEL;
+SHOW SERVER_VERSION;
 
--- PGWire intercepts and returns fake/default value:
--- Result: 'read committed'
+-- PGWire intercepts and returns a fixed value:
+-- Result: '16.0 (InterSystems IRIS)'
 
 -- IRIS execution bypassed - no error thrown
 ```
 
 **Supported SHOW Commands**:
-| SHOW Command | Default Value Returned |
-|--------------|------------------------|
-| `SHOW TRANSACTION ISOLATION LEVEL` | `'read committed'` |
-| `SHOW SERVER_VERSION` | `'16.0 (InterSystems IRIS)'` |
-| `SHOW SERVER_ENCODING` | `'UTF8'` |
-| `SHOW CLIENT_ENCODING` | `'UTF8'` |
-| `SHOW DATESTYLE` | `'ISO, MDY'` |
-| `SHOW TIMEZONE` | `'UTC'` |
-| `SHOW STANDARD_CONFORMING_STRINGS` | `'on'` |
-| `SHOW INTEGER_DATETIMES` | `'on'` |
-| `SHOW INTERVALSTYLE` | `'postgres'` |
-| `SHOW IS_SUPERUSER` | `'off'` |
-| `SHOW APPLICATION_NAME` | `''` (empty string) |
+
+| SHOW Command                       | Default Value Returned       |
+| ---------------------------------- | ---------------------------- |
+| `SHOW SERVER_VERSION`              | `'16.0 (InterSystems IRIS)'` |
+| `SHOW SERVER_ENCODING`             | `'UTF8'`                     |
+| `SHOW CLIENT_ENCODING`             | `'UTF8'`                     |
+| `SHOW DATESTYLE`                   | `'ISO, MDY'`                 |
+| `SHOW TIMEZONE`                    | `'UTC'`                      |
+| `SHOW STANDARD_CONFORMING_STRINGS` | `'on'`                       |
+| `SHOW INTEGER_DATETIMES`           | `'on'`                       |
+| `SHOW INTERVALSTYLE`               | `'postgres'`                 |
+| `SHOW IS_SUPERUSER`                | `'off'`                      |
+| `SHOW APPLICATION_NAME`            | `''` (empty string)          |
+
+**Result**: These runtime parameters are fixed server facts, so a stub is the correct answer for all of them.
+
+### ⚠️ Transaction Isolation Is Not In That Table
+
+`SHOW TRANSACTION ISOLATION LEVEL` and `SHOW transaction_isolation` are deliberately **not** stubbed. They are answered from the level IRIS actually accepted for that session, and an untouched session reports `read uncommitted`, which is IRIS's real default.
+
+This used to be a stub returning `'read committed'` unconditionally, and was documented here as a solved compatibility box-check. It was not one:
+
+- `SET TRANSACTION ISOLATION LEVEL ...` never reached IRIS, so the level a client asked for was never applied, while `SHOW` claimed it was in force.
+- `SHOW transaction_isolation` — the GUC spelling psycopg and SQLAlchemy actually send — was not in the table at all and returned an empty string.
+- IRIS `READ COMMITTED` is narrower than PostgreSQL's, so reporting it invites assumptions the database will not honor.
 
 **JDBC Integration**:
+
 ```java
-// ✅ WORKS: JDBC calls getTransactionIsolation() which internally sends SHOW
+// JDBC calls getTransactionIsolation(), which sends SHOW transaction_isolation.
 Connection conn = DriverManager.getConnection(url, props);
-int level = conn.getTransactionIsolation();  // Works transparently
-// Returns: Connection.TRANSACTION_READ_COMMITTED (2)
+int level = conn.getTransactionIsolation();
+// Returns TRANSACTION_READ_UNCOMMITTED (1) on a session that has not set a level.
+// setTransactionIsolation(TRANSACTION_READ_COMMITTED) is forwarded to IRIS and
+// then reported back. TRANSACTION_REPEATABLE_READ and TRANSACTION_SERIALIZABLE
+// are rejected with SQLSTATE 0A000 rather than silently downgraded.
 ```
 
-**Result**: Standard JDBC transaction isolation level queries work seamlessly - no client code changes needed.
+See [KNOWN_LIMITATIONS.md](../../KNOWN_LIMITATIONS.md) — "Transaction Isolation: No MVCC, No Snapshots" — for what each level does and does not cover, and for the optimistic-locking hazard that follows from it.
 
 ---
 
@@ -227,12 +255,14 @@ int level = conn.getTransactionIsolation();  // Works transparently
 **Issue**: IRIS does not implement all PostgreSQL system functions
 
 **Common Missing Functions**:
+
 - `version()` - Returns PostgreSQL version string (use `SHOW SERVER_VERSION` instead ✅)
 - `current_setting()` - Get runtime parameters (use `SHOW` commands instead ✅)
 - `pg_backend_pid()` - Get backend process ID
 - `pg_postmaster_start_time()` - Get server start time
 
 **Error Example**:
+
 ```sql
 SELECT version();
 -- ERROR: Function 'version' does not exist
@@ -241,16 +271,19 @@ SELECT version();
 **Workaround Options**:
 
 1. **Use SHOW commands** (recommended - fully supported):
+
 ```sql
 -- ✅ WORKS: Use SHOW instead of function calls
 SHOW SERVER_VERSION;
 -- Returns: '16.0 (InterSystems IRIS)'
 
 SHOW TRANSACTION ISOLATION LEVEL;
--- Returns: 'read committed'
+-- Returns the level IRIS accepted for this session; 'read uncommitted'
+-- if none was set. Not a stub -- see the isolation note above.
 ```
 
-2. **Use IRIS equivalents** (when available):
+1. **Use IRIS equivalents** (when available):
+
 ```sql
 -- PostgreSQL: SELECT version();
 -- IRIS: SELECT $ZVERSION  -- Via ObjectScript
@@ -259,13 +292,14 @@ SHOW TRANSACTION ISOLATION LEVEL;
 -- IRIS: SELECT CURRENT_SCHEMA()
 ```
 
-3. **Client-side fallback**:
+1. **Client-side fallback**:
+
 ```javascript
 try {
-    const result = await client.query('SELECT version()');
+  const result = await client.query("SELECT version()");
 } catch (err) {
-    // Handle gracefully - IRIS doesn't support version()
-    console.warn('version() not supported by IRIS');
+  // Handle gracefully - IRIS doesn't support version()
+  console.warn("version() not supported by IRIS");
 }
 ```
 
@@ -274,6 +308,7 @@ try {
 ### 6. Table Operations and Edge Cases
 
 #### DELETE Requires Existing Table
+
 **IRIS Behavior**: `DELETE FROM non_existent_table` fails with "Table not found"
 
 **PostgreSQL Behavior**: Same - table must exist
@@ -281,9 +316,11 @@ try {
 **Impact**: None - both behave identically
 
 #### INSERT Cardinality Matching
+
 **IRIS Behavior**: Requires exact column count match in VALUES clause
 
 **Error Example**:
+
 ```sql
 CREATE TABLE test (id INT, name VARCHAR(50), status VARCHAR(20));
 
@@ -293,6 +330,7 @@ INSERT INTO test VALUES (1, 'John');
 ```
 
 **Workaround**: Always specify column list explicitly
+
 ```sql
 -- ✅ WORKS: Explicit column list
 INSERT INTO test (id, name) VALUES (1, 'John');
@@ -309,6 +347,7 @@ INSERT INTO test (id, name) VALUES (1, 'John');
 **Impact**: Schema introspection queries may need case-insensitive matching
 
 **Example**:
+
 ```sql
 -- PostgreSQL expectation:
 SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS
@@ -322,6 +361,7 @@ WHERE table_name = 'patients';
 ```
 
 **Workaround**: Use `LOWER()` for case-insensitive matching
+
 ```sql
 SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS
 WHERE LOWER(table_name) = LOWER('Patients')
@@ -339,6 +379,7 @@ ORDER BY ordinal_position;
 **Impact**: PostgreSQL-specific catalog queries will fail
 
 **Example**:
+
 ```sql
 -- ❌ FAILS: PostgreSQL catalog query
 SELECT column_name FROM pg_catalog.pg_attribute
@@ -350,6 +391,7 @@ WHERE table_name = 'MyTable';
 ```
 
 **Available INFORMATION_SCHEMA Tables**:
+
 - `INFORMATION_SCHEMA.TABLES` - Table metadata
 - `INFORMATION_SCHEMA.COLUMNS` - Column metadata
 - `INFORMATION_SCHEMA.INDEXES` - Index metadata
@@ -364,6 +406,7 @@ WHERE table_name = 'MyTable';
 **Status**: ✅ **COMPATIBLE** (with known limitations)
 
 **Test Results**:
+
 - ✅ Connection establishment: WORKS
 - ✅ Simple queries: WORKS
 - ✅ Prepared statements: WORKS (automatic parameter translation)
@@ -383,6 +426,7 @@ WHERE table_name = 'MyTable';
 **Status**: ✅ **COMPATIBLE** (with known IRIS limitations)
 
 **Test Results** (27 total tests):
+
 - ✅ Connection tests (6/6): 100% PASSING ✅
 - ⚠️ Simple query tests (3/7): 43% PASSING
 - ⚠️ Prepared statement tests (1/7): 14% PASSING
@@ -391,11 +435,15 @@ WHERE table_name = 'MyTable';
 **Total**: **17/27 tests passing (63%)** ⬆️ **+113% improvement from initial 30%**
 
 **Recent Fixes** (2025-11-11):
+
 1. ✅ **SQLCODE 100 Handling** - Fixed 7 tests by treating IRIS SQLCODE 100 as success with 0 rows
 2. ✅ **Empty Result Set** - Fixed 1 test by properly handling SELECT from empty table
-3. ✅ **SHOW Commands** - Fixed 1 test by implementing SHOW TRANSACTION ISOLATION LEVEL shim
+3. ✅ **SHOW Commands** - Fixed 1 test with a SHOW TRANSACTION ISOLATION LEVEL shim.
+   Superseded: the shim reported a level no session had set. It is now answered
+   from real per-session state, and a level IRIS cannot honor is rejected.
 
 **Progress Timeline**:
+
 - Initial: 8/27 tests (30%)
 - After SQLCODE 100 fix: 15/27 tests (56%)
 - After empty result fix: 16/27 tests (59%)
@@ -404,6 +452,7 @@ WHERE table_name = 'MyTable';
 **Known IRIS Limitations** (10 failures):
 
 1. **Column Aliases NOT Preserved** (7 failures) - **IRIS SQL LIMITATION**
+
    ```java
    // ❌ FAILS: IRIS returns "column1" not "num"
    ResultSet rs = stmt.executeQuery("SELECT 1 AS num, 'hello' AS text");
@@ -414,6 +463,7 @@ WHERE table_name = 'MyTable';
    ```
 
 2. **String Literals Uppercased** (1 failure) - **IRIS SQL BEHAVIOR**
+
    ```java
    // ❌ FAILS: IRIS returns "HELLO" not "hello"
    ResultSet rs = stmt.executeQuery("SELECT 'hello'");
@@ -428,8 +478,11 @@ WHERE table_name = 'MyTable';
    - Batch operations (1 test)
 
 **Production Readiness**:
+
 - ✅ **READY**: Connections, connection pooling, transactions, read-write queries
-- ✅ **READY**: Transaction isolation level queries (via SHOW shim)
+- ⚠️ **LIMITED**: Transaction isolation. `SET`/`SHOW` now report real state, but IRIS
+  has no MVCC — `REPEATABLE READ` and `SERIALIZABLE` are refused, and `READ COMMITTED`
+  is narrower than PostgreSQL's. See KNOWN_LIMITATIONS.md before relying on it.
 - ⚠️ **LIMITED**: Named column access (use positional instead)
 - ⚠️ **LIMITED**: String comparisons (case-insensitive only)
 - ❌ **NOT READY**: Batch operations, some DDL operations
@@ -437,6 +490,7 @@ WHERE table_name = 'MyTable';
 **Full Analysis**: `tests/client_compatibility/jdbc/JDBC_TEST_RESULTS.md`
 
 **To Execute**:
+
 ```bash
 cd tests/client_compatibility/jdbc
 ./gradlew test
@@ -449,12 +503,14 @@ cd tests/client_compatibility/jdbc
 **Status**: 🔄 **Testing Pending**
 
 **Test Framework**: 10+ tests across 2 test files
+
 - `BasicConnectionTest.cs` - Connection tests with xUnit
 - `SimpleQueryTest.cs` - Query execution with async/await patterns
 
 **Expected Compatibility**: High (parameter translation works for all PostgreSQL clients)
 
 **To Execute**:
+
 ```bash
 cd tests/client_compatibility/dotnet
 dotnet test
@@ -467,12 +523,14 @@ dotnet test
 **Status**: 🔄 **Testing Pending**
 
 **Test Framework**: 10+ tests across 2 test files
+
 - `connection_test.go` - Connection establishment, pooling
 - `query_test.go` - Query execution, prepared statements
 
 **Expected Compatibility**: High (same wire protocol as other drivers)
 
 **To Execute**:
+
 ```bash
 cd tests/client_compatibility/go
 go test -v
@@ -483,6 +541,7 @@ go test -v
 ## Best Practices
 
 ### 1. Always Use Explicit Column Aliases
+
 ```sql
 -- ❌ BAD: Unnamed columns
 SELECT 1, 2, 3;
@@ -492,6 +551,7 @@ SELECT 1 AS id, 2 AS count, 3 AS total;
 ```
 
 ### 2. Specify Column Lists in INSERT Statements
+
 ```sql
 -- ❌ BAD: Implicit column list (fragile)
 INSERT INTO users VALUES (1, 'John', 'Doe');
@@ -501,6 +561,7 @@ INSERT INTO users (id, first_name, last_name) VALUES (1, 'John', 'Doe');
 ```
 
 ### 3. Use INFORMATION_SCHEMA for Metadata
+
 ```sql
 -- ❌ BAD: PostgreSQL-specific catalog
 SELECT * FROM pg_catalog.pg_tables;
@@ -510,19 +571,21 @@ SELECT * FROM INFORMATION_SCHEMA.TABLES;
 ```
 
 ### 4. Handle Missing Functions Gracefully
+
 ```javascript
 async function getServerVersion(client) {
-    try {
-        const result = await client.query('SELECT version()');
-        return result.rows[0].version;
-    } catch (err) {
-        // IRIS doesn't support version() - return placeholder
-        return 'InterSystems IRIS (version unknown)';
-    }
+  try {
+    const result = await client.query("SELECT version()");
+    return result.rows[0].version;
+  } catch (err) {
+    // IRIS doesn't support version() - return placeholder
+    return "InterSystems IRIS (version unknown)";
+  }
 }
 ```
 
 ### 5. Use Case-Insensitive Matching for Schema Queries
+
 ```sql
 -- ✅ GOOD: Case-insensitive table name matching
 SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS
@@ -534,6 +597,7 @@ WHERE LOWER(table_name) = LOWER('MyTable');
 ## Feature Roadmap
 
 ### Implemented ✅
+
 - ✅ P0-P6 PostgreSQL wire protocol (complete)
 - ✅ Automatic `$1, $2, $3` → `?` parameter translation
 - ✅ Automatic `::` → `CAST()` type cast translation
@@ -544,12 +608,14 @@ WHERE LOWER(table_name) = LOWER('MyTable');
 - ✅ SHOW command shims (11 commands including TRANSACTION ISOLATION LEVEL)
 
 ### Planned 🔄
+
 - 🔄 Additional client driver testing (Npgsql, pgx)
 - 🔄 `?column?` naming compatibility mode (optional)
 - 🔄 Enhanced error messages with PostgreSQL context
 - 🔄 Additional function shims (`version()`, `current_setting()`)
 
 ### Not Supported ❌
+
 - ❌ `pg_catalog` schema (use INFORMATION_SCHEMA instead)
 - ❌ PostgreSQL-specific data types (use IRIS types)
 - ❌ PostgreSQL advisory locks (not applicable to IRIS)
@@ -560,22 +626,26 @@ WHERE LOWER(table_name) = LOWER('MyTable');
 ## Troubleshooting
 
 ### Connection Refused
+
 ```
 Error: connect ECONNREFUSED 127.0.0.1:5432
 ```
 
 **Solution**: Ensure PGWire server is running
+
 ```bash
 docker ps --filter "name=pgwire"
 # Should show iris-pgwire-db container on port 5432
 ```
 
 ### Authentication Failed
+
 ```
 FATAL: password authentication failed for user "test_user"
 ```
 
 **Solution**: Check IRIS credentials match connection string
+
 ```bash
 # Verify credentials in docker-compose.yml
 IRIS_USERNAME=test_user
@@ -583,11 +653,13 @@ IRIS_PASSWORD=test
 ```
 
 ### Column Not Found (case sensitivity)
+
 ```
 ERROR: Column 'patientid' not found
 ```
 
 **Solution**: Match exact case or use `LOWER()` for case-insensitive matching
+
 ```sql
 -- Option 1: Match exact case
 SELECT PatientID FROM Patients;
@@ -598,17 +670,19 @@ WHERE LOWER(table_name) = 'patients';
 ```
 
 ### Function Not Found
+
 ```
 ERROR: Function 'version' does not exist
 ```
 
 **Solution**: Use client-side fallback or wait for function shims
+
 ```javascript
 // Client-side handling
 try {
-    const result = await client.query('SELECT version()');
+  const result = await client.query("SELECT version()");
 } catch (err) {
-    console.warn('version() not supported by IRIS');
+  console.warn("version() not supported by IRIS");
 }
 ```
 
@@ -617,7 +691,7 @@ try {
 ## References
 
 - **PGWire Protocol Specification**: PostgreSQL Wire Protocol v3.0
-- **IRIS SQL Documentation**: https://docs.intersystems.com/iris20252/csp/docbook/DocBook.UI.Page.cls?KEY=GSQL
+- **IRIS SQL Documentation**: <https://docs.intersystems.com/iris20252/csp/docbook/DocBook.UI.Page.cls?KEY=GSQL>
 - **Client Compatibility Tests**: `/tests/client_compatibility/`
 - **Known Limitations**: `/tests/client_compatibility/COMPATIBILITY_FINDINGS.md`
 
@@ -625,7 +699,7 @@ try {
 
 ## Support
 
-**Issue Reporting**: https://github.com/your-org/iris-pgwire/issues
+**Issue Reporting**: <https://github.com/your-org/iris-pgwire/issues>
 
 **Questions**: For IRIS-specific behavior questions, consult InterSystems documentation or support
 

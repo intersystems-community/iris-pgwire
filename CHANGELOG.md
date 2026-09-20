@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Transaction isolation was reported, not applied**: `SET TRANSACTION ISOLATION LEVEL …` was swallowed by the generic `SET` shim in `protocol.handle_set_command`, which reads `SET\s+(\w+)`, took the parameter name to be `TRANSACTION`, and answered `CommandComplete("SET")` without sending anything to IRIS. `SHOW TRANSACTION ISOLATION LEVEL` then answered a hardcoded `"read committed"`, and `SHOW transaction_isolation` — the spelling psycopg and SQLAlchemy actually send — missed the lookup table entirely and returned an empty setting. A client asking for READ COMMITTED got success, no effect, and then confirmation of a level it did not have.
+
+  All isolation statements now reach IRIS, and the level is recorded only once IRIS has accepted it, so a level is never reported unless it was applied:
+
+  - `SET TRANSACTION ISOLATION LEVEL`, `SET [SESSION|LOCAL] transaction_isolation = …`, `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL`, `SET default_transaction_isolation = …`, and the level named on `BEGIN` / `START TRANSACTION`.
+  - `transaction_isolation` and `default_transaction_isolation` are kept apart, with the scoping PostgreSQL 16 measurably has: a transaction-scoped level ends with the transaction (COMMIT and ROLLBACK alike), the session default outlives it, and a default set inside a transaction is undone by ROLLBACK. Note that `SET SESSION TRANSACTION ISOLATION LEVEL` is transaction-scoped despite the keyword. IRIS holds one level per session, so IRIS is resynced before the next transaction opens when the effective level changes because a transaction ended rather than because a client asked.
+  - A closed session's isolation state is dropped, so a reused session id cannot inherit the previous client's level.
+
+- **Command tags carried a row count PostgreSQL sends bare**: `SET`, `SHOW` and the transaction-control verbs are answered with the bare tag, and `BEGIN ISOLATION LEVEL x` is answered `BEGIN` even though the statement sent to IRIS says `START TRANSACTION`.
+
+### Changed
+
+- **BREAKING: `REPEATABLE READ` and `SERIALIZABLE` are refused** with `0A000 feature_not_supported` instead of being accepted and ignored. They are guarantees about what a transaction will not observe, and IRIS has no snapshot mechanism to downgrade them _to_; an error at `SET` is recoverable, a silently violated guarantee is not. This follows the existing rejection of L2 vector distance. A client that previously got a successful `SET SERIALIZABLE` — while running at READ UNCOMMITTED regardless — now gets an error, so releasing this warrants a minor version bump.
+
+- **A mid-transaction level change is refused** with `25001 active_sql_transaction`, as PostgreSQL does, once the open transaction has run a query or entered a savepoint. Re-asserting the level already in force stays accepted, and the session-scoped spellings are always accepted because they describe the next transaction.
+
+### Documentation
+
+- KNOWN_LIMITATIONS.md now records what measurement showed rather than what the levels are called: which levels exist, what IRIS's READ COMMITTED does not cover, that an accepted READ COMMITTED is not a guarantee (either a flat 10s lock timeout or an immediate dirty read, trigger not isolated), that lock conflicts arrive as retryable `40001`, that optimistic locking reports false conflicts, and that sessions share one transaction in the in-IRIS deployment. Those divergences are pinned by tests — `pytest -m pinned_limitation tests/protocol tests/integration` — so a change in one cannot leave the document quietly wrong.
+
+## [1.7.3] - 2026-08-26
+
+Backfilled: this version shipped without a changelog entry.
+
+### Fixed
+
+- **`CREATE INDEX IF NOT EXISTS … USING hnsw` not idempotent on a second run**: three interlocking causes. The `CREATE_INDEX_IF_NOT_EXISTS` construct strips `IF NOT EXISTS` and leaves a `/* IF_NOT_EXISTS */` marker before HNSW translation runs, and the HNSW patterns in `constructs.py` and `vector_syntax.py` did not match the marker, so the translated IRIS SQL dropped `IF NOT EXISTS` altogether; the simple-query path did not pass `original_sql`, so `DdlErrorHandler` only ever saw the translated DDL; and `VectorQueryOptimizer.is_duplicate_object_error` matched SQLCODEs only, while IRIS emits `Class '…' already has index named '…'.` as plain text with no SQLCODE. `original_sql` is now threaded through `_safe_execute` and `_execute_embedded_statement_sequence` as well.
+
+- **Duplicate-index detection missed a SQLCODE that never reached the message**: `DdlErrorHandler` now checks `e.sqlcode == -324` directly as well as matching the text. `iris.sql.exec` can raise a `SQLError` whose `.sqlcode` is `-324` while `str(e)` omits it (confirmed on IRIS 2026.2), which defeated text-only matching for both HNSW and plain `CREATE INDEX IF NOT EXISTS`.
+
 ## [1.7.2] - 2026-08-26
 
 ### Fixed

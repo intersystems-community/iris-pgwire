@@ -284,6 +284,11 @@ markers = [
     "document_db: Tests for document database features",
     "error_handling: Tests for error handling scenarios",
     "mixed_sql: Tests for mixed SQL query processing",
+    # A pinned limitation asserts behaviour that is *wrong* by PostgreSQL's
+    # standards and cannot be fixed at the wire layer. It is pinned, not endorsed:
+    # a failure means the limitation changed and KNOWN_LIMITATIONS.md is now
+    # lying. Run them together with `pytest -m pinned_limitation`.
+    "pinned_limitation: Pins a documented divergence from PostgreSQL; a failure means the docs are stale",
 ]
 
 # Flaky test detection configuration

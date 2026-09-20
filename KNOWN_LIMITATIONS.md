@@ -6,6 +6,14 @@ This document catalogs known limitations, workarounds, and behavior differences 
 
 **Security Note**: Authentication security is enterprise-grade (OAuth 2.0, IRIS Wallet, SCRAM-SHA-256) with no plain-text password transmission. Transport encryption is delegated to industry-standard reverse proxy pattern (nginx/HAProxy).
 
+**These limitations are pinned by tests.** The divergences that cannot be fixed at the wire layer are asserted rather than only described, so a change in one cannot go unnoticed and leave this document quietly wrong:
+
+```bash
+pytest -m pinned_limitation tests/protocol tests/integration
+```
+
+A failure there means the behaviour changed and the corresponding section below needs rewriting — the tests pin these outcomes, they do not endorse them.
+
 ---
 
 ## ✅ Resolved Limitations (v1.3.0)
@@ -22,15 +30,15 @@ The 1.3.0 release (IRIS 2024.2+ compatibility) addresses several previously docu
 
 Based on comprehensive research of 9 major implementations (November 2025):
 
-| Feature | IRIS PGWire | PgBouncer | YugabyteDB | PGAdapter | QuestDB | CockroachDB | Materialize | ClickHouse | Pattern |
-|---------|-------------|-----------|------------|-----------|---------|-------------|-------------|------------|---------|
-| **Wire Protocol** | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | ✅ v3.0 | Universal |
-| **SSL/TLS Native** | ❌ Proxy | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes | Mixed (6/8 native) |
-| **SCRAM-SHA-256** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | — | ❌ No | Standard (5/8) |
-| **OAuth/IAM** | ✅ Yes | ❌ No | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | Rare (2/8) |
-| **Kerberos/GSSAPI** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ No | ❌ No | **Very Rare (1/8)** |
-| **Connection Pool** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | — | Common (6/8) |
-| **Binary Format** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | Universal |
+| Feature             | IRIS PGWire | PgBouncer | YugabyteDB | PGAdapter | QuestDB | CockroachDB | Materialize | ClickHouse | Pattern             |
+| ------------------- | ----------- | --------- | ---------- | --------- | ------- | ----------- | ----------- | ---------- | ------------------- |
+| **Wire Protocol**   | ✅ v3.0     | ✅ v3.0   | ✅ v3.0    | ✅ v3.0   | ✅ v3.0 | ✅ v3.0     | ✅ v3.0     | ✅ v3.0    | Universal           |
+| **SSL/TLS Native**  | ❌ Proxy    | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | ✅ Yes      | ✅ Yes     | Mixed (6/8 native)  |
+| **SCRAM-SHA-256**   | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | —           | ❌ No      | Standard (5/8)      |
+| **OAuth/IAM**       | ✅ Yes      | ❌ No     | ❌ No      | ✅ Yes    | ❌ No   | ❌ No       | ❌ No       | ❌ No      | Rare (2/8)          |
+| **Kerberos/GSSAPI** | ❌ No       | ❌ No     | ❌ No      | ❌ No     | ❌ No   | ✅ Yes      | ❌ No       | ❌ No      | **Very Rare (1/8)** |
+| **Connection Pool** | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | ✅ Yes      | —          | Common (6/8)        |
+| **Binary Format**   | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ✅ Yes  | ✅ Yes      | ✅ Yes      | ✅ Yes     | Universal           |
 
 **Key Insights**:
 
@@ -50,9 +58,11 @@ Based on comprehensive research of 9 major implementations (November 2025):
 4. **IRIS PGWire Position**: Matches 6 of 8 implementations in security/authentication profile.
 
 **Technical Reason for GSSAPI Rarity** (from industry research):
+
 > "GSSAPI is an inherently stateful, interactive protocol involving challenge-response exchanges and ticket validation against a centralized Key Distribution Center (KDC). This makes it difficult to implement in connection pooling contexts and cloud-native architectures where authentication delegation is preferred."
 
 **References**:
+
 - Perplexity industry research: PostgreSQL wire protocol ecosystem survey (November 2025)
 - CockroachDB, YugabyteDB, PGAdapter, PgBouncer, QuestDB, Materialize, ClickHouse, CrateDB official documentation
 - PostgreSQL wire protocol compatibility analysis
@@ -78,6 +88,7 @@ IRIS PGWire automatically handles several common PostgreSQL DDL constructs that 
 ### Configuration
 
 Use the `strict_ddl` flag to control this behavior:
+
 - `strict_ddl = false` (default): Skip/transform with a warning.
 - `strict_ddl = true`: Raise an error for unsupported DDL.
 
@@ -154,11 +165,11 @@ Inline `LIMIT`/`OFFSET` values instead of parameterizing them, or use raw querie
 
 HNSW vector indexes provide significant performance benefits only at scale:
 
-| Dataset Size | HNSW Performance | Recommendation |
-|--------------|------------------|----------------|
-| < 10,000 vectors | 0.98-1.02× (negligible) | Use sequential scan |
-| 10,000-99,999 vectors | 1.0-2.0× improvement | Consider HNSW with testing |
-| ≥ 100,000 vectors | **5.14× improvement** ✅ | **HNSW strongly recommended** |
+| Dataset Size          | HNSW Performance         | Recommendation                |
+| --------------------- | ------------------------ | ----------------------------- |
+| < 10,000 vectors      | 0.98-1.02× (negligible)  | Use sequential scan           |
+| 10,000-99,999 vectors | 1.0-2.0× improvement     | Consider HNSW with testing    |
+| ≥ 100,000 vectors     | **5.14× improvement** ✅ | **HNSW strongly recommended** |
 
 ### Recommendation
 
@@ -183,11 +194,11 @@ CREATE INDEX idx_vec ON vectors(vec) AS HNSW(Distance='DotProduct');
 
 ### Supported Operators
 
-| pgvector Operator | IRIS Translation | Status |
-|-------------------|------------------|--------|
-| `<=>` (cosine distance) | `VECTOR_COSINE()` | ✅ **Supported** |
-| `<#>` (inner/dot product) | `VECTOR_DOT_PRODUCT()` | ✅ **Supported** |
-| `<->` (L2/Euclidean distance) | — | ❌ Not implemented |
+| pgvector Operator             | IRIS Translation       | Status             |
+| ----------------------------- | ---------------------- | ------------------ |
+| `<=>` (cosine distance)       | `VECTOR_COSINE()`      | ✅ **Supported**   |
+| `<#>` (inner/dot product)     | `VECTOR_DOT_PRODUCT()` | ✅ **Supported**   |
+| `<->` (L2/Euclidean distance) | —                      | ❌ Not implemented |
 
 ### Example
 
@@ -226,17 +237,17 @@ IndexError: tuple index out of range
 
 ### Affected Libraries and Tools
 
-| Tool/Library | PGWire Status | IRIS-Native Alternative |
-|--------------|---------------|------------------------|
-| **LangChain PGVector** | ❌ Fails | [`langchain-iris`](https://github.com/caretdev/langchain-iris) ✅ |
-| **LlamaIndex PGVectorStore** | ❌ Fails | [`llama-iris`](https://github.com/caretdev/llama-iris) ✅ |
-| **Haystack PGVector** | ❌ Fails | Custom retriever with psycopg3 |
-| **SQLAlchemy + psycopg2** | ❌ Fails | psycopg3 directly |
-| **Django ORM (psycopg2)** | ❌ Fails | psycopg3 directly |
-| **psycopg3 (psycopg)** | ✅ Works | — |
-| **asyncpg** | ✅ Works | — |
-| **node-postgres (pg)** | ✅ Works | — |
-| **JDBC PostgreSQL** | ✅ Works | — |
+| Tool/Library                 | PGWire Status | IRIS-Native Alternative                                           |
+| ---------------------------- | ------------- | ----------------------------------------------------------------- |
+| **LangChain PGVector**       | ❌ Fails      | [`langchain-iris`](https://github.com/caretdev/langchain-iris) ✅ |
+| **LlamaIndex PGVectorStore** | ❌ Fails      | [`llama-iris`](https://github.com/caretdev/llama-iris) ✅         |
+| **Haystack PGVector**        | ❌ Fails      | Custom retriever with psycopg3                                    |
+| **SQLAlchemy + psycopg2**    | ❌ Fails      | psycopg3 directly                                                 |
+| **Django ORM (psycopg2)**    | ❌ Fails      | psycopg3 directly                                                 |
+| **psycopg3 (psycopg)**       | ✅ Works      | —                                                                 |
+| **asyncpg**                  | ✅ Works      | —                                                                 |
+| **node-postgres (pg)**       | ✅ Works      | —                                                                 |
+| **JDBC PostgreSQL**          | ✅ Works      | —                                                                 |
 
 ### Recommended: IRIS-Native Packages
 
@@ -247,6 +258,7 @@ pip install langchain-iris llama-iris
 ```
 
 **LangChain with IRIS:**
+
 ```python
 from langchain_iris import IRISVector
 
@@ -260,6 +272,7 @@ results = db.similarity_search("query", k=5)
 ```
 
 **LlamaIndex with IRIS:**
+
 ```python
 from llama_iris import IRISVectorStore
 
@@ -285,6 +298,133 @@ with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
 
 ---
 
+## 🔴 Transaction Isolation: No MVCC, No Snapshots
+
+**Severity**: High
+**Affects**: Every client and ORM that relies on PostgreSQL isolation semantics
+
+This is the largest behavioral difference between IRIS through PGWire and PostgreSQL, and it cannot be fixed at the wire protocol layer. PostgreSQL gives every transaction a snapshot of committed data; IRIS has no MVCC and therefore has no snapshot to give. A query either waits for a lock or reads what is currently in the database, including another transaction's uncommitted writes.
+
+All behavior below was measured against IRIS 2026.2 through PGWire, not inferred.
+
+### Which Levels Exist
+
+| Requested level    | Result                                                           |
+| ------------------ | ---------------------------------------------------------------- |
+| `READ UNCOMMITTED` | Applied. This is the default — IRIS's default, not PostgreSQL's. |
+| `READ COMMITTED`   | Applied, with the documented exceptions below.                   |
+| `REPEATABLE READ`  | **Rejected** with `0A000 feature_not_supported`.                 |
+| `SERIALIZABLE`     | **Rejected** with `0A000 feature_not_supported`.                 |
+
+`SET TRANSACTION ISOLATION LEVEL`, `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL`, and the `SET transaction_isolation = '...'` GUC spelling that psycopg and SQLAlchemy send are all forwarded to IRIS. `SHOW transaction_isolation` and `SHOW TRANSACTION ISOLATION LEVEL` report the level IRIS actually accepted for that session — a level is never reported unless it was applied.
+
+The two stronger levels are refused rather than silently downgraded. They are guarantees about what a transaction will not observe, and IRIS has no snapshot mechanism to downgrade them _to_; an error at `SET` is recoverable, silently violated guarantees are not. This follows the same principle as the rejection of L2 vector distance.
+
+### What READ COMMITTED Does Not Cover
+
+`READ COMMITTED` on IRIS is narrower than PostgreSQL's. These are documented exceptions in the InterSystems SQL reference for `SET TRANSACTION`, not defects — but a PostgreSQL client has no way to anticipate them.
+
+Measured with one committed row `(id 1, n 100)` and a second transaction holding an uncommitted `UPDATE` of `n` to `999` plus an uncommitted `INSERT` of `(id 2, n 7)`. A reader at `READ COMMITTED`:
+
+| Query                                  | Committed answer | Actual answer     |
+| -------------------------------------- | ---------------- | ----------------- |
+| `SELECT n FROM t WHERE id = 1`         | `100`            | **fails**, `-114` |
+| `SELECT COUNT(*) FROM t`               | `1`              | `2` — dirty       |
+| `SELECT SUM(n) FROM t`                 | `100`            | `999` — dirty     |
+| `SELECT n, COUNT(*) FROM t GROUP BY n` | `100`            | `999` — dirty     |
+| `SELECT DISTINCT n FROM t`             | `100`            | `999` — dirty     |
+| `SELECT %NOLOCK n FROM t WHERE id = 1` | `100`            | `999` — dirty     |
+
+Only the plain row query honored the level, and it did so by _failing_ rather than by returning the last committed value: it waited for the lock and then raised a lock timeout. There is no committed version to fall back on. Aggregates, `GROUP BY` and `DISTINCT` are explicitly documented as unaffected by the isolation level.
+
+A row deleted by an in-progress transaction is never returned, at any level — `READ COMMITTED` keeps inserts and updates consistent, but not deletes.
+
+Note also that `READ VERIFIED` is **not** stronger than `READ COMMITTED` despite the name. It re-checks query _conditions_, not commit state; the same plain row query that raised `-114` at `READ COMMITTED` returned the uncommitted `999` immediately at `READ VERIFIED`.
+
+### ⚠️ An Accepted `READ COMMITTED` Is Not a Guarantee
+
+`SET TRANSACTION ISOLATION LEVEL READ COMMITTED` returning success, and `SHOW transaction_isolation` then reporting `read committed`, do not mean the level is in force for the next read.
+
+Measured against IRIS 2026.1 CE with a writer holding one row uncommitted, a reader whose `SET` was accepted with SQLCODE 0 does one of two things:
+
+| Outcome                                          | Timing         |
+| ------------------------------------------------ | -------------- |
+| Lock timeout, SQLCODE `-114` → `40001`           | a flat **10s** |
+| Returns the writer's uncommitted value, no error | immediate      |
+
+Both shapes were reproduced repeatedly. The trigger for the second was **not** isolated: not the statement text, not how many readers had run before, not whether the `SET` preceded or followed the first read, and not whether a transaction was explicitly open. Six successive fresh connections against a fresh table were deterministic (all ten-second timeouts), while other sequences returned the uncommitted value with no wait at all.
+
+Practical consequences:
+
+- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, lock explicitly (`SELECT ... FOR UPDATE`) and keep the transaction short.
+- Budget more than 10 seconds for any statement that may meet a contended row. A test or health check with a 5-second timeout reports a hang where the database was waiting out its normal lock timeout.
+
+### Sessions Share One Transaction in the In-IRIS Deployment
+
+**This applies to the embedded backend (`BACKEND_TYPE=embedded`), not to DBAPI.** Deployed inside IRIS, every wire session is served by a thread of the same IRIS process, and an IRIS transaction belongs to the process rather than the thread. The isolation a PostgreSQL client assumes between connections therefore does not exist.
+
+Measured inside the container with two threads of one embedded process:
+
+```text
+session A: START TRANSACTION; INSERT (id 1)
+session B: SELECT COUNT(*)              ->  1     (sees A's uncommitted row)
+session B: COMMIT                       ->  A's row is now committed
+session A: ROLLBACK                     ->  no effect
+afterwards SELECT COUNT(*)              ->  1     (PostgreSQL would say 0)
+```
+
+One client's `COMMIT` commits another client's work, and the other client's `ROLLBACK` then has nothing to undo. Any deployment serving more than one concurrent client transaction should use the DBAPI backend, where each session holds its own IRIS connection; the embedded backend is appropriate for single-client or read-mostly use.
+
+### Lock Conflicts Are Reported as Retryable
+
+Because there is no snapshot, a lock timeout is how _all_ conflicts surface. PGWire maps both halves to `40001 serialization_failure`, which is the class PostgreSQL retry helpers act on:
+
+| IRIS SQLCODE | Situation                                                     | SQLSTATE |
+| ------------ | ------------------------------------------------------------- | -------- |
+| `-110`       | A writer meets a row another transaction holds                | `40001`  |
+| `-114`       | A reader at `READ COMMITTED` meets a held row (at fetch time) | `40001`  |
+
+Applications should retry `40001` with backoff, as they would on PostgreSQL. The default lock wait is 10 seconds.
+
+### ⚠️ Optimistic Locking Reports False Conflicts
+
+**This is silent and affects every ORM in the compatibility list.** Optimistic locking — SQLAlchemy `version_id_col`, JPA `@Version`, ActiveRecord `lock_version`, Django's equivalent, and hand-written equivalents — issues `UPDATE t SET ver = 2 WHERE id = ? AND ver = 1` and branches on the row count.
+
+Measured through PGWire, with two sessions and a committed row `(id 3, ver 1)`:
+
+```text
+Session A: UPDATE t SET ver=2 WHERE id=3 AND ver=1   ->  rowcount 1, NOT committed
+Session B: UPDATE t SET ver=2 WHERE id=3 AND ver=1   ->  rowcount 0, in 0.01s, no error
+Session B: the same at READ COMMITTED                ->  rowcount 0, in 0.00s, no error
+Session A: ROLLBACK
+Committed state afterwards:                              ver = 1  (nothing ever committed)
+```
+
+Nothing was committed and no error was raised anywhere, yet B was told zero rows matched. Every framework above reads a zero row count as "another transaction changed this row" and raises `StaleDataError` / `OptimisticLockException`, discarding work that was valid. PostgreSQL 16 in the same scenario blocks B until A settles and then reports rowcount 1.
+
+The mechanism: the version predicate matches no row while A holds the new value, so no row is ever taken for update and nothing contends. The guard that exists to detect a conflict is the reason no conflict is detected. An _unguarded_ `UPDATE ... WHERE id = 3` does contend and correctly raises `-110` → `40001`.
+
+**Workarounds**:
+
+- Prefer pessimistic locking: `SELECT ... FOR UPDATE` at `READ COMMITTED` (it does contend there; at the default level it returns the uncommitted value and buys nothing), then update by key alone.
+- Or treat a zero row count from a version-guarded update as inconclusive, re-read the row, and distinguish a real version change from a concurrent holder before raising a stale-data error.
+
+### Related PostgreSQL Statements
+
+Measured through PGWire against IRIS 2026.2:
+
+| Statement                           | Result                               |
+| ----------------------------------- | ------------------------------------ |
+| `SELECT ... FOR UPDATE`             | Works                                |
+| `SELECT ... FOR UPDATE NOWAIT`      | Not supported — `42601 syntax_error` |
+| `SELECT ... FOR UPDATE SKIP LOCKED` | Not supported — `42601 syntax_error` |
+| `INSERT ... ON CONFLICT DO NOTHING` | Emulated by PGWire                   |
+| `UPDATE ... RETURNING`              | Emulated by PGWire                   |
+
+Neither lock modifier is translated, so both reach IRIS as trailing tokens it cannot parse. That means the standard PostgreSQL job-queue pattern (`SELECT ... FOR UPDATE SKIP LOCKED` plus `UPDATE ... RETURNING`) has no direct equivalent — use an IRIS-native queue or a single-consumer design.
+
+---
+
 ## 🟡 Two-Phase Commit Not Supported
 
 **Severity**: Medium
@@ -307,6 +447,7 @@ COMMIT;  -- Use COMMIT instead of PREPARE TRANSACTION
 ### Impact
 
 Most applications don't require two-phase commit. Affected scenarios:
+
 - Distributed database transactions (XA protocol)
 - Some Java EE application servers
 - Microservices requiring cross-database consistency
@@ -322,11 +463,11 @@ Most applications don't require two-phase commit. Affected scenarios:
 
 Bulk inserts via `COPY FROM STDIN` are currently limited by row-by-row processing. Performance expectations:
 
-| Operation | Expected Time | Notes |
-|-----------|---------------|-------|
-| Single INSERT | 6-8ms | Includes protocol overhead |
-| 250-row COPY | 400-600ms | ~2.4ms per row |
-| 1000-row COPY | 1.6-2.4s | Row-by-row processing |
+| Operation     | Expected Time | Notes                      |
+| ------------- | ------------- | -------------------------- |
+| Single INSERT | 6-8ms         | Includes protocol overhead |
+| 250-row COPY  | 400-600ms     | ~2.4ms per row             |
+| 1000-row COPY | 1.6-2.4s      | Row-by-row processing      |
 
 ### Workaround (Large Imports)
 
@@ -387,6 +528,7 @@ irispython -m iris_pgwire.server
 ### Issue Description
 
 PGWire responds with 'N' (no SSL) to PostgreSQL client SSL probes. The wire protocol does not support TLS encryption. Authentication security is provided by:
+
 - ✅ **OAuth 2.0**: Token-based authentication (no plain-text passwords)
 - ✅ **IRIS Wallet**: Encrypted credential storage (encrypted at rest)
 - ✅ **Password Authentication**: SCRAM-SHA-256 protocol (no plain-text transmission)
@@ -416,6 +558,7 @@ server {
 ```
 
 **Client Connection**:
+
 ```bash
 # Connect via TLS proxy on port 5433
 psql "host=your-server port=5433 sslmode=require user=_SYSTEM dbname=USER"
@@ -442,6 +585,7 @@ psql "host=your-server port=5433 sslmode=require user=_SYSTEM dbname=USER"
 IRIS PGWire does not implement Kerberos/GSSAPI authentication. This matches the pattern of most PostgreSQL wire protocol implementations.
 
 **Technical Reason** (from industry research):
+
 > "GSSAPI is an inherently stateful, interactive protocol involving challenge-response exchanges and ticket validation against a centralized Key Distribution Center (KDC). This makes it difficult to implement in connection pooling contexts and cloud-native architectures." - PostgreSQL Wire Protocol Ecosystem Analysis (2025)
 
 ### Alternative Authentication Methods
@@ -476,17 +620,17 @@ IRIS PGWire provides enterprise-grade alternatives that match cloud-native patte
 
 ### Implementations Comparison
 
-| Implementation | GSSAPI Support | Notes |
-|----------------|----------------|-------|
-| **PostgreSQL Core** | ✅ Yes | Native OS Kerberos integration |
-| **CockroachDB** | ✅ Yes | Enterprise feature with keytab management |
-| **PgBouncer** | ❌ No | Most deployed connection pooler - GSSAPI omitted |
-| **YugabyteDB** | ❌ No | Distributed SQL database - uses password auth |
-| **PGAdapter** | ❌ No | Google Cloud - uses IAM instead |
-| **ClickHouse** | ❌ No | Analytical database - password only |
-| **QuestDB** | ❌ No | Time-series database - no GSSAPI |
-| **Materialize** | ❌ No | Streaming warehouse - standard auth only |
-| **IRIS PGWire** | ❌ No | **Matches 6 of 9 implementations** |
+| Implementation      | GSSAPI Support | Notes                                            |
+| ------------------- | -------------- | ------------------------------------------------ |
+| **PostgreSQL Core** | ✅ Yes         | Native OS Kerberos integration                   |
+| **CockroachDB**     | ✅ Yes         | Enterprise feature with keytab management        |
+| **PgBouncer**       | ❌ No          | Most deployed connection pooler - GSSAPI omitted |
+| **YugabyteDB**      | ❌ No          | Distributed SQL database - uses password auth    |
+| **PGAdapter**       | ❌ No          | Google Cloud - uses IAM instead                  |
+| **ClickHouse**      | ❌ No          | Analytical database - password only              |
+| **QuestDB**         | ❌ No          | Time-series database - no GSSAPI                 |
+| **Materialize**     | ❌ No          | Streaming warehouse - standard auth only         |
+| **IRIS PGWire**     | ❌ No          | **Matches 6 of 9 implementations**               |
 
 **Pattern**: Only 2 of 9 implementations support GSSAPI (22% adoption rate in ecosystem)
 
@@ -504,29 +648,35 @@ Found a new limitation or unexpected behavior?
 
 ### Report Format
 
-**GitHub Repository**: https://github.com/isc-tdyar/iris-pgwire/issues
+**GitHub Repository**: <https://github.com/isc-tdyar/iris-pgwire/issues>
 
 ```markdown
 ## Issue Description
+
 Brief description of the limitation/bug
 
 ## Environment
+
 - IRIS Version: X.X.X
 - PGWire Version: X.X.X
 - Client: psql/psycopg/other
 
 ## Reproduction Steps
+
 1. Step 1
 2. Step 2
 3. Observe behavior
 
 ## Expected Behavior
+
 What should happen
 
 ## Actual Behavior
+
 What actually happens
 
 ## Workaround (if known)
+
 How to work around the issue
 ```
 
@@ -543,6 +693,7 @@ Help us improve! If you find workarounds or solutions:
 5. Update this document
 
 **Priority Contributions Welcome**:
+
 - `pg_catalog` emulation: Add more tables/functions for additional ORMs (e.g., TypeORM, MikrORM)
 - Bulk insert optimization: True batching for COPY protocol
 - SSL/TLS wire protocol support: Native server-side TLS

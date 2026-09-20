@@ -30,12 +30,23 @@ from .csv_processor import CSVParsingError, CSVProcessor
 from .schema_mapper import IRIS_SCHEMA
 from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
+from .sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolation
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.sqlstate import classify_iris_error
 from .vector_optimizer import VectorQueryOptimizer
 
 logger = structlog.get_logger()
+
+
+# The tags that carry a row count. Measured against PostgreSQL 16 via
+# `cursor.statusmessage`: SELECT/INSERT/UPDATE/DELETE report counts, while BEGIN,
+# START TRANSACTION, COMMIT, ROLLBACK, SAVEPOINT, SET, SHOW, CREATE TABLE,
+# DROP TABLE, ALTER TABLE, CREATE INDEX and TRUNCATE TABLE are answered bare.
+# MERGE, MOVE, FETCH and COPY are counted too, per the protocol documentation.
+_COUNTED_TAGS = frozenset(
+    {"SELECT", "INSERT", "UPDATE", "DELETE", "MERGE", "MOVE", "FETCH", "COPY"}
+)
 
 
 def build_command_complete_tag(command: str, row_count: int) -> str:
@@ -49,15 +60,20 @@ def build_command_complete_tag(command: str, row_count: int) -> str:
     emulated pg_catalog query failed at the protocol level rather than
     returning rows.
 
+    A count is only appended to the verbs PostgreSQL counts. Appending it to
+    everything produced `BEGIN 0`, `SET 0`, `COMMIT 0` and `CREATE TABLE 0` —
+    none of which PostgreSQL sends. psycopg ignores the extra field, which is how
+    it went unnoticed, but a client is entitled to parse the tag strictly.
+
     Kept as a module-level pure function so the tag rules can be tested without
     a socket.
     """
     stripped = command.strip()
     if stripped and stripped.split()[-1].isdigit():
         return stripped
-    if stripped.upper() == "SELECT":
-        return f"SELECT {row_count}"
-    return f"{stripped} {row_count}"
+    if stripped.upper() in _COUNTED_TAGS:
+        return f"{stripped} {row_count}"
+    return stripped
 
 
 # PostgreSQL protocol constants
@@ -142,6 +158,10 @@ class PGWireProtocol:
         # Session state
         self.startup_params = {}
         self.transaction_status = STATUS_IDLE
+        # What this session will report for SHOW transaction_isolation. Starts at
+        # IRIS's real default (READ UNCOMMITTED) and only moves when IRIS accepts
+        # a SET, so the value reported is always one IRIS actually applied.
+        self.isolation_level = DEFAULT_ISOLATION_LEVEL
         self.backend_pid = secrets.randbelow(32768) + 1000  # PostgreSQL-like PID
         self.backend_secret = secrets.randbelow(2**32)
         self.ssl_enabled = False
@@ -1484,6 +1504,33 @@ class PGWireProtocol:
             return True
         return False
 
+    async def _handle_isolation_set(self, command: str, send_ready: bool) -> None:
+        """Route `SET TRANSACTION ISOLATION LEVEL ...` to IRIS instead of faking it.
+
+        The decision of what IRIS can honour, and the per-session bookkeeping, both
+        live in the executor so that the extended protocol gets identical
+        behaviour; see iris_executor._handle_isolation_statement.
+        """
+        in_txn, autocommit = self._transaction_flags()
+        result = await self.iris_executor.execute_query(
+            command,
+            session_id=self.connection_id,
+            in_transaction=in_txn,
+            autocommit=autocommit,
+        )
+
+        if not result.get("success", False):
+            error_message = result.get("error", "unknown error")
+            sqlstate, condition = classify_iris_error(error_message)
+            await self.send_error_response("ERROR", sqlstate, condition, error_message)
+            if send_ready:
+                await self.send_ready_for_query()
+            return
+
+        level = self.iris_executor.get_isolation_level(self.connection_id)
+        self.isolation_level = level
+        await self.send_set_response("transaction_isolation", level, send_ready=send_ready)
+
     async def _maybe_handle_postgresql_command(self, query_upper: str, send_ready: bool) -> bool:
         if query_upper.startswith("UNLISTEN") or query_upper.startswith("CLOSE ALL"):
             await self.send_postgresql_command_response(query_upper, send_ready=send_ready)
@@ -2160,6 +2207,13 @@ class PGWireProtocol:
                 f"🔍 DEBUG handle_set_command called with: '{command_clean}' (length={len(command_clean)})",
                 connection_id=self.connection_id,
             )
+
+            # Isolation level is not a cosmetic runtime parameter, so it must not
+            # reach the shim below. That shim reads `SET\s+(\w+)` as the parameter
+            # name — "TRANSACTION" — and replies success without touching IRIS.
+            if parse_set_isolation(command_clean) is not None:
+                await self._handle_isolation_set(command_clean, send_ready)
+                return
 
             # Extract parameter name (everything between SET/RESET and = or TO)
             import re

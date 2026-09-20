@@ -17,6 +17,7 @@ from typing import Any
 
 import structlog
 
+from ._isolation import IsolationMixin
 from ._noop_cursor import NoopCursor
 from .catalog import CatalogRouter  # Feature: Consolidated catalog emulation
 from .conversions import (
@@ -180,7 +181,7 @@ class MockResult:
         pass
 
 
-class IRISExecutor:
+class IRISExecutor(IsolationMixin):
     """
     IRIS SQL Execution Handler
 
@@ -215,6 +216,9 @@ class IRISExecutor:
         self.session_connections = {}
         self.session_executors = {}  # Thread affinity: one executor per session
         self.session_namespaces = {}  # Feature 034: Per-session IRIS namespace
+        # session_id -> the isolation level IRIS accepted for that session. Absent
+        # means untouched, which is IRIS's default of READ UNCOMMITTED.
+        self.session_isolation: dict[str, str] = {}
         self.embedded_mode = False
         self.backend_type = "embedded"  # Feature 018: Backend identification
         self.vector_support = False
@@ -1167,6 +1171,15 @@ class IRISExecutor:
         try:
             # Feature 022: Apply PostgreSQL→IRIS transaction verb translation FIRST
             sql = self.transaction_translator.translate_transaction_command(sql)
+
+            # Isolation level, before anything else can mangle it. Handled here
+            # rather than only in protocol.py because the extended protocol
+            # (psycopg3, asyncpg, JDBC) reaches this method without passing
+            # through the simple-query interceptors.
+            if not kwargs.get("_skip_isolation"):
+                isolation_result = await self._handle_isolation_statement(sql, session_id, **kwargs)
+                if isolation_result is not None:
+                    return isolation_result
 
             # Feature: Handle catalog emulation shared across all paths
             catalog_result = await self.catalog_router.handle_catalog_query(
@@ -3632,6 +3645,8 @@ class IRISExecutor:
             if session_id in self.session_namespaces:
                 del self.session_namespaces[session_id]
 
+            self.forget_isolation_level(session_id)
+
             conn = self.session_connections.pop(session_id, None)
             if conn:
                 logger.info(
@@ -4139,8 +4154,11 @@ class IRISExecutor:
         sql_upper = sql.strip().upper()
 
         # Map of SHOW commands to their default values
+        # Isolation level is deliberately absent: it is answered by
+        # _handle_isolation_statement from the session's real state. It used to be
+        # hardcoded to "read committed" here, for every session, whether or not any
+        # SET had been honoured.
         show_responses = {
-            "SHOW TRANSACTION ISOLATION LEVEL": "read committed",
             "SHOW SERVER_VERSION": "16.0 (InterSystems IRIS)",
             "SHOW SERVER_ENCODING": "UTF8",
             "SHOW CLIENT_ENCODING": "UTF8",
@@ -4213,6 +4231,11 @@ class IRISExecutor:
             logger.warning("Error during IRIS executor shutdown", error=str(e))
 
     # Transaction management methods (using async threading)
+    #
+    # These bypass execute_query, so the isolation mixin — which notices a
+    # transaction boundary by reading the SQL it is given — never sees them. Each
+    # one therefore reports the boundary itself, or a transaction-scoped isolation
+    # level would outlive its transaction on this backend and not on the other.
     async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction with async threading"""
 
@@ -4223,6 +4246,10 @@ class IRISExecutor:
                     iris.sql.exec("START TRANSACTION")
             # For external mode, transaction is managed per connection
 
+        # Before the transaction opens is the last point IRIS's level can be
+        # corrected; inside one, changing it is what PostgreSQL refuses.
+        await self._resync_iris(session_id)
+        self._note_transaction_boundary("start", session_id)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._get_executor(session_id), _sync_begin, session_id)
 
@@ -4236,6 +4263,7 @@ class IRISExecutor:
                     iris.sql.exec("COMMIT")
             # For external mode, transaction is managed per connection
 
+        self._note_transaction_boundary("commit", session_id)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(self._get_executor(session_id), _sync_commit, session_id)
 
@@ -4249,6 +4277,7 @@ class IRISExecutor:
                     iris.sql.exec("ROLLBACK")
             # For external mode, transaction is managed per connection
 
+        self._note_transaction_boundary("rollback", session_id)
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             self._get_executor(session_id), _sync_rollback, session_id

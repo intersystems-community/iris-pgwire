@@ -69,9 +69,46 @@ def test_explicit_flush_select(pgwire_client):
         assert row[0] == "flushed"
 
 
-def test_repro_cross_session_interference(pgwire_server):
+def test_repro_cross_session_interference(pgwire_server, pgwire_connection_params):
     """
     Tests if multiple clients share the same IRIS connection/transaction.
+
+    Two concurrent clients, which this needed and did not have: a second
+    connection inserts a row and commits while the first holds an open
+    transaction. If the two wire sessions were multiplexed onto one IRIS
+    connection, the first session's ROLLBACK would discard the second's commit.
+
+    Full isolation and locking coverage is in test_isolation_e2e.py.
     """
-    # This requires two concurrent clients
-    pass
+    table = f"test_xsession_{int(time.time())}"
+
+    with psycopg.connect(**pgwire_connection_params) as setup:
+        setup.autocommit = True
+        with setup.cursor() as cur:
+            cur.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, owner TEXT)")
+
+    try:
+        with psycopg.connect(**pgwire_connection_params) as first:
+            with first.cursor() as cur:
+                cur.execute(f"INSERT INTO {table} (id, owner) VALUES (1, 'first')")
+
+            with psycopg.connect(**pgwire_connection_params) as second:
+                with second.cursor() as cur:
+                    cur.execute(f"INSERT INTO {table} (id, owner) VALUES (2, 'second')")
+                second.commit()
+
+            first.rollback()
+
+            with first.cursor() as cur:
+                cur.execute(f"SELECT owner FROM {table} ORDER BY id")
+                owners = [r[0] for r in cur.fetchall()]
+
+        assert owners == ["second"], (
+            f"expected only the committed row to survive, got {owners} — "
+            "sessions are sharing a transaction"
+        )
+    finally:
+        with psycopg.connect(**pgwire_connection_params) as cleanup:
+            cleanup.autocommit = True
+            with cleanup.cursor() as cur:
+                cur.execute(f"DROP TABLE {table}")

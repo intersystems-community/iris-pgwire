@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from iris_pgwire._isolation import IsolationMixin
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.iris_executor import (  # noqa: F401 — shared constants
@@ -95,7 +96,7 @@ _PYTHON_TYPE_TO_OID: dict[type, int] = {
 }
 
 
-class DBAPIExecutor:
+class DBAPIExecutor(IsolationMixin):
     """Execute SQL queries against IRIS via DBAPI backend.
 
     Uses connection pool for efficient connection management and supports
@@ -112,6 +113,9 @@ class DBAPIExecutor:
         self.session_connections: dict[str, Any] = {}
         self.strict_single_connection = config.strict_single_connection
         self.session_transactions: dict[str, bool] = {}
+        # session_id -> the isolation level IRIS accepted for that session.
+        # Absent means untouched, which is IRIS's default of READ UNCOMMITTED.
+        self.session_isolation: dict[str, str] = {}
 
         self.sql_pipeline = SQLPipeline()
         self.sql_translator = self.sql_pipeline.translator
@@ -220,6 +224,15 @@ class DBAPIExecutor:
             )
             if catalog_result is not None:
                 return catalog_result
+
+            # Isolation level first: the interceptor's generic SHOW handler
+            # answers any parameter it does not recognise with the literal
+            # "unknown", and `SET transaction_isolation = '...'` is not valid
+            # IRIS SQL, so neither can be left to fall through.
+            if not kwargs.get("_skip_isolation"):
+                isolation_result = await self._handle_isolation_statement(sql, session_id, **kwargs)
+                if isolation_result is not None:
+                    return isolation_result
 
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
@@ -1403,6 +1416,7 @@ class DBAPIExecutor:
             await self.pool.release(conn_wrapper)
         self.session_namespaces.pop(session_id, None)
         self.session_transactions.pop(session_id, None)
+        self.forget_isolation_level(session_id)
 
     async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction."""

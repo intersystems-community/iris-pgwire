@@ -42,18 +42,45 @@ class TestCommandCompleteTag:
             ("SELECT 0", 0, "SELECT 0"),
             ("SELECT 3", 3, "SELECT 3"),
             ("INSERT 0 1", 1, "INSERT 0 1"),
-            # Bare verbs must keep appending the count, as before.
+            # A row-returning or row-affecting verb takes the count.
             ("SELECT", 5, "SELECT 5"),
             ("SELECT", 0, "SELECT 0"),
             ("INSERT", 1, "INSERT 1"),
             ("UPDATE", 2, "UPDATE 2"),
             ("DELETE", 1, "DELETE 1"),
-            ("CREATE TABLE", 0, "CREATE TABLE 0"),
-            ("BEGIN", 0, "BEGIN 0"),
+            ("select", 5, "select 5"),
         ],
     )
     def test_tag_is_never_double_counted(self, command, row_count, expected):
         assert build_command_tag(command, row_count) == expected
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            # Measured against PostgreSQL 16 (`cursor.statusmessage`): a statement
+            # that affects no rows is answered with the bare verb, never a count.
+            ("BEGIN", "BEGIN"),
+            ("START TRANSACTION", "START TRANSACTION"),
+            ("COMMIT", "COMMIT"),
+            ("ROLLBACK", "ROLLBACK"),
+            ("SAVEPOINT", "SAVEPOINT"),
+            ("SET", "SET"),
+            ("SHOW", "SHOW"),
+            ("CREATE TABLE", "CREATE TABLE"),
+            ("DROP TABLE", "DROP TABLE"),
+            ("ALTER TABLE", "ALTER TABLE"),
+            ("CREATE INDEX", "CREATE INDEX"),
+            ("TRUNCATE TABLE", "TRUNCATE TABLE"),
+        ],
+    )
+    def test_a_verb_postgresql_never_counts_gets_no_count(self, command, expected):
+        """`BEGIN 0` and `SET 0` are not tags PostgreSQL emits.
+
+        The count used to be appended to every verb. psycopg tolerates the extra
+        field, which is why it went unnoticed, but it is not the wire protocol and
+        a client entitled to parse the tag strictly is entitled to reject it.
+        """
+        assert build_command_tag(command, 0) == expected
 
     def test_catalog_router_tag_survives_the_protocol_layer(self):
         """The router's own tag must pass through unchanged.

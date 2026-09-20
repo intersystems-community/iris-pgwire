@@ -823,6 +823,13 @@ def pgwire_client(pgwire_server, pgwire_connection_params):
             if result is None or result[0] != 1:
                 raise RuntimeError("PGWire connection verification failed")
 
+        # The verification query opened a transaction psycopg will not close by
+        # itself, so without this every test began inside a transaction that had
+        # already read a row. PostgreSQL refuses `SET TRANSACTION ISOLATION LEVEL`
+        # in that state (`25001`), so the fixture was handing out a connection no
+        # test could have set a level on.
+        connection.rollback()
+
         logger.info("pgwire_client: Connection verified")
 
         # Yield connection to test

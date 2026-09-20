@@ -179,6 +179,7 @@ python -m iris_pgwire.quality
 
 See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full list. Key items:
 
+- **No MVCC or snapshot isolation.** `REPEATABLE READ` and `SERIALIZABLE` are rejected rather than silently downgraded; IRIS `READ COMMITTED` is narrower than PostgreSQL's, and dirty reads are reachable through aggregates, `GROUP BY` and `DISTINCT`. Lock conflicts arrive as retryable `40001`. Version-guarded (optimistic-locking) updates can report false conflicts — read the isolation section before porting an ORM that uses them.
 - IRIS Community Edition: 5-user connection limit — use `PGWIRE_POOL_SIZE=1` for dev
 - No native SSL termination — use nginx/HAProxy in front for TLS
 - Kerberos/GSSAPI auth wiring deferred (OAuth 2.0 is the recommended enterprise auth)
