@@ -18,10 +18,16 @@ from unittest.mock import MagicMock, call, patch, mock_open
 import pytest
 
 # ---------------------------------------------------------------------------
-# Import the module under test.  iris_devtester is not installed in the test
-# environment, so mock it at the package level before importing.
+# Import the module under test.  Where iris_devtester is not installed, mock it
+# at the package level first so the import below resolves.  Where it *is*
+# installed the stub is skipped: it is installed at collection time, before any
+# test runs, so clobbering sys.modules would hand the fake to every later
+# consumer of the real package — including the container fixture in
+# tests/conftest.py, which then cannot find IRISContainer and skips.
+# tests/unit/test_devtester_stub_does_not_leak.py pins that.
 # ---------------------------------------------------------------------------
 
+import importlib.machinery
 import sys
 from types import ModuleType
 
@@ -63,7 +69,13 @@ def _make_devtester_mocks():
     return pkg, config_mod, connections_mod, creator_mod, loader_mod
 
 
-_pkg, _config_mod, _connections_mod, _creator_mod, _loader_mod = _make_devtester_mocks()
+def _real_devtester_installed() -> bool:
+    """Ask the filesystem finders, not sys.modules, which this is about."""
+    return importlib.machinery.PathFinder.find_spec("iris_devtester", None) is not None
+
+
+if not _real_devtester_installed():
+    _make_devtester_mocks()
 
 # Now we can safely import the module under test
 from iris_pgwire.testing.base_fixture_builder import (  # noqa: E402

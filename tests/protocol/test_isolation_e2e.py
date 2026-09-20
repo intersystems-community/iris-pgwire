@@ -9,6 +9,14 @@ SQLSTATE instead of `42000`.
 Requires the IRIS container. `docker compose up -d` first; these do not skip
 themselves, because a skipped isolation test is indistinguishable from a passing
 one in CI and this is exactly the behaviour that went unnoticed.
+
+Run this module in its own pytest process. Appended to a run of tests/unit, the
+six tests here that need two independent sessions — the lock-conflict pair,
+optimistic locking, the READ COMMITTED pin and TestCrossSessionIsolation — fail:
+by then something in that suite has left the process believing every session
+shares one IRIS transaction, which is the in-IRIS shape, not the DBAPI one the
+fixture asks for. That contamination predates this module and is not diagnosed
+here; the single-session tests are unaffected either way.
 """
 
 from __future__ import annotations

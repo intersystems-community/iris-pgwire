@@ -9,10 +9,14 @@ This document catalogs known limitations, workarounds, and behavior differences 
 **These limitations are pinned by tests.** The divergences that cannot be fixed at the wire layer are asserted rather than only described, so a change in one cannot go unnoticed and leave this document quietly wrong:
 
 ```bash
-pytest -m pinned_limitation tests/protocol tests/integration
+pytest -m pinned_limitation \
+  tests/protocol/test_isolation_e2e.py \
+  tests/integration/test_in_iris_shared_transaction.py
 ```
 
-A failure there means the behaviour changed and the corresponding section below needs rewriting — the tests pin these outcomes, they do not endorse them.
+The two files are named rather than the directories because `tests/integration` also holds modules that fail to collect where the optional `sqlalchemy-iris` psycopg dialect is absent, which would stop the run before any pin is reached. A new pin belongs in one of these files, or in this command.
+
+A failure there means the behaviour changed and the corresponding section below needs rewriting — the tests pin these outcomes, they do not endorse them. Run it in its own pytest process: appended to a run of `tests/unit`, the pins that need two independent sessions fail for a reason that has nothing to do with isolation, which `tests/protocol/test_isolation_e2e.py` describes.
 
 ---
 
