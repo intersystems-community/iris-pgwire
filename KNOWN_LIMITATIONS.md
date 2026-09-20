@@ -377,7 +377,18 @@ session A: ROLLBACK                     ->  no effect
 afterwards SELECT COUNT(*)              ->  1     (PostgreSQL would say 0)
 ```
 
-One client's `COMMIT` commits another client's work, and the other client's `ROLLBACK` then has nothing to undo. Any deployment serving more than one concurrent client transaction should use the DBAPI backend, where each session holds its own IRIS connection; the embedded backend is appropriate for single-client or read-mostly use.
+One client's `COMMIT` commits another client's work, and the other client's `ROLLBACK` then has nothing to undo.
+
+What is wrong here is the transaction's **scope**, not the backend's ability to express a transaction. Measured on the same path, single-threaded:
+
+```text
+START TRANSACTION; INSERT; ROLLBACK  ->  SELECT COUNT(*)  ->  0   (PostgreSQL: 0)
+START TRANSACTION; INSERT; COMMIT    ->  SELECT COUNT(*)  ->  1   (PostgreSQL: 1)
+```
+
+So an application driving the embedded backend from one thread gets the transaction semantics it asked for; only concurrency breaks them. Read this section as "the embedded backend cannot do transactions" and you go looking for a missing implementation instead of a process-scoped one.
+
+Any deployment serving more than one concurrent client transaction should use the DBAPI backend, where each session holds its own IRIS connection; the embedded backend is appropriate for single-client or read-mostly use.
 
 ### Lock Conflicts Are Reported as Retryable
 
