@@ -16,9 +16,16 @@ import asyncio
 
 import pytest
 
-# Import dialect directly to register it
-import sqlalchemy_iris.psycopg  # noqa
-from sqlalchemy import Column, Integer, MetaData, String, Table, select, text
+# The dialect this file exists to test is not in any released sqlalchemy-iris
+# (0.20.0 registers `iris`, `iris.emb`, `iris.intersystems` and ships no
+# `psycopg` submodule), and the import below is unconditional — so without the
+# guard this module breaks collection for the entire `pytest tests/` run.
+sqlalchemy_iris_psycopg = pytest.importorskip(
+    "sqlalchemy_iris.psycopg",
+    reason="iris+psycopg dialect not available in sqlalchemy-iris",
+)
+
+from sqlalchemy import Column, Integer, MetaData, String, Table, select, text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 

@@ -8,9 +8,22 @@ Expected: FAIL until T010-T017 async dialect implementation is complete.
 """
 
 import pytest
-from fastapi import Depends, FastAPI
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# See the note in test_fastapi_async_vector.py: `iris+psycopg` is not a dialect
+# any released sqlalchemy-iris provides, and the engine below is built at import
+# time, so an unguarded import aborts collection for the whole run.
+pytest.importorskip(
+    "sqlalchemy_iris.psycopg",
+    reason="async iris+psycopg dialect not implemented (T010-T017)",
+)
+
+from fastapi import Depends, FastAPI  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 # FastAPI app setup
 engine = create_async_engine("iris+psycopg://localhost:5432/USER")
