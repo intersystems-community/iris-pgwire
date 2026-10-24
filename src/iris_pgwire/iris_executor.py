@@ -27,6 +27,12 @@ from .conversions import (
     horolog_to_pg,
     pg_to_horolog,
 )
+from .embedded_vector_fetch import (
+    inline_none_params,
+    is_read_only_statement,
+    is_vector_fetch_error,
+    refetch_in_odbc_mode,
+)
 from .schema_mapper import (
     IRIS_SCHEMA,
     translate_output_schema,
@@ -2036,20 +2042,7 @@ class IRISExecutor(IsolationMixin):
                     # nullable FK columns - causes referential integrity failures.
                     # When params contain None, inline the values instead of binding.
                     if any(p is None for p in params):
-                        inline_sql = sql
-                        for param_value in params:
-                            if param_value is None:
-                                sql_literal = "NULL"
-                            elif isinstance(param_value, bool):
-                                # IRIS expects 1/0 for BIT columns
-                                sql_literal = "1" if param_value else "0"
-                            elif isinstance(param_value, int | float):
-                                sql_literal = str(param_value)
-                            else:
-                                # Strings need quoting and escaping
-                                escaped_value = str(param_value).replace("'", "''")
-                                sql_literal = f"'{escaped_value}'"
-                            inline_sql = inline_sql.replace("?", sql_literal, 1)
+                        inline_sql, _ = inline_none_params(sql, params)
                         logger.debug(
                             "Using inline SQL for None params",
                             original_sql=sql[:100],
@@ -2252,7 +2245,14 @@ class IRISExecutor(IsolationMixin):
                         if select_params
                         else iris.sql.exec(captured_sql)
                     )
-                    return list(res), getattr(res, "_meta", None)
+                    try:
+                        return list(res), getattr(res, "_meta", None)
+                    except Exception as fetch_error:
+                        # These re-selects are read-only, so a VECTOR value in the
+                        # RETURNING list can be re-fetched rather than lost.
+                        if not is_vector_fetch_error(fetch_error):
+                            raise
+                        return refetch_in_odbc_mode(iris, captured_sql, select_params), None
                 return [], None
             else:
                 cursor = connection.cursor()
@@ -2589,6 +2589,8 @@ class IRISExecutor(IsolationMixin):
         optimized_sql_upper: str,
         sql: str,
         session_id: str | None,
+        executed_sql: str | None = None,
+        params: list | None = None,
     ) -> tuple[list[list[Any]], list[dict[str, Any]]]:
         rows: list[list[Any]] = []
         columns: list[dict[str, Any]] = []
@@ -2642,11 +2644,23 @@ class IRISExecutor(IsolationMixin):
                     normalized_value = self._normalize_iris_null(row)
                     rows.append([normalized_value])
         except Exception as fetch_error:
-            logger.warning(
-                "Error fetching IRIS result rows",
-                error=str(fetch_error),
+            # A fetch error used to be logged and returned as zero rows with a normal
+            # CommandComplete. The one error with a known recovery is a VECTOR value in the
+            # row; anything else, and any statement that could write, is raised.
+            if not (
+                executed_sql
+                and is_vector_fetch_error(fetch_error)
+                and is_read_only_statement(executed_sql)
+            ):
+                raise
+            logger.info(
+                "Re-fetching in ODBC mode: the projection contains a VECTOR value",
                 session_id=session_id,
             )
+            rows = [
+                [self._normalize_iris_null(value) for value in row]
+                for row in refetch_in_odbc_mode(self._import_iris(), executed_sql, params)
+            ]
 
         if not columns:
             if rows:
@@ -2812,7 +2826,13 @@ class IRISExecutor(IsolationMixin):
                 t_fetch_start = time.perf_counter()
 
                 rows, columns = self._materialize_embedded_result(
-                    result, optimized_sql, optimized_sql_upper, sql, session_id
+                    result,
+                    optimized_sql,
+                    optimized_sql_upper,
+                    sql,
+                    session_id,
+                    executed_sql=statements[-1] if statements and not plan.has_returning else None,
+                    params=optimized_params,
                 )
                 t_fetch_elapsed = (time.perf_counter() - t_fetch_start) * 1000
 

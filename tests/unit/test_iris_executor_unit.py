@@ -906,21 +906,23 @@ class TestMaterializeEmbeddedResult:
         )
         assert columns[0]["type_oid"] == 1114
 
-    def test_fetch_error_handled_gracefully(self, executor_embedded):
+    def test_fetch_error_is_raised_not_returned_as_zero_rows(self, executor_embedded):
+        # This test used to assert the opposite: that a fetch error became `rows == []`.
+        # That was the defect: a VECTOR projection on the embedded backend returned zero rows
+        # with a normal CommandComplete (research.md §R7). A fetch error is now an error.
         mock_result = MagicMock()
         mock_result._meta = None
 
-        def bad_iter():
+        def bad_iter(_self):
             raise RuntimeError("fetch failed")
             yield  # make it a generator
 
         mock_result.__iter__ = bad_iter
 
-        # Should not raise
-        rows, columns = executor_embedded._materialize_embedded_result(
-            mock_result, "SELECT 1", "SELECT 1", "SELECT 1", None
-        )
-        assert rows == []
+        with pytest.raises(RuntimeError, match="fetch failed"):
+            executor_embedded._materialize_embedded_result(
+                mock_result, "SELECT 1", "SELECT 1", "SELECT 1", None
+            )
 
 
 # ---------------------------------------------------------------------------

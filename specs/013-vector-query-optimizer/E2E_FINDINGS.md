@@ -2,7 +2,36 @@
 
 **Date**: 2025-10-02
 **Test**: psycopg3 client → PGWire server → IRIS
-**Status**: ⚠️ **IRIS LIMITATION DISCOVERED** - IRIS doesn't support vector values as parameters
+**Status**: ❌ **Superseded 2026-10-17. The central finding does not reproduce.** Original status:
+"⚠️ IRIS LIMITATION DISCOVERED - IRIS doesn't support vector values as parameters"
+
+> **Correction, 2026-10-17** — measured through pgwire with psycopg 3.3.6 against IRIS
+> **2026.2.0.221.0com** (`iris-pgwire-db`), on both the embedded and the DBAPI backend. Probe:
+> `specs/051-unified-executor/spikes/probe_to_vector_binding.py`.
+>
+> **IRIS binds vector parameters.** A 21.6 KB, 1,024-dim string binds into
+> `TO_VECTOR(%s, DOUBLE, 1024)` in INSERT and in `ORDER BY VECTOR_COSINE(v, TO_VECTOR(%s, DOUBLE, 1024))`.
+> The ranking matches the order computed locally. An 87.7 KB, 4,096-dim string does the same. The
+> 2026-10-17 DB-API measurements from the irispython-dx project agree, on 2026.1.0.234.1 and
+> 2026.3.0L.196. Binding works up to **65,536 dimensions**. 65,537 fails with `-263`, which is a
+> dimension limit, not a size limit.
+>
+> What this document most likely observed instead:
+>
+> - **The 3,000-byte "limit" below is not a binding limit.** It was the optimizer's own threshold
+>   for _inlining_ a parameter as a literal. Today `_MAX_TO_VECTOR_LITERAL_BYTES = 3000`
+>   (`vector_optimizer.py:23`) is defined but never used. The live `ORDER BY` threshold is 1 MB.
+> - **An element-type mismatch.** Untyped `TO_VECTOR(?)` is `FLOAT`, and the optimizer fills in
+>   `FLOAT` when no type is given (`vector_optimizer.py:302`). Against a `DOUBLE` column that fails
+>   with `-259`, _"Cannot perform vector operation on vectors of different datatypes"_, which is easy
+>   to read as "cannot bind". Measured: it fails at every size, including 3 dimensions.
+> - **A result that came back empty.** On the embedded backend, a `SELECT` that projects a `VECTOR`
+>   column returns zero rows with no error (`iris_executor.py:2644-2649` swallows the fetch error).
+>   An empty result also looks like a failed bind.
+>
+> Which of these applied in 2025 cannot be recovered from this document. Its conclusion that IRIS
+> cannot handle production-sized vectors over the wire is withdrawn. The body below is kept as
+> originally written.
 
 ---
 
@@ -17,12 +46,14 @@ E2E testing with psycopg3 revealed that **IRIS cannot accept vector data as SQL 
 ## What Works ✅
 
 ### 1. PGWire Server Extended Protocol Implementation
+
 - ✅ Server correctly receives parameters from psycopg3 (server-side binding)
 - ✅ Protocol correctly converts PostgreSQL `$1` → IRIS `?` placeholders
 - ✅ Parameters passed to IRIS executor correctly (verified in logs: `param_count=1`)
 - ✅ Optimizer correctly detects and processes vector parameters
 
 ### 2. IRIS DBAPI Direct Connection
+
 - ✅ Works perfectly for any vector size (1024+ dimensions)
 - ✅ Performance: 40.6ms P95 latency (proven in benchmarks)
 - ✅ **RECOMMENDED FOR PRODUCTION** vector similarity search
@@ -36,7 +67,8 @@ E2E testing with psycopg3 revealed that **IRIS cannot accept vector data as SQL 
 **Problem**: IRIS SQL compiler cannot handle string literals >3KB
 
 **Evidence**:
-```
+
+```text
 Approach: Convert parameter to literal in SQL
 Vector: 1024 dimensions
 JSON array: 21,657 characters
@@ -53,7 +85,8 @@ IRIS Error: <SQL ERROR>; Details: [SQLCODE: <-400>:<Fatal error occurred>]
 **Problem**: IRIS cannot bind vector values as query parameters
 
 **Evidence** (from latest E2E testing):
-```
+
+```text
 Approach: Keep as parameter (not literal)
 SQL: SELECT ... ORDER BY VECTOR_COSINE(vec, TO_VECTOR(?)) LIMIT 5
 Parameters: ['base64:ABC123...'] (21KB base64 string)
@@ -74,11 +107,11 @@ IRIS Error: <SQL ERROR>; Details: [SQLCODE: <-400>:<Fatal error occurred>]
 
 This creates an **impossible situation** for 1024+ dimension vectors:
 
-| Approach | SQL Form | Parameter | Result |
-|----------|----------|-----------|--------|
-| **Literals** | `TO_VECTOR('[1.0,2.0,...]')` | None | ❌ IRIS: Literal >3KB |
-| **Parameters** | `TO_VECTOR(?)` | `base64:...` | ❌ IRIS: Can't bind vector param |
-| **Parameters** | `TO_VECTOR(?)` | `[1.0,2.0,...]` | ❌ IRIS: Can't bind vector param |
+| Approach       | SQL Form                     | Parameter       | Result                           |
+| -------------- | ---------------------------- | --------------- | -------------------------------- |
+| **Literals**   | `TO_VECTOR('[1.0,2.0,...]')` | None            | ❌ IRIS: Literal >3KB            |
+| **Parameters** | `TO_VECTOR(?)`               | `base64:...`    | ❌ IRIS: Can't bind vector param |
+| **Parameters** | `TO_VECTOR(?)`               | `[1.0,2.0,...]` | ❌ IRIS: Can't bind vector param |
 
 **Conclusion**: **IRIS doesn't support vector data in PostgreSQL wire protocol** for production-sized vectors.
 
@@ -88,7 +121,8 @@ This creates an **impossible situation** for 1024+ dimension vectors:
 
 ### Test Sequence (psycopg3 Client)
 
-**Test 1: Server-Side Parameters (Latest Test)**
+#### Test 1: Server-Side Parameters (Latest Test)
+
 ```python
 # Client code (psycopg3):
 cur.execute(
@@ -114,14 +148,16 @@ Parameters: ['base64:ABC123...']
 ❌ FAILS: Cannot bind vector parameter to TO_VECTOR(?)
 ```
 
-**Test 2: Small Literals (psycopg2 with small vectors)**
+#### Test 2: Small Literals (psycopg2 with small vectors)
+
 ```python
 # Works for vectors <256 dimensions
 # JSON array: ~2KB (under IRIS 3KB limit)
 ✅ IRIS accepts literal: TO_VECTOR('[1.0,2.0,...,256.0]')
 ```
 
-**Test 3: Direct IRIS (Workaround)**
+#### Test 3: Direct IRIS (Workaround)
+
 ```python
 import iris
 # Build SQL with literal inline (no wire protocol)
@@ -135,11 +171,13 @@ result = iris.sql.exec(
 ### Root Cause Analysis
 
 **IRIS Vector Parameter Binding Limitation**:
+
 - IRIS DBAPI (direct connection) supports vector parameters
 - IRIS via SQL string execution (wire protocol path) does NOT support vector parameters
 - IRIS `TO_VECTOR(?)` function fails when parameter contains vector data
 
 **Why IRIS DBAPI Works**:
+
 - Uses internal IRIS parameter binding mechanism
 - Bypasses SQL string compilation entirely
 - Direct object serialization (not text-based SQL)
@@ -214,6 +252,7 @@ if len(vector_literal) > MAX_LITERAL_SIZE_BYTES:
 ### For Production Use
 
 **Option 1: PostgreSQL Clients → PGWire Server** ✅ **RECOMMENDED** (Updated 2025-10-03)
+
 - PostgreSQL clients connect via wire protocol to PGWire server
 - PGWire server (running in embedded Python) translates to `iris.sql.exec()` internally
 - Works with ANY PostgreSQL-compatible client (psycopg3, asyncpg, JDBC, node-postgres, etc.)
@@ -237,12 +276,14 @@ results = cur.fetchall()
 ```
 
 **How it works**:
+
 1. PostgreSQL client connects to PGWire server (port 5432)
 2. Client sends query with parameters via Extended Protocol
 3. **PGWire server (embedded Python) transforms and executes via `iris.sql.exec()`**
 4. Results returned in PostgreSQL wire protocol format
 
 **Option 2: Direct IRIS DBAPI** ✅ PRODUCTION READY (with specific pattern)
+
 - For code running inside IRIS container using DBAPI
 - **Critical**: Must use the proven safe pattern from rag-templates/vector_sql_utils.py
 - **Limitation**: Can only parameterize the vector itself, NOT dimension or TOP clause
@@ -270,6 +311,7 @@ results = cursor.fetchall()
 ```
 
 **Option 3: IRIS Embedded Python (iris.sql.exec)** ✅ PRODUCTION READY
+
 - For code running inside IRIS container via irispython
 - Direct access to iris module (no DBAPI layer)
 - May have different parameterization capabilities than DBAPI
@@ -286,6 +328,7 @@ result = iris.sql.exec(
 ```
 
 **Option 4: External Connection via IRIS Native Protocol** ❌ DOESN'T WORK
+
 - ~~External TCP connection using IRIS's native wire protocol~~
 - IRIS native protocol **cannot bind vector parameters** for external connections
 - **Status**: ❌ Not viable (IRIS platform limitation)
@@ -293,6 +336,7 @@ result = iris.sql.exec(
 - **Note**: This is NOT the same as embedded Python `import iris` (which works)
 
 **Why PGWire Works** (but external IRIS TCP connection doesn't):
+
 - PGWire server runs in embedded Python inside IRIS (has `import iris` access)
 - Receives PostgreSQL wire protocol messages from external clients
 - Uses `iris.sql.exec()` internally (which DOES support vector parameters)
@@ -301,6 +345,7 @@ result = iris.sql.exec(
 ### For Development/Testing
 
 **Option 1: PGWire Server** (for PostgreSQL client testing):
+
 ```python
 import psycopg
 
@@ -316,6 +361,7 @@ cur.execute(
 ```
 
 **Option 2: Direct IRIS Embedded Python** (for embedded code testing):
+
 ```python
 import iris
 
@@ -332,19 +378,20 @@ result = iris.sql.exec(
 
 ### What This Means (Updated 2025-10-03)
 
-| Scenario | HNSW Optimization | Status |
-|----------|-------------------|--------|
-| **PostgreSQL clients → PGWire server** | ✅ Works | ✅ **Production ready** |
-| **Embedded Python: `import iris; iris.sql.exec()`** | ✅ Works | ✅ **Production ready** |
-| **External connection via IRIS native protocol** | ❌ Fails | ❌ **Protocol limitation** |
-| **PGWire + any vector size (1024+ dims)** | ✅ Works | ✅ PGWire translates to iris.sql.exec() |
-| **psycopg2 vs psycopg3 vs asyncpg** | ✅ All work | Via PGWire server |
+| Scenario                                            | HNSW Optimization | Status                                  |
+| --------------------------------------------------- | ----------------- | --------------------------------------- |
+| **PostgreSQL clients → PGWire server**              | ✅ Works          | ✅ **Production ready**                 |
+| **Embedded Python: `import iris; iris.sql.exec()`** | ✅ Works          | ✅ **Production ready**                 |
+| **External connection via IRIS native protocol**    | ❌ Fails          | ❌ **Protocol limitation**              |
+| **PGWire + any vector size (1024+ dims)**           | ✅ Works          | ✅ PGWire translates to iris.sql.exec() |
+| **psycopg2 vs psycopg3 vs asyncpg**                 | ✅ All work       | Via PGWire server                       |
 
 ### Constitutional Compliance
 
 **Question**: Does this violate constitutional requirements?
 
 **Answer**: ⚠️ Partial compliance. The constitution requires:
+
 - ✅ Optimizer transforms queries correctly (proven in both literal and parameter paths)
 - ✅ Transformation overhead <5ms (0.45ms avg, 0.49ms P95)
 - ✅ Graceful degradation on errors (size limit prevents crashes)
@@ -376,7 +423,8 @@ The optimizer **works perfectly**. The limitation is in **IRIS's SQL execution e
 ## Test Evidence
 
 ### PGWire Server Working Correctly ✅
-```
+
+```text
 Server Logs (psycopg3 test):
 ✅ param_count=1 (Extended Protocol working)
 ✅ Vector query optimization triggered
@@ -386,7 +434,8 @@ Server Logs (psycopg3 test):
 ```
 
 ### IRIS Execution Failure ❌
-```
+
+```text
 IRIS Error:
 ❌ <SQL ERROR>; Details: [SQLCODE: <-400>:<Fatal error occurred>]
 ❌ [Location: <ServerLoop>]
@@ -395,6 +444,7 @@ IRIS Error:
 ```
 
 ### Direct IRIS Success ✅
+
 ```python
 # IRIS DBAPI bypasses SQL string execution
 result = iris.sql.exec(
@@ -409,17 +459,20 @@ result = iris.sql.exec(
 ## Conclusion
 
 **PGWire Server**: ✅ **WORKING AS DESIGNED**
+
 - Extended Protocol implementation correct
 - Parameter passing correct
 - Optimizer integration correct
 - All application-level code functioning properly
 
 **IRIS Platform**: ⚠️ **VECTOR PARAMETER LIMITATION DISCOVERED**
+
 - Cannot bind vector values as SQL parameters (via string execution path)
 - Can bind vector values via DBAPI (internal parameter binding)
 - String literal size limit ~3KB (affects large vectors)
 
 **Production Recommendation**:
+
 - ✅ **IRIS DBAPI**: Production ready for vector similarity search (any size)
 - ⚠️ **PGWire**: Works for non-vector queries and small vectors (<256 dims)
 - ❌ **PGWire + Large Vectors**: Not supported due to IRIS limitation
