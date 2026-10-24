@@ -1,86 +1,17 @@
-"""
-IRIS PGWire Authentication Bridge
+"""Authentication components that are not wired into the server.
 
-This module provides enterprise authentication capabilities for PostgreSQL clients
-connecting to InterSystems IRIS via the PGWire protocol. It bridges PostgreSQL
-wire protocol authentication (SCRAM-SHA-256, GSSAPI) to IRIS's native authentication
-infrastructure (OAuth 2.0, Kerberos, Wallet).
+What the server actually does is in ``iris_pgwire.password_auth``: the client sends its IRIS
+password and the server checks it by logging in to IRIS.
 
-Architecture:
-    PostgreSQL Client → PGWire Protocol → Authentication Bridge → IRIS Auth (OAuth/Kerberos/Wallet)
+This package once also held SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet code (feature 024). It was
+removed on 2026-10-24. None of it was ever reachable in a way that verified anything: the SCRAM
+exchange accepted any client proof, handed the next stage the literal password
+``"placeholder_password"`` and answered with a constant server signature. It is in git history,
+and ``docs/adr/0003-password-auth-verified-by-iris-login.md`` records why it was not kept.
 
-Supported Authentication Methods:
-    - OAuth 2.0: Token-based authentication via IRIS OAuth server (RFC 6749)
-    - Kerberos (GSSAPI): SSO authentication via Active Directory or MIT Kerberos
-    - IRIS Wallet: Encrypted credential storage in IRISSECURITY database
-    - Password (fallback): SCRAM-SHA-256 authentication (backward compatibility)
-
-Key Components:
-    - OAuthBridge: OAuth 2.0 token exchange and validation
-    - GSSAPIAuthenticator: Kerberos GSSAPI authentication with principal mapping
-    - WalletCredentials: IRIS Wallet integration for encrypted credential storage
-    - AuthenticationSelector: Dual-mode authentication routing with fallback chain
-
-Constitutional Requirements:
-    - Protocol Fidelity: Exact PostgreSQL GSSAPI protocol support
-    - Test-First Development: All implementations validated with contract tests
-    - IRIS Integration: Uses iris.cls() for direct IRIS API access
-    - Performance: <5 second authentication latency (FR-028)
-    - Backward Compatibility: Password fallback ensures 100% client compatibility
-
-Feature: 024-research-and-implement (Authentication Bridge)
-Phase: Implementation (Phase 3.1 - Module Structure)
+What remains is the Kerberos/GSSAPI authenticator, which is also not wired in.
 """
 
-# Export authentication components (Phase 3.4 - Implementation Complete)
-__all__ = [
-    "OAuthBridge",
-    "GSSAPIAuthenticator",
-    "WalletCredentials",
-    "AuthenticationSelector",
-    # SCRAM components
-    "AuthenticationState",
-    "AuthenticationMethod",
-    "AuthenticationResult",
-    "ScramCredentials",
-    "IRISAuthenticationProvider",
-    "PostgreSQLAuthenticator",
-    "SCRAMAuthenticator",
-    "create_authentication_ok",
-    "create_authentication_sasl",
-    "create_authentication_sasl_continue",
-    "create_authentication_sasl_final",
-    "create_error_response",
-    # OAuth types and errors
-    "OAuthToken",
-    "OAuthConfig",
-    "OAuthAuthenticationError",
-    "OAuthValidationError",
-    "OAuthRefreshError",
-    "OAuthConfigurationError",
-    # Kerberos types and errors
-    "KerberosPrincipal",
-    "KerberosConfig",
-    "KerberosAuthenticationError",
-    "KerberosTimeoutError",
-    # Wallet types and errors
-    "WalletSecret",
-    "WalletConfig",
-    "WalletSecretNotFoundError",
-    "WalletAPIError",
-    # Authentication selector
-    "AuthMethod",
-]
-
-# Version info
-__version__ = "0.1.0"
-__feature__ = "024-research-and-implement"
-
-# Import implementations (Phase 3.4 complete)
-from .auth_selector import (
-    AuthenticationSelector,
-    AuthMethod,
-)
 from .gssapi_auth import (
     GSSAPIAuthenticator,
     KerberosAuthenticationError,
@@ -88,33 +19,11 @@ from .gssapi_auth import (
     KerberosPrincipal,
     KerberosTimeoutError,
 )
-from .oauth_bridge import (
-    OAuthAuthenticationError,
-    OAuthBridge,
-    OAuthConfig,
-    OAuthConfigurationError,
-    OAuthRefreshError,
-    OAuthToken,
-    OAuthValidationError,
-)
-from .scram import (
-    AuthenticationMethod,
-    AuthenticationResult,
-    AuthenticationState,
-    IRISAuthenticationProvider,
-    PostgreSQLAuthenticator,
-    SCRAMAuthenticator,
-    ScramCredentials,
-    create_authentication_ok,
-    create_authentication_sasl,
-    create_authentication_sasl_continue,
-    create_authentication_sasl_final,
-    create_error_response,
-)
-from .wallet_credentials import (
-    WalletAPIError,
-    WalletConfig,
-    WalletCredentials,
-    WalletSecret,
-    WalletSecretNotFoundError,
-)
+
+__all__ = [
+    "GSSAPIAuthenticator",
+    "KerberosAuthenticationError",
+    "KerberosConfig",
+    "KerberosPrincipal",
+    "KerberosTimeoutError",
+]

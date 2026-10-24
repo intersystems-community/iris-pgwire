@@ -2,7 +2,7 @@
 Unit tests for PGWireProtocol (protocol.py) — Phase 3.
 
 Targets uncovered lines: SSL probe, startup sequence error paths,
-SCRAM authentication, handle_ssl_probe, COPY protocol (legacy path),
+handle_ssl_probe, COPY protocol (legacy path),
 cancel request, send_copy_*, _decode_binary_parameter edge cases,
 message_loop error paths, handle_set_command, _transaction_flags,
 infer_parameter_oids_from_casts, _find_limit_offset_param_indexes, etc.
@@ -51,7 +51,7 @@ from iris_pgwire.protocol import (
 # ---------------------------------------------------------------------------
 
 
-def make_protocol(enable_scram: bool = False) -> PGWireProtocol:
+def make_protocol() -> PGWireProtocol:
     reader = AsyncMock(spec=asyncio.StreamReader)
     writer = MagicMock()
     writer.write = MagicMock()
@@ -105,7 +105,6 @@ def make_protocol(enable_scram: bool = False) -> PGWireProtocol:
         writer=writer,
         iris_executor=iris_executor,
         connection_id="test-conn-003",
-        enable_scram=enable_scram,
     )
     return p
 
@@ -117,11 +116,6 @@ def collected_bytes(writer) -> bytes:
 @pytest.fixture
 def protocol():
     return make_protocol()
-
-
-@pytest.fixture
-def scram_protocol():
-    return make_protocol(enable_scram=True)
 
 
 # ===========================================================================
@@ -278,224 +272,6 @@ class TestHandleStartupSequence:
                 await protocol.handle_startup_sequence()
         written = collected_bytes(protocol.writer)
         assert MSG_ERROR_RESPONSE in written
-
-    @pytest.mark.asyncio
-    async def test_scram_path_calls_scram_methods(self, scram_protocol):
-        """When enable_scram=True, SCRAM sequence methods are called."""
-        with (
-            patch.object(scram_protocol, "parse_startup_message", new_callable=AsyncMock),
-            patch.object(scram_protocol, "start_scram_authentication", new_callable=AsyncMock) as mock_scram,
-            patch.object(scram_protocol, "handle_scram_client_final", new_callable=AsyncMock) as mock_final,
-            patch.object(scram_protocol, "complete_scram_authentication", new_callable=AsyncMock) as mock_complete,
-            patch.object(scram_protocol, "send_parameter_status", new_callable=AsyncMock),
-            patch.object(scram_protocol, "send_backend_key_data", new_callable=AsyncMock),
-            patch.object(scram_protocol, "send_ready_for_query", new_callable=AsyncMock),
-        ):
-            await scram_protocol.handle_startup_sequence()
-            mock_scram.assert_called_once()
-            mock_final.assert_called_once()
-            mock_complete.assert_called_once()
-
-
-# ===========================================================================
-# SCRAM authentication methods
-# ===========================================================================
-
-
-class TestScramAuthentication:
-    @pytest.mark.asyncio
-    async def test_send_sasl_auth_request(self, scram_protocol):
-        """send_sasl_auth_request writes SASL message with SCRAM-SHA-256."""
-        await scram_protocol.send_sasl_auth_request()
-        written = collected_bytes(scram_protocol.writer)
-        assert MSG_AUTHENTICATION in written
-        assert b"SCRAM-SHA-256" in written
-
-    @pytest.mark.asyncio
-    async def test_handle_sasl_initial_response_valid(self, scram_protocol):
-        """handle_sasl_initial_response with valid SCRAM-SHA-256 body."""
-        mechanism = b"SCRAM-SHA-256\x00"
-        initial_response = b"n,,n=user,r=clientnonce123"
-        response_length = struct.pack("!I", len(initial_response))
-        body = mechanism + response_length + initial_response
-
-        with patch.object(scram_protocol, "process_scram_client_first", new_callable=AsyncMock):
-            await scram_protocol.handle_sasl_initial_response(body)
-
-    @pytest.mark.asyncio
-    async def test_handle_sasl_initial_response_wrong_mechanism(self, scram_protocol):
-        """handle_sasl_initial_response with unsupported mechanism raises."""
-        body = b"UNKNOWN-MECH\x00" + struct.pack("!I", 0)
-        with pytest.raises(ValueError, match="Unsupported SASL mechanism"):
-            await scram_protocol.handle_sasl_initial_response(body)
-
-    @pytest.mark.asyncio
-    async def test_handle_sasl_initial_response_missing_mechanism(self, scram_protocol):
-        """Body with no null terminator raises."""
-        body = b"no-null-here"
-        with pytest.raises(ValueError, match="Invalid SASL response"):
-            await scram_protocol.handle_sasl_initial_response(body)
-
-    @pytest.mark.asyncio
-    async def test_handle_sasl_initial_response_ffff_length(self, scram_protocol):
-        """0xFFFFFFFF response length means empty initial response."""
-        mechanism = b"SCRAM-SHA-256\x00"
-        body = mechanism + struct.pack("!I", 0xFFFFFFFF)
-        with patch.object(scram_protocol, "process_scram_client_first", new_callable=AsyncMock) as mock_proc:
-            await scram_protocol.handle_sasl_initial_response(body)
-            mock_proc.assert_called_once_with(b"")
-
-    @pytest.mark.asyncio
-    async def test_process_scram_client_first_valid(self, scram_protocol):
-        """process_scram_client_first stores nonce and sends server-first."""
-        client_first = b"n,,n=user,r=clientnonce"
-        with patch.object(scram_protocol, "send_scram_server_first", new_callable=AsyncMock):
-            await scram_protocol.process_scram_client_first(client_first)
-        assert scram_protocol.client_nonce == "clientnonce"
-        assert scram_protocol.scram_state["username"] == "user"
-
-    @pytest.mark.asyncio
-    async def test_process_scram_client_first_missing_prefix_raises(self, scram_protocol):
-        """client-first without n,, prefix raises ValueError."""
-        client_first = b"bad,n=user,r=nonce"
-        with pytest.raises(ValueError):
-            await scram_protocol.process_scram_client_first(client_first)
-
-    @pytest.mark.asyncio
-    async def test_process_scram_client_first_missing_username_raises(self, scram_protocol):
-        """client-first without username raises ValueError."""
-        client_first = b"n,,r=clientnonce"
-        with pytest.raises(ValueError, match="Missing username"):
-            await scram_protocol.process_scram_client_first(client_first)
-
-    @pytest.mark.asyncio
-    async def test_send_scram_server_first(self, scram_protocol):
-        """send_scram_server_first writes AuthenticationSASLContinue."""
-        scram_protocol.client_nonce = "clientnonce"
-        scram_protocol.server_nonce = "servernonce"
-        scram_protocol.salt = "c2FsdA=="
-        scram_protocol.iteration_count = 4096
-        await scram_protocol.send_scram_server_first()
-        written = collected_bytes(scram_protocol.writer)
-        assert MSG_AUTHENTICATION in written
-        assert b"clientnonce" in written
-
-    @pytest.mark.asyncio
-    async def test_handle_scram_client_final_reads_message(self, scram_protocol):
-        """handle_scram_client_final reads and processes SASLResponse."""
-        body = b"c=biws,r=clientnonceservernonce,p=proof"
-        header = struct.pack("!cI", b"p", 4 + len(body))
-        scram_protocol.reader.readexactly.side_effect = [header, body]
-        await scram_protocol.handle_scram_client_final()
-
-    @pytest.mark.asyncio
-    async def test_handle_scram_client_final_wrong_msg_type(self, scram_protocol):
-        """handle_scram_client_final raises if wrong message type."""
-        header = struct.pack("!cI", b"Q", 8)
-        body = b"some body"
-        scram_protocol.reader.readexactly.side_effect = [header, body]
-        with pytest.raises(ValueError, match="Expected SASLResponse"):
-            await scram_protocol.handle_scram_client_final()
-
-    @pytest.mark.asyncio
-    async def test_complete_scram_authentication_trust_mode(self, protocol):
-        """complete_scram_authentication without bridge uses trust mode."""
-        protocol.auth_bridge_available = False
-        protocol.scram_state = {"username": "testuser"}
-        with patch.object(protocol, "send_scram_final_success", new_callable=AsyncMock) as mock_final:
-            await protocol.complete_scram_authentication()
-            mock_final.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_complete_scram_authentication_oauth_path(self, protocol):
-        """complete_scram_authentication with bridge uses oauth path."""
-        protocol.auth_bridge_available = True
-        protocol.scram_state = {"username": "testuser"}
-
-        mock_token = MagicMock()
-        mock_token.expires_in = 3600
-
-        protocol.auth_selector = MagicMock()
-        protocol.auth_selector.select_authentication_method = AsyncMock(return_value="oauth")
-        protocol.auth_selector.should_try_wallet_first = AsyncMock(return_value=False)
-        protocol.oauth_bridge = MagicMock()
-        protocol.oauth_bridge.exchange_password_for_token = AsyncMock(return_value=mock_token)
-        protocol.wallet_credentials = MagicMock()
-
-        with patch.object(protocol, "send_scram_final_success", new_callable=AsyncMock) as mock_final:
-            await protocol.complete_scram_authentication()
-            mock_final.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_complete_scram_authentication_wallet_path(self, protocol):
-        """complete_scram_authentication with wallet retrieval."""
-        protocol.auth_bridge_available = True
-        protocol.scram_state = {"username": "testuser"}
-
-        protocol.auth_selector = MagicMock()
-        protocol.auth_selector.select_authentication_method = AsyncMock(return_value="password")
-        protocol.auth_selector.should_try_wallet_first = AsyncMock(return_value=True)
-        protocol.wallet_credentials = MagicMock()
-        protocol.wallet_credentials.get_password_from_wallet = AsyncMock(return_value="walletpw")
-        protocol.oauth_bridge = MagicMock()
-
-        with patch.object(protocol, "send_scram_final_success", new_callable=AsyncMock) as mock_final:
-            await protocol.complete_scram_authentication()
-            mock_final.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_complete_scram_authentication_wallet_fails_fallback(self, protocol):
-        """Wallet retrieval fails, falls back to placeholder password."""
-        protocol.auth_bridge_available = True
-        protocol.scram_state = {"username": "testuser"}
-
-        protocol.auth_selector = MagicMock()
-        protocol.auth_selector.select_authentication_method = AsyncMock(return_value="password")
-        protocol.auth_selector.should_try_wallet_first = AsyncMock(return_value=True)
-        protocol.wallet_credentials = MagicMock()
-        protocol.wallet_credentials.get_password_from_wallet = AsyncMock(
-            side_effect=Exception("wallet error")
-        )
-        protocol.oauth_bridge = MagicMock()
-
-        with patch.object(protocol, "send_scram_final_success", new_callable=AsyncMock) as mock_final:
-            await protocol.complete_scram_authentication()
-            mock_final.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_complete_scram_authentication_unsupported_method(self, protocol):
-        """Unsupported auth method raises ValueError."""
-        protocol.auth_bridge_available = True
-        protocol.scram_state = {"username": "testuser"}
-
-        protocol.auth_selector = MagicMock()
-        protocol.auth_selector.select_authentication_method = AsyncMock(return_value="kerberos")
-        protocol.auth_selector.should_try_wallet_first = AsyncMock(return_value=False)
-        protocol.wallet_credentials = MagicMock()
-        protocol.oauth_bridge = MagicMock()
-
-        with pytest.raises(ValueError, match="Authentication failed"):
-            await protocol.complete_scram_authentication()
-
-    @pytest.mark.asyncio
-    async def test_send_scram_final_success(self, scram_protocol):
-        """send_scram_final_success writes SASL final and AuthOk."""
-        scram_protocol.scram_state = {"username": "testuser"}
-        await scram_protocol.send_scram_final_success()
-        written = collected_bytes(scram_protocol.writer)
-        # SASL final (R + 12) then auth ok (R + 0)
-        assert written.count(MSG_AUTHENTICATION) >= 2
-
-    @pytest.mark.asyncio
-    async def test_start_scram_authentication_wrong_msg_type(self, scram_protocol):
-        """start_scram_authentication raises on non-SASLResponse message."""
-        with patch.object(scram_protocol, "send_sasl_auth_request", new_callable=AsyncMock):
-            # Return wrong message type header
-            header = struct.pack("!cI", b"Q", 8)
-            body = b"garbage"
-            scram_protocol.reader.readexactly.side_effect = [header, body]
-            with pytest.raises(Exception):
-                await scram_protocol.start_scram_authentication()
 
 
 # ===========================================================================
@@ -2268,19 +2044,9 @@ class TestHandleFlushMessage:
 # ===========================================================================
 
 
-class TestConstructorAuthBridge:
-    def test_auth_bridge_always_has_flag(self):
-        """auth_bridge_available attribute always exists on protocol."""
+class TestConstructorHasNoAuthBridge:
+    def test_the_oauth_wallet_bridge_is_gone(self):
+        # Feature 024's bridge was never reachable in a way that verified anything and was removed.
         p = make_protocol()
-        assert hasattr(p, "auth_bridge_available")
-        assert isinstance(p.auth_bridge_available, bool)
-
-    def test_auth_bridge_available_or_unavailable(self):
-        """Protocol sets auth_bridge_available based on import success."""
-        p = make_protocol()
-        # If import succeeds (normal), it will be True
-        # We just verify the attribute is consistent
-        if p.auth_bridge_available:
-            assert hasattr(p, "auth_selector")
-            assert hasattr(p, "oauth_bridge")
-            assert hasattr(p, "wallet_credentials")
+        for name in ("auth_bridge_available", "auth_selector", "oauth_bridge", "wallet_credentials"):
+            assert not hasattr(p, name), name

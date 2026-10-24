@@ -99,7 +99,6 @@ def protocol():
         writer=writer,
         iris_executor=iris_executor,
         connection_id="test-conn-001",
-        enable_scram=False,
     )
     return p
 

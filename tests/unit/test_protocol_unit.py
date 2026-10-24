@@ -75,7 +75,6 @@ def protocol():
         writer=writer,
         iris_executor=iris_executor,
         connection_id="test-conn-001",
-        enable_scram=False,
     )
     return p
 
@@ -1039,8 +1038,10 @@ class TestProtocolInitialization:
     def test_portals_empty_on_init(self, protocol):
         assert protocol.portals == {}
 
-    def test_enable_scram_false(self, protocol):
-        assert protocol.enable_scram is False
+    def test_the_handler_has_no_scram_state(self, protocol):
+        # SCRAM was removed; a handler that still carried its state would suggest it could run.
+        assert not hasattr(protocol, "enable_scram")
+        assert not hasattr(protocol, "scram_state")
 
     def test_connection_id_stored(self, protocol):
         assert protocol.connection_id == "test-conn-001"

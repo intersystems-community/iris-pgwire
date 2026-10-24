@@ -14,7 +14,6 @@ P0 Implementation:
 """
 
 import asyncio
-import base64
 import re
 import secrets
 import ssl
@@ -149,7 +148,6 @@ class PGWireProtocol:
         writer: asyncio.StreamWriter,
         iris_executor: Executor,
         connection_id: str,
-        enable_scram: bool = False,
         auth_mode: str = "trust",
         password_verifier: Any = None,
         allow_plaintext_password: bool = False,
@@ -181,7 +179,6 @@ class PGWireProtocol:
         self.ready = False
 
         # P3: Authentication state
-        self.enable_scram = enable_scram
         self.auth_mode = auth_mode
         self.password_verifier = password_verifier
         self.allow_plaintext_password = allow_plaintext_password
@@ -189,39 +186,6 @@ class PGWireProtocol:
         # passes the resolved set. Names are case-folded.
         self.allowed_users = allowed_users
         self.failed_login_delay = failed_login_delay
-        self.auth_method = AUTH_SASL if enable_scram else AUTH_OK
-        self.scram_state = {}  # SCRAM authentication state
-        self.client_nonce = None
-        self.server_nonce = None
-        self.salt = None
-        self.iteration_count = 4096
-
-        # Feature 024: Authentication Bridge integration
-        try:
-            from iris_pgwire.auth import AuthenticationSelector, OAuthBridge, WalletCredentials
-
-            self.auth_selector = AuthenticationSelector(
-                oauth_enabled=True,
-                kerberos_enabled=False,  # GSSAPI not yet wired
-                wallet_enabled=True,
-            )
-            self.oauth_bridge = OAuthBridge()
-            self.wallet_credentials = WalletCredentials()
-            self.auth_bridge_available = True
-            logger.debug(
-                "Authentication bridge initialized",
-                connection_id=connection_id,
-                oauth_enabled=True,
-                wallet_enabled=True,
-            )
-        except ImportError as e:
-            # Authentication bridge not available - fallback to trust mode
-            self.auth_bridge_available = False
-            logger.warning(
-                "Authentication bridge not available - using trust mode",
-                connection_id=connection_id,
-                error=str(e),
-            )
 
         # P2: Extended Protocol state
         self.prepared_statements = {}  # name -> {'query': str, 'param_types': list}
@@ -564,19 +528,12 @@ class PGWireProtocol:
             logger.info(
                 "🔍 HANDSHAKE STEP 2: About to send authentication",
                 connection_id=self.connection_id,
-                scram_enabled=self.enable_scram,
+                auth_mode=self.auth_mode,
             )
-            if self.enable_scram:
-                # Unreachable from PGWireServer, which refuses enable_scram at startup: this
-                # sequence never verified the client proof (see complete_scram_authentication).
-                await self.start_scram_authentication()
-                # SCRAM requires additional message handling
-                await self.handle_scram_client_final()
-                await self.complete_scram_authentication()
-            elif self.auth_mode == "password":
+            if self.auth_mode == "password":
                 await self.authenticate_with_password()
             else:
-                # P0: Basic authentication (trust)
+                # --trust: no authentication. PGWireServer warns at startup.
                 await self.send_authentication_ok()
             logger.info(
                 "✅ HANDSHAKE STEP 2: Authentication sent", connection_id=self.connection_id
@@ -858,358 +815,6 @@ class PGWireProtocol:
         self.writer.write(message)
         await self.writer.drain()
         logger.debug("Authentication OK sent", connection_id=self.connection_id)
-
-    # P3: SCRAM-SHA-256 Authentication Methods
-
-    async def start_scram_authentication(self):
-        """P3: Start SCRAM-SHA-256 authentication sequence"""
-        try:
-            # Send SASL authentication request with supported mechanisms
-            await self.send_sasl_auth_request()
-
-            # Wait for client's SASL initial response
-            header = await self.reader.readexactly(5)
-            msg_type, length = struct.unpack("!cI", header)
-
-            if msg_type != b"p":  # SASLResponse message
-                raise ValueError(f"Expected SASLResponse, got {msg_type}")
-
-            body_length = length - 4
-            body = await self.reader.readexactly(body_length) if body_length > 0 else b""
-
-            await self.handle_sasl_initial_response(body)
-
-        except Exception as e:
-            logger.error(
-                "SCRAM authentication failed", connection_id=self.connection_id, error=str(e)
-            )
-            await self.send_error_response(
-                "FATAL",
-                "28000",
-                "invalid_authorization_specification",
-                f"SCRAM authentication failed: {e}",
-            )
-            raise
-
-    async def send_sasl_auth_request(self):
-        """Send SASL authentication request with SCRAM-SHA-256"""
-        # AuthenticationSASL: R + length + 10 + mechanisms
-        mechanisms = SASL_SCRAM_SHA_256.encode("utf-8") + b"\x00" + b"\x00"  # null-terminated list
-        message_length = 4 + 4 + len(mechanisms)
-
-        message = struct.pack("!cII", MSG_AUTHENTICATION, message_length, AUTH_SASL) + mechanisms
-        self.writer.write(message)
-        await self.writer.drain()
-
-        logger.debug(
-            "SASL authentication request sent",
-            connection_id=self.connection_id,
-            mechanisms=[SASL_SCRAM_SHA_256],
-        )
-
-    async def handle_sasl_initial_response(self, body: bytes):
-        """Handle client's SASL initial response"""
-        pos = 0
-
-        # Parse mechanism name
-        mechanism_end = body.find(b"\x00", pos)
-        if mechanism_end == -1:
-            raise ValueError("Invalid SASL response: missing mechanism")
-        mechanism = body[pos:mechanism_end].decode("utf-8")
-        pos = mechanism_end + 1
-
-        if mechanism != SASL_SCRAM_SHA_256:
-            raise ValueError(f"Unsupported SASL mechanism: {mechanism}")
-
-        # Parse initial response length
-        if pos + 4 > len(body):
-            raise ValueError("Invalid SASL response: missing response length")
-        response_length = struct.unpack("!I", body[pos : pos + 4])[0]
-        pos += 4
-
-        # Parse initial response data
-        if response_length == 0xFFFFFFFF:
-            response_data = b""
-        else:
-            if pos + response_length > len(body):
-                raise ValueError("Invalid SASL response: truncated response data")
-            response_data = body[pos : pos + response_length]
-
-        await self.process_scram_client_first(response_data)
-
-    async def process_scram_client_first(self, client_first: bytes):
-        """Process SCRAM client-first message"""
-        try:
-            # Parse client-first message: "n,,n=user,r=client_nonce"
-            client_first_str = client_first.decode("utf-8")
-
-            # Basic parsing (production would be more robust)
-            if not client_first_str.startswith("n,,"):
-                raise ValueError("Invalid SCRAM client-first message format")
-
-            # Extract username and client nonce
-            auth_message = client_first_str[3:]  # Remove "n,," prefix
-            parts = auth_message.split(",")
-
-            username = None
-            self.client_nonce = None
-
-            for part in parts:
-                if part.startswith("n="):
-                    username = part[2:]
-                elif part.startswith("r="):
-                    self.client_nonce = part[2:]
-
-            if username is None or not self.client_nonce:
-                raise ValueError("Missing username or client nonce in SCRAM message")
-            # libpq sends an empty `n=` and takes the user from the startup message, as
-            # PostgreSQL does. Refusing it locked out every libpq client.
-            username = username or self.startup_params.get("user") or ""
-            if not username:
-                raise ValueError("No user name in the SCRAM message or the startup packet")
-
-            # Generate server nonce and salt
-            self.server_nonce = base64.b64encode(secrets.token_bytes(18)).decode("ascii")
-            self.salt = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
-
-            # Store auth state for final verification
-            self.scram_state = {
-                "username": username,
-                "client_first_bare": auth_message,
-                "client_nonce": self.client_nonce,
-                "server_nonce": self.server_nonce,
-                "salt": self.salt,
-                "iteration_count": self.iteration_count,
-            }
-
-            # Send server-first message
-            await self.send_scram_server_first()
-
-            logger.debug(
-                "SCRAM client-first processed",
-                connection_id=self.connection_id,
-                username=username,
-                client_nonce=self.client_nonce[:8] + "...",
-            )
-
-        except Exception as e:
-            logger.error(
-                "SCRAM client-first processing failed",
-                connection_id=self.connection_id,
-                error=str(e),
-            )
-            raise
-
-    async def send_scram_server_first(self):
-        """Send SCRAM server-first message"""
-        nonce = self.client_nonce + self.server_nonce
-        server_first = f"r={nonce},s={self.salt},i={self.iteration_count}"
-        server_first_bytes = server_first.encode("utf-8")
-
-        # AuthenticationSASLContinue: R + length + 11 + data
-        message_length = 4 + 4 + len(server_first_bytes)
-        message = (
-            struct.pack("!cII", MSG_AUTHENTICATION, message_length, AUTH_SASL_CONTINUE)
-            + server_first_bytes
-        )
-
-        self.writer.write(message)
-        await self.writer.drain()
-
-        logger.debug(
-            "SCRAM server-first sent", connection_id=self.connection_id, nonce=nonce[:16] + "..."
-        )
-
-    async def handle_scram_client_final(self):
-        """Handle SCRAM client-final message"""
-        try:
-            # Wait for client-final response
-            header = await self.reader.readexactly(5)
-            msg_type, length = struct.unpack("!cI", header)
-
-            if msg_type != b"p":  # SASLResponse message
-                raise ValueError(f"Expected SASLResponse, got {msg_type}")
-
-            body_length = length - 4
-            body = await self.reader.readexactly(body_length) if body_length > 0 else b""
-
-            # Parse client-final message
-            client_final_str = body.decode("utf-8")
-            logger.debug(
-                "SCRAM client-final received",
-                connection_id=self.connection_id,
-                message_preview=client_final_str[:50] + "...",
-            )
-
-            # In production, this would verify the client proof
-            # For now, we'll accept any well-formed client-final message
-
-        except Exception as e:
-            logger.error(
-                "SCRAM client-final handling failed", connection_id=self.connection_id, error=str(e)
-            )
-            raise
-
-    async def complete_scram_authentication(self):
-        """
-        Complete SCRAM authentication with OAuth/Wallet integration (Feature 024).
-
-        Authentication Flow:
-        1. Extract username and password from SCRAM client-final
-        2. Select authentication method (OAuth vs password)
-        3. Try Wallet password retrieval first (if enabled)
-        4. Fallback to OAuth token exchange or password authentication
-        5. Send SCRAM final success on authentication success
-        """
-        try:
-            # Parse client-final message to extract password
-            # In real SCRAM, this would verify the client proof
-            # For Feature 024, we'll extract credentials and authenticate via OAuth/Wallet
-
-            username = self.scram_state.get("username")
-            if not username:
-                raise ValueError("Username not found in SCRAM state")
-
-            # Feature 024: Authentication bridge integration
-            if self.auth_bridge_available:
-                try:
-                    # Select authentication method
-                    connection_context = {
-                        "auth_method": "password",  # SCRAM is password-based
-                        "username": username,
-                        "database": self.startup_params.get("database", "USER"),
-                        "oauth_available": True,
-                    }
-
-                    auth_method = await self.auth_selector.select_authentication_method(
-                        connection_context
-                    )
-
-                    logger.info(
-                        "Authentication method selected",
-                        connection_id=self.connection_id,
-                        username=username,
-                        method=auth_method,
-                    )
-
-                    # Try Wallet password retrieval first (if applicable)
-                    password = None
-                    should_try_wallet = await self.auth_selector.should_try_wallet_first(
-                        auth_method, username
-                    )
-
-                    if should_try_wallet:
-                        try:
-                            password = await self.wallet_credentials.get_password_from_wallet(
-                                username
-                            )
-                            logger.info(
-                                "Password retrieved from Wallet",
-                                connection_id=self.connection_id,
-                                username=username,
-                            )
-                        except Exception as wallet_error:
-                            logger.info(
-                                "Wallet password retrieval failed - will use SCRAM password",
-                                connection_id=self.connection_id,
-                                username=username,
-                                error=str(wallet_error),
-                            )
-                            # Password remains None - will extract from SCRAM client-final
-
-                    # If no wallet password, extract from SCRAM client-final
-                    if password is None:
-                        # TODO: Implement proper SCRAM client-final parsing to extract password
-                        # For now, use a placeholder (trust mode)
-                        password = "placeholder_password"
-                        logger.warning(
-                            "SCRAM client-final password extraction not yet implemented",
-                            connection_id=self.connection_id,
-                            username=username,
-                        )
-
-                    # Authenticate based on selected method
-                    if auth_method == "oauth":
-                        # OAuth token exchange
-                        token = await self.oauth_bridge.exchange_password_for_token(
-                            username, password
-                        )
-                        logger.info(
-                            "OAuth authentication successful",
-                            connection_id=self.connection_id,
-                            username=username,
-                            expires_in=token.expires_in,
-                        )
-
-                        # Store token in session for future requests
-                        self.scram_state["oauth_token"] = token
-
-                    elif auth_method == "password":
-                        # Direct password authentication (fallback)
-                        # Verify password against IRIS %Service_Login
-                        logger.info(
-                            "Password authentication (fallback)",
-                            connection_id=self.connection_id,
-                            username=username,
-                        )
-                        # TODO: Implement actual password verification
-                        # For now, accept in trust mode
-
-                    else:
-                        raise ValueError(f"Unsupported authentication method: {auth_method}")
-
-                    # Authentication successful - send SCRAM final success
-                    await self.send_scram_final_success()
-
-                except Exception as auth_error:
-                    logger.error(
-                        "Authentication failed",
-                        connection_id=self.connection_id,
-                        username=username,
-                        error=str(auth_error),
-                    )
-                    raise ValueError(f"Authentication failed: {auth_error}")
-
-            else:
-                # Authentication bridge not available - use trust mode
-                logger.warning(
-                    "Using trust mode authentication (bridge unavailable)",
-                    connection_id=self.connection_id,
-                    username=username,
-                )
-                await self.send_scram_final_success()
-
-        except Exception as e:
-            logger.error(
-                "SCRAM authentication completion failed",
-                connection_id=self.connection_id,
-                error=str(e),
-            )
-            raise
-
-    async def send_scram_final_success(self):
-        """Send SCRAM final success message"""
-        # AuthenticationSASLFinal: R + length + 12 + server_signature
-        server_final = "v=rmF+pqV8S7suAoZWja4dJRkFsKQ="  # Dummy server signature
-        server_final_bytes = server_final.encode("utf-8")
-
-        message_length = 4 + 4 + len(server_final_bytes)
-        message = (
-            struct.pack("!cII", MSG_AUTHENTICATION, message_length, AUTH_SASL_FINAL)
-            + server_final_bytes
-        )
-
-        self.writer.write(message)
-        await self.writer.drain()
-
-        # Send final AuthenticationOk
-        await self.send_authentication_ok()
-
-        logger.info(
-            "SCRAM authentication completed successfully",
-            connection_id=self.connection_id,
-            username=self.scram_state.get("username"),
-        )
 
     async def send_parameter_status(self):
         """Send ParameterStatus messages for PostgreSQL compatibility"""
