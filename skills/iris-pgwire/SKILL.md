@@ -7,7 +7,8 @@ any PostgreSQL-compatible client (psycopg3, asyncpg, pgx, Npgsql, node-postgres,
 JDBC, Prisma, SQLAlchemy, BI tools) connect to IRIS without IRIS-specific drivers.
 
 The server translates PostgreSQL SQL syntax to IRIS SQL in-flight, handles
-authentication (SCRAM-SHA-256, OAuth 2.0, IRIS Wallet), and supports parameterized
+authentication (IRIS username and password, checked by logging in to IRIS; TLS required by
+default, `--allow-plaintext-password` or `--trust` to opt out), and supports parameterized
 queries, COPY bulk load, and pgvector operators.
 
 ## When to Use
@@ -108,8 +109,9 @@ Type mapping (PostgreSQL → IRIS):
 ### Known gaps / limitations
 
 - **RETURNING with complex expressions** — emulation may not cover all cases
-- **Kerberos/GSSAPI auth** — wired but deferred; OAuth 2.0 is the recommended
-  enterprise auth path
+- **Kerberos/GSSAPI auth** — deferred. SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet
+  credentials are not available either; authentication is a cleartext password
+  checked against IRIS, and sessions run as the service account
 - **No pg_catalog tables** — only `INFORMATION_SCHEMA` exists in IRIS; ORM
   introspection that hits `pg_catalog` directly may fail even after translation
 - **COPY throughput** — ~600 rows/sec on DBAPI path; executemany() path

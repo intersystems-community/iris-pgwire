@@ -8,7 +8,7 @@
 ## ✅ Implemented (Production-Ready)
 
 - **PostgreSQL Wire Protocol v3**: Handshake, simple & extended query protocols
-- **Authentication**: SCRAM-SHA-256, OAuth 2.0, IRIS Wallet
+- **Authentication**: IRIS username and password (required by default, TLS or an explicit opt-out). SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet are not available
 - **Vector Operations**: pgvector syntax (`<=>`, `<#>`), HNSW indexes
 - **COPY Protocol**: Bulk import/export with CSV format (600+ rows/sec)
 - **DDL Compatibility**: Automated transformation/skipping of PostgreSQL-specific syntax (Generated columns, Enums, Fillfactor, etc.)
@@ -28,15 +28,18 @@
 **Note**: These limitations are common across PostgreSQL wire protocol implementations. For example, PgBouncer also omits GSSAPI support, and QuestDB does not support SSL/TLS.
 
 ### Protocol & Authentication
-- **SSL/TLS wire protocol**: Not implemented - use reverse proxy (nginx/HAProxy) for transport encryption
-- **Kerberos/GSSAPI**: Not implemented - use OAuth 2.0 or IRIS Wallet instead
+
+- **SSL/TLS wire protocol**: Native (`PGWIRE_SSL_ENABLED`); behind a TLS-terminating proxy use `--allow-plaintext-password`
+- **Kerberos/GSSAPI**: Not implemented; password authentication against IRIS is the supported method
 
 ### Vector Operations
+
 - **Cosine distance** (`<=>`): ✅ Supported → `VECTOR_COSINE()`
 - **Dot product** (`<#>`): ✅ Supported → `VECTOR_DOT_PRODUCT()`
 - **L2/Euclidean** (`<->`): ❌ Not available (IRIS database limitation - only cosine and dot product supported)
 
 ### PostgreSQL Compatibility
+
 - **System catalogs**: Partial `pg_catalog` support (6 tables + 5 functions) - see [PG_CATALOG.md](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/PG_CATALOG.md)
 - **CREATE EXTENSION**: Not supported (IRIS has native vector support)
 
@@ -55,21 +58,25 @@
 ## 📋 Future Enhancements
 
 ### Security
+
 - **SSL/TLS wire protocol encryption**: Direct TLS support (currently requires reverse proxy)
 - **Kerberos/GSSAPI authentication**: Enterprise single sign-on
 
 ### Performance
+
 - **Connection limits & rate limiting**: Prevent resource exhaustion
 - **executemany() bulk operations**: Batch parameter binding for faster inserts
 - **Query result streaming**: Reduce memory for large result sets
 - **Prepared statement caching**: Reuse parsed/translated statements
 
 ### PostgreSQL Compatibility
+
 - **Advanced SQL features**: CTEs (Common Table Expressions), window functions
 - **Additional catalog tables**: Expand pg_catalog coverage for more ORMs
 - **Additional catalog functions**: More PostgreSQL utility functions
 
 ### Tooling
+
 - **Prometheus metrics endpoint**: Built-in observability
 - **Health check endpoint**: Kubernetes/Docker readiness probes
 - **Admin UI**: Web interface for monitoring connections and queries
@@ -86,6 +93,7 @@ pip install langchain-iris llama-iris
 ```
 
 **LangChain Example** (community package):
+
 ```python
 from langchain_iris import IRISVector
 
@@ -99,6 +107,7 @@ results = db.similarity_search("query", k=5)
 ```
 
 **PGWire Approach** (direct psycopg3):
+
 ```python
 import psycopg
 with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:

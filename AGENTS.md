@@ -35,7 +35,8 @@ that speaks `postgresql://` connection strings.
 | Backend selection (embedded vs DBAPI) | `src/iris_pgwire/backend_selector.py`           |
 | IRIS execution paths                  | `src/iris_pgwire/iris_executor.py`              |
 | SQL sub-translators                   | `src/iris_pgwire/sql_translator/`               |
-| Authentication (OAuth, Wallet, SCRAM) | `src/iris_pgwire/auth/`                         |
+| Password authentication               | `src/iris_pgwire/password_auth.py`              |
+| Kerberos/GSSAPI (not wired)           | `src/iris_pgwire/auth/`                         |
 | Integration test client               | `tests/integration/`, `tests/e2e/`              |
 | Feature spec detail                   | `specs/<NNN>-<name>/spec.md`                    |
 | Current phase / feature status        | `STATUS.md`                                     |
@@ -59,7 +60,7 @@ Key files:
 
 - `src/iris_pgwire/server.py` — `PGWireServer` asyncio TCP server; entrypoint
 - `src/iris_pgwire/protocol.py` — `PGWireProtocol` — 4700-line asyncio handler;
-  wire encode/decode, SCRAM auth, query dispatch
+  wire encode/decode, password auth, query dispatch
 - `src/iris_pgwire/vector_optimizer.py` — **ALL SQL rewrites go here**
   (`translator.py` is bypassed at `protocol.py:897-910`)
 - `src/iris_pgwire/translator.py` — bypassed; transaction verbs are the one
@@ -90,7 +91,7 @@ When adding or fixing a rewrite rule in `vector_optimizer.py`:
 
    ```bash
    docker exec iris-pgwire bash -c \
-     "PGWIRE_LOG_LEVEL=DEBUG python -m iris_pgwire.server"
+     "PGWIRE_LOG_LEVEL=DEBUG python -m iris_pgwire.server --allow-plaintext-password"
    ```
 
 3. Add a regression test in `tests/unit/` (no IRIS needed for pure translation

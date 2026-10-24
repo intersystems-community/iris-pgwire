@@ -98,6 +98,7 @@ with psycopg.connect("host=localhost port=5432 dbname=USER") as conn:
 **Default**: Maps PostgreSQL `public` schema to IRIS `SQLUser` schema.
 
 **Custom schema** (optional):
+
 ```bash
 # For non-standard IRIS schema names
 export PGWIRE_IRIS_SCHEMA=MyAppSchema
@@ -114,6 +115,7 @@ configure_schema(iris_schema="MyAppSchema")
 IRIS PGWire emulates **6 core PostgreSQL catalog tables** and **5 catalog functions** to enable ORM introspection:
 
 **Catalog Tables**:
+
 - `pg_class` - Table/view catalog
 - `pg_attribute` - Column catalog
 - `pg_constraint` - Constraint catalog (PK, FK, unique, check)
@@ -122,6 +124,7 @@ IRIS PGWire emulates **6 core PostgreSQL catalog tables** and **5 catalog functi
 - `pg_attrdef` - Default value catalog
 
 **Catalog Functions**:
+
 - `format_type()` - Type name formatting
 - `pg_get_constraintdef()` - Constraint SQL
 - `pg_get_serial_sequence()` - Sequence lookup (returns NULL for IRIS)
@@ -147,31 +150,27 @@ IRIS PGWire emulates **6 core PostgreSQL catalog tables** and **5 catalog functi
 
 ## Enterprise Authentication
 
-**Industry-standard security** matching PgBouncer, YugabyteDB, Google Cloud PGAdapter - no plain-text passwords, enterprise-grade protection.
+**Clients must authenticate.** The client sends its IRIS username and password and the server checks
+them by logging in to IRIS, so IRIS stays the only store of users and passwords. The password is
+sent in the clear, so TLS is required unless the operator says otherwise.
 
-### Supported Methods
-
-#### 1. SCRAM-SHA-256 (Recommended)
-Industry best practice for password authentication - replaces deprecated MD5.
+### How it works
 
 ```python
 import psycopg
 conn = psycopg.connect(
-    "host=localhost port=5432 user=_SYSTEM password=SYS dbname=USER"
+    "host=localhost port=5432 user=_SYSTEM password=SYS dbname=USER sslmode=require"
 )
 ```
 
-**Security**: Passwords never transmitted in plain text, salted hashing, replay attack protection.
+- **TLS by default**: the server refuses to start without TLS unless you pass
+  `--allow-plaintext-password` (a trusted network, or a TLS-terminating proxy in front).
+- **`--trust`**: no authentication, for local development only.
+- **Login users**: only the service account may log in unless you list others
+  (`PGWIRE_ALLOWED_USERS`). Statements run as the service account whoever logs in.
 
-#### 2. OAuth 2.0
-Token-based authentication for BI tools and applications - cloud-native IAM pattern.
-
-**Use Case**: Enterprise SSO, temporary access tokens, audit trail.
-
-#### 3. IRIS Wallet
-Encrypted credential storage with audit trail - zero plain-text passwords in code.
-
-**Use Case**: Production deployments, credential rotation, compliance.
+SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet credentials are **not available**. Earlier versions
+listed them, but none provided authentication.
 
 **Learn More**: [Authentication Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md#authentication)
 
@@ -219,6 +218,7 @@ async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
 ### Connection Pooling
 
 **DBAPI Backend**:
+
 - **Max connections**: 50 concurrent + 20 overflow
 - **Acquisition time**: <1ms average
 - **Pool strategy**: QueuePool with pre-ping health checks

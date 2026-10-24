@@ -19,8 +19,10 @@ git clone https://github.com/intersystems-community/iris-pgwire.git
 cd iris-pgwire
 docker compose up -d
 
-# Test it (PGWire runs on port 5432 inside the IRIS container)
-psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
+# Test it (PGWire runs on port 5432 inside the IRIS container).
+# Clients log in with an IRIS username and password; the development container accepts the
+# password over a plain connection because it is published on localhost only.
+PGPASSWORD=SYS psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 ```
 
 ### Python package
@@ -31,8 +33,12 @@ pip install iris-pgwire psycopg[binary]
 export IRIS_HOST=localhost IRIS_PORT=1972 \
        IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS IRIS_NAMESPACE=USER
 
-python -m iris_pgwire.server
+python -m iris_pgwire.server --allow-plaintext-password
 ```
+
+Clients must log in with an IRIS username and password, and the password is sent in the clear, so
+the server refuses to start unless you choose how it is protected — see
+[Authentication](#authentication). `--allow-plaintext-password` is for a network you trust.
 
 ### First query
 
@@ -77,7 +83,30 @@ See [Client Compatibility Guide](docs/CLIENT_RECOMMENDATIONS.md) for setup examp
 
 **SQL translation** — `RETURNING` emulation, `ON CONFLICT`, boolean literals, `pg_catalog` → `INFORMATION_SCHEMA` rewrites, JSON operators (`->` / `->>` → `JSON_EXTRACT`), parameterized queries.
 
-**Authentication** — SCRAM-SHA-256, OAuth 2.0 (RFC 6749), IRIS Wallet credentials.
+<a id="authentication"></a>
+
+**Authentication** — Required by default. The client sends its IRIS username and password and the
+server checks them by logging in to IRIS with them, so IRIS remains the only store of users and
+passwords. Because the password crosses the wire, TLS is required unless you say otherwise:
+
+| You want                                                                 | Run with                                                              |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| TLS (production)                                                         | `PGWIRE_SSL_ENABLED=true PGWIRE_SSL_CERT=… PGWIRE_SSL_KEY=…`          |
+| Plain connection on a trusted network, or behind a TLS-terminating proxy | `--allow-plaintext-password` (`PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true`) |
+| No authentication, local development only                                | `--trust` (`PGWIRE_AUTH_MODE=trust`)                                  |
+| Let users other than the service account log in                           | `--allowed-users alice,bob` (`PGWIRE_ALLOWED_USERS`)                  |
+
+A server started with none of these refuses to start and says so.
+
+What authentication does and does not do: it proves the client knows the password of an IRIS user.
+Statements still run as the service account configured with `IRIS_USERNAME`, so every user who can
+log in has that account's privileges. That is why **only the service account may log in unless you
+list others**; a list replaces the default, so list only people you would trust with that account.
+SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet credentials are
+**not available**: earlier versions advertised them, but the SCRAM exchange never checked the client's
+proof, and `PGWIRE_ENABLE_SCRAM` was never read. Asking for SCRAM now fails at startup. Login
+attempts are checked by IRIS itself, so its lockout and password policies apply — repeated failures
+can lock an account.
 
 **Dual backend** — Embedded Python (irispython, lowest latency) or external DBAPI (standard TCP connection). Selectable via `IRIS_BACKEND` env var.
 
@@ -181,8 +210,8 @@ See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the full list. Key items:
 
 - **No MVCC or snapshot isolation.** `REPEATABLE READ` and `SERIALIZABLE` are rejected rather than silently downgraded; IRIS `READ COMMITTED` is narrower than PostgreSQL's, and dirty reads are reachable through aggregates, `GROUP BY` and `DISTINCT`. Lock conflicts arrive as retryable `40001`. Version-guarded (optimistic-locking) updates can report false conflicts — read the isolation section before porting an ORM that uses them.
 - IRIS Community Edition: 5-user connection limit — use `PGWIRE_POOL_SIZE=1` for dev
-- No native SSL termination — use nginx/HAProxy in front for TLS
-- Kerberos/GSSAPI auth wiring deferred (OAuth 2.0 is the recommended enterprise auth)
+- TLS is native (`PGWIRE_SSL_ENABLED`); behind a TLS-terminating proxy, use `--allow-plaintext-password`
+- Kerberos/GSSAPI auth wiring deferred; SCRAM-SHA-256, OAuth 2.0 and Wallet credentials are not available (see [Authentication](#authentication))
 - `INFORMATION_SCHEMA` only, no `pg_catalog` tables (translated automatically)
 
 ---

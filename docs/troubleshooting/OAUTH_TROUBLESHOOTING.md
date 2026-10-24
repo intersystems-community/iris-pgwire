@@ -1,5 +1,12 @@
 # OAuth 2.0 Authentication Troubleshooting Guide
 
+> **Not available.** OAuth 2.0, IRIS Wallet and SCRAM-SHA-256 authentication were removed on
+> 2026-10-24. They were documented as features but never provided authentication (the SCRAM
+> exchange accepted any client proof, and the OAuth and Wallet code was reachable only
+> through it). This guide describes the removed design and is kept for history. See
+> [Authentication](../DEPLOYMENT.md#authentication) and
+> [ADR-0003](../adr/0003-password-auth-verified-by-iris-login.md).
+
 **Feature**: 024-research-and-implement (Authentication Bridge)
 **Component**: OAuthBridge
 **Last Updated**: 2025-11-15
@@ -54,6 +61,7 @@ docker exec iris-pgwire-db grep "Authentication bridge initialized" /tmp/pgwire.
 **Solution**:
 
 1. **Verify client credentials exist**:
+
    ```bash
    # Check environment variables
    docker exec iris-pgwire-db env | grep OAUTH
@@ -64,6 +72,7 @@ docker exec iris-pgwire-db grep "Authentication bridge initialized" /tmp/pgwire.
    ```
 
 2. **Verify credentials in IRIS Wallet** (recommended):
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%IRIS.Wallet).GetSecret("pgwire-oauth-client")
@@ -72,6 +81,7 @@ docker exec iris-pgwire-db grep "Authentication bridge initialized" /tmp/pgwire.
    ```
 
 3. **Verify client registered in IRIS**:
+
    ```objectscript
    # Check OAuth client exists
    Set client = ##class(OAuth2.Client).Open("pgwire-server")
@@ -79,6 +89,7 @@ docker exec iris-pgwire-db grep "Authentication bridge initialized" /tmp/pgwire.
    ```
 
 4. **Re-register OAuth client**:
+
    ```objectscript
    # From IRIS Terminal
    Set client = ##class(OAuth2.Client).%New()
@@ -90,6 +101,7 @@ docker exec iris-pgwire-db grep "Authentication bridge initialized" /tmp/pgwire.
    ```
 
 **Verification**:
+
 ```bash
 psql -h localhost -p 5432 -U testuser -d USER
 # Should successfully authenticate
@@ -106,12 +118,14 @@ psql -h localhost -p 5432 -U testuser -d USER
 **Solution**:
 
 1. **Check IRIS is running**:
+
    ```bash
    docker ps | grep iris
    # Should show iris-enterprise container running
    ```
 
 2. **Verify OAuth endpoint accessible**:
+
    ```bash
    # From PGWire container
    docker exec iris-pgwire-db curl -v http://iris:52773/oauth2/token
@@ -122,6 +136,7 @@ psql -h localhost -p 5432 -U testuser -d USER
    ```
 
 3. **Check network connectivity**:
+
    ```bash
    # Verify PGWire can reach IRIS
    docker exec iris-pgwire-db ping -c 3 iris
@@ -130,6 +145,7 @@ psql -h localhost -p 5432 -U testuser -d USER
    ```
 
 4. **Verify IRIS OAuth service enabled**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%SYS.OAuth2.Server).IsEnabled()
@@ -140,6 +156,7 @@ psql -h localhost -p 5432 -U testuser -d USER
    ```
 
 **Verification**:
+
 ```bash
 # Test OAuth endpoint from PGWire container
 docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
@@ -157,6 +174,7 @@ docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
 **Solution**:
 
 1. **Check token expiry**:
+
    ```bash
    # View PGWire logs for token TTL
    docker exec iris-pgwire-db grep "expires_in" /tmp/pgwire.log
@@ -166,6 +184,7 @@ docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
    ```
 
 2. **Verify introspection endpoint**:
+
    ```bash
    # Check if token introspection works
    curl -u pgwire-server:secret http://localhost:52773/oauth2/introspect \
@@ -175,6 +194,7 @@ docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
    ```
 
 3. **Check token refresh works**:
+
    ```objectscript
    # From IRIS Terminal, verify refresh token grant enabled
    Set client = ##class(OAuth2.Client).Open("pgwire-server")
@@ -183,6 +203,7 @@ docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
    ```
 
 4. **Increase token TTL** (if needed):
+
    ```objectscript
    # Extend token lifetime
    Set client = ##class(OAuth2.Client).Open("pgwire-server")
@@ -191,6 +212,7 @@ docker exec iris-pgwire-db curl http://iris:52773/oauth2/token
    ```
 
 **Verification**:
+
 ```python
 import psycopg
 
@@ -214,6 +236,7 @@ for i in range(10):
 **Solution**:
 
 1. **Verify password grant enabled**:
+
    ```objectscript
    # From IRIS Terminal
    Set client = ##class(OAuth2.Client).Open("pgwire-server")
@@ -222,6 +245,7 @@ for i in range(10):
    ```
 
 2. **Enable password grant**:
+
    ```objectscript
    Set client = ##class(OAuth2.Client).Open("pgwire-server")
    Set client.GrantTypes = "password,refresh_token"
@@ -229,6 +253,7 @@ for i in range(10):
    ```
 
 **Verification**:
+
 ```bash
 # Test password grant directly
 curl -X POST http://localhost:52773/oauth2/token \
@@ -249,6 +274,7 @@ curl -X POST http://localhost:52773/oauth2/token \
 **Solution**:
 
 1. **Verify secret stored in Wallet**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%IRIS.Wallet).GetSecret("pgwire-user-testuser")
@@ -256,23 +282,27 @@ curl -X POST http://localhost:52773/oauth2/token \
    ```
 
 2. **Store password in Wallet**:
+
    ```objectscript
    Do ##class(%IRIS.Wallet).SetSecret("pgwire-user-testuser", "secure_password")
    ```
 
 3. **Check Wallet enabled**:
+
    ```objectscript
    Write ##class(%IRIS.Wallet).IsEnabled()
    # Should return 1
    ```
 
 4. **Verify IRIS version supports Wallet**:
+
    ```objectscript
    Write $ZVERSION
    # Should be 2025.3.0 or later for Wallet support
    ```
 
 **Verification**:
+
 ```bash
 # Check PGWire logs for Wallet retrieval
 docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
@@ -286,7 +316,8 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
 
 ### Enable Detailed OAuth Logging
 
-**Method 1: Environment Variable**
+#### Method 1: Environment Variable
+
 ```bash
 # In docker-compose.yml or runtime
 export LOG_LEVEL=DEBUG
@@ -295,7 +326,8 @@ export LOG_LEVEL=DEBUG
 docker compose restart iris
 ```
 
-**Method 2: Python Logging Configuration**
+#### Method 2: Python Logging Configuration
+
 ```python
 # In src/iris_pgwire/auth/oauth_bridge.py
 import structlog
@@ -324,6 +356,7 @@ docker exec iris-pgwire-db tcpdump -r /tmp/oauth.pcap -A
 **Solution**:
 
 1. **Check network latency**:
+
    ```bash
    # Measure round-trip time to IRIS
    docker exec iris-pgwire-db ping -c 10 iris
@@ -331,6 +364,7 @@ docker exec iris-pgwire-db tcpdump -r /tmp/oauth.pcap -A
    ```
 
 2. **Check IRIS CPU usage**:
+
    ```bash
    # Monitor IRIS container CPU
    docker stats iris-enterprise
@@ -338,6 +372,7 @@ docker exec iris-pgwire-db tcpdump -r /tmp/oauth.pcap -A
    ```
 
 3. **Verify no DNS delays**:
+
    ```bash
    # Check DNS resolution time
    docker exec iris-pgwire-db time nslookup iris
@@ -345,12 +380,14 @@ docker exec iris-pgwire-db tcpdump -r /tmp/oauth.pcap -A
    ```
 
 4. **Check OAuth server load**:
+
    ```objectscript
    # From IRIS Terminal, check OAuth server metrics
    Write ##class(%SYS.OAuth2.Server).GetMetrics()
    ```
 
 **Verification**:
+
 ```bash
 # Measure authentication time
 time psql -h localhost -p 5432 -U testuser -d USER -c "SELECT 1"
@@ -435,6 +472,7 @@ if __name__ == "__main__":
 ### Support
 
 For additional help:
+
 1. Check PGWire logs: `docker exec iris-pgwire-db tail -100 /tmp/pgwire.log`
 2. Review PHASE_3_5_COMPLETION.md for known limitations
 3. File issue on GitLab with logs and configuration

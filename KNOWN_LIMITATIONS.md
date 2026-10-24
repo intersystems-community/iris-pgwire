@@ -4,7 +4,7 @@ This document catalogs known limitations, workarounds, and behavior differences 
 
 **Industry Context**: IRIS PGWire follows proven architectural patterns from the PostgreSQL wire protocol ecosystem. Many design decisions (e.g., delegating SSL/TLS to reverse proxy, omitting GSSAPI) match industry leaders like PgBouncer (most deployed connection pooler), YugabyteDB (distributed SQL), and Google Cloud PGAdapter.
 
-**Security Note**: Authentication security is enterprise-grade (OAuth 2.0, IRIS Wallet, SCRAM-SHA-256) with no plain-text password transmission. Transport encryption is delegated to industry-standard reverse proxy pattern (nginx/HAProxy).
+**Security Note** _(corrected 2026-10-24)_: Clients authenticate with their IRIS username and password, which the server checks by logging in to IRIS. The password is sent in the clear, so TLS is required unless the operator opts out (`--allow-plaintext-password`, or `--trust` to disable authentication). Earlier versions of this document described OAuth 2.0, IRIS Wallet and SCRAM-SHA-256 as available and the password as never sent in plain text. None of that was true: no version authenticated by any of those methods, and until 2026-10-24 no version authenticated at all. See [Authentication](README.md#authentication). Authentication does not change who a session runs as: every authenticated user has the privileges of the service account, so by default only the service account may log in (`PGWIRE_ALLOWED_USERS` lists others).
 
 **These limitations are pinned by tests.** The divergences that cannot be fixed at the wire layer are asserted rather than only described, so a change in one cannot go unnoticed and leave this document quietly wrong:
 
@@ -37,9 +37,9 @@ Based on comprehensive research of 9 major implementations (November 2025):
 | Feature             | IRIS PGWire | PgBouncer | YugabyteDB | PGAdapter | QuestDB | CockroachDB | Materialize | ClickHouse | Pattern             |
 | ------------------- | ----------- | --------- | ---------- | --------- | ------- | ----------- | ----------- | ---------- | ------------------- |
 | **Wire Protocol**   | ✅ v3.0     | ✅ v3.0   | ✅ v3.0    | ✅ v3.0   | ✅ v3.0 | ✅ v3.0     | ✅ v3.0     | ✅ v3.0    | Universal           |
-| **SSL/TLS Native**  | ❌ Proxy    | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | ✅ Yes      | ✅ Yes     | Mixed (6/8 native)  |
-| **SCRAM-SHA-256**   | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | —           | ❌ No      | Standard (5/8)      |
-| **OAuth/IAM**       | ✅ Yes      | ❌ No     | ❌ No      | ✅ Yes    | ❌ No   | ❌ No       | ❌ No       | ❌ No      | Rare (2/8)          |
+| **SSL/TLS Native**  | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | ✅ Yes      | ✅ Yes     | Mixed (7/8 native)  |
+| **SCRAM-SHA-256**   | ❌ No       | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | —           | ❌ No      | Standard (4/8)      |
+| **OAuth/IAM**       | ❌ No       | ❌ No     | ❌ No      | ✅ Yes    | ❌ No   | ❌ No       | ❌ No       | ❌ No      | Rare (1/8)          |
 | **Kerberos/GSSAPI** | ❌ No       | ❌ No     | ❌ No      | ❌ No     | ❌ No   | ✅ Yes      | ❌ No       | ❌ No      | **Very Rare (1/8)** |
 | **Connection Pool** | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ❌ No   | ✅ Yes      | ✅ Yes      | —          | Common (6/8)        |
 | **Binary Format**   | ✅ Yes      | ✅ Yes    | ✅ Yes     | ✅ Yes    | ✅ Yes  | ✅ Yes      | ✅ Yes      | ✅ Yes     | Universal           |
@@ -55,11 +55,11 @@ Based on comprehensive research of 9 major implementations (November 2025):
    - **Network-layer**: Emerging pattern (Tailscale pgproxy)
 
 3. **Authentication Trends**:
-   - **SCRAM-SHA-256**: Standard (5 of 8 implementations)
-   - **OAuth/IAM**: Cloud-native pattern (2 of 8 - IRIS PGWire + PGAdapter)
+   - **SCRAM-SHA-256**: Standard (4 of 8 implementations; not IRIS PGWire)
+   - **OAuth/IAM**: Cloud-native pattern (1 of 8 - PGAdapter; not IRIS PGWire)
    - **MD5**: Being deprecated across ecosystem (YugabyteDB migration guide)
 
-4. **IRIS PGWire Position**: Matches 6 of 8 implementations in security/authentication profile.
+4. **IRIS PGWire Position**: Native TLS and a cleartext-password exchange verified against IRIS. It does not offer SCRAM-SHA-256 or OAuth, which most of the others do.
 
 **Technical Reason for GSSAPI Rarity** (from industry research):
 
@@ -234,7 +234,7 @@ SQLAlchemy's psycopg2 dialect queries PostgreSQL system catalogs (`pg_type`) dur
 
 ### Error
 
-```
+```text
 IndexError: tuple index out of range
   in psycopg2/extras.py HstoreAdapter.get_oids()
 ```
@@ -522,7 +522,7 @@ Use the embedded Python backend for accurate type introspection:
 ```bash
 # Embedded backend (inside IRIS)
 export BACKEND_TYPE=embedded
-irispython -m iris_pgwire.server
+irispython -m iris_pgwire.server --allow-plaintext-password   # or TLS; see README "Authentication"
 ```
 
 ### Impact
@@ -533,20 +533,18 @@ irispython -m iris_pgwire.server
 
 ---
 
-## 🟡 SSL/TLS Wire Protocol Not Implemented
+## 🟢 SSL/TLS: native, required for passwords by default _(rewritten 2026-10-24)_
 
-**Severity**: Medium
+**Severity**: Low
 **Affects**: Connection transport encryption
 
 **Industry Context**: Many PostgreSQL wire protocol implementations omit SSL/TLS support (e.g., QuestDB) or delegate to network-layer security (e.g., Tailscale's pgproxy). This is a common architectural decision for protocol adapters.
 
 ### Issue Description
 
-PGWire responds with 'N' (no SSL) to PostgreSQL client SSL probes. The wire protocol does not support TLS encryption. Authentication security is provided by:
+PGWire supports TLS natively: set `PGWIRE_SSL_ENABLED=true` with `PGWIRE_SSL_CERT` and `PGWIRE_SSL_KEY`, and answer `S` to a client's `SSLRequest`. This section previously said the server answered `N` and that TLS was delegated to a proxy. The upgrade did in fact hang until it timed out (fixed 2026-10-24: the server slept between answering `S` and upgrading, so the client's ClientHello was consumed as plain data), so a TLS client connected to nothing before then.
 
-- ✅ **OAuth 2.0**: Token-based authentication (no plain-text passwords)
-- ✅ **IRIS Wallet**: Encrypted credential storage (encrypted at rest)
-- ✅ **Password Authentication**: SCRAM-SHA-256 protocol (no plain-text transmission)
+Passwords are sent in the clear (PostgreSQL's cleartext password exchange, checked by logging in to IRIS), so the server requires TLS unless the operator passes `--allow-plaintext-password`. Behind a TLS-terminating proxy that flag is the correct setting. SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet credentials are **not** available.
 
 ### Workaround
 
@@ -582,7 +580,7 @@ psql "host=your-server port=5433 sslmode=require user=_SYSTEM dbname=USER"
 ### Impact
 
 - ❌ Wire protocol does not encrypt PostgreSQL traffic
-- ✅ Authentication credentials protected (OAuth tokens, SCRAM-SHA-256, Wallet encryption)
+- ✅ Passwords require TLS by default (opt-out: `--allow-plaintext-password`)
 - ✅ Workaround available (reverse proxy with TLS termination)
 - ⚠️ Database traffic visible to network observers without proxy
 
@@ -605,21 +603,26 @@ IRIS PGWire does not implement Kerberos/GSSAPI authentication. This matches the 
 
 ### Alternative Authentication Methods
 
-IRIS PGWire provides enterprise-grade alternatives that match cloud-native patterns:
+> **Corrected 2026-10-24.** The three methods below were documented as available. None was: SCRAM
+> never verified the client's proof, nothing read `PGWIRE_ENABLE_SCRAM`, and the OAuth and Wallet
+> code was reachable only through that SCRAM exchange. What exists is a cleartext password checked
+> against IRIS, over TLS. The text below describes the design, not the product.
 
-1. **OAuth 2.0 Token Authentication** (matches Google Cloud PGAdapter approach)
+IRIS PGWire was documented as providing enterprise-grade alternatives that match cloud-native patterns:
+
+1. **OAuth 2.0 Token Authentication** (matches Google Cloud PGAdapter approach) _(not available)_
    - Token-based authentication
    - No plain-text passwords
    - 5-minute TTL, automatic refresh
    - Integrated with IRIS security infrastructure
 
-2. **IRIS Wallet** (encrypted credential storage)
+2. **IRIS Wallet** (encrypted credential storage) _(not available)_
    - Credentials encrypted at rest in IRISSECURITY database
    - Automatic password rotation via Wallet API
    - Audit trail of all credential access
    - No plain-text passwords in code or configuration
 
-3. **SCRAM-SHA-256** (industry best practice, YugabyteDB recommended)
+3. **SCRAM-SHA-256** (industry best practice, YugabyteDB recommended) _(not available)_
    - Challenge-response authentication
    - Cryptographically secure password storage
    - Resistant to replay attacks
@@ -629,9 +632,8 @@ IRIS PGWire provides enterprise-grade alternatives that match cloud-native patte
 
 - ❌ Cannot authenticate using Kerberos tickets
 - ❌ No Active Directory SSO integration via GSSAPI
-- ✅ OAuth 2.0 provides token-based authentication (cloud-native equivalent)
-- ✅ IRIS Wallet provides centralized credential management
-- ✅ SCRAM-SHA-256 provides secure password authentication
+- ⚠️ OAuth 2.0, IRIS Wallet and SCRAM-SHA-256 are not available (see the correction above)
+- ✅ Password authentication against IRIS, over TLS by default
 
 ### Implementations Comparison
 

@@ -11,14 +11,14 @@ Complete PostgreSQL wire protocol server for InterSystems IRIS with enterprise-g
 - **P0-P6 Protocol Support**: SSL, Authentication, Extended Protocol, Cancellation, Vectors, COPY
 - **AI/ML Ready**: 1024d vectors with float/double precision support
 - **Production Optimized**: Back-pressure controls, streaming, memory management
-- **Enterprise Security**: SCRAM-SHA-256 authentication, TLS encryption
+- **Enterprise Security**: IRIS username/password authentication (required by default), TLS encryption
 - **High Performance**: Bulk operations, connection pooling, resource controls
 
 See [Installation Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/INSTALLATION.md) for quick setup or [Architecture Overview](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/ARCHITECTURE.md) for system design details.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   PostgreSQL    │    │  IRIS PGWire     │    │  InterSystems   │
 │   Clients       │◄──►│  Protocol Server │◄──►│  IRIS Database  │
@@ -27,6 +27,7 @@ See [Installation Guide](https://github.com/intersystems-community/iris-pgwire/b
 ```
 
 **Key Components:**
+
 - **Protocol Handler**: PostgreSQL v3 wire protocol implementation
 - **IRIS Executor**: SQL execution via intersystems-irispython driver
 - **Vector Engine**: IRIS VECTOR/EMBEDDING type support with pgvector compatibility
@@ -63,8 +64,9 @@ docker compose up -d iris
 # Configure IRIS authentication
 docker exec iris-pgwire bash -c 'echo -e "ZN \"%SYS\"\nDO ##class(Security.Users).UnExpireUserPasswords(\"*\")\nSET user = \"SuperUser\"\nSET password = \"SYS\"\nDO ##class(Security.Users).Modify(user,,password)\nHALT" | iris terminal IRIS'
 
-# Start PGWire server
-python -m iris_pgwire.server
+# Start PGWire server. Clients must log in with an IRIS username and password, so the server
+# will not start until you choose how the password is protected (see Authentication below).
+python -m iris_pgwire.server --allow-plaintext-password   # trusted network, development
 ```
 
 ## Configuration
@@ -88,7 +90,8 @@ export IRIS_NAMESPACE="USER"              # IRIS namespace
 export PGWIRE_SSL_ENABLED="true"          # Enable TLS
 export PGWIRE_SSL_CERT="/path/to/cert.pem"
 export PGWIRE_SSL_KEY="/path/to/key.pem"
-export PGWIRE_ENABLE_SCRAM="true"         # SCRAM-SHA-256 auth
+export PGWIRE_AUTH_MODE="password"        # password (default) or trust (no authentication)
+export PGWIRE_ALLOW_PLAINTEXT_PASSWORD="false"  # true: accept passwords without TLS
 
 # Performance
 export PGWIRE_MAX_CONNECTIONS="100"       # Connection limit
@@ -107,7 +110,7 @@ PGWIRE_CONFIG = {
     "ssl_enabled": True,
     "ssl_cert_path": "/etc/ssl/certs/pgwire.pem",
     "ssl_key_path": "/etc/ssl/private/pgwire.key",
-    "enable_scram": True,
+    "auth_mode": "password",   # the default; "trust" disables authentication
 
     # IRIS Configuration
     "iris": {
@@ -193,7 +196,8 @@ services:
       - IRIS_PASSWORD=SYS
       - IRIS_NAMESPACE=USER
       - PGWIRE_SSL_ENABLED=true
-      - PGWIRE_ENABLE_SCRAM=true
+      - PGWIRE_SSL_CERT=/etc/ssl/certs/pgwire.pem
+      - PGWIRE_SSL_KEY=/etc/ssl/certs/pgwire.key
     volumes:
       - ./certs:/etc/ssl/certs:ro
       - ./logs:/app/logs
@@ -310,15 +314,66 @@ openssl req -x509 -newkey rsa:4096 -keyout pgwire.key -out pgwire.pem -days 365 
 certbot certonly --standalone -d pgwire.yourdomain.com
 ```
 
-### SCRAM-SHA-256 Authentication
+### Authentication
 
-```python
-# Enable SCRAM authentication
-PGWIRE_ENABLE_SCRAM=true
+Clients must authenticate unless you opt out. The client sends its IRIS username and password
+(PostgreSQL's cleartext password exchange) and the server verifies them by logging in to IRIS with
+them. IRIS is the only store of users and passwords; pgwire keeps no copy and no verifier.
 
-# Client connection with SCRAM
+Because the password crosses the wire, the server demands TLS. It refuses to start, and says why,
+unless you choose one of:
+
+```bash
+# 1. TLS (production)
+PGWIRE_SSL_ENABLED=true PGWIRE_SSL_CERT=/path/cert.pem PGWIRE_SSL_KEY=/path/key.pem
+
+# 2. A trusted network, or a proxy that terminates TLS in front of pgwire
+python -m iris_pgwire.server --allow-plaintext-password     # PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true
+
+# 3. No authentication at all: local development only
+python -m iris_pgwire.server --trust                        # PGWIRE_AUTH_MODE=trust
+```
+
+When TLS is enabled the server also refuses, per connection, a client that does not negotiate it
+(`28000`, before any password prompt), so `sslmode=disable` cannot be used to send a password in
+the clear.
+
+```bash
 psql "postgresql://username:password@pgwire-host:5432/database?sslmode=require"
 ```
+
+**Upgrading from a version that did not authenticate.** Earlier versions accepted every client and
+ignored the password. This is a breaking change: a deployment that relied on that must now either
+supply real credentials or pass `--trust` explicitly. The docker-compose development container sets
+`PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true`, so `_SYSTEM`/`SYS` (or any IRIS user) works there with a
+password.
+
+**What authentication does not do.** It proves the client knows the password of an IRIS user. It
+does not change who the session runs as: statements execute as the service account configured with
+`IRIS_USERNAME`, so every user who can log in has that account's privileges. Do not rely on it to
+separate users of different privilege. Mapping a login user to its own session identity is not
+implemented ([ADR-0004](adr/0004-login-users-run-as-the-service-account.md)).
+
+**Who may log in.** Only the service account, unless you list others:
+
+```bash
+python -m iris_pgwire.server --allowed-users alice,bob     # PGWIRE_ALLOWED_USERS=alice,bob
+```
+
+A list replaces the default, so include the service account if it should still connect. A login
+user who is not listed is refused without any attempt to log in to IRIS, so a stranger cannot use up
+another user's failed-login attempts. The refusal looks and times exactly like a wrong password, so
+it does not reveal who is on the list. Names compare case-insensitively, and IRIS still verifies the
+real credentials. List only people you would trust with the service account's privileges.
+
+**Account lockout.** Passwords are checked by IRIS, so IRIS's own security policy applies,
+including lockout after repeated failures. Anyone who can reach the port can attempt logins and
+may lock an account out. Put the port behind a network boundary.
+
+**SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet credentials are not available.** Earlier versions listed
+them. The SCRAM exchange never verified the client proof and `PGWIRE_ENABLE_SCRAM` was never read,
+so neither provided authentication. `PGWIRE_ENABLE_SCRAM=true` and `enable_scram=True` now stop the
+server at startup instead of being ignored.
 
 ## Client Examples
 
@@ -441,6 +496,7 @@ structlog.configure(
 ### Common Issues
 
 1. **Connection Refused**
+
    ```bash
    # Check IRIS connectivity
    docker exec iris-pgwire iris sql IRIS -U SuperUser
@@ -450,18 +506,21 @@ structlog.configure(
    ```
 
 2. **Authentication Errors**
+
    ```bash
    # Reset IRIS passwords
    docker exec iris-pgwire bash -c 'echo "..." | iris terminal IRIS'
    ```
 
 3. **Vector Operation Failures**
+
    ```sql
    -- Test IRIS vector support
    SELECT TO_VECTOR('[1,2,3]') as test_vector;
    ```
 
 4. **Performance Issues**
+
    ```bash
    # Monitor resource usage
    docker stats iris-pgwire
@@ -484,7 +543,7 @@ export IRIS_DEBUG="true"
 ## Production Checklist
 
 - [ ] TLS certificates configured and valid
-- [ ] SCRAM authentication enabled
+- [ ] Password authentication left on (no `--trust`), and TLS enabled rather than `--allow-plaintext-password`
 - [ ] Connection limits set appropriately
 - [ ] Resource limits configured (CPU, memory)
 - [ ] Health checks and monitoring enabled
@@ -517,6 +576,6 @@ tar -czf pgwire-config-$(date +%Y%m%d).tar.gz config/ certs/
 
 ---
 
-**IRIS PostgreSQL Wire Protocol Server - Production Ready! 🚀**
+IRIS PostgreSQL Wire Protocol Server - Production Ready! 🚀
 
 Complete P0-P6 implementation with enterprise features, security, and operational excellence.

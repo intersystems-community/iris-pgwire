@@ -1,5 +1,12 @@
 # IRIS Wallet Integration Troubleshooting Guide
 
+> **Not available.** OAuth 2.0, IRIS Wallet and SCRAM-SHA-256 authentication were removed on
+> 2026-10-24. They were documented as features but never provided authentication (the SCRAM
+> exchange accepted any client proof, and the OAuth and Wallet code was reachable only
+> through it). This guide describes the removed design and is kept for history. See
+> [Authentication](../DEPLOYMENT.md#authentication) and
+> [ADR-0003](../adr/0003-password-auth-verified-by-iris-login.md).
+
 **Feature**: 024-research-and-implement (Authentication Bridge)
 **Component**: WalletCredentials
 **Last Updated**: 2025-11-15
@@ -72,6 +79,7 @@ docker exec iris-pgwire-db tail -50 /tmp/pgwire.log | grep -i wallet
 **Solution**:
 
 1. **Verify secret key format**:
+
    ```python
    # PGWire expects: pgwire-user-{username}
    # Example keys:
@@ -83,6 +91,7 @@ docker exec iris-pgwire-db tail -50 /tmp/pgwire.log | grep -i wallet
    ```
 
 2. **Check if secret exists**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%IRIS.Wallet).GetSecret("pgwire-user-alice")
@@ -92,6 +101,7 @@ docker exec iris-pgwire-db tail -50 /tmp/pgwire.log | grep -i wallet
    ```
 
 3. **Store password in Wallet**:
+
    ```objectscript
    # From IRIS Terminal
    Do ##class(%IRIS.Wallet).SetSecret("pgwire-user-alice", "secure_password_123")
@@ -102,6 +112,7 @@ docker exec iris-pgwire-db tail -50 /tmp/pgwire.log | grep -i wallet
    ```
 
 4. **Check secret length requirement**:
+
    ```python
    # PGWire requires: Password >= 32 characters (FR-019)
    # If password < 32 chars:
@@ -109,6 +120,7 @@ docker exec iris-pgwire-db tail -50 /tmp/pgwire.log | grep -i wallet
    ```
 
 **Verification**:
+
 ```bash
 # Connect using Wallet-stored password
 psql -h localhost -p 5432 -U alice -d USER
@@ -127,6 +139,7 @@ psql -h localhost -p 5432 -U alice -d USER
 **Solution**:
 
 1. **Check IRIS version**:
+
    ```objectscript
    # From IRIS Terminal
    Write $ZVERSION
@@ -136,6 +149,7 @@ psql -h localhost -p 5432 -U alice -d USER
    ```
 
 2. **Verify Wallet class exists**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%Dictionary.ClassDefinition).%ExistsId("%IRIS.Wallet")
@@ -147,6 +161,7 @@ psql -h localhost -p 5432 -U alice -d USER
    ```
 
 3. **Test Wallet API directly**:
+
    ```objectscript
    # From IRIS Terminal
    Try {
@@ -158,6 +173,7 @@ psql -h localhost -p 5432 -U alice -d USER
    ```
 
 4. **Check IRIS embedded Python access**:
+
    ```python
    # From Python (irispython or external)
    import iris
@@ -170,6 +186,7 @@ psql -h localhost -p 5432 -U alice -d USER
    ```
 
 **Verification**:
+
 ```bash
 # Check PGWire can access Wallet
 docker exec iris-pgwire-db python3 -c "
@@ -190,6 +207,7 @@ print(iris.cls('%IRIS.Wallet').IsEnabled())
 **Solution**:
 
 1. **Check PGWire logs for fallback reason**:
+
    ```bash
    docker exec iris-pgwire-db grep "Wallet password retrieval failed" /tmp/pgwire.log
 
@@ -200,6 +218,7 @@ print(iris.cls('%IRIS.Wallet').IsEnabled())
    ```
 
 2. **Verify Wallet enabled in PGWire**:
+
    ```bash
    # Check authentication bridge initialization
    docker exec iris-pgwire-db grep "wallet_enabled" /tmp/pgwire.log
@@ -209,6 +228,7 @@ print(iris.cls('%IRIS.Wallet').IsEnabled())
    ```
 
 3. **Test Wallet retrieval manually**:
+
    ```python
    # From Python
    import iris
@@ -226,6 +246,7 @@ print(iris.cls('%IRIS.Wallet').IsEnabled())
    ```
 
 4. **Verify fallback chain is correct**:
+
    ```python
    # Expected fallback: Wallet → SCRAM password → OAuth
    # See src/iris_pgwire/auth/auth_selector.py
@@ -233,6 +254,7 @@ print(iris.cls('%IRIS.Wallet').IsEnabled())
    ```
 
 **Verification**:
+
 ```bash
 # Successful Wallet retrieval should show in logs
 docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
@@ -252,6 +274,7 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
 **Solution**:
 
 1. **Check IRIS user permissions**:
+
    ```objectscript
    # From IRIS Terminal
    # Verify PGWire connection user has Wallet access
@@ -260,12 +283,14 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
    ```
 
 2. **Grant Wallet access to PGWire user**:
+
    ```objectscript
    # From IRIS Terminal
    Do ##class(Security.Users).AddRoles("_SYSTEM", "%DB_IRISSECURITY")
    ```
 
 3. **Check IRISSECURITY database mounted**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%SYS.Database).Exists("IRISSECURITY")
@@ -275,6 +300,7 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
    ```
 
 4. **Test direct Wallet access as connection user**:
+
    ```objectscript
    # From IRIS Terminal (as _SYSTEM or PGWire user)
    Write ##class(%IRIS.Wallet).GetSecret("test-secret")
@@ -286,6 +312,7 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
    ```
 
 **Verification**:
+
 ```bash
 # Test Wallet access from PGWire
 docker exec iris-pgwire-db python3 -c "
@@ -310,6 +337,7 @@ except Exception as e:
 **Solution**:
 
 1. **Check PGWire log level**:
+
    ```bash
    # Verify INFO-level logging enabled
    docker exec iris-pgwire-db env | grep LOG_LEVEL
@@ -319,6 +347,7 @@ except Exception as e:
    ```
 
 2. **Check structured logging configuration**:
+
    ```python
    # In src/iris_pgwire/auth/wallet_credentials.py
    # Wallet access logged at INFO level
@@ -329,6 +358,7 @@ except Exception as e:
    ```
 
 3. **Enable IRIS audit logging** (optional):
+
    ```objectscript
    # From IRIS Terminal
    # Enable Wallet audit in IRIS
@@ -336,6 +366,7 @@ except Exception as e:
    ```
 
 4. **Verify logs are being written**:
+
    ```bash
    # Check PGWire log file
    ls -lh /tmp/pgwire.log
@@ -345,6 +376,7 @@ except Exception as e:
    ```
 
 **Verification**:
+
 ```bash
 # Connect and check logs
 psql -h localhost -p 5432 -U alice -d USER -c "SELECT 1"
@@ -360,7 +392,8 @@ docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log
 
 ### Enable Detailed Wallet Logging
 
-**Method 1: Environment Variable**
+#### Method 1: Environment Variable
+
 ```bash
 # Set log level to DEBUG
 export LOG_LEVEL=DEBUG
@@ -372,7 +405,8 @@ docker compose restart iris
 docker exec iris-pgwire-db tail -100 /tmp/pgwire.log | grep -i wallet
 ```
 
-**Method 2: Python Logging Configuration**
+#### Method 2: Python Logging Configuration
+
 ```python
 # In src/iris_pgwire/auth/wallet_credentials.py
 import structlog
@@ -405,6 +439,7 @@ While rs.%Next() {
 **Solution**:
 
 1. **Measure Wallet query time**:
+
    ```objectscript
    # From IRIS Terminal
    Set start = $ZH
@@ -417,6 +452,7 @@ While rs.%Next() {
    ```
 
 2. **Check IRISSECURITY database status**:
+
    ```objectscript
    # From IRIS Terminal
    Write ##class(%SYS.Database).DatabaseStatus("IRISSECURITY")
@@ -426,6 +462,7 @@ While rs.%Next() {
    ```
 
 3. **Monitor concurrent Wallet access**:
+
    ```bash
    # Count Wallet access rate
    docker exec iris-pgwire-db grep "Password retrieved from Wallet" /tmp/pgwire.log | wc -l
@@ -434,6 +471,7 @@ While rs.%Next() {
    ```
 
 **Verification**:
+
 ```python
 import time
 import psycopg
@@ -595,11 +633,13 @@ Do ##class(%IRIS.Wallet).Import("/secure/backup/wallet_backup.dat")
 ### Wallet Secret Key Format
 
 **PGWire Secret Keys**:
+
 - User passwords: `pgwire-user-{username}` (e.g., `pgwire-user-alice`)
 - OAuth client secret: `pgwire-oauth-client`
 - Custom secrets: `pgwire-{purpose}`
 
 **Examples**:
+
 ```objectscript
 # Store user password
 Do ##class(%IRIS.Wallet).SetSecret("pgwire-user-alice", "password")
@@ -618,6 +658,7 @@ Do ##class(%IRIS.Wallet).SetSecret("pgwire-oauth-client", "secret")
 ### Support
 
 For additional help:
+
 1. Check PGWire logs: `docker exec iris-pgwire-db tail -100 /tmp/pgwire.log`
 2. Check Wallet status: `Write ##class(%IRIS.Wallet).IsEnabled()`
 3. Review PHASE_3_5_COMPLETION.md for implementation details

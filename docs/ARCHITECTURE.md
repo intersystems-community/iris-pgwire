@@ -15,7 +15,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 
 ## High-Level Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                     PostgreSQL Clients                          │
 │  (psql, DBeaver, Superset, psycopg3, JDBC, node-postgres, ...)  │
@@ -47,14 +47,16 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 **Responsibility**: Implement PostgreSQL wire protocol v3 specification
 
 **Components**:
+
 - **Message Parser**: Decode PostgreSQL protocol messages (Query, Parse, Bind, Execute, Sync)
 - **Message Encoder**: Encode PostgreSQL responses (RowDescription, DataRow, CommandComplete)
-- **Authentication Handler**: SCRAM-SHA-256, OAuth 2.0, IRIS Wallet integration
+- **Authentication Handler**: cleartext password exchange, verified by logging in to IRIS (`password_auth.py`)
 - **Session Manager**: Track client connection state, prepared statements, portals
 
 **Implementation**: `src/iris_pgwire/protocol.py` (asyncio-based TCP server)
 
 **Key Features**:
+
 - Full extended query protocol (prepared statements, parameter binding)
 - Simple query protocol (direct SQL execution)
 - COPY protocol (bulk import/export with 600+ rows/sec)
@@ -83,6 +85,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 **Responsibility**: Emulate PostgreSQL system catalogs for ORM introspection
 
 **Supported Catalogs**:
+
 - `pg_class` - Table/view catalog
 - `pg_attribute` - Column catalog
 - `pg_constraint` - Constraint catalog (PK, FK, unique, check)
@@ -91,6 +94,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 - `pg_attrdef` - Default value catalog
 
 **Supported Functions**:
+
 - `format_type()` - Type name formatting
 - `pg_get_constraintdef()` - Constraint SQL
 - `pg_get_serial_sequence()` - Sequence lookup
@@ -100,6 +104,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 **Implementation**: `src/iris_pgwire/catalog/` module
 
 **How It Works**:
+
 1. Detect `pg_catalog.*` or `pg_*` table references in queries
 2. Route to appropriate catalog emulator
 3. Query IRIS `INFORMATION_SCHEMA` for metadata
@@ -125,6 +130,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 | `vector(n)` | `VECTOR(DOUBLE, n)` | pgvector compatibility |
 
 **Type Modifier Handling**:
+
 - `varchar(255)` → typmod encoding for length
 - `numeric(10,2)` → precision + scale encoding
 - Preserved through `format_type()` function
@@ -136,6 +142,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 **Responsibility**: Bind PostgreSQL parameters to IRIS SQL
 
 **Binary Format Support**:
+
 - Integers (2/4/8 byte)
 - Floats (4/8 byte IEEE 754)
 - Strings (UTF-8)
@@ -143,6 +150,7 @@ IRIS PGWire is a PostgreSQL wire protocol implementation that enables any Postgr
 - Arrays (PostgreSQL array format)
 
 **Vector Parameter Binding**:
+
 - Text format: `[0.1, 0.2, 0.3]` → IRIS list
 - Binary format: 40% more compact, faster parsing
 - Dimensions: 128D-4096D tested
@@ -173,6 +181,7 @@ IRIS PGWire supports **two distinct SQL execution methods**, providing deploymen
 **Use Case**: External development, connecting to remote IRIS instances, connection pooling.
 
 **Deployment**:
+
 ```bash
 # External Python process connects to IRIS
 python -m iris_pgwire.server
@@ -181,17 +190,20 @@ python -m iris_pgwire.server
 ```
 
 **Advantages**:
+
 - Connection pooling (50 concurrent + 20 overflow)
 - Works with any IRIS instance (local or remote)
 - Standard Python deployment (pip install)
 - Hot-reload for development
 
 **Disadvantages**:
+
 - Network latency (+1-3ms per query)
 - DBAPI type mapping layer
 - Requires separate Python environment
 
 **Configuration**:
+
 ```bash
 export IRIS_HOST=localhost
 export IRIS_PORT=1972
@@ -206,6 +218,7 @@ export BACKEND_TYPE=dbapi
 **Use Case**: Production deployment, maximum performance, single-container deployment.
 
 **Deployment**:
+
 ```bash
 # PGWire runs INSIDE IRIS process
 export BACKEND_TYPE=embedded
@@ -214,12 +227,14 @@ irispython -m iris_pgwire.server
 ```
 
 **Advantages**:
+
 - Zero network latency (in-process calls)
 - Native IRIS type system
 - True VECTOR type handling
 - Single process deployment
 
 **Disadvantages**:
+
 - Must run on same machine as IRIS
 - No connection pooling (not needed)
 - Requires IRIS Embedded Python
@@ -234,7 +249,7 @@ irispython -m iris_pgwire.server
 
 ### Simple Query Flow
 
-```
+```text
 Client: "SELECT * FROM users WHERE id = 123"
   │
   ▼ PostgreSQL wire protocol (Query message)
@@ -255,7 +270,7 @@ Client: Receives result set
 
 ### Extended Query Flow (Prepared Statement)
 
-```
+```text
 Client: Prepare "SELECT * FROM docs WHERE embedding <=> $1 LIMIT 5"
   │
   ▼ Parse message
@@ -283,7 +298,7 @@ Protocol Layer: Encode and send DataRow messages
 
 ### Catalog Query Flow
 
-```
+```text
 Client: "SELECT relname FROM pg_class WHERE relkind = 'r'"
   │
   ▼ Query message
@@ -314,6 +329,7 @@ Protocol Layer: Encode and send
 ### Latency Breakdown
 
 **Simple SELECT** (no parameters):
+
 - Protocol parsing: ~0.5ms
 - Query translation: ~0.3ms
 - IRIS execution: 0.2ms (DBAPI baseline)
@@ -322,6 +338,7 @@ Protocol Layer: Encode and send
 - **Total**: 3.82ms (DBAPI), ~1.5ms (Embedded)
 
 **Vector Similarity Query** (binary parameter):
+
 - Protocol parsing: ~0.8ms
 - Vector parameter decode: ~0.4ms
 - Query translation: ~0.5ms
@@ -331,6 +348,7 @@ Protocol Layer: Encode and send
 - **Total**: 6.76ms (DBAPI), ~4.5ms (Embedded)
 
 **Catalog Query** (pg_class):
+
 - Catalog detection: ~0.2ms
 - INFORMATION_SCHEMA translation: ~0.3ms
 - IRIS execution: 0.5ms
@@ -341,16 +359,19 @@ Protocol Layer: Encode and send
 ### Throughput
 
 **DBAPI Backend**:
+
 - Simple queries: ~250 qps per connection
 - Vector queries: ~150 qps per connection
 - Connection pool: 50 concurrent connections
 - **Aggregate**: ~12,500 simple qps
 
 **Embedded Backend**:
+
 - Simple queries: ~600 qps (estimated, no network)
 - Vector queries: ~220 qps (estimated)
 
 **Comparison to PostgreSQL**:
+
 - PostgreSQL native: ~930 qps (psycopg3)
 - IRIS DBAPI direct: ~4,760 qps (bypassing PGWire)
 - **Overhead**: ~4ms for PostgreSQL compatibility
@@ -364,17 +385,19 @@ Protocol Layer: Encode and send
 ### Horizontal Scaling
 
 **DBAPI Backend**:
+
 - Multiple PGWire instances can connect to same IRIS database
 - Load balancer distributes clients across PGWire instances
 - Each instance maintains independent connection pool
 
-```
+```text
                     ┌─→ PGWire Instance 1 ─┐
 Load Balancer ──────┼─→ PGWire Instance 2 ─┼─→ IRIS Database
                     └─→ PGWire Instance 3 ─┘
 ```
 
 **Embedded Backend**:
+
 - One PGWire instance per IRIS instance
 - Scale by deploying multiple IRIS instances
 - Use IRIS sharding/mirroring for data distribution
@@ -382,11 +405,13 @@ Load Balancer ──────┼─→ PGWire Instance 2 ─┼─→ IRIS Da
 ### Vertical Scaling
 
 **Connection Limits**:
+
 - DBAPI pool: 50+20 connections (configurable)
 - IRIS concurrent connections: Depends on IRIS license and resources
 - Operating system: File descriptor limits (default 1024, increase for production)
 
 **Memory Usage**:
+
 - ~10MB per PGWire connection (protocol buffers, session state)
 - ~5MB per IRIS DBAPI connection (cursor state, result caching)
 - Vector operations: Temporary memory for dimension encoding
@@ -397,28 +422,36 @@ Load Balancer ──────┼─→ PGWire Instance 2 ─┼─→ IRIS Da
 
 ### Authentication Flow
 
-```
+```text
 Client: Connect with username/password
   │
   ▼ Startup message
-Protocol Layer: Initiate SCRAM-SHA-256 authentication
+Protocol Layer: Require TLS (unless --allow-plaintext-password), then request the password
   │
-  ▼ Challenge/response exchange
-Authentication Handler: Verify credentials against IRIS
+  ▼ Password message
+Authentication Handler: Check the login user is allowed, then verify by logging in to IRIS
   │
   ▼ Success/failure
 Protocol Layer: Send Authentication OK or Error
 ```
 
 **Supported Methods**:
-- **SCRAM-SHA-256**: Industry standard, no plain-text passwords
-- **OAuth 2.0**: Token-based, enterprise SSO
-- **IRIS Wallet**: Encrypted credential storage
+
+- **Cleartext password over TLS**, verified against IRIS. DBAPI backend: a one-off DBAPI
+  connection. Embedded backend: `%SYSTEM.Security.Login` in a child process, because a successful
+  login switches the calling process's IRIS user.
+- **`--trust`**: no authentication (development only).
+
+SCRAM-SHA-256, OAuth 2.0 and IRIS Wallet are not available; see
+[ADR-0003](adr/0003-password-auth-verified-by-iris-login.md). Authentication proves a client knows
+an IRIS user's password; statements still run as the service account
+([ADR-0004](adr/0004-login-users-run-as-the-service-account.md)).
 
 **Security Best Practices**:
-- Use TLS/SSL reverse proxy (nginx, HAProxy) for transport encryption
-- Rotate IRIS Wallet credentials regularly
-- Configure OAuth 2.0 token expiration
+
+- Enable TLS on the server, or terminate it in a proxy and pass `--allow-plaintext-password`
+- List the login users you intend (`PGWIRE_ALLOWED_USERS`); the default is the service account only
+- Keep the port off untrusted networks: IRIS locks accounts after repeated failed logins
 - Audit authentication failures
 
 **Learn More**: [Authentication Guide](https://github.com/intersystems-community/iris-pgwire/blob/main/docs/DEPLOYMENT.md#authentication)
@@ -426,6 +459,7 @@ Protocol Layer: Send Authentication OK or Error
 ### Authorization
 
 **IRIS SQL Privileges**: PGWire inherits IRIS user permissions
+
 - Users see only tables they have SELECT privilege on
 - INSERT/UPDATE/DELETE operations respect IRIS grants
 - Catalog queries filtered by user schema access
@@ -439,6 +473,7 @@ Protocol Layer: Send Authentication OK or Error
 ### Logging
 
 **Structured Logging** (via structlog):
+
 ```python
 logger.info(
     "query_executed",
@@ -451,6 +486,7 @@ logger.info(
 ```
 
 **Log Levels**:
+
 - `DEBUG`: Protocol message details, SQL translations
 - `INFO`: Query execution, connection events
 - `WARNING`: Slow queries, authentication failures
@@ -459,6 +495,7 @@ logger.info(
 ### Metrics
 
 **Key Metrics** (exposed via `/metrics` endpoint - if configured):
+
 - `pgwire_connections_active` - Current active connections
 - `pgwire_queries_total` - Total queries executed (by type)
 - `pgwire_query_duration_seconds` - Query latency histogram
@@ -468,6 +505,7 @@ logger.info(
 ### Performance Monitoring
 
 **Query Performance**:
+
 ```python
 # Enable query timing
 export PGWIRE_LOG_QUERY_TIMING=true
@@ -477,6 +515,7 @@ export PGWIRE_SLOW_QUERY_THRESHOLD=100
 ```
 
 **Connection Pool Monitoring**:
+
 ```python
 # DBAPI backend - pool statistics
 from iris_pgwire.dbapi_backend import get_pool_stats
