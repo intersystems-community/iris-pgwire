@@ -295,41 +295,6 @@ class BulkExecutor:
         logger.debug(f"Column types for {table_name}: {column_types}")
         return column_types
 
-    async def stream_query_results(self, query: str) -> AsyncIterator[tuple]:
-        """
-        Execute SELECT query and stream results.
-
-        Uses batched fetching (1000 rows at a time) to avoid memory exhaustion.
-
-        Args:
-            query: SELECT query
-
-        Yields:
-            Row tuples
-
-        Raises:
-            Exception: IRIS query execution error
-        """
-        logger.info(f"Streaming query results: {query[:100]}")
-
-        # Execute query via IRIS (already async)
-        try:
-            # Execute query
-            cursor_result = await self.iris_executor.execute_query(query, [])
-
-            # Stream results in batches
-            # Note: This is a simplified implementation
-            # Real implementation would use IRIS cursor.fetchmany()
-            if cursor_result:
-                for row in cursor_result:
-                    yield row
-
-            logger.debug("Query streaming complete")
-
-        except Exception as e:
-            logger.error(f"Query execution failed: {e}")
-            raise
-
     async def get_table_columns(self, table_name: str) -> list[str]:
         """
         Get column names for a table using INFORMATION_SCHEMA.

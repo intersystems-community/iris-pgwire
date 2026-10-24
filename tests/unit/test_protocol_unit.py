@@ -25,11 +25,11 @@ from iris_pgwire.protocol import (
     MSG_PARAMETER_STATUS,
     MSG_PARSE_COMPLETE,
     MSG_READY_FOR_QUERY,
-    PGWireProtocol,
     STATUS_IDLE,
     STATUS_IN_TRANSACTION,
+    PGWireProtocol,
 )
-
+from iris_pgwire.value_encoding import ValueEncodingError
 
 # ---------------------------------------------------------------------------
 # Fixture
@@ -523,19 +523,23 @@ class TestEncodeBinaryColumnValue:
         # Should at least be non-empty
         assert len(data) > 0
 
-    def test_numeric_oid_1700_non_decimal_falls_back_to_str(self, protocol):
+    def test_numeric_oid_1700_from_a_string_is_a_real_numeric(self, protocol):
+        # This used to send the text b"99.99" where a binary client expects numeric's digit groups.
         data = protocol._encode_binary_column_value(1700, "99.99", 0)
-        assert data == b"99.99"
+        assert data == protocol._encode_binary_column_value(1700, Decimal("99.99"), 0)
+        assert data != b"99.99"
 
     def test_fallback_oid_returns_utf8(self, protocol):
         data = protocol._encode_binary_column_value(9999, "arbitrary", 0)
         assert data == b"arbitrary"
 
-    def test_invalid_value_falls_back_to_text(self, protocol):
-        # Float value for INT4 that can't be packed as int — passes via int()
-        data = protocol._encode_binary_column_value(23, 7.9, 0)
-        # int(7.9) == 7
-        assert struct.unpack("!i", data)[0] == 7
+    def test_a_non_integer_for_int4_is_refused_not_truncated(self, protocol):
+        # This used to send 7 for 7.9: the data changed and nothing said so.
+        with pytest.raises(ValueEncodingError):
+            protocol._encode_binary_column_value(23, 7.9, 0)
+
+    def test_a_whole_float_for_int4_is_fine(self, protocol):
+        assert struct.unpack("!i", protocol._encode_binary_column_value(23, 7.0, 0))[0] == 7
 
 
 # ===========================================================================

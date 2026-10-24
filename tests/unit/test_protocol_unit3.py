@@ -39,12 +39,12 @@ from iris_pgwire.protocol import (
     MSG_PARSE_COMPLETE,
     MSG_READY_FOR_QUERY,
     MSG_ROW_DESCRIPTION,
-    PGWireProtocol,
     SSL_REQUEST_CODE,
     STATUS_IDLE,
     STATUS_IN_TRANSACTION,
+    PGWireProtocol,
 )
-
+from iris_pgwire.value_encoding import ValueEncodingError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -896,17 +896,14 @@ class TestEncodeBinaryColumnValue:
         result = protocol._encode_binary_column_value(9999, "hello", 0)
         assert result == b"hello"
 
-    def test_int4_encoding_error_fallback(self, protocol):
-        """Out-of-range int falls back to text."""
-        result = protocol._encode_binary_column_value(23, "not-an-int", 0)
-        assert b"not-an-int" in result
+    def test_int4_encoding_error_is_raised_not_sent_as_text(self, protocol):
+        """A binary client expecting 4 bytes must not be handed the text 'not-an-int'."""
+        with pytest.raises(ValueEncodingError):
+            protocol._encode_binary_column_value(23, "not-an-int", 0)
 
-    def test_timestamp_invalid_format_raises_and_fallback(self, protocol):
-        """Invalid timestamp string falls back via exception."""
-        # Should not raise — falls through to text fallback
-        result = protocol._encode_binary_column_value(1114, "not-a-date", 0)
-        # It raises ValueError internally but _encode_binary_column_value catches it
-        assert isinstance(result, bytes)
+    def test_invalid_timestamp_is_raised_not_sent_as_text(self, protocol):
+        with pytest.raises(ValueEncodingError):
+            protocol._encode_binary_column_value(1114, "not-a-date", 0)
 
 
 # ===========================================================================
@@ -1044,25 +1041,6 @@ class TestHandleCopyFromStdin:
             await protocol.handle_copy_from_stdin("COPY orders FROM STDIN")
         assert protocol.copy_table == "orders"
         assert protocol.copy_columns is None
-
-
-# ===========================================================================
-# handle_copy_to_stdout (legacy path)
-# ===========================================================================
-
-
-class TestHandleCopyToStdout:
-    @pytest.mark.asyncio
-    async def test_sends_data_and_done(self, protocol):
-        """handle_copy_to_stdout sends sample data and completes."""
-        with (
-            patch.object(protocol, "send_copy_out_response", new_callable=AsyncMock),
-            patch.object(protocol, "send_copy_data", new_callable=AsyncMock) as mock_data,
-            patch.object(protocol, "send_copy_done", new_callable=AsyncMock) as mock_done,
-        ):
-            await protocol.handle_copy_to_stdout("COPY test TO STDOUT")
-        assert mock_data.call_count > 0
-        mock_done.assert_called_once()
 
 
 # ===========================================================================
@@ -1864,7 +1842,8 @@ class TestProcessCopyBatch:
             "command_tag": "INSERT",
         }
 
-        import tempfile, os
+        import os
+        import tempfile
         with patch("tempfile.NamedTemporaryFile") as mock_tmp:
             mock_file = MagicMock()
             mock_file.__enter__ = MagicMock(return_value=mock_file)

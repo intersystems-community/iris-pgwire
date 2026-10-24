@@ -13,7 +13,6 @@ import pytest
 
 from iris_pgwire.bulk_executor import BulkExecutor
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -457,47 +456,3 @@ class TestGetTableColumns:
         call_args = mock_exec._execute_external_async.call_args
         query = call_args[0][0]
         assert "MyTable" in query
-
-
-# ---------------------------------------------------------------------------
-# stream_query_results
-# ---------------------------------------------------------------------------
-
-
-class TestStreamQueryResults:
-    @pytest.mark.asyncio
-    async def test_yields_rows_from_result(self):
-        mock_exec = _make_executor()
-        mock_exec.execute_query = AsyncMock(return_value=[("Alice", 30), ("Bob", 25)])
-        be = BulkExecutor(mock_exec)
-
-        rows = [row async for row in be.stream_query_results("SELECT * FROM Users")]
-        assert rows == [("Alice", 30), ("Bob", 25)]
-
-    @pytest.mark.asyncio
-    async def test_empty_result_yields_nothing(self):
-        mock_exec = _make_executor()
-        mock_exec.execute_query = AsyncMock(return_value=[])
-        be = BulkExecutor(mock_exec)
-
-        rows = [row async for row in be.stream_query_results("SELECT * FROM Empty")]
-        assert rows == []
-
-    @pytest.mark.asyncio
-    async def test_none_result_yields_nothing(self):
-        mock_exec = _make_executor()
-        mock_exec.execute_query = AsyncMock(return_value=None)
-        be = BulkExecutor(mock_exec)
-
-        rows = [row async for row in be.stream_query_results("SELECT 1")]
-        assert rows == []
-
-    @pytest.mark.asyncio
-    async def test_propagates_execute_query_exception(self):
-        mock_exec = _make_executor()
-        mock_exec.execute_query = AsyncMock(side_effect=RuntimeError("IRIS error"))
-        be = BulkExecutor(mock_exec)
-
-        with pytest.raises(RuntimeError, match="IRIS error"):
-            async for _ in be.stream_query_results("SELECT 1"):
-                pass

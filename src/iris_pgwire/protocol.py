@@ -24,6 +24,7 @@ import structlog
 
 from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
+from .copy_export import copy_data, copy_out_response, export_messages, resolve_export_format
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
 from .password_auth import AuthRefused, AuthUnavailable, parse_password_message
@@ -34,6 +35,7 @@ from .sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolati
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.sqlstate import classify_iris_error
+from .value_encoding import ValueEncodingError, binary_encoding_is_defined, encode_binary
 from .vector_optimizer import VectorQueryOptimizer
 
 logger = structlog.get_logger()
@@ -132,6 +134,16 @@ AUTH_SASL_FINAL = 12
 
 # SASL mechanisms
 SASL_SCRAM_SHA_256 = "SCRAM-SHA-256"
+
+
+def wire_column_name(column: dict[str, Any], index: int) -> str:
+    """The name a client is told for a result column.
+
+    IRIS returns `N` for `SELECT 1 AS n`; the protocol layer sends `n`. RowDescription and the
+    COPY header both use this, so a client is never told two names for one column.
+    """
+    name = column.get("name", f"column{index + 1}")
+    return (name if isinstance(name, str) else str(name)).lower()
 
 
 class PGWireProtocol:
@@ -1187,16 +1199,29 @@ class PGWireProtocol:
             if send_ready:
                 await self.send_ready_for_query()
 
+    # Every spelling PostgreSQL accepts, and nothing broader: `BEGIN ISOLATION LEVEL ...` and
+    # `ROLLBACK TO SAVEPOINT ...` carry meaning of their own and are not handled here. The ADBC
+    # PostgreSQL driver says `BEGIN TRANSACTION`; matching only the bare words sent that to IRIS as
+    # SQL, which the DBAPI backend refuses ("SQL statement expected, BEGIN found").
+    _BEGIN_FORMS = frozenset({"BEGIN", "BEGIN WORK", "BEGIN TRANSACTION", "START TRANSACTION"})
+    _COMMIT_FORMS = frozenset(
+        {"COMMIT", "COMMIT WORK", "COMMIT TRANSACTION", "END", "END WORK", "END TRANSACTION"}
+    )
+    _ROLLBACK_FORMS = frozenset(
+        {"ROLLBACK", "ROLLBACK WORK", "ROLLBACK TRANSACTION", "ABORT", "ABORT WORK",
+         "ABORT TRANSACTION"}
+    )  # fmt: skip
+
     async def _maybe_handle_transaction_command(self, query_upper: str, send_ready: bool) -> bool:
-        if query_upper in ("BEGIN", "START TRANSACTION"):
+        if query_upper in self._BEGIN_FORMS:
             await self.iris_executor.begin_transaction(session_id=self.connection_id)
             await self.send_transaction_response("BEGIN", send_ready=send_ready)
             return True
-        elif query_upper in ("COMMIT", "END"):
+        elif query_upper in self._COMMIT_FORMS:
             await self.iris_executor.commit_transaction(session_id=self.connection_id)
             await self.send_transaction_response("COMMIT", send_ready=send_ready)
             return True
-        elif query_upper == "ROLLBACK":
+        elif query_upper in self._ROLLBACK_FORMS:
             await self.iris_executor.rollback_transaction(session_id=self.connection_id)
             await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
             return True
@@ -1465,10 +1490,7 @@ class PGWireProtocol:
                 "type_modifier": -1,
             }
 
-        name = col.get("name", f"column{index + 1}")
-        if not isinstance(name, str):
-            name = str(name)
-        name = name.lower()
+        name = wire_column_name(col, index)
 
         if "type_oid" in col:
             type_oid = col["type_oid"]
@@ -1617,116 +1639,24 @@ class PGWireProtocol:
         return str(value)
 
     def _encode_binary_column_value(self, type_oid: int, value: Any, column_index: int) -> bytes:
-        try:
-            if type_oid == 23:  # INT4
-                binary_data = struct.pack("!i", int(value))
-            elif type_oid == 21:  # INT2
-                binary_data = struct.pack("!h", int(value))
-            elif type_oid == 20:  # INT8
-                binary_data = struct.pack("!q", int(value))
-            elif type_oid == 700:
-                binary_data = struct.pack("!f", float(value))
-            elif type_oid == 701:
-                binary_data = struct.pack("!d", float(value))
-            elif type_oid == 26:
-                binary_data = struct.pack("!I", int(value))
-            elif type_oid == 19:
-                binary_data = str(value).encode("utf-8")
-            elif type_oid == 16:
-                binary_data = struct.pack("!?", bool(value))
-            elif type_oid == 1082:
-                binary_data = struct.pack("!i", int(value))
-            elif type_oid in (1114, 1184):
-                import datetime
+        """The binary wire form of one value, as PostgreSQL would send it.
 
-                if isinstance(value, str):
-                    for _fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-                        try:
-                            timestamp_obj = datetime.datetime.strptime(value, _fmt)
-                            break
-                        except ValueError:
-                            continue
-                    else:
-                        raise ValueError(f"Cannot parse timestamp string: {value!r}")
-                elif isinstance(value, datetime.datetime):
-                    timestamp_obj = value
-                else:
-                    raise ValueError(f"Unexpected timestamp value type: {type(value)}")
+        Encoding lives in `value_encoding`, whose expected bytes were captured from a real
+        PostgreSQL. A value that cannot be encoded raises `ValueEncodingError`: the previous code
+        sent the value's text in its place and logged a warning, so a binary client got text bytes
+        where it expected, say, a 4-byte integer.
 
-                PG_EPOCH = datetime.datetime(2000, 1, 1, 0, 0, 0)
-                delta = timestamp_obj - PG_EPOCH
-                microseconds = int(delta.total_seconds() * 1_000_000)
-                binary_data = struct.pack("!q", microseconds)
-            elif type_oid == 1700:
-                from decimal import Decimal
-
-                if isinstance(value, Decimal):
-                    dec_str = str(value)
-                    is_negative = dec_str.startswith("-")
-                    dec_str = dec_str.lstrip("-")
-
-                    if "." in dec_str:
-                        int_part, frac_part = dec_str.split(".")
-                        dscale = len(frac_part)
-                    else:
-                        int_part = dec_str
-                        frac_part = ""
-                        dscale = 0
-
-                    if int_part == "0" or not int_part:
-                        int_groups = []
-                        int_weight = -1
-                    else:
-                        int_padding = (4 - len(int_part) % 4) % 4
-                        int_padded = "0" * int_padding + int_part
-                        int_groups = [
-                            int(int_padded[i : i + 4]) for i in range(0, len(int_padded), 4)
-                        ]
-                        while int_groups and int_groups[0] == 0:
-                            int_groups.pop(0)
-                        int_weight = len(int_groups) - 1
-
-                    if frac_part:
-                        frac_padding = (4 - len(frac_part) % 4) % 4
-                        frac_padded = frac_part + "0" * frac_padding
-                        frac_groups = [
-                            int(frac_padded[i : i + 4]) for i in range(0, len(frac_padded), 4)
-                        ]
-                        while frac_groups and frac_groups[-1] == 0:
-                            frac_groups.pop()
-                    else:
-                        frac_groups = []
-
-                    digits_10000 = int_groups + frac_groups
-                    weight = int_weight if int_groups else -len(frac_groups)
-                    ndigits = len(digits_10000)
-                    sign = 0x4000 if is_negative else 0x0000
-
-                    binary_data = struct.pack("!hhhh", ndigits, weight, sign, dscale)
-                    for digit in digits_10000:
-                        binary_data += struct.pack("!H", digit)
-                else:
-                    binary_data = str(value).encode("utf-8")
-            else:
-                binary_data = str(value).encode("utf-8")
-
-            logger.debug(
-                "Binary encoded column",
-                column_index=column_index,
-                type_oid=type_oid,
-                value=value,
-                binary_length=len(binary_data),
-            )
-            return binary_data
-        except (ValueError, struct.error) as e:
+        A type with no binary form defined is the one case that still sends text, because a
+        client that asked for binary on a type we cannot describe has no better answer coming.
+        """
+        if not binary_encoding_is_defined(type_oid):
             logger.warning(
-                "Binary encoding failed, falling back to text",
+                "No binary format defined for this type; sending its text",
                 column_index=column_index,
                 type_oid=type_oid,
-                value=value,
-                error=str(e),
             )
             return str(value).encode("utf-8")
+        return encode_binary(type_oid, value)
 
     async def send_simple_query_response(self):
         """Send a simple 'SELECT 1' response for P0 testing (legacy)"""
@@ -2292,7 +2222,7 @@ class PGWireProtocol:
             # Handle PostgreSQL transaction commands in Parse phase (Feature 022)
             # JDBC driver uses Extended Protocol for transactions (setAutoCommit(false) → BEGIN)
             # CRITICAL: Must intercept BEGIN/COMMIT/ROLLBACK during Parse, not Execute
-            if query_upper in ("BEGIN", "START TRANSACTION", "BEGIN WORK", "BEGIN TRANSACTION"):
+            if query_upper in self._BEGIN_FORMS:
                 logger.info(
                     "PostgreSQL transaction command intercepted in Parse phase",
                     connection_id=self.connection_id,
@@ -2320,7 +2250,7 @@ class PGWireProtocol:
                 await self.send_parse_complete()
                 return
 
-            if query_upper in ("COMMIT", "COMMIT WORK", "COMMIT TRANSACTION", "END"):
+            if query_upper in self._COMMIT_FORMS:
                 logger.info(
                     "PostgreSQL transaction command intercepted in Parse phase",
                     connection_id=self.connection_id,
@@ -2348,7 +2278,7 @@ class PGWireProtocol:
                 await self.send_parse_complete()
                 return
 
-            if query_upper in ("ROLLBACK", "ROLLBACK WORK", "ROLLBACK TRANSACTION"):
+            if query_upper in self._ROLLBACK_FORMS:
                 logger.info(
                     "PostgreSQL transaction command intercepted in Parse phase",
                     connection_id=self.connection_id,
@@ -3153,6 +3083,20 @@ class PGWireProtocol:
                 cache_hit=translation_metadata.get("cache_hit", False),
             )
 
+            # COPY ... TO STDOUT over the extended protocol. The ADBC PostgreSQL driver sends its
+            # result fetch this way (Parse, Bind with a binary result format, Describe, Execute,
+            # Sync). Describe on the portal already answered NoData; the copy runs here, and
+            # ReadyForQuery is left for Sync as PostgreSQL does. Without this the COPY text went
+            # to IRIS as if it were SQL.
+            if original_query and CopyCommandParser.is_copy_command(original_query):
+                try:
+                    copy_command = CopyCommandParser.parse(original_query)
+                except ValueError:
+                    copy_command = None
+                if copy_command is not None and copy_command.direction == CopyDirection.TO_STDOUT:
+                    await self.handle_copy_command(original_query, send_ready=False)
+                    return
+
             # Handle empty queries (JDBC connection validation)
             # JDBC driver sends empty Parse/Bind/Execute after SET commands
             is_empty_query = translation_metadata.get("is_empty_query", False)
@@ -3708,12 +3652,15 @@ class PGWireProtocol:
 
     # P6: COPY Protocol Methods
 
-    async def handle_copy_command(self, query: str):
+    async def handle_copy_command(self, query: str, send_ready: bool = True):
         """
         P6: Handle COPY command parsing and execution (T017 Implementation)
 
         Uses CopyCommandParser to parse SQL and CopyHandler for execution.
         Implements proper PostgreSQL wire protocol message flow.
+
+        `send_ready` is False when the COPY arrives through the extended protocol, where the
+        client sends Sync and ReadyForQuery follows that, not the statement.
         """
         try:
             # Parse COPY command using CopyCommandParser (T012-T013)
@@ -3733,7 +3680,7 @@ class PGWireProtocol:
                 await self.handle_copy_from_stdin_v2(command)
             elif command.direction == CopyDirection.TO_STDOUT:
                 # COPY TO STDOUT - bulk data export
-                await self.handle_copy_to_stdout_v2(command)
+                await self.handle_copy_to_stdout_v2(command, send_ready=send_ready)
             else:
                 await self.send_error_response(
                     "ERROR",
@@ -3752,7 +3699,8 @@ class PGWireProtocol:
             )
             await self.send_error_response("ERROR", "22P04", "bad_copy_file_format", str(e))
             # Send ReadyForQuery after error
-            await self.send_ready_for_query()
+            if send_ready:
+                await self.send_ready_for_query()
 
         except ValueError as e:
             # Parse errors (invalid COPY syntax)
@@ -3762,7 +3710,8 @@ class PGWireProtocol:
             await self.send_error_response(
                 "ERROR", "42601", "syntax_error", f"Invalid COPY command: {e}"
             )
-            await self.send_ready_for_query()
+            if send_ready:
+                await self.send_ready_for_query()
 
         except Exception as e:
             logger.error(
@@ -3771,7 +3720,8 @@ class PGWireProtocol:
             await self.send_error_response(
                 "ERROR", "08000", "connection_exception", f"COPY command failed: {e}"
             )
-            await self.send_ready_for_query()
+            if send_ready:
+                await self.send_ready_for_query()
 
     async def handle_copy_from_stdin_v2(self, command):
         """
@@ -3856,77 +3806,98 @@ class PGWireProtocol:
             logger.error("COPY FROM STDIN failed", connection_id=self.connection_id, error=str(e))
             raise
 
-    async def handle_copy_to_stdout_v2(self, command):
-        """
-        P6: Handle COPY TO STDOUT with CopyHandler integration (T017)
+    async def handle_copy_to_stdout_v2(self, command, send_ready: bool = True):
+        """COPY ... TO STDOUT: run the query, then describe and send its rows.
 
-        Protocol Flow:
-        1. Send CopyOutResponse to client
-        2. Execute query via CopyHandler.handle_copy_to_stdout()
-        3. Stream CopyData messages to client
-        4. Send CopyDone
-        5. Send CommandComplete and ReadyForQuery
+        The query runs *first*. CopyOutResponse carries the column count and the format, and a
+        client believes both, so sending it before the query meant a binary client was told "text,
+        0 columns" about data that did not exist yet, and a failing query could only be reported
+        from inside a COPY. The rows then go out in PostgreSQL's message boundaries, one per
+        CopyData (see copy_export), each value encoded by the same code a DataRow uses.
+
+        This used to await the executor and iterate the result as if it were a list of rows. It is
+        a dict, so what reached the client was its key names, for every query.
         """
+        fmt = resolve_export_format(command.csv_options)  # ValueError -> 42601 in the caller
+
+        if command.query:
+            query = command.query
+        else:
+            columns = ", ".join(command.column_list) if command.column_list else "*"
+            query = f"SELECT {columns} FROM {command.table_name}"
+
+        translation_result = await self.translate_sql(query)
+        final_sql = translation_result["translated_sql"]
+        if not final_sql.rstrip().endswith(";"):
+            final_sql = final_sql.rstrip() + ";"
+
+        in_txn, autocommit = self._transaction_flags()
         try:
-            # Determine column count for CopyOutResponse
-            if command.column_list:
-                column_count = len(command.column_list)
-            elif command.table_name:
-                # Get column count from table metadata
-                column_count = len(await self.bulk_executor.get_table_columns(command.table_name))
-            else:
-                # Query-based COPY - default to unknown
-                column_count = 0  # Will be determined by query execution
-
-            # Send CopyOutResponse message (T014)
-            copy_out_response = self.copy_handler.build_copy_out_response(column_count)
-            self.writer.write(copy_out_response)
-            await self.writer.drain()
-
-            logger.info(
-                "CopyOutResponse sent, starting data export",
-                connection_id=self.connection_id,
-                table=command.table_name,
-                query=command.query[:100] if command.query else None,
+            result = await self.iris_executor.execute_query(
+                final_sql,
+                session_id=self.connection_id,
+                in_transaction=in_txn,
+                autocommit=autocommit,
+                original_sql=translation_result.get("original_sql", query),
             )
+        except Exception as exc:
+            # The embedded executor reports a failed statement as {"success": False}; the DBAPI
+            # executor raises. Either way the client gets the same ErrorResponse, with a SQLSTATE
+            # from the IRIS error, not a connection exception.
+            result = {"success": False, "error": str(exc)}
 
-            # Execute COPY TO STDOUT via CopyHandler (T016, T019, T021)
-            row_count = 0
-            async for csv_chunk in self.copy_handler.handle_copy_to_stdout(command):
-                # Send CopyData message (T016)
-                copy_data = self.copy_handler.build_copy_data(csv_chunk)
-                self.writer.write(copy_data)
-                await self.writer.drain()
+        if not result.get("success"):
+            error_msg = result.get("error", "Query execution failed")
+            sqlstate, condition = classify_iris_error(
+                error_msg, default=("08000", "connection_exception")
+            )
+            await self.send_error_response("ERROR", sqlstate, condition, error_msg)
+            if send_ready:
+                await self.send_ready_for_query()
+            return
 
-                # Approximate row count
-                row_count += csv_chunk.count(b"\n")
+        columns = [
+            {**column, "name": wire_column_name(column, index)}
+            for index, column in enumerate(result.get("columns") or [])
+        ]
+        rows = result.get("rows") or []
 
-            # Send CopyDone message
-            copy_done = self.copy_handler.build_copy_done()
-            self.writer.write(copy_done)
+        self.writer.write(copy_out_response(fmt, len(columns)))
+        await self.writer.drain()
+
+        try:
+            for sent, payload in enumerate(export_messages(fmt, columns, rows), start=1):
+                self.writer.write(copy_data(payload))
+                if sent % 500 == 0:
+                    await self.writer.drain()  # back-pressure on a large export
             await self.writer.drain()
+        except ValueEncodingError as exc:
+            # Mid-COPY, so the only honest report is an error that ends the statement: no CopyDone,
+            # no CommandComplete. Sending the value's text instead would hand a binary client bytes
+            # it cannot decode.
+            logger.error(
+                "COPY TO STDOUT aborted: a value could not be encoded",
+                connection_id=self.connection_id,
+                error=str(exc),
+            )
+            await self.send_error_response("ERROR", "22P03", "invalid_binary_representation", str(exc))
+            if send_ready:
+                await self.send_ready_for_query()
+            return
 
-            logger.info("CopyDone sent", connection_id=self.connection_id)
-
-            # Send CommandComplete with row count
-            tag = f"COPY {row_count}\x00".encode()
-            cmd_complete_length = 4 + len(tag)
-            cmd_complete = struct.pack("!cI", MSG_COMMAND_COMPLETE, cmd_complete_length) + tag
-            self.writer.write(cmd_complete)
-            await self.writer.drain()
-
-            # Send ReadyForQuery
+        self.writer.write(self.copy_handler.build_copy_done())
+        tag = f"COPY {len(rows)}\x00".encode()
+        self.writer.write(struct.pack("!cI", MSG_COMMAND_COMPLETE, 4 + len(tag)) + tag)
+        await self.writer.drain()
+        if send_ready:
             await self.send_ready_for_query()
 
-            logger.info(
-                "COPY TO STDOUT completed successfully",
-                connection_id=self.connection_id,
-                rows_exported=row_count,
-            )
-
-        except Exception as e:
-            logger.error("COPY TO STDOUT failed", connection_id=self.connection_id, error=str(e))
-            raise
+        logger.info(
+            "COPY TO STDOUT completed",
+            connection_id=self.connection_id,
+            format=fmt.kind,
+            rows_exported=len(rows),
+        )
 
     async def handle_copy_from_stdin(self, query: str):
         """
@@ -3986,42 +3957,6 @@ class PGWireProtocol:
             logger.error(
                 "COPY FROM STDIN setup failed", connection_id=self.connection_id, error=str(e)
             )
-            raise
-
-    async def handle_copy_to_stdout(self, query: str):
-        """
-        P6: Handle COPY TO STDOUT command
-
-        Initiates bulk data export mode. Server will send CopyData messages
-        followed by CopyDone to complete the operation.
-        """
-        try:
-            logger.info(
-                "COPY TO STDOUT initiated", connection_id=self.connection_id, query=query[:100]
-            )
-
-            # Send CopyOutResponse to client
-            await self.send_copy_out_response()
-
-            # Execute query to get data for export
-            # For demo, we'll export some sample vector data
-            sample_data = ["id\tvector_data\n", "1\t[1,2,3]\n", "2\t[4,5,6]\n", "3\t[7,8,9]\n"]
-
-            # Send data via CopyData messages
-            for data_line in sample_data:
-                await self.send_copy_data(data_line.encode("utf-8"))
-
-            # Complete COPY operation
-            await self.send_copy_done()
-
-            logger.info(
-                "COPY TO STDOUT completed",
-                connection_id=self.connection_id,
-                rows_exported=len(sample_data) - 1,
-            )
-
-        except Exception as e:
-            logger.error("COPY TO STDOUT failed", connection_id=self.connection_id, error=str(e))
             raise
 
     async def handle_copy_data_message(self, body: bytes):

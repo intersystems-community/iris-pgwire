@@ -4,10 +4,11 @@ COPY SQL Command Parser
 Parses PostgreSQL COPY commands and extracts table name, column list, direction,
 and CSV options.
 
-Syntax:
-    COPY table_name [(column_list)] FROM STDIN [WITH (options)]
-    COPY table_name [(column_list)] TO STDOUT [WITH (options)]
-    COPY (query) TO STDOUT [WITH (options)]
+Syntax (PostgreSQL's: the WITH before an option list is optional, and the ADBC driver omits it):
+    COPY table_name [(column_list)] FROM STDIN [[WITH] (options)]
+    COPY table_name [(column_list)] TO STDOUT [[WITH] (options)]
+    COPY (query) TO STDOUT [[WITH] (options)]
+    ... and the legacy keywords BINARY and CSV [HEADER] after STDIN/STDOUT.
 
 Constitutional Requirement:
 - Translation overhead <5ms (performance standard)
@@ -40,6 +41,10 @@ class CSVOptions:
     header: bool = False
     quote: str = '"'
     escape: str = "\\"
+    # The option names the statement actually gave. The fields above hold defaults that predate
+    # this and suit COPY FROM; a COPY TO has to know what was asked for, because PostgreSQL's
+    # defaults are different (text format, tab delimiter, \\N for NULL).
+    explicit: frozenset = frozenset()
 
     @staticmethod
     def _unescape_string(s: str) -> str:
@@ -74,6 +79,8 @@ class CSVOptions:
         if not with_clause:
             return options
 
+        explicit: set[str] = set()
+
         # Parse options (case-insensitive)
         with_clause_upper = with_clause.upper()
 
@@ -82,6 +89,7 @@ class CSVOptions:
             format_match = re.search(r"FORMAT\s+(\w+)", with_clause_upper)
             if format_match:
                 options.format = format_match.group(1)
+                explicit.add("format")
 
         # DELIMITER option (handle E'...' escape sequences)
         delimiter_match = re.search(r"DELIMITER\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
@@ -89,6 +97,7 @@ class CSVOptions:
             has_e_prefix = delimiter_match.group(1) is not None
             value = delimiter_match.group(2)
             options.delimiter = cls._unescape_string(value) if has_e_prefix else value
+            explicit.add("delimiter")
 
         # NULL option (handle E'...' escape sequences)
         null_match = re.search(r"NULL\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
@@ -96,16 +105,20 @@ class CSVOptions:
             has_e_prefix = null_match.group(1) is not None
             value = null_match.group(2)
             options.null_string = cls._unescape_string(value) if has_e_prefix else value
+            explicit.add("null")
 
-        # HEADER option (boolean flag)
-        if re.search(r"\bHEADER\b", with_clause_upper):
-            options.header = True
+        # HEADER option: a bare flag, or HEADER true/false/on/off
+        header_match = re.search(r"\bHEADER\b(?:\s+(TRUE|FALSE|ON|OFF|1|0|MATCH)\b)?", with_clause_upper)
+        if header_match:
+            options.header = header_match.group(1) not in ("FALSE", "OFF", "0")
+            explicit.add("header")
 
         # QUOTE option (handle doubled single quotes '')
         quote_match = re.search(r"QUOTE\s+'((?:''|[^'])*)'", with_clause, re.IGNORECASE)
         if quote_match:
             # Replace '' with ' (SQL standard escape)
             options.quote = quote_match.group(1).replace("''", "'")
+            explicit.add("quote")
 
         # ESCAPE option (handle E'...' escape sequences)
         escape_match = re.search(r"ESCAPE\s+(E)?'([^']*)'", with_clause, re.IGNORECASE)
@@ -113,7 +126,38 @@ class CSVOptions:
             has_e_prefix = escape_match.group(1) is not None
             value = escape_match.group(2)
             options.escape = cls._unescape_string(value) if has_e_prefix else value
+            explicit.add("escape")
 
+        options.explicit = frozenset(explicit)
+        return options
+
+    @classmethod
+    def from_statement_tail(cls, tail: str) -> "CSVOptions":
+        """Parse what follows STDIN or STDOUT: `[WITH] (options)`, or the legacy keywords.
+
+        PostgreSQL makes the WITH optional before a parenthesised list, and the ADBC driver
+        writes `COPY (...) TO STDOUT (FORMAT binary)` with none. Legacy `BINARY` and `CSV [HEADER]`
+        are accepted too.
+        """
+        text = (tail or "").strip()
+        text = re.sub(r"^WITH\b\s*", "", text, flags=re.IGNORECASE)
+        listed = ""
+        if text.startswith("("):
+            end = text.find(")")
+            listed, text = text[1:end] if end > 0 else text[1:], (text[end + 1 :] if end > 0 else "")
+        options = cls.from_with_clause(listed)
+        explicit = set(options.explicit)
+        for word in text.upper().replace(",", " ").split():
+            if word == "BINARY":
+                options.format = "BINARY"
+                explicit.add("format")
+            elif word == "CSV":
+                options.format = "CSV"
+                explicit.add("format")
+            elif word == "HEADER":
+                options.header = True
+                explicit.add("header")
+        options.explicit = frozenset(explicit)
         return options
 
 
@@ -150,16 +194,17 @@ class CopyCommandParser:
     """
 
     # Regex patterns
+    # Group 3 is everything after STDIN/STDOUT; CSVOptions.from_statement_tail reads it.
     COPY_FROM_STDIN_PATTERN = re.compile(
-        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+FROM\s+STDIN(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE
+        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+FROM\s+STDIN\b(.*)$", re.IGNORECASE | re.DOTALL
     )
 
     COPY_TO_STDOUT_PATTERN = re.compile(
-        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE
+        r"COPY\s+(\w+)(?:\s*\(([^)]+)\))?\s+TO\s+STDOUT\b(.*)$", re.IGNORECASE | re.DOTALL
     )
 
     COPY_QUERY_TO_STDOUT_PATTERN = re.compile(
-        r"COPY\s*\((.+)\)\s+TO\s+STDOUT(?:\s+WITH\s*\(([^)]+)\))?", re.IGNORECASE | re.DOTALL
+        r"COPY\s*\((.+)\)\s+TO\s+STDOUT\b(.*)$", re.IGNORECASE | re.DOTALL
     )
 
     @staticmethod
@@ -194,7 +239,7 @@ class CopyCommandParser:
             if column_list_str:
                 column_list = [col.strip() for col in column_list_str.split(",")]
 
-            csv_options = CSVOptions.from_with_clause(with_clause or "")
+            csv_options = CSVOptions.from_statement_tail(with_clause or "")
 
             return CopyCommand(
                 table_name=table_name,
@@ -214,7 +259,7 @@ class CopyCommandParser:
             if column_list_str:
                 column_list = [col.strip() for col in column_list_str.split(",")]
 
-            csv_options = CSVOptions.from_with_clause(with_clause or "")
+            csv_options = CSVOptions.from_statement_tail(with_clause or "")
 
             return CopyCommand(
                 table_name=table_name,
@@ -229,7 +274,7 @@ class CopyCommandParser:
             query = match.group(1).strip()
             with_clause = match.group(2)
 
-            csv_options = CSVOptions.from_with_clause(with_clause or "")
+            csv_options = CSVOptions.from_statement_tail(with_clause or "")
 
             return CopyCommand(
                 table_name=None,
