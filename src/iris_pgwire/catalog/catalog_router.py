@@ -23,7 +23,6 @@ from .pg_class import PgClassEmulator
 from .pg_constraint import PgConstraintEmulator
 from .pg_index import PgIndexEmulator
 from .pg_namespace import PgNamespaceEmulator
-from .pg_type import PgTypeEmulator
 from .views.definitions import CATALOG_SCHEMA, VIEW_BACKED_TABLES
 
 logger = structlog.get_logger(__name__)
@@ -136,7 +135,6 @@ class CatalogRouter:
         self._regclass_pattern = re.compile(r"'([^']+)'::regclass", re.IGNORECASE)
         self._catalog_handler_map = {
             "pg_enum": self._handle_pg_enum,
-            "pg_type": self._handle_pg_type,
             "pg_extension": self._handle_pg_extension,
             "pg_namespace": self._handle_pg_namespace,
             "pg_class": self._handle_pg_class,
@@ -529,29 +527,6 @@ class CatalogRouter:
         columns = self._build_pg_enum_columns(sql)
         return self._build_success_response([], columns)
 
-    async def _handle_pg_type(
-        self,
-        sql: str,
-        sql_upper: str,
-        params: list | tuple | None,
-        session_id: str | None,
-        executor,
-    ) -> dict[str, Any] | None:
-        if "PG_TYPE" not in sql_upper:
-            return None
-
-        logger.debug("Matched PG_TYPE block")
-        logger.info("Intercepting pg_type query", sql_preview=sql[:150], session_id=session_id)
-        emulator = PgTypeEmulator(self.oid_gen)
-        columns = emulator.get_column_definitions()
-        rows = [list(row) for row in emulator.get_all_as_rows()]
-
-        rows = self._filter_pg_type_rows_by_name(sql, rows)
-        rows = self._filter_pg_type_rows_by_namespace(rows, params)
-        columns, rows = self._project_pg_type_columns(sql, columns, rows)
-        rows = [tuple(row) for row in rows]
-        return self._build_success_response(rows, columns)
-
     async def _handle_pg_extension(
         self,
         sql: str,
@@ -846,48 +821,6 @@ class CatalogRouter:
             ]
 
         return columns
-
-    def _filter_pg_type_rows_by_name(self, sql: str, rows: list[list[Any]]) -> list[list[Any]]:
-        name_match = re.search(r"typname\s*=\s*'([^']+)'", sql, re.IGNORECASE)
-        if not name_match:
-            return rows
-
-        target_name = name_match.group(1).lower()
-        return [row for row in rows if row[1] == target_name]
-
-    def _filter_pg_type_rows_by_namespace(
-        self, rows: list[list[Any]], params: list | tuple | None
-    ) -> list[list[Any]]:
-        if not params or len(params) == 0 or params[0] is None:
-            return rows
-
-        requested_namespaces = [n.lower() for n in self._extract_filter_names(params[0])]
-        if "pg_catalog" not in requested_namespaces:
-            return []
-
-        return rows
-
-    def _project_pg_type_columns(
-        self, sql: str, columns: list[dict[str, Any]], rows: list[list[Any]]
-    ) -> tuple[list[dict[str, Any]], list[list[Any]]]:
-        select_match = re.search(r"SELECT\s+(.+?)\s+FROM", sql, re.IGNORECASE | re.DOTALL)
-        if not select_match:
-            return columns, rows
-
-        clause = select_match.group(1).lower()
-        available = [c["name"] for c in columns]
-        indices: list[int] = []
-        select_columns: list[dict[str, Any]] = []
-        for idx, col_name in enumerate(available):
-            if col_name in clause:
-                indices.append(idx)
-                select_columns.append(columns[idx])
-
-        if not indices:
-            return columns, rows
-
-        projected_rows = [[row[i] for i in indices] for row in rows]
-        return select_columns, projected_rows
 
     def _filter_namespace_rows(
         self, rows: list[tuple[Any, ...]], params: list | tuple | None

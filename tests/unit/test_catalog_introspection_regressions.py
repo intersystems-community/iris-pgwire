@@ -25,6 +25,26 @@ from iris_pgwire.protocol import build_command_complete_tag as build_command_tag
 from iris_pgwire.sql_translator import SQLInterceptor
 
 
+
+def handled_table_probe(router: CatalogRouter) -> str:
+    """A query on a table the router still answers itself, taken from its handler map.
+
+    This probe has been moved three times: pg_namespace became a view in feature 044,
+    pg_attribute in T015b, pg_type when the ADBC driver needed real type rows. Each time the
+    tests that borrowed it as "the table that is still handler-backed" broke, so it is chosen
+    from the map instead of named. If every table has become a view this fails loudly, because
+    the tests that use it would otherwise prove nothing.
+    """
+    from iris_pgwire.catalog.views.definitions import VIEW_BACKED_TABLES
+
+    candidates = [
+        name
+        for name in router._catalog_handler_map
+        if name not in VIEW_BACKED_TABLES and "." not in name
+    ]
+    assert candidates, "every catalog table is view-backed now; the tests using this have no premise"
+    return f"SELECT * FROM {candidates[0]}"
+
 class TestCommandCompleteTag:
     """Defect 3: `SELECT 0 0` — an invalid CommandComplete tag.
 
@@ -89,9 +109,8 @@ class TestCommandCompleteTag:
         T015b.
         """
         router = CatalogRouter()
-        assert "pg_type" in router._catalog_handler_map, "pick a still-handled table"
         result = asyncio.run(
-            router.handle_catalog_query("SELECT typname FROM pg_type", None, "t", None)
+            router.handle_catalog_query(handled_table_probe(router), None, "t", None)
         )
         assert result is not None
         tag = result["command_tag"]
@@ -198,12 +217,8 @@ class TestUnevaluableExpressionsFallThrough:
         the handler map rather than named, and the test says why.
         """
         router = CatalogRouter()
-        assert "pg_type" in router._catalog_handler_map, (
-            "pg_type is no longer handler-backed; pick another still-handled table "
-            "or this test proves nothing"
-        )
         result = asyncio.run(
-            router.handle_catalog_query("SELECT typname FROM pg_type", None, "t", None)
+            router.handle_catalog_query(handled_table_probe(router), None, "t", None)
         )
         assert result is not None, "handler-backed tables must still be intercepted"
 
@@ -260,8 +275,7 @@ class TestNestedCatalogQueryGuard:
         # *other* reason would mask whether the guard is task-scoped. pg_namespace
         # became a view in feature 044 and pg_attribute in T015b, so this asserts
         # the premise rather than trusting it.
-        assert "pg_type" in router._catalog_handler_map, "pick a still-handled table"
-        probe = "SELECT typname FROM pg_type"
+        probe = handled_table_probe(router)
 
         async def nested_holder():
             token = cr._IN_CATALOG_HANDLER.set(True)

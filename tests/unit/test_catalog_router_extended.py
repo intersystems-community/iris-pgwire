@@ -293,79 +293,6 @@ class TestBuildPgEnumColumns:
 
 
 # ---------------------------------------------------------------------------
-# _filter_pg_type_rows_by_name
-# ---------------------------------------------------------------------------
-
-
-class TestFilterPgTypeRowsByName:
-    def test_filters_by_name(self):
-        router = make_router()
-        rows = [[1, "int4", 10], [2, "text", 10], [3, "bool", 10]]
-        result = router._filter_pg_type_rows_by_name("WHERE typname = 'int4'", rows)
-        assert len(result) == 1
-        assert result[0][1] == "int4"
-
-    def test_no_filter_returns_all(self):
-        router = make_router()
-        rows = [[1, "int4", 10], [2, "text", 10]]
-        result = router._filter_pg_type_rows_by_name("SELECT * FROM pg_type", rows)
-        assert result == rows
-
-
-# ---------------------------------------------------------------------------
-# _filter_pg_type_rows_by_namespace
-# ---------------------------------------------------------------------------
-
-
-class TestFilterPgTypeRowsByNamespace:
-    def test_no_params_returns_all(self):
-        router = make_router()
-        rows = [[1, "int4"], [2, "text"]]
-        assert router._filter_pg_type_rows_by_namespace(rows, None) == rows
-        assert router._filter_pg_type_rows_by_namespace(rows, []) == rows
-
-    def test_pg_catalog_namespace_included(self):
-        router = make_router()
-        rows = [[1, "int4"], [2, "text"]]
-        result = router._filter_pg_type_rows_by_namespace(rows, [["pg_catalog"]])
-        assert result == rows
-
-    def test_non_pg_catalog_namespace_excluded(self):
-        router = make_router()
-        rows = [[1, "int4"], [2, "text"]]
-        result = router._filter_pg_type_rows_by_namespace(rows, [["public"]])
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# _project_pg_type_columns
-# ---------------------------------------------------------------------------
-
-
-class TestProjectPgTypeColumns:
-    def test_no_select_match_returns_original(self):
-        router = make_router()
-        columns = [{"name": "oid"}, {"name": "typname"}]
-        rows = [[1, "int4"]]
-        result_cols, result_rows = router._project_pg_type_columns(
-            "SOMETHING weird", columns, rows
-        )
-        assert result_cols == columns
-        assert result_rows == rows
-
-    def test_projects_specific_columns(self):
-        router = make_router()
-        columns = [{"name": "oid"}, {"name": "typname"}, {"name": "typlen"}]
-        rows = [[1, "int4", 4]]
-        result_cols, result_rows = router._project_pg_type_columns(
-            "SELECT typname FROM pg_type", columns, rows
-        )
-        # typname should be projected
-        col_names = [c["name"] for c in result_cols]
-        assert "typname" in col_names
-
-
-# ---------------------------------------------------------------------------
 # _filter_namespace_rows
 # ---------------------------------------------------------------------------
 
@@ -578,14 +505,6 @@ class TestHandleCatalogQuery:
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_handle_pg_type(self):
-        router = make_router()
-        sql = "SELECT oid, typname FROM pg_type"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
     async def test_handle_pg_extension(self):
         """pg_extension is view-backed since feature 047; router declines it."""
         router = make_router()
@@ -682,39 +601,6 @@ class TestHandleCatalogQuery:
         router = make_router()
         result = await router.handle_catalog_query("SELECT * FROM users")
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _handle_pg_type with name filter and namespace filter
-# ---------------------------------------------------------------------------
-
-
-class TestHandlePgTypeFiltering:
-    @pytest.mark.asyncio
-    async def test_pg_type_with_typname_filter(self):
-        router = make_router()
-        sql = "SELECT oid, typname FROM pg_type WHERE typname = 'int4'"
-        result = await router.handle_catalog_query(sql)
-        assert result is not None
-        # rows should only contain int4 if it exists in the emulator
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_pg_type_with_namespace_filter_pg_catalog(self):
-        router = make_router()
-        sql = "SELECT typname FROM pg_type WHERE typnamespace = $1"
-        result = await router.handle_catalog_query(sql, params=[["pg_catalog"]])
-        assert result is not None
-        assert result["success"] is True
-
-    @pytest.mark.asyncio
-    async def test_pg_type_with_non_pg_catalog_namespace(self):
-        router = make_router()
-        sql = "SELECT typname FROM pg_type WHERE typnamespace = $1"
-        result = await router.handle_catalog_query(sql, params=[["public"]])
-        assert result is not None
-        assert result["success"] is True
-        assert result["rows"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ Key Components:
 - PgConstraintEmulator: Constraint catalog
 - PgIndexEmulator: Index catalog
 - PgAttrdefEmulator: Default value catalog
-- PgTypeEmulator: Data type catalog
+- pg_type: a view of rows captured from PostgreSQL (pg_type_data.py), see views/definitions.py
 - CatalogRouter: Query routing to appropriate emulators
 """
 
@@ -37,8 +37,6 @@ __all__ = [
     "PgIndexEmulator",
     "PgAttrdef",
     "PgAttrdefEmulator",
-    "PgType",
-    "PgTypeEmulator",
     # Router
     "CatalogRouter",
     "CatalogQueryResult",
@@ -71,10 +69,6 @@ def __getattr__(name: str):
         from .pg_attrdef import PgAttrdef, PgAttrdefEmulator
 
         return PgAttrdef if name == "PgAttrdef" else PgAttrdefEmulator
-    elif name in ("PgType", "PgTypeEmulator"):
-        from .pg_type import PgType, PgTypeEmulator
-
-        return PgType if name == "PgType" else PgTypeEmulator
     elif name in ("CatalogRouter", "CatalogQueryResult"):
         from .catalog_router import CatalogQueryResult, CatalogRouter
 

@@ -156,15 +156,25 @@ class TestTheRoutingInvariant:
     def test_a_handled_table_queried_directly_still_answers(self):
         """The invariant must not disable the handlers that remain in use.
 
-        pg_type is one of the few left: pg_attribute and pg_attrdef became views
-        in T015b, pg_class and pg_namespace before them.
+        pg_enum is one of the few left: pg_type, pg_attribute and pg_attrdef became
+        views, pg_class and pg_namespace before them.
         """
         router = CatalogRouter()
         result = asyncio.run(
             router.handle_catalog_query(
-                "SELECT typname FROM pg_type WHERE typname = 'int4'",
+                "SELECT enumlabel FROM pg_enum",
                 session_id="t",
             )
         )
         assert result is not None
         assert result["success"] is True
+
+    @pytest.mark.parametrize("table", sorted(VIEW_BACKED_TABLES))
+    def test_every_view_backed_table_is_declined_by_the_router(self, table):
+        """Exactly one path answers a catalog table (spec 044 FR-011). If a handler still
+        answered for a view-backed table, its answer would shadow the view's."""
+        router = CatalogRouter()
+        result = asyncio.run(
+            router.handle_catalog_query(f"SELECT * FROM pg_catalog.{table}", session_id="t")
+        )
+        assert result is None, f"{table}: a handler answered for a table a view serves"

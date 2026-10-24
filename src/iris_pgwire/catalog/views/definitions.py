@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from iris_pgwire.catalog.pg_type_data import PG_TYPE_COLUMNS, PG_TYPE_ROWS
 from iris_pgwire.schema_mapper import IRIS_SCHEMA
 
 # The IRIS schema holding the emulated catalog. IRIS accepts a schema named
@@ -616,10 +617,50 @@ PG_REWRITE = CatalogView(
 )
 
 
+# --- pg_type -----------------------------------------------------------------
+# Static, and captured from a real PostgreSQL 16 rather than written by hand
+# (scripts/capture_pg_type.py -> catalog/pg_type_data.py). Clients decide how to decode a result
+# column from `typreceive`, `typsend`, `typelem` and `typarray`, by *name*; the ADBC PostgreSQL
+# driver maps `int4recv` to a 32-bit integer and cannot use a guessed name. This was a handler
+# that matched the shape of a query in Python and answered with four columns of its own choosing,
+# which made that driver refuse to connect.
+#
+# Every row has a receive and a send function. The driver filters with `typreceive != 0`, and IRIS
+# compares a name column with 0 as strings (measured), so the predicate is true for every row; it
+# is only meaningful because no row lacks a function.
+def _sql_literal(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _pg_type_body() -> str:
+    selects = []
+    for index, row in enumerate(PG_TYPE_ROWS):
+        cells = [
+            f"{_sql_literal(value)} AS {column}" if index == 0 else _sql_literal(value)
+            for column, value in zip(PG_TYPE_COLUMNS, row, strict=True)
+        ]
+        selects.append("SELECT " + ", ".join(cells))
+    return "\nUNION ALL\n".join(selects)
+
+
+PG_TYPE = CatalogView(
+    name="pg_type",
+    columns=PG_TYPE_COLUMNS,
+    body=_pg_type_body(),
+)
+
+
 # Ordered so dependencies are created first. pg_namespace has no dependencies;
 # the rest reference its OIDs or its schema name by value.
 CATALOG_VIEWS: tuple[CatalogView, ...] = (
     PG_NAMESPACE,
+    PG_TYPE,
     PG_CLASS,
     PG_CONSTRAINT,
     PG_VIEWS,
@@ -683,6 +724,11 @@ BOOLEAN_CATALOG_COLUMNS: frozenset[str] = frozenset(
         "is_instead",
         # pg_extension (feature 047)
         "extrelocatable",
+        # pg_type
+        "typbyval",
+        "typispreferred",
+        "typisdefined",
+        "typnotnull",
     }
 )
 
@@ -728,4 +774,10 @@ CATALOG_COLUMN_TYPE_OIDS: dict[str, int] = {
     # pg_rewrite (feature 047)
     "ev_type": 18,
     "ev_enabled": 18,
+    # pg_type: `"char"` columns
+    "typtype": 18,
+    "typcategory": 18,
+    "typdelim": 18,
+    "typalign": 18,
+    "typstorage": 18,
 }

@@ -42,12 +42,12 @@ SCHEMA_COLUMNS = frozenset({"table_schema", "schema_name", "nspname"})
 
 # Declared here rather than imported from catalog.views.definitions: that module
 # imports IRIS_SCHEMA from this one, so importing back would be circular. The
-# test suite asserts the two stay in agreement.
+# test suite asserts the two stay in agreement (test_pg_type_view.py compares them directly).
 CATALOG_SCHEMA = "pg_catalog"
 VIEW_BACKED_TABLES = frozenset(
     {
-        "pg_namespace", "pg_class", "pg_constraint", "pg_views", "pg_attribute", "pg_attrdef",
-        "pg_depend", "pg_extension", "pg_index", "pg_policy", "pg_rewrite",
+        "pg_namespace", "pg_type", "pg_class", "pg_constraint", "pg_views", "pg_attribute",
+        "pg_attrdef", "pg_depend", "pg_extension", "pg_index", "pg_policy", "pg_rewrite",
     }
 )
 
