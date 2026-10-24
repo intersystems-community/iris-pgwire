@@ -2,7 +2,20 @@
 
 **Feature Branch**: `045-unified-iris-driver`
 **Created**: 2026-08-17
-**Status**: Draft — spike complete, awaiting plan review. No open clarifications.
+**Status**: **Superseded by [`specs/051-unified-executor`](../051-unified-executor/spec.md)** on
+2026-09-20. This spec diagnosed the _outbound_ half — three implementations of what a result looks
+like — and its Out of Scope section rules out "rewriting either executor wholesale." Measurement
+since then found the same disease on the way _in_: the statement-preparation sequence also exists
+three times, which is why `optimize_vector_query` has exactly one call site in `src/` and pgvector
+operators reach IRIS untranslated on the default backend. The two halves cannot be unified
+separately without restructuring the same code twice, so 051 covers both. Every requirement here is
+carried forward in 051 — FR-001…FR-010 and FR-012…FR-016 map to 051 FR-001…FR-003, FR-007…FR-010,
+FR-014, FR-017, FR-018 and FR-025…FR-029 — and the Route B rejection is recorded as
+[ADR-0002](../../docs/adr/0002-iris-embedded-python-wrapper-not-adopted.md). **Do not implement from
+this document**; the measurements and the §Alternatives analysis remain valid and are cited rather
+than re-derived.
+
+_Original status_: Draft — spike complete, awaiting plan review. No open clarifications.
 
 **Running spec-kit commands on this feature**: the scripts resolve the feature from a `NNN-` branch
 prefix. If development happens on a branch without that prefix, every invocation needs the override:
@@ -45,7 +58,7 @@ review:
   **no SQLCODE at all**, so a SQLCODE-only classifier scored 2/5 on the default backend.
   `sql_translator/sqlstate.py` now matches both wordings for every family.
 
-Both fixes work. Both had to be written *twice*, or written outside the executors precisely because
+Both fixes work. Both had to be written _twice_, or written outside the executors precisely because
 they would otherwise be written twice — the header comment in
 `sql_translator/column_types.py` says so explicitly. **The prize in this feature is collapsing three
 materialisation paths into one**, so the next fix of this kind lands once.
@@ -57,7 +70,7 @@ DB-API facade over both embedded and native backends and normalisation of "SQL N
 strings". It was measured, not assumed. Three results reshape this spec:
 
 1. **The T011h property already holds on the native driver, and it always did.** Measured:
-   `cursor.description` is byte-for-byte identical for 10 rows and 0 rows, and reports *distinct*
+   `cursor.description` is byte-for-byte identical for 10 rows and 0 rows, and reports _distinct_
    ODBC codes — `12` varchar, `-7` bit, `4` integer. The facade contributes nothing here; the bare
    official driver gives the same answer.
 2. **We discard that metadata ourselves, in five lines.** `DBAPIExecutor._map_dbapi_type_to_oid`
@@ -73,7 +86,7 @@ So the third-party package is a **possible enabler, not the fix**. The fix is ou
 
 ---
 
-## User Scenarios & Testing *(mandatory)*
+## User Scenarios & Testing _(mandatory)_
 
 ### User Story 1 — A metadata fix lands once and holds on both backends (Priority: P1)
 
@@ -115,7 +128,7 @@ both backends: statement Describe declarations versus DataRow widths.
 2. **Given** a binary-format result request, **When** a column is declared `bool`, **Then** the
    DataRow carries exactly one byte for it.
 3. **Given** the query has no rows and the SQL settles nothing, **When** the Describe is answered,
-   **Then** the type reported is the one the *driver* reported — never a guess from an absent value.
+   **Then** the type reported is the one the _driver_ reported — never a guess from an absent value.
 
 ---
 
@@ -145,7 +158,7 @@ deliberately.
 A client writes `''` and reads back `''`, not NULL and not a one-byte NUL.
 
 **Why this priority**: Real, measured, and narrower than the others. Measured on the embedded API:
-`iris.sql.exec` returns `'\x00'` for a non-NULL empty string and `''` for SQL NULL — the *inverse* of
+`iris.sql.exec` returns `'\x00'` for a non-NULL empty string and `''` for SQL NULL — the _inverse_ of
 Python's convention. `IRISExecutor._normalize_iris_null` maps `''` to `None` (right for NULL) and
 leaves `'\x00'` alone, so a genuine empty string appears to a client as one NUL character. This was
 measured at the driver level and **not** verified end-to-end over the wire, so it is a
@@ -187,7 +200,7 @@ backends, and compare against real PostgreSQL 15 for the same four cases.
 
 ---
 
-## Requirements *(mandatory)*
+## Requirements _(mandatory)_
 
 ### Functional Requirements
 
@@ -197,9 +210,9 @@ backends, and compare against real PostgreSQL 15 for the same four cases.
   size, format) of a result set. Both backends MUST reach it. A second implementation of that decision
   is a defect, not a variant.
 - **FR-002**: The unified path MUST be reachable without instantiating an executor, so it can be
-  tested directly and so neither executor can quietly diverge from it. *(This is already true of
+  tested directly and so neither executor can quietly diverge from it. _(This is already true of
   `sql_translator/column_types.py`; FR-001 extends the property from "the part 044 had to extract" to
-  the whole decision.)*
+  the whole decision.)_
 - **FR-003**: A test MUST fail if either backend stops routing through the unified path. Asserting the
   behaviour on one backend is not sufficient — T011g passed its own tests while shipping broken on the
   other one.
@@ -234,7 +247,7 @@ backends, and compare against real PostgreSQL 15 for the same four cases.
 
 - **FR-009**: For any observable behaviour, the two backends MUST agree, **or** the difference MUST be
   recorded with the measurement that establishes it and the reason it cannot be unified. An
-  undocumented divergence is a defect. *(Constitution Principle IV.)*
+  undocumented divergence is a defect. _(Constitution Principle IV.)_
 - **FR-010**: The empty string and SQL NULL MUST be distinguishable to the client on both backends,
   and MUST be represented as PostgreSQL represents them — a zero-length value and NULL. Measured
   today: the native driver is already correct (`''` / `None`); `iris.sql.exec` returns `'\x00'` for
@@ -290,7 +303,7 @@ backends, and compare against real PostgreSQL 15 for the same four cases.
 
 ---
 
-## Success Criteria *(mandatory)*
+## Success Criteria _(mandatory)_
 
 - **SC-001**: **One** implementation decides column metadata, asserted by a test that both backends
   route through it. Count of independent implementations goes from **3 to 1**.
@@ -336,7 +349,7 @@ used instead of discarded.
 - **Cost**: the work is ours. ~5,700 lines of executor to read and carefully reduce; no upstream help.
 - **Evidence it is sufficient**: measured — the native driver already satisfies FR-004 and reports
   distinct types with zero rows; the row-count dependence came from our own five-line mapper; and
-  the third-party embedded facade reports *no* column types, so it cannot satisfy FR-001 anyway.
+  the third-party embedded facade reports _no_ column types, so it cannot satisfy FR-001 anyway.
 
 ### B. Adopt `iris-embedded-python-wrapper` as the driver layer
 
@@ -348,7 +361,7 @@ Replace `iris.sql.exec` and the DBAPI pool with `iris.dbapi` from the wrapper, i
   normalisation on the embedded path**, which is the one thing it does better than we do today.
 - **What it does not deliver**: FR-001 — the embedded facade reports `type_code=None` for every
   column, so a unified metadata decision on top of it still needs
-  `sql_translator/column_types.py`. FR-008 — errors are *not* normalised; the embedded facade raises
+  `sql_translator/column_types.py`. FR-008 — errors are _not_ normalised; the embedded facade raises
   the raw `%Status` `$LIST` with control bytes and no SQLCODE, which is harder to classify than the
   plain text `iris.sql.exec` gives today (classification survived at 3/3, by wording match, which is
   luck rather than contract).
@@ -385,8 +398,8 @@ Route B wins only if **all** of the following become true, each measured:
    pinned install layout in which neither collision can occur.
 4. Embedded-local mode fails **loudly at configuration time** when the loader path is wrong, rather
    than after N successful statements.
-5. Route A has been completed first, so that adoption is measured as a *replacement of a known-good
-   layer* — with 044's probes as the oracle — rather than as a simultaneous refactor and dependency
+5. Route A has been completed first, so that adoption is measured as a _replacement of a known-good
+   layer_ — with 044's probes as the oracle — rather than as a simultaneous refactor and dependency
    change.
 
 Point 5 is not negotiable regardless of 1–4: a driver swap and a consolidation performed together
@@ -397,15 +410,15 @@ have no bisectable failure.
 ## Assumptions
 
 - **The native driver's `cursor.description` is row-count independent and type-distinguishing.**
-  *Verified by measurement* on IRIS 2026.2 — identical output at 10 rows and 0 rows, codes
+  _Verified by measurement_ on IRIS 2026.2 — identical output at 10 rows and 0 rows, codes
   `12`/`-7`/`4`. Not verified on other IRIS versions.
-- **`iris.sql.exec` results carry no `_meta` on this IRIS build.** *Verified by measurement.* The
+- **`iris.sql.exec` results carry no `_meta` on this IRIS build.** _Verified by measurement._ The
   branch in `_materialize_embedded_result` that reads it is therefore dead here; other versions
   untested, so the branch is not assumed removable without a version check.
-- **The embedded backend reports no per-column type codes through a DB-API surface.** *Verified* for
+- **The embedded backend reports no per-column type codes through a DB-API surface.** _Verified_ for
   the third-party facade. Whether `%SQL.Statement` metadata is reachable another way (e.g.
   `%GetMetadata`) is **not** verified and is a Phase 0 question for the plan.
-- **`sql_translator/column_types.py` is the right shape for the unified decision.** *Partly verified*:
+- **`sql_translator/column_types.py` is the right shape for the unified decision.** _Partly verified_:
   it already serves both executors and is row-count independent by construction. Whether it can absorb
   name normalisation, size and format decisions is a design question, not a measurement.
 - **IRIS is required for all verification; there is no mock and none will be introduced.**
@@ -433,10 +446,10 @@ have no bisectable failure.
   scope except where they call the materialisers.
 - **DDL identifier casing.** C-1 in `specs/044-catalog-as-views/plan.md`, owned by
   `docs/identifier-casing-inconsistency.md`. FR-011 forbids touching it here.
-- **New PostgreSQL type coverage.** Declaring *correct* types for constructs already supported is in
+- **New PostgreSQL type coverage.** Declaring _correct_ types for constructs already supported is in
   scope; supporting new types is not.
 - **Removing the embedded backend, or the `iris.connect` external path inside `IRISExecutor`.**
-  Principle IV requires both backends stay functional. Whether path 2 and path 3 above are the *same*
+  Principle IV requires both backends stay functional. Whether path 2 and path 3 above are the _same_
   path wearing two names is a Phase 0 question; deleting either is not assumed.
 - **The `iris.sql.exec` bound-`None` inlining workaround** (`iris_executor.py:1825-1848`) — kept
   as-is unless a measurement justifies replacing it.

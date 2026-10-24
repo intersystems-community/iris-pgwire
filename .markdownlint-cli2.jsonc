@@ -9,7 +9,9 @@
     "MD024": { "siblings_only": true },
     "MD033": false,
     "MD041": false,
-    "MD049": { "style": "asterisk" },
+    // Underscore, not asterisk: prettier normalises `*em*` to `_em_`, so an
+    // asterisk rule can never be satisfied on a formatted file.
+    "MD049": { "style": "underscore" },
     "MD050": { "style": "asterisk" },
     "MD060": false
   }
