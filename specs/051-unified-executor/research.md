@@ -598,6 +598,48 @@ reproduce. Both carry a dated note naming the build.
 
 ---
 
+## R8. What the ADBC driver exposed _(added 2026-10-24, not a Phase 0 question)_
+
+Measured by driving `adbc-driver-postgresql` 1.12.0 against both backends (IRIS 2026.2.0.221.0com,
+`intersystems_irispython` 5.3.2 for DBAPI). The driver is a good probe because it is strict: it
+decodes binary by the OIDs it was told, in two ways (binary `COPY` and binary result format), and
+resolves types from `pg_type` by name. Findings that bear on this feature, none fixed here unless
+stated:
+
+1. **The same statement declared different types depending on the path (fixed).** On DBAPI,
+   `SELECT CAST('2026-10-24' AS DATE)` was `varchar` over the simple protocol and `date` over the
+   extended one. Cause: the simple path appends `;`, and `resolve_column_type_oids` took the
+   semicolon as part of the last alias, so the lookup by name matched nothing and the statement's own
+   evidence about its types was silently lost on that path. This is the T011h defect (a type decided
+   in more than one place) in its most ordinary form, and it is what US3 exists to remove. The fix
+   strips a trailing terminator in the resolver; the structural problem (preparation differs by
+   path) remains.
+2. **Error reporting differs by executor.** The embedded executor returns `{"success": False}`; the
+   DBAPI executor re-raises. Anything that calls `execute_query` outside the two existing call sites
+   has to handle both, and COPY now does.
+3. **DBAPI type codes depend on the expression.** For `CAST(... AS DATE|TIME|TIMESTAMP)` this driver
+   reports `9`, `10` and `11`; the executor's table (built from table columns) expects `1091`,
+   `1092` and `1093`. `9` and `10` are not mapped, so a bare date or time falls to `varchar` unless
+   the statement text says otherwise.
+4. **Declared types still wrong, pinned as strict xfails in `tests/e2e/test_adbc.py`:** `TIME` is
+   `varchar` on both backends (and on embedded its value is raw seconds, `'45296'`); `NUMERIC` is
+   `float8` on embedded and correctly `numeric` on DBAPI.
+5. **`COPY` defaults differ in direction.** `TO STDOUT` now defaults to PostgreSQL's text format;
+   `FROM STDIN` still defaults to CSV with a comma. A psycopg `copy.write_row` sends text and would
+   be mis-parsed. Item 6 of the ADBC request (bulk ingest) is where this gets settled.
+6. **Unsupported, and needed by the driver beyond queries:** `pg_database`, `pg_table_is_visible`,
+   `unnest(conkey)`, the `!~` operator, the `regclass` cast, and `CURRENT_SCHEMA()`. `adbc_ingest`
+   fails first at `CURRENT_SCHEMA()` on both backends. `adbc_get_objects` returns an empty result
+   and `adbc_get_table_schema` fails on `regclass`.
+7. **A guard that was promised and did not exist.** `schema_mapper.VIEW_BACKED_TABLES` is a second
+   copy of the definitions' list, with a comment saying a test keeps them in agreement. There was
+   only a per-view assertion, so a view added without one (`pg_type`) was unreachable by its bare
+   name. `test_pg_type_view.py` now compares the lists directly.
+
+Seed into T012 as divergences: items 1 (fix, done), 3, 4 and 5.
+
+---
+
 ## Summary of changes to the feature's own artifacts
 
 | Artifact   | Change required                                                                                                                                               |

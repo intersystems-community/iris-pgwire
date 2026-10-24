@@ -67,6 +67,7 @@ Tested against real IRIS instances via the wire protocol:
 | Ruby     | pg gem                                       |
 | Rust     | tokio-postgres                               |
 | PHP      | PDO PostgreSQL                               |
+| Arrow    | ADBC PostgreSQL driver (queries only; see [ADBC](docs/ADBC.md)) |
 
 **ORMs**: SQLAlchemy, Prisma, Drizzle, Sequelize, Hibernate  
 **BI tools**: Apache Superset, Metabase, Grafana (standard PostgreSQL driver)
