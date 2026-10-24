@@ -69,6 +69,20 @@ _CAST_TAIL = r"\bAS\s+(\w+)\s*\)\s+AS\s+{}\b"
 _ALIAS_NAME = re.compile(r'^(?:AS\s+)?"?([^"\s]+)"?$', re.IGNORECASE)
 
 
+def _without_terminator(sql: str) -> str:
+    """`sql` without trailing semicolons and whitespace.
+
+    The simple-query path appends `;` before it executes a statement. Left in, it becomes part of
+    the last select-list alias (`AS v;`), the lookup by name finds nothing, and the statement's own
+    evidence about its column types is silently lost for exactly that path. Only a *trailing*
+    terminator is removed; a semicolon inside a literal is untouched.
+    """
+    text = sql.rstrip()
+    while text.endswith(";"):
+        text = text[:-1].rstrip()
+    return text
+
+
 def _alias_name(alias: str) -> str:
     match = _ALIAS_NAME.match(alias.strip())
     return match.group(1) if match else ""
@@ -102,7 +116,7 @@ def cast_type_oid(sql: str, column_name: str) -> int | None:
     """
     if not sql or not column_name:
         return None
-    sql_upper = sql.upper()
+    sql_upper = _without_terminator(sql).upper()
     escaped = re.escape(column_name.upper())
 
     match = re.search(_PG_CAST.format(escaped), sql_upper)
@@ -132,7 +146,7 @@ def catalog_column_type_oid(sql: str, item_index: int) -> int | None:
     # module-level import would close the cycle.
     from ..catalog.views.definitions import CATALOG_COLUMN_TYPE_OIDS
 
-    items = select_list_items(sql)
+    items = select_list_items(_without_terminator(sql))
     if not 0 <= item_index < len(items):
         return None
 
@@ -157,7 +171,7 @@ def boolean_expression_type_oid(sql: str, item_index: int) -> int | None:
     """
     from .boolean_expr import _is_boolean_expression, _scan_top_level
 
-    items = select_list_items(sql)
+    items = select_list_items(_without_terminator(sql))
     if not 0 <= item_index < len(items):
         return None
 
@@ -184,6 +198,7 @@ def resolve_column_type_oids(sql: str) -> list[int | None]:
 
     Anything else is None, leaving the type IRIS reported in place.
     """
+    sql = _without_terminator(sql)
     items = select_list_items(sql)
     resolved: list[int | None] = []
     for index, (_expression, alias) in enumerate(items):
