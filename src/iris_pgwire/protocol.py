@@ -27,6 +27,7 @@ from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
+from .password_auth import AuthRefused, AuthUnavailable, parse_password_message
 from .schema_mapper import IRIS_SCHEMA
 from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
@@ -149,7 +150,16 @@ class PGWireProtocol:
         iris_executor: Executor,
         connection_id: str,
         enable_scram: bool = False,
+        auth_mode: str = "trust",
+        password_verifier: Any = None,
+        allow_plaintext_password: bool = False,
+        allowed_users: frozenset[str] | None = None,
+        failed_login_delay: float = 0.0,
     ):
+        # `auth_mode` defaults to "trust" here only because this is the per-connection handler,
+        # built by PGWireServer, whose own default is "password" and which always passes the mode
+        # explicitly (tests/unit/test_password_auth.py pins that). Nothing outside the server
+        # should construct one.
         self.reader = reader
         self.writer = writer
         self.iris_executor = iris_executor
@@ -172,6 +182,13 @@ class PGWireProtocol:
 
         # P3: Authentication state
         self.enable_scram = enable_scram
+        self.auth_mode = auth_mode
+        self.password_verifier = password_verifier
+        self.allow_plaintext_password = allow_plaintext_password
+        # None means "no restriction" and exists for the internal tests; PGWireServer always
+        # passes the resolved set. Names are case-folded.
+        self.allowed_users = allowed_users
+        self.failed_login_delay = failed_login_delay
         self.auth_method = AUTH_SASL if enable_scram else AUTH_OK
         self.scram_state = {}  # SCRAM authentication state
         self.client_nonce = None
@@ -457,14 +474,19 @@ class PGWireProtocol:
                     logger.debug("SSL request received", connection_id=self.connection_id)
 
                     if ssl_context:
+                        transport = self.writer.transport
+                        protocol = transport.get_protocol()
+
+                        # A client sends its TLS ClientHello the moment it reads 'S'. If this
+                        # transport is still reading when that arrives, the StreamReader takes
+                        # the bytes as plain application data, the handshake never sees them and
+                        # hangs until it times out. So stop reading *before* answering. (There
+                        # used to be a 0.1 s sleep here, which made the race certain.)
+                        transport.pause_reading()
+
                         # Respond with 'S' (SSL supported) and upgrade connection
                         self.writer.write(b"S")
                         await self.writer.drain()
-
-                        # Upgrade to TLS
-                        transport = self.writer.transport
-                        protocol = transport.get_protocol()
-                        await asyncio.sleep(0.1)  # Allow response to be sent
 
                         # Create SSL transport
                         ssl_transport = await asyncio.get_event_loop().start_tls(
@@ -545,10 +567,14 @@ class PGWireProtocol:
                 scram_enabled=self.enable_scram,
             )
             if self.enable_scram:
+                # Unreachable from PGWireServer, which refuses enable_scram at startup: this
+                # sequence never verified the client proof (see complete_scram_authentication).
                 await self.start_scram_authentication()
                 # SCRAM requires additional message handling
                 await self.handle_scram_client_final()
                 await self.complete_scram_authentication()
+            elif self.auth_mode == "password":
+                await self.authenticate_with_password()
             else:
                 # P0: Basic authentication (trust)
                 await self.send_authentication_ok()
@@ -602,6 +628,16 @@ class PGWireProtocol:
                 expected=e.expected,
             )
             raise ConnectionAbortedError("Client disconnected before StartupMessage")
+        except AuthRefused as e:
+            logger.warning(
+                "Authentication refused",
+                connection_id=self.connection_id,
+                user=self.startup_params.get("user"),
+                sqlstate=e.sqlstate,
+                reason=e.message,
+            )
+            await self.send_error_response("FATAL", e.sqlstate, "authentication_failed", e.message)
+            raise
         except Exception as e:
             logger.error(
                 "❌ Startup sequence failed",
@@ -616,6 +652,70 @@ class PGWireProtocol:
                 "FATAL", "08006", "startup_failed", f"Startup sequence failed: {e}"
             )
             raise
+
+    async def authenticate_with_password(self):
+        """Ask for the client's password and check it by logging into IRIS with it.
+
+        Every refusal is an AuthRefused, which handle_startup_sequence turns into a FATAL
+        ErrorResponse. Nothing here falls through to AuthenticationOk.
+        """
+        user = self.startup_params.get("user")
+        if not user:
+            raise AuthRefused("28000", "no PostgreSQL user name specified in startup packet")
+
+        # Refuse before asking: a password prompt over plaintext invites sending it.
+        if not (self.ssl_enabled or self.allow_plaintext_password):
+            raise AuthRefused(
+                "28000",
+                "TLS is required for password authentication: connect with sslmode=require",
+            )
+
+        # No verifier means authentication was not configured. Fail closed.
+        if self.password_verifier is None:
+            raise AuthRefused("28000", "password authentication is not configured")
+
+        self.writer.write(struct.pack("!cII", MSG_AUTHENTICATION, 8, AUTH_CLEARTEXT_PASSWORD))
+        await self.writer.drain()
+
+        header = await self.reader.readexactly(5)
+        msg_type, length = struct.unpack("!cI", header)
+        if msg_type != b"p":
+            raise AuthRefused("08P01", f"expected password response, got message type {msg_type!r}")
+        if length < 5 or length > 4 + 1025:
+            raise AuthRefused("08P01", "invalid password message length")
+        password = parse_password_message(await self.reader.readexactly(length - 4))
+
+        denied = AuthRefused("28P01", f'password authentication failed for user "{user}"')
+
+        # Not on the list: refuse without touching IRIS, which counts failed logins and locks
+        # accounts, so a stranger must not be able to spend another user's attempts. The refusal is
+        # indistinguishable from a wrong password, in text and in how long it takes.
+        if self.allowed_users is not None and user.casefold() not in self.allowed_users:
+            await asyncio.sleep(self.failed_login_delay)
+            raise denied
+
+        # IRIS would deny it too; skipping the round trip skips its deliberate ~2 s delay.
+        if password == "":
+            raise denied
+
+        try:
+            accepted = await self.password_verifier.verify(user, password)
+        except AuthUnavailable as exc:
+            # The detail names internal hosts and ports: log it, never send it.
+            logger.error(
+                "Password check could not run",
+                connection_id=self.connection_id,
+                user=user,
+                error=str(exc),
+            )
+            raise AuthRefused(
+                "57P03", "the authentication service is unavailable; try again later"
+            ) from exc
+        if not accepted:
+            raise denied
+
+        logger.info("Password accepted", connection_id=self.connection_id, user=user)
+        await self.send_authentication_ok()
 
     async def parse_startup_message(self):
         """Parse PostgreSQL StartupMessage"""
@@ -860,8 +960,13 @@ class PGWireProtocol:
                 elif part.startswith("r="):
                     self.client_nonce = part[2:]
 
-            if not username or not self.client_nonce:
+            if username is None or not self.client_nonce:
                 raise ValueError("Missing username or client nonce in SCRAM message")
+            # libpq sends an empty `n=` and takes the user from the startup message, as
+            # PostgreSQL does. Refusing it locked out every libpq client.
+            username = username or self.startup_params.get("user") or ""
+            if not username:
+                raise ValueError("No user name in the SCRAM message or the startup packet")
 
             # Generate server nonce and salt
             self.server_nonce = base64.b64encode(secrets.token_bytes(18)).decode("ascii")

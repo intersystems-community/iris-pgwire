@@ -44,6 +44,7 @@ def pgwire_server():
 
     # This will fail until error handling is implemented
     server = PGWireServer(
+        auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
         port=5438,  # Different port for error testing
         enable_translation=True,
         error_strategy="HYBRID",  # Support multiple fallback strategies

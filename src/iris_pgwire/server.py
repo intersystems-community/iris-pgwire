@@ -49,6 +49,14 @@ importlib.reload(iris_pgwire.vector_optimizer)
 from .backend_selector import BackendSelector
 from .integratedml import enhance_iris_executor_with_integratedml
 from .models.backend_config import BackendConfig, BackendType
+from .password_auth import (
+    FAILED_LOGIN_DELAY_SECONDS,
+    AuthConfigError,
+    DbapiPasswordVerifier,
+    EmbeddedPasswordVerifier,
+    resolve_allowed_users,
+    validate_auth_config,
+)
 from .protocol import PGWireProtocol
 
 
@@ -79,7 +87,25 @@ class PGWireServer:
         enable_query_cache: bool = True,
         query_cache_size: int = 1000,
         backend_type: str | None = None,
+        auth_mode: str = "password",
+        allow_plaintext_password: bool = False,
+        allowed_users: str | list[str] | None = None,
     ):
+        # Refuse a configuration that cannot authenticate safely before touching IRIS.
+        # `enable_scram` is accepted only so that asking for it fails loudly: it never verified
+        # the client proof.
+        validate_auth_config(
+            auth_mode=auth_mode,
+            enable_ssl=enable_ssl,
+            allow_plaintext_password=allow_plaintext_password,
+            enable_scram=enable_scram,
+        )
+        self.auth_mode = auth_mode
+        self.allow_plaintext_password = allow_plaintext_password
+        # Who may log in. Meaningful only when passwords are checked; trust has no login users.
+        self.allowed_users = (
+            resolve_allowed_users(allowed_users, iris_username) if auth_mode == "password" else None
+        )
         self.host = host
         self.port = port
         self.enable_ssl = enable_ssl
@@ -132,6 +158,35 @@ class PGWireServer:
 
         # Enhance with IntegratedML support
         self.iris_executor = enhance_iris_executor_with_integratedml(self.iris_executor)
+
+        # The check is made against IRIS the way this backend reaches IRIS.
+        self.password_verifier = None
+        if auth_mode == "password":
+            if backend_type.lower() == "dbapi":
+                self.password_verifier = DbapiPasswordVerifier(iris_host, iris_port, iris_namespace)
+            else:
+                self.password_verifier = EmbeddedPasswordVerifier()
+            if not enable_ssl:
+                if host in ("0.0.0.0", "::", ""):
+                    logger.warning(
+                        "Passwords will be accepted over UNENCRYPTED connections on every "
+                        "network interface (listening on 0.0.0.0, --allow-plaintext-password): "
+                        "anyone who can reach this port can read them. Bind to 127.0.0.1, enable "
+                        "TLS, or put this behind a TLS-terminating proxy on a network you trust.",
+                    )
+                else:
+                    logger.warning(
+                        "Passwords will be accepted over UNENCRYPTED connections "
+                        "(--allow-plaintext-password). Use this only on a network you trust.",
+                        host=host,
+                    )
+        else:
+            logger.warning(
+                "AUTHENTICATION IS DISABLED (--trust): every client is accepted without a "
+                "password and every session runs as the configured IRIS service account. "
+                "For local development only.",
+                service_account=iris_username,
+            )
 
         logger.info(
             "PGWire server initialized",
@@ -212,7 +267,15 @@ class PGWireServer:
         try:
             # Create protocol handler for this connection
             protocol = PGWireProtocol(
-                reader, writer, self.iris_executor, connection_id, self.enable_scram
+                reader,
+                writer,
+                self.iris_executor,
+                connection_id,
+                auth_mode=self.auth_mode,
+                password_verifier=self.password_verifier,
+                allow_plaintext_password=self.allow_plaintext_password,
+                allowed_users=self.allowed_users,
+                failed_login_delay=FAILED_LOGIN_DELAY_SECONDS,
             )
 
             # P0 Phase: Handle SSL probe first
@@ -352,13 +415,22 @@ def _gather_main_config() -> dict[str, Any]:
         "enable_query_cache": os.getenv("PGWIRE_QUERY_CACHE_ENABLED", "true").lower() == "true",
         "query_cache_size": int(os.getenv("PGWIRE_QUERY_CACHE_SIZE", "1000")),
         "debug": os.getenv("PGWIRE_DEBUG", "false").lower() == "true",
+        "auth_mode": os.getenv("PGWIRE_AUTH_MODE", "password").lower(),
+        "allow_plaintext_password": os.getenv("PGWIRE_ALLOW_PLAINTEXT_PASSWORD", "false").lower()
+        == "true",
+        # Comma-separated login users. Unset: only the service account (IRIS_USERNAME).
+        "allowed_users": os.getenv("PGWIRE_ALLOWED_USERS") or None,
+        # Read only so that asking for it fails loudly. Docs once told users to set it, and
+        # nothing read it, so a deployment could believe it had SCRAM and have no authentication.
+        "enable_scram": os.getenv("PGWIRE_ENABLE_SCRAM", "false").lower() == "true",
     }
 
 
-async def main():
+async def main(overrides: dict[str, Any] | None = None):
     """Main entry point for the PGWire server"""
 
     config = _gather_main_config()
+    config.update(overrides or {})
 
     if config["debug"]:
         logging.basicConfig(level=logging.DEBUG)
@@ -379,6 +451,10 @@ async def main():
         query_timeout=config["query_timeout"],
         enable_query_cache=config["enable_query_cache"],
         query_cache_size=config["query_cache_size"],
+        enable_scram=config["enable_scram"],
+        auth_mode=config["auth_mode"],
+        allow_plaintext_password=config["allow_plaintext_password"],
+        allowed_users=config["allowed_users"],
     )
 
     try:
@@ -391,7 +467,38 @@ async def main():
         sys.exit(1)
 
 
-def cli():
+def _parse_args(argv: list[str] | None = None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="iris-pgwire",
+        description="PostgreSQL wire protocol server for InterSystems IRIS. By default clients "
+        "must authenticate with an IRIS username and password, over TLS.",
+    )
+    parser.add_argument(
+        "--trust",
+        action="store_true",
+        help="DISABLE authentication: accept every client with no password. Every session runs "
+        "as the configured IRIS service account. Local development only. "
+        "(env: PGWIRE_AUTH_MODE=trust)",
+    )
+    parser.add_argument(
+        "--allow-plaintext-password",
+        action="store_true",
+        help="Accept passwords over unencrypted connections, for a network you trust. "
+        "(env: PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true)",
+    )
+    parser.add_argument(
+        "--allowed-users",
+        metavar="USER[,USER...]",
+        help="IRIS users allowed to log in. Replaces the default, which is the service account "
+        "alone (IRIS_USERNAME). Statements run as the service account whoever logs in. "
+        "(env: PGWIRE_ALLOWED_USERS)",
+    )
+    return parser.parse_args(argv)
+
+
+def cli(argv: list[str] | None = None):
     """Synchronous entry point for the installed `iris-pgwire` command.
 
     `[project.scripts]` pointed at `main` directly. A console script calls its
@@ -400,7 +507,19 @@ def cli():
     anything. Only `python -m iris_pgwire.server` worked, because that path
     goes through the `asyncio.run` below.
     """
-    asyncio.run(main())
+    args = _parse_args(argv)
+    overrides: dict[str, Any] = {}
+    if args.trust:
+        overrides["auth_mode"] = "trust"
+    if args.allow_plaintext_password:
+        overrides["allow_plaintext_password"] = True
+    if args.allowed_users:
+        overrides["allowed_users"] = args.allowed_users
+    try:
+        asyncio.run(main(overrides))
+    except AuthConfigError as exc:
+        print(f"iris-pgwire: refusing to start: {exc}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

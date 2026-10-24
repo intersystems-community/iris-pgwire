@@ -41,6 +41,7 @@ def pgwire_server():
 
     # This will fail until Document Database support is implemented
     server = PGWireServer(
+        auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
         port=5437,  # Different port for document testing
         enable_translation=True,
         enable_document_filters=True,  # Key feature for document operations

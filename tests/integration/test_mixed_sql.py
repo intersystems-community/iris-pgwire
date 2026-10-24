@@ -40,6 +40,7 @@ def pgwire_server():
 
     # This will fail until hybrid SQL processing is implemented
     server = PGWireServer(
+        auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
         port=5436,  # Different port for mixed SQL testing
         enable_translation=True,
         enable_hybrid_mode=True,  # Key feature for mixed SQL

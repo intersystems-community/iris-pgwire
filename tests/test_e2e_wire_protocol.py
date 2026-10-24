@@ -35,6 +35,7 @@ class TestE2EWireProtocol:
         test_port = 15432
 
         server = PGWireServer(
+            auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
             host="localhost",
             port=test_port,
             iris_host=iris_config["host"],
@@ -192,6 +193,7 @@ class TestE2EWireProtocol:
         test_port = 25432
 
         server = PGWireServer(
+            auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
             host="localhost",
             port=test_port,
             iris_host=iris_config["host"],

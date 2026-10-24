@@ -167,6 +167,7 @@ def isolated_iris_with_pgwire():
         # Start PGWire server ON THE HOST pointing to the container
         server_port = find_free_port(5435, 5499)
         server = PGWireServer(
+            auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
             host="127.0.0.1",
             port=server_port,
             iris_host=config.host,

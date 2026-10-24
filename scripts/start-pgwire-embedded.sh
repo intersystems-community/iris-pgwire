@@ -22,5 +22,13 @@ export IRIS_USERNAME=_SYSTEM
 export IRIS_PASSWORD=SYS
 export IRIS_NAMESPACE=USER
 
+# Authentication: clients must send an IRIS username and password, checked by logging in to
+# IRIS, and the password must travel over TLS. That needs a certificate, so a container with
+# neither one nor the opt-in below refuses to start and says why. Set, in the environment:
+#   PGWIRE_SSL_ENABLED=true PGWIRE_SSL_CERT=... PGWIRE_SSL_KEY=...   (TLS)
+#   PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true   (trusted network only; docker-compose.yml sets it)
+# Or pass --trust as an argument to this script to disable authentication entirely
+# (local development only).
+
 # Run as irisowner user for proper permissions
-exec /usr/irissys/bin/irispython -m iris_pgwire.server
+exec /usr/irissys/bin/irispython -m iris_pgwire.server "$@"

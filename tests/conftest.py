@@ -691,6 +691,7 @@ def pgwire_server(
     # Use PGWIRE_BACKEND_TYPE=dbapi when running outside Docker (no embedded iris.sql)
     backend_type = os.environ.get("PGWIRE_BACKEND_TYPE", "dbapi")
     server = PGWireServer(
+        auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
         host="127.0.0.1",
         port=int(os.environ.get("PGWIRE_PORT", "5434")),
         iris_host=iris_config["host"],

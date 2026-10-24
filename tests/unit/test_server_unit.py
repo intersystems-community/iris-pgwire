@@ -87,6 +87,7 @@ def server(server_module):
             port=15432,
             iris_host="localhost",
             iris_port=1972,
+            auth_mode="trust",  # these tests exercise the server, not authentication
         )
         s.iris_executor = executor
         return s
@@ -415,3 +416,233 @@ class TestStop:
         await server.stop()
 
         fake_server.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Authentication posture of the public constructor
+# ---------------------------------------------------------------------------
+
+
+class TestAuthenticationPosture:
+    """Credentials are required unless the operator says otherwise, in so many words."""
+
+    @pytest.fixture
+    def build(self, server_module):
+        executor = _make_executor()
+
+        def _build(**kwargs):
+            with patch("iris_pgwire.backend_selector.BackendSelector") as selector, patch(
+                "iris_pgwire.server.enhance_iris_executor_with_integratedml",
+                side_effect=lambda x: x,
+            ):
+                selector.return_value.select_backend.return_value = executor
+                return server_module.PGWireServer(
+                    host="127.0.0.1", port=15433, backend_type="dbapi", **kwargs
+                )
+
+        return _build
+
+    def test_the_default_is_password_and_a_bare_server_refuses_to_start(self, build):
+        from iris_pgwire.password_auth import AuthConfigError
+
+        with pytest.raises(AuthConfigError, match="TLS"):
+            build()
+
+    def test_trust_must_be_asked_for(self, build):
+        server = build(auth_mode="trust")
+        assert server.auth_mode == "trust"
+        assert server.password_verifier is None
+
+    def test_password_over_tls_builds_a_verifier_for_the_backend(self, build):
+        from iris_pgwire.password_auth import DbapiPasswordVerifier
+
+        server = build(auth_mode="password", enable_ssl=True)
+        assert isinstance(server.password_verifier, DbapiPasswordVerifier)
+
+    def test_the_plaintext_flag_is_enough_on_its_own(self, build):
+        server = build(allow_plaintext_password=True)
+        assert server.auth_mode == "password"
+        assert server.password_verifier is not None
+
+    def test_the_embedded_backend_gets_the_embedded_verifier(self, server_module):
+        from iris_pgwire.password_auth import EmbeddedPasswordVerifier
+
+        with patch("iris_pgwire.backend_selector.BackendSelector") as selector, patch(
+            "iris_pgwire.server.enhance_iris_executor_with_integratedml",
+            side_effect=lambda x: x,
+        ):
+            selector.return_value.select_backend.return_value = _make_executor()
+            server = server_module.PGWireServer(
+                port=15434, backend_type="embedded", allow_plaintext_password=True
+            )
+        assert isinstance(server.password_verifier, EmbeddedPasswordVerifier)
+
+    def test_scram_is_refused_rather_than_ignored(self, build):
+        from iris_pgwire.password_auth import AuthConfigError
+
+        with pytest.raises(AuthConfigError, match="SCRAM"):
+            build(auth_mode="trust", enable_scram=True)
+
+    async def test_every_connection_is_built_with_the_servers_mode(self, build):
+        """The protocol handler defaults to trust, so the server must always say otherwise."""
+        server = build(allow_plaintext_password=True)
+        seen = {}
+
+        class Handler:
+            backend_pid = 0
+
+            def __init__(self, *args, **kwargs):
+                seen.update(kwargs)
+
+            async def handle_ssl_probe(self, ctx):
+                raise ConnectionAbortedError("stop here")
+
+        reader, writer = MagicMock(), MagicMock()
+        writer.get_extra_info.return_value = ("127.0.0.1", 40000)
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        with patch("iris_pgwire.server.PGWireProtocol", Handler):
+            await server.handle_client(reader, writer)
+
+        assert seen["auth_mode"] == "password"
+        assert seen["password_verifier"] is server.password_verifier
+        assert seen["allow_plaintext_password"] is True
+
+
+class TestAuthenticationEnvironment:
+    def test_defaults_require_credentials(self, server_module, monkeypatch):
+        for var in ("PGWIRE_AUTH_MODE", "PGWIRE_ALLOW_PLAINTEXT_PASSWORD", "PGWIRE_ENABLE_SCRAM"):
+            monkeypatch.delenv(var, raising=False)
+        cfg = server_module._gather_main_config()
+        assert cfg["auth_mode"] == "password"
+        assert cfg["allow_plaintext_password"] is False
+        assert cfg["enable_scram"] is False
+
+    def test_the_environment_can_select_trust_and_plaintext(self, server_module, monkeypatch):
+        monkeypatch.setenv("PGWIRE_AUTH_MODE", "TRUST")
+        monkeypatch.setenv("PGWIRE_ALLOW_PLAINTEXT_PASSWORD", "true")
+        cfg = server_module._gather_main_config()
+        assert cfg["auth_mode"] == "trust"
+        assert cfg["allow_plaintext_password"] is True
+
+    def test_the_old_scram_variable_is_read_so_that_it_can_fail_loudly(
+        self, server_module, monkeypatch
+    ):
+        monkeypatch.setenv("PGWIRE_ENABLE_SCRAM", "true")
+        assert server_module._gather_main_config()["enable_scram"] is True
+
+
+class TestCommandLine:
+    def test_no_flags_means_no_overrides(self, server_module):
+        args = server_module._parse_args([])
+        assert not args.trust and not args.allow_plaintext_password
+
+    def test_trust_flag(self, server_module):
+        assert server_module._parse_args(["--trust"]).trust is True
+
+    def test_plaintext_flag(self, server_module):
+        assert server_module._parse_args(["--allow-plaintext-password"]).allow_plaintext_password
+
+    def test_a_refused_configuration_exits_2_with_the_reason_not_a_traceback(
+        self, server_module, monkeypatch, capsys
+    ):
+        for var in ("PGWIRE_AUTH_MODE", "PGWIRE_ALLOW_PLAINTEXT_PASSWORD", "PGWIRE_SSL_ENABLED"):
+            monkeypatch.delenv(var, raising=False)
+        with patch("iris_pgwire.backend_selector.BackendSelector"), pytest.raises(SystemExit) as e:
+            server_module.cli([])
+        assert e.value.code == 2
+        err = capsys.readouterr().err
+        assert "refusing to start" in err and "--trust" in err
+
+
+class TestAllowedUsersWiring:
+    @pytest.fixture
+    def build(self, server_module):
+        executor = _make_executor()
+
+        def _build(**kwargs):
+            with patch("iris_pgwire.backend_selector.BackendSelector") as selector, patch(
+                "iris_pgwire.server.enhance_iris_executor_with_integratedml",
+                side_effect=lambda x: x,
+            ):
+                selector.return_value.select_backend.return_value = executor
+                return server_module.PGWireServer(
+                    host="127.0.0.1", port=15435, backend_type="dbapi",
+                    allow_plaintext_password=True, **kwargs,
+                )
+
+        return _build
+
+    def test_by_default_only_the_service_account_may_log_in(self, build):
+        server = build(iris_username="_SYSTEM")
+        assert server.allowed_users == frozenset({"_system"})
+
+    def test_an_explicit_list_replaces_it(self, build):
+        server = build(iris_username="_SYSTEM", allowed_users="alice, Bob")
+        assert server.allowed_users == frozenset({"alice", "bob"})
+
+    async def test_every_connection_gets_the_list_and_the_delay(self, build):
+        server = build(allowed_users="alice")
+        seen = {}
+
+        class Handler:
+            backend_pid = 0
+
+            def __init__(self, *args, **kwargs):
+                seen.update(kwargs)
+
+            async def handle_ssl_probe(self, ctx):
+                raise ConnectionAbortedError("stop here")
+
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("127.0.0.1", 40001)
+        writer.wait_closed = AsyncMock()
+        with patch("iris_pgwire.server.PGWireProtocol", Handler):
+            await server.handle_client(MagicMock(), writer)
+        assert seen["allowed_users"] == frozenset({"alice"})
+
+    def test_trust_mode_has_no_list(self, server_module):
+        executor = _make_executor()
+        with patch("iris_pgwire.backend_selector.BackendSelector") as selector, patch(
+            "iris_pgwire.server.enhance_iris_executor_with_integratedml",
+            side_effect=lambda x: x,
+        ):
+            selector.return_value.select_backend.return_value = executor
+            server = server_module.PGWireServer(
+                port=15436, backend_type="dbapi", auth_mode="trust"
+            )
+        assert server.allowed_users is None
+
+    def test_the_environment_and_the_command_line_can_set_it(self, server_module, monkeypatch):
+        monkeypatch.setenv("PGWIRE_ALLOWED_USERS", "alice,bob")
+        assert server_module._gather_main_config()["allowed_users"] == "alice,bob"
+        assert server_module._parse_args(["--allowed-users", "carol"]).allowed_users == "carol"
+
+
+class TestPlaintextWarning:
+    """The plaintext flag is an operator's explicit choice, so it is allowed. Combined with the
+    default bind on every interface it is a password listener open to the whole network, and the
+    warning has to say that."""
+
+    def _warnings(self, server_module, host):
+        from structlog.testing import capture_logs
+
+        with capture_logs() as logs, patch(
+            "iris_pgwire.backend_selector.BackendSelector"
+        ) as selector, patch(
+            "iris_pgwire.server.enhance_iris_executor_with_integratedml",
+            side_effect=lambda x: x,
+        ):
+            selector.return_value.select_backend.return_value = _make_executor()
+            server_module.PGWireServer(
+                host=host, port=15437, backend_type="dbapi", allow_plaintext_password=True
+            )
+        return [e["event"] for e in logs if e["log_level"] == "warning"]
+
+    def test_all_interfaces_gets_the_stronger_warning(self, server_module):
+        text = " ".join(self._warnings(server_module, "0.0.0.0"))
+        assert "0.0.0.0" in text and "every network interface" in text
+
+    def test_loopback_gets_the_plain_warning(self, server_module):
+        text = " ".join(self._warnings(server_module, "127.0.0.1"))
+        assert "UNENCRYPTED" in text and "every network interface" not in text

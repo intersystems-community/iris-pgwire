@@ -571,6 +571,7 @@ async def start_demo_server():
         from iris_pgwire.server import PGWireServer
 
         server = PGWireServer(
+            auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
             host="127.0.0.1",
             port=5432,
             iris_host="127.0.0.1",

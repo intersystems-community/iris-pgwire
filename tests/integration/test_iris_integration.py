@@ -57,6 +57,7 @@ def pgwire_server_with_params(iris_server):
         pytest.skip("PGWire server not implemented yet")
 
     server = PGWireServer(
+        auth_mode="trust",  # these tests/examples exercise something else; see docs for password auth
         port=5435,  # Different port for parameter testing
         enable_translation=True,
         enable_parameter_rewriting=True,

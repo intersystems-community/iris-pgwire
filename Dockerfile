@@ -38,6 +38,11 @@ ENV IRIS_PASSWORD=SYS
 ENV IRIS_NAMESPACE=USER
 ENV PGWIRE_SSL_ENABLED=false
 ENV PGWIRE_DEBUG=false
+# Clients must authenticate with an IRIS username and password, over TLS. This image sets no
+# certificate, so it will not start until you choose: mount a certificate and set
+# PGWIRE_SSL_ENABLED=true with PGWIRE_SSL_CERT and PGWIRE_SSL_KEY; or set
+# PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true behind a TLS-terminating proxy or on a trusted network;
+# or run with --trust (PGWIRE_AUTH_MODE=trust) for local development with no authentication.
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

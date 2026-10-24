@@ -19,6 +19,11 @@ services:
       - PGWIRE_PORT=5432
       - PGWIRE_SSL_ENABLED=false
       - PGWIRE_DEBUG=false
+      # Clients must authenticate with an IRIS username and password. This development container
+      # is published on localhost only and has no TLS certificate, so it accepts the password
+      # over a plain connection. For anything reachable from another machine, enable TLS
+      # (PGWIRE_SSL_ENABLED=true plus PGWIRE_SSL_CERT/PGWIRE_SSL_KEY) and delete this line.
+      - PGWIRE_ALLOW_PLAINTEXT_PASSWORD=true
     ports:
       - "2972:1972"   # IRIS SQL port (mapped to 2972 to avoid conflicts)
       - "52776:52773" # Management Portal (mapped to avoid conflicts)
