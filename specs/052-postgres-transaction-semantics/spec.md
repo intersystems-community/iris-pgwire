@@ -126,8 +126,7 @@ reaches 1000 of 1000, and refused shapes get the specified SQLSTATE.
    same as without the clause.
 2. **Given** such a statement with `NOWAIT`, **When** a selected row is locked by another session, **Then** it fails at
    once with `55P03` (`lock_not_available`).
-3. **Given** `FOR UPDATE` on a shape PGWire cannot lock exactly (a join, a subquery in `FROM`, `GROUP BY`, a `LIMIT`
-   with no deterministic order, a view), **When** strict mode is on, **Then** it is refused with `0A000` and a message
+3. **Given** `FOR UPDATE` on a shape PGWire cannot lock exactly (a join, a subquery in `FROM`, `GROUP BY`, a `LIMIT` or `OFFSET`, a view), **When** strict mode is on, **Then** it is refused with `0A000` and a message
    naming the shape and the workaround.
 4. **Given** `SKIP LOCKED`, `FOR SHARE`, `FOR NO KEY UPDATE` or `FOR KEY SHARE`, **When** strict mode is on, **Then**
    it is refused with `0A000` (today `42601`, a syntax error).
@@ -215,6 +214,9 @@ before the lock is released, and its write is not applied.
 3. **Given** a CancelRequest for a session with no statement running, **When** it arrives, **Then** nothing happens, as
    on PostgreSQL.
 4. **Given** a CancelRequest with a wrong secret key, **When** it arrives, **Then** it is ignored.
+5. **Given** a statement cancelled inside an explicit transaction, **When** the client sends its next statement,
+   **Then** the session is outside any transaction (ReadyForQuery `I`). PostgreSQL would report `E` and keep the
+   transaction open; this deviation is pinned in the suite with its reason (see Assumptions).
 
 ---
 
@@ -286,8 +288,9 @@ from `KNOWN_LIMITATIONS.md`, and every claim in it is backed by a suite check.
 - **`FOR UPDATE OF table`** on a single-table query: treated as `FOR UPDATE`; with several tables, refused like a join.
 - **Lock escalation**: a touch-update of more than IRIS's lock-escalation threshold (1000 rows by default) escalates to
   a table lock. Documented, not prevented; measuring it needs an enterprise-key lab (out of scope).
-- **The touch-update's side effects**: it fires `UPDATE` triggers and bumps a `ROWVERSION` column. Documented as the
-  emulation's known gaps; a table with an `UPDATE` trigger is a shape the emulation refuses in strict mode.
+- **The touch-update's side effects**: it fires `UPDATE` triggers and bumps a `ROWVERSION` column. A table with an `UPDATE` trigger or a
+  `ROWVERSION` column is therefore a shape the emulation refuses in strict mode, because the emulation would not be
+  exact there.
 - **Embedded backend**: none of this applies. It stays documented as single-client; its guard against concurrent
   transactions is spec 051 task T088.
 
@@ -302,6 +305,9 @@ from `KNOWN_LIMITATIONS.md`, and every claim in it is backed by a suite check.
   it to IRIS.
 - **FR-002**: `COMMIT` in an aborted transaction MUST roll it back and reply with the command tag `ROLLBACK`.
 - **FR-003**: ReadyForQuery MUST report `E` while a transaction is aborted, on both protocols.
+- **FR-003a**: After an error while handling an extended-protocol message (Parse, Bind, Describe, Execute, Close),
+  the server MUST discard every message up to the next Sync, then answer Sync with ReadyForQuery, as PostgreSQL does.
+  This replaces spec 049 FR-005.
 - **FR-004**: The abort rule MUST be always on; `PGWIRE_TXN_COMPAT=permissive` MUST NOT disable it.
 
 #### Savepoints (US2)
@@ -312,6 +318,8 @@ from `KNOWN_LIMITATIONS.md`, and every claim in it is backed by a suite check.
 - **FR-006**: `RELEASE` MUST succeed without being sent to IRIS (which has no `RELEASE`).
 - **FR-007**: Rolling back to or releasing a name not on the stack MUST be refused with `3B001` and MUST abort the
   transaction.
+- **FR-007a**: `SAVEPOINT`, `ROLLBACK TO` and `RELEASE` outside an explicit transaction MUST be refused with `25P01`
+  (`no_active_sql_transaction`), as PostgreSQL does.
 - **FR-008**: Savepoint names MUST follow PostgreSQL's identifier rules for case and quoting.
 - **FR-008a**: IRIS allows 254 savepoints per transaction, counting released ones (each raises `$TLEVEL`; the 255th
   fails with SQLCODE -400, after which the transaction's work is lost and `COMMIT` still succeeds; measured
