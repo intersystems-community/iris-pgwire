@@ -440,3 +440,34 @@ class TestWiredIntoTheProtocol:
                 assert (
                     "classify_iris_error(" in body
                 ), f"{name} still reports a fixed SQLSTATE for every failure"
+
+
+class TestSpec052States:
+    """The SQLSTATEs spec 052 emits, and the lock-timeout context (FR-019)."""
+
+    LOCK_110 = "[SQLCODE: <-110>:<Unable to acquire lock for UPDATE of table 'T' on row with RowID = '1'>]"
+    LOCK_114 = "[SQLCODE: <-114>:<Unable to acquire shared lock on table T for RowID value: 1>]"
+
+    @pytest.mark.parametrize("message", [LOCK_110, LOCK_114])
+    def test_a_lock_timeout_the_client_set_is_lock_not_available(self, message):
+        assert classify_iris_error(message, lock_timeout_set=True) == (
+            "55P03",
+            "lock_not_available",
+        )
+
+    @pytest.mark.parametrize("message", [LOCK_110, LOCK_114])
+    def test_the_default_wait_stays_serialization_failure(self, message):
+        assert classify_iris_error(message) == ("40001", "serialization_failure")
+
+    def test_the_flag_changes_nothing_else(self):
+        message = "[SQLCODE: <-119>:<UNIQUE or PRIMARY KEY Constraint failed>]"
+        assert classify_iris_error(message, lock_timeout_set=True)[0] == "23505"
+
+    def test_the_new_states_are_named(self):
+        from iris_pgwire.sql_translator import sqlstate
+
+        assert sqlstate.IN_FAILED_SQL_TRANSACTION == ("25P02", "in_failed_sql_transaction")
+        assert sqlstate.NO_ACTIVE_SQL_TRANSACTION == ("25P01", "no_active_sql_transaction")
+        assert sqlstate.PROGRAM_LIMIT_EXCEEDED == ("54000", "program_limit_exceeded")
+        assert sqlstate.QUERY_CANCELED == ("57014", "query_canceled")
+        assert sqlstate.INVALID_SAVEPOINT == ("3B001", "invalid_savepoint_specification")

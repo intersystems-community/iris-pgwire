@@ -43,6 +43,9 @@ class Outcome:
     # placed before or after another session's COMMIT.
     started: float = 0.0
     finished: float = 0.0
+    # The connection's transaction status after the statement, from ReadyForQuery: IDLE, INTRANS
+    # or INERROR (psycopg's TransactionStatus names).
+    status_after: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -319,14 +322,17 @@ def verdict_for(case_name: str, trace: Trace) -> str:
     A run with no anomaly and no error prevented it. A run with no anomaly whose only errors are
     retryable conflicts prevented it by refusing work; "by timeout" when one of them took IRIS's
     lock timeout to arrive. Any other error means the script did not run as written, and the
-    verdict names the SQLSTATE so the cause is visible in the table.
+    verdict names the SQLSTATE so the cause is visible in the table. A 25P02 never counts on its
+    own: it only follows another error in its transaction.
     """
     if CASES[case_name].anomaly(trace):
         return "anomaly"
     errors = [r.outcome for r in trace.values() if not r.outcome.ok]
     if not errors:
         return "prevented"
-    other = [e for e in errors if e.sqlstate not in RETRYABLE]
+    # A 25P02 is the aborted-transaction rule (spec 052 US1): it follows an earlier error in the
+    # same transaction and is that error's consequence, so the earlier error decides the verdict.
+    other = [e for e in errors if e.sqlstate not in RETRYABLE and e.sqlstate != "25P02"]
     if other:
         return f"error:{other[0].sqlstate}"
     if any(e.elapsed >= TIMEOUT_SECONDS for e in errors):

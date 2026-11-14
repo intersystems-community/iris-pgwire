@@ -20,6 +20,7 @@ import structlog
 from . import row_limit
 from ._isolation import IsolationMixin
 from ._noop_cursor import NoopCursor
+from ._savepoint_mixin import SavepointMixin
 from .catalog import CatalogRouter  # Feature: Consolidated catalog emulation
 from .conversions import (
     BulkInsertJob,
@@ -188,7 +189,7 @@ class MockResult:
         pass
 
 
-class IRISExecutor(IsolationMixin):
+class IRISExecutor(SavepointMixin, IsolationMixin):
     """
     IRIS SQL Execution Handler
 
@@ -1223,6 +1224,12 @@ class IRISExecutor(IsolationMixin):
             # rather than only in protocol.py because the extended protocol
             # (psycopg3, asyncpg, JDBC) reaches this method without passing
             # through the simple-query interceptors.
+            # Savepoints first: PGWire keeps the stack itself (spec 052 US2).
+            if not kwargs.get("_skip_savepoints"):
+                savepoint_result = await self._handle_savepoint_statement(sql, session_id, **kwargs)
+                if savepoint_result is not None:
+                    return savepoint_result
+
             if not kwargs.get("_skip_isolation"):
                 isolation_result = await self._handle_isolation_statement(sql, session_id, **kwargs)
                 if isolation_result is not None:
@@ -3709,6 +3716,7 @@ class IRISExecutor(IsolationMixin):
                 del self.session_namespaces[session_id]
 
             self.forget_isolation_level(session_id)
+            self.forget_savepoints(session_id)
 
             conn = self.session_connections.pop(session_id, None)
             if conn:

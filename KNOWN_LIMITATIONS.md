@@ -6,6 +6,10 @@ This document catalogs known limitations, workarounds, and behavior differences 
 
 **Security Note** _(corrected 2026-10-24)_: Clients authenticate with their IRIS username and password, which the server checks by logging in to IRIS. The password is sent in the clear, so TLS is required unless the operator opts out (`--allow-plaintext-password`, or `--trust` to disable authentication). Earlier versions of this document described OAuth 2.0, IRIS Wallet and SCRAM-SHA-256 as available and the password as never sent in plain text. None of that was true: no version authenticated by any of those methods, and until 2026-10-24 no version authenticated at all. See [Authentication](README.md#authentication). Authentication does not change who a session runs as: every authenticated user has the privileges of the service account, so by default only the service account may log in (`PGWIRE_ALLOWED_USERS` lists others).
 
+**Transactions:** what a PostgreSQL application can rely on (aborted transactions, savepoints, and, as spec 052
+lands, row locks, ON CONFLICT, timeouts and cancel), each row backed by an isolation-suite check, is in
+[`docs/POSTGRES_APP_COMPATIBILITY.md`](docs/POSTGRES_APP_COMPATIBILITY.md).
+
 **These limitations are pinned by tests.** The divergences that cannot be fixed at the wire layer are asserted rather than only described, so a change in one cannot go unnoticed and leave this document quietly wrong:
 
 ```bash

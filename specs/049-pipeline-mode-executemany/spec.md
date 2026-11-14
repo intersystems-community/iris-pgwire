@@ -54,7 +54,10 @@ A developer uses psycopg3's explicit pipeline context (`with conn.pipeline():`) 
 - **FR-002**: Server MUST strip ON CONFLICT clauses from batched SQL and treat per-row duplicate key errors as silent skips when ON CONFLICT DO NOTHING was specified.
 - **FR-003**: Server MUST handle pipeline Sync by flushing the DML batch, sending CommandComplete for each buffered statement, then sending ReadyForQuery.
 - **FR-004**: Server MUST handle Flush without sending ReadyForQuery (Flush drains the write buffer; Sync terminates the pipeline cycle).
-- **FR-005**: In pipeline mode, a statement error SHOULD NOT abort subsequent statements. _(Aspirational; full per-statement error isolation deferred to a follow-on spec.)_
+- **FR-005**: ~~In pipeline mode, a statement error SHOULD NOT abort subsequent statements.~~ **Replaced by spec 052
+  FR-003a (2026-11-14):** after an error, the server discards messages up to the next Sync, as PostgreSQL does, and
+  an open transaction is aborted. Per-statement isolation is not PostgreSQL's behaviour and would let a pipeline
+  commit around a failed statement.
 - **FR-006**: Server MUST NOT batch DDL statements — execute immediately and synchronously.
 - **FR-007**: Server MUST correctly report row counts in CommandComplete tags (`INSERT 0 N` where N is rows successfully inserted).
 

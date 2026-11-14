@@ -28,6 +28,19 @@ class BackendType(str, Enum):
     EMBEDDED = "embedded"
 
 
+DEFAULT_ISOLATION_CHOICES = ("read committed", "read uncommitted")
+TXN_COMPAT_CHOICES = ("strict", "permissive")
+
+
+def _one_of(value: str, choices: tuple[str, ...], setting: str) -> str:
+    """Normalise case and spacing; refuse anything else, naming what is accepted."""
+    normalised = " ".join(str(value).split()).lower()
+    if normalised not in choices:
+        accepted = ", ".join(f"'{c}'" for c in choices)
+        raise ValueError(f"{setting} must be one of {accepted}, not {value!r}")
+    return normalised
+
+
 class BackendConfig(BaseModel):
     """
     Configuration for backend selection and connection parameters.
@@ -98,9 +111,36 @@ class BackendConfig(BaseModel):
         description="If True, prevents secondary metadata connections. Recommended for strict single-connection clients.",
     )
 
+    # Transaction behaviour (spec 052)
+    default_isolation: str = Field(
+        default="read committed",
+        description=(
+            "Isolation level a new session starts at: 'read committed' (PostgreSQL's default) or "
+            "'read uncommitted' (IRIS's, and PGWire's before 2.1). Set via PGWIRE_DEFAULT_ISOLATION."
+        ),
+    )
+    txn_compat: str = Field(
+        default="strict",
+        description=(
+            "'strict' refuses statement shapes PGWire cannot run exactly as PostgreSQL would; "
+            "'permissive' runs them as 2.0 did, with a warning per shape. Never affects the "
+            "aborted-transaction rule. Set via PGWIRE_TXN_COMPAT."
+        ),
+    )
+
     # Observability Configuration
     enable_otel: bool = Field(default=True, description="Enable OpenTelemetry instrumentation")
     otel_endpoint: str = Field(default="http://localhost:4318", description="OTLP endpoint URL")
+
+    @field_validator("default_isolation")
+    @classmethod
+    def validate_default_isolation(cls, v: str) -> str:
+        return _one_of(v, DEFAULT_ISOLATION_CHOICES, "PGWIRE_DEFAULT_ISOLATION")
+
+    @field_validator("txn_compat")
+    @classmethod
+    def validate_txn_compat(cls, v: str) -> str:
+        return _one_of(v, TXN_COMPAT_CHOICES, "PGWIRE_TXN_COMPAT")
 
     @field_validator("otel_endpoint")
     @classmethod
@@ -193,6 +233,8 @@ class BackendConfig(BaseModel):
         - PGWIRE_POOL_RECYCLE → pool_recycle
         - PGWIRE_ENABLE_OTEL → enable_otel
         - PGWIRE_OTEL_ENDPOINT → otel_endpoint
+        - PGWIRE_DEFAULT_ISOLATION → default_isolation
+        - PGWIRE_TXN_COMPAT → txn_compat
 
         Returns:
             Validated BackendConfig instance
@@ -218,6 +260,9 @@ class BackendConfig(BaseModel):
             ("PGWIRE_POOL_TIMEOUT", "pool_timeout", int),
             ("PGWIRE_POOL_RECYCLE", "pool_recycle", int),
             ("PGWIRE_QUERY_TIMEOUT", "query_timeout", float),
+            # Transaction behaviour (spec 052)
+            ("PGWIRE_DEFAULT_ISOLATION", "default_isolation", None),
+            ("PGWIRE_TXN_COMPAT", "txn_compat", None),
             # Observability
             ("PGWIRE_ENABLE_OTEL", "enable_otel", _as_bool),
             ("PGWIRE_OTEL_ENDPOINT", "otel_endpoint", None),

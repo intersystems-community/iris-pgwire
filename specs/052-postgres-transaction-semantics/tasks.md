@@ -33,16 +33,16 @@ commit credits AI tooling.
 
 **Purpose**: let the suite run against a server with non-default settings, which US3, US4 and US7 need.
 
-- [ ] T001 Add `ISOLATION_SERVER_ENV` and `ISOLATION_MARK` to the `isolation` target in `Makefile`: the env assignments
+- [X] T001 Add `ISOLATION_SERVER_ENV` and `ISOLATION_MARK` to the `isolation` target in `Makefile`: the env assignments
       are prefixed to the server's command line, the mark is passed as `-m "isolation and $(ISOLATION_MARK)"` when set.
       Add `isolation-permissive` (`PGWIRE_TXN_COMPAT=permissive`, mark `permissive`) and `isolation-read-uncommitted`
       (`PGWIRE_DEFAULT_ISOLATION="read uncommitted"`, mark `default_isolation`) targets that call it. Default
       `make isolation` behaviour unchanged. For the two extra targets, pytest's exit 5 (no tests selected) counts as
       success.
-- [ ] T002 Register the `permissive` and `default_isolation` markers in `pyproject.toml` (`[tool.pytest.ini_options]
+- [X] T002 Register the `permissive` and `default_isolation` markers in `pytest.ini` (the effective config; `pyproject.toml`'s `[tool.pytest.ini_options]` is shadowed by it) (was: `pyproject.toml` `[tool.pytest.ini_options]
   markers`) and make `tests/e2e/isolation/conftest.py` skip tests carrying either marker unless
       `ISOLATION_MARK` names it (skip reason: "runs under make isolation-permissive" or "...-read-uncommitted"), so the default run never needs a second server.
-- [ ] T003 Record the ReadyForQuery status per step for the US1/US2 scripts: extend `run_statement` in
+- [X] T003 Record the ReadyForQuery status per step for the US1/US2 scripts: extend `run_statement` in
       `tests/e2e/isolation/harness.py` to capture `conn.info.transaction_status` after each statement into `Outcome`
       (new field `status_after`, values `IDLE`/`INTRANS`/`INERROR`), keeping every existing caller working.
 
@@ -55,17 +55,17 @@ commit credits AI tooling.
 
 **Purpose**: the two server settings every later story reads, and the SQLSTATEs the stories emit.
 
-- [ ] T004 [P] Unit tests in `tests/unit/test_backend_config_txn_settings.py`: `BackendConfig` gets `default_isolation`
+- [X] T004 [P] Unit tests in `tests/unit/test_backend_config_txn_settings.py`: `BackendConfig` gets `default_isolation`
       (env `PGWIRE_DEFAULT_ISOLATION`, default `read committed`, accepts `read committed` / `read uncommitted`, case and
       whitespace normalised) and `txn_compat` (env `PGWIRE_TXN_COMPAT`, default `strict`, accepts `strict` /
       `permissive`); any other value raises a validation error whose message lists the accepted values.
-- [ ] T005 [P] Unit tests in `tests/unit/test_sqlstate_classification.py` (append): `classify_iris_error` returns
+- [X] T005 [P] Unit tests in `tests/unit/test_sqlstate_classification.py` (append): `classify_iris_error` returns
       `55P03` (`lock_not_available`) for -110/-114 when called with `lock_timeout_set=True` and `40001` otherwise; the
       module exposes constants for `25P02` (`in_failed_sql_transaction`), `25P01` (`no_active_sql_transaction`),
       `54000` (`program_limit_exceeded`), `57014` (`query_canceled`).
-- [ ] T006 Implement T004 in `src/iris_pgwire/models/backend_config.py`: two fields, validators, and two rows in the
+- [X] T006 Implement T004 in `src/iris_pgwire/models/backend_config.py`: two fields, validators, and two rows in the
       env-var table (around line 208). Do not wire them anywhere yet.
-- [ ] T007 Implement T005 in `src/iris_pgwire/sql_translator/sqlstate.py`: the constants and a keyword-only
+- [X] T007 Implement T005 in `src/iris_pgwire/sql_translator/sqlstate.py`: the constants and a keyword-only
       `lock_timeout_set: bool = False` parameter on `classify_iris_error`.
 
 **Checkpoint**: unit tests green; `make isolation` unchanged (110 passed). Gate.
@@ -78,45 +78,45 @@ commit credits AI tooling.
 
 ### Tests first
 
-- [ ] T008 [P] [US1] Unit tests in `tests/unit/test_transaction_status.py` for a pure status machine
+- [X] T008 [P] [US1] Unit tests in `tests/unit/test_transaction_status.py` for a pure status machine
       (`src/iris_pgwire/transaction_status.py`, data-model.md "Transaction status"): every row of the transitions table,
       including `E` + `COMMIT` → `I` with tag `ROLLBACK`, `E` + `ROLLBACK TO` known → `T`, `E` + other → refuse with
       `25P02`, `I` + error → `I`; which statements are "transaction exit" statements (every `_COMMIT_FORMS` /
       `_ROLLBACK_FORMS` spelling in `protocol.py:1207`, `ROLLBACK TO [SAVEPOINT] x`, with comments and a trailing `;`).
-- [ ] T009 [US1] Suite checks in `tests/e2e/isolation/test_failed_transaction.py`, both protocols: after a duplicate
+- [X] T009 [US1] Suite checks in `tests/e2e/isolation/test_failed_transaction.py`, both protocols: after a duplicate
       key in a transaction, the next INSERT gets `25P02` with status `INERROR`; `COMMIT` replies `ROLLBACK`, status
       `IDLE`, table empty (replace the expectation of `error_then_commit` with PostgreSQL's steps
       `BEGIN, INSERT, 23505, 25P02, ROLLBACK` and statuses); `ROLLBACK` recovers; `ROLLBACK TO` a savepoint taken before
       the error recovers and keeps the earlier row; in autocommit a failed statement changes nothing (FR-001 scenario 5).
-- [ ] T010 [US1] Suite check in `tests/e2e/isolation/test_failed_transaction.py`: a psycopg pipeline
+- [X] T010 [US1] Suite check in `tests/e2e/isolation/test_failed_transaction.py`: a psycopg pipeline
       (`with conn.pipeline():`) inside a transaction sends INSERT 1, a duplicate INSERT 1, INSERT 2, then Sync: the
       third gets no result (discarded), the transaction is aborted, and the table is empty after COMMIT (FR-003a,
       research R3).
-- [ ] T011 [US1] Suite check (SC-002): 100 trials of `BEGIN; INSERT; failing INSERT; INSERT; COMMIT` on each protocol
+- [X] T011 [US1] Suite check (SC-002): 100 trials of `BEGIN; INSERT; failing INSERT; INSERT; COMMIT` on each protocol
       commit 0 rows, in `tests/e2e/isolation/test_failed_transaction.py`.
-- [ ] T012 [US1] Also mark the T009 and T010 checks `permissive` (a second parametrisation, not a copy), so
+- [X] T012 [US1] Also mark the T009 and T010 checks `permissive` (a second parametrisation, not a copy), so
       `make isolation-permissive` shows the abort rule unchanged under permissive mode (FR-004).
-- [ ] T013 [US1] Run `make isolation`; confirm T009–T011 fail on PGWire and pass on PostgreSQL. Record the failing
+- [X] T013 [US1] Run `make isolation`; confirm T009–T011 fail on PGWire and pass on PostgreSQL. Record the failing
       output in the task's commit message.
 
 ### Implementation
 
-- [ ] T014 [US1] Implement `src/iris_pgwire/transaction_status.py` until T008 passes.
-- [ ] T015 [US1] In `src/iris_pgwire/protocol.py`: `send_error_response` (line 891) sets `transaction_status` to
+- [X] T014 [US1] Implement `src/iris_pgwire/transaction_status.py` until T008 passes.
+- [X] T015 [US1] In `src/iris_pgwire/protocol.py`: `send_error_response` (line 891) sets `transaction_status` to
       `STATUS_FAILED_TRANSACTION` when severity is `ERROR` and the status is `STATUS_IN_TRANSACTION` (research R1).
-- [ ] T016 [US1] In `src/iris_pgwire/protocol.py`: gate in `_handle_single_statement` (line 1062) before
+- [X] T016 [US1] In `src/iris_pgwire/protocol.py`: gate in `_handle_single_statement` (line 1062) before
       `_maybe_handle_transaction_command`, and in `handle_parse_message` / `handle_execute_message`: in state `E`, a
       statement that is not a transaction exit is answered with `25P02` ("current transaction is aborted, commands
       ignored until end of transaction block") and never reaches the executor.
-- [ ] T017 [US1] In `src/iris_pgwire/protocol.py` `_maybe_handle_transaction_command` (line 1217) and the extended
+- [X] T017 [US1] In `src/iris_pgwire/protocol.py` `_maybe_handle_transaction_command` (line 1217) and the extended
       path's transaction handling (around line 3148): `COMMIT` forms in state `E` call
       `iris_executor.rollback_transaction()` and reply `ROLLBACK` (research R2).
-- [ ] T018 [US1] In `src/iris_pgwire/protocol.py`: `_discard_until_sync` (data-model.md): set on an error sent while
+- [X] T018 [US1] In `src/iris_pgwire/protocol.py`: `_discard_until_sync` (data-model.md): set on an error sent while
       handling Parse/Bind/Describe/Execute/Close; `message_loop` drops every message but Sync while set;
       `handle_sync_message` (line 3239) clears it. Flush any buffered batch (`flush_batch`) is skipped while discarding.
-- [ ] T019 [US1] Amend `specs/049-pipeline-mode-executemany/spec.md` FR-005: replaced by spec 052 research R3
+- [X] T019 [US1] Amend `specs/049-pipeline-mode-executemany/spec.md` FR-005: replaced by spec 052 research R3
       (discard until Sync, as PostgreSQL); leave the old text struck through with the reason.
-- [ ] T020 [US1] Remove the `failed_transaction/error_then_commit/*` pins from
+- [X] T020 [US1] Remove the `failed_transaction/error_then_commit/*` pins from
       `tests/e2e/isolation/known_differences.py` and update the E5 subsection of
       `docs/investigations/mvcc-apps-on-iris-pgwire.md` ("fixed in 2.1, spec 052 US1").
 
@@ -130,49 +130,49 @@ commit credits AI tooling.
 
 ### Tests first
 
-- [ ] T021 [P] [US2] Unit tests in `tests/unit/test_savepoint_stack.py` for `src/iris_pgwire/savepoints.py`
+- [X] T021 [P] [US2] Unit tests in `tests/unit/test_savepoint_stack.py` for `src/iris_pgwire/savepoints.py`
       (data-model.md "Savepoint stack"): push/rollback-to/release return the IRIS statements to send; most recent
       duplicate wins; rolling back to `a` drops `b`; release drops the named and later entries and sends nothing;
       unknown name → `3B001`; the 255th IRIS level (including re-establishments and released savepoints) → `54000`;
       identifier rules (`"S1"` ≠ `s1`, `S1` = `s1`, doubled quotes); parsing of every spelling (`ROLLBACK TO x`,
       `ROLLBACK TO SAVEPOINT x`, `ROLLBACK WORK TO`, `RELEASE x`, `RELEASE SAVEPOINT x`, quoted, trailing `;`).
-- [ ] T022 [US2] Suite checks in `tests/e2e/isolation/test_savepoints.py`: rollback-to twice keeps the savepoint (PG:
+- [X] T022 [US2] Suite checks in `tests/e2e/isolation/test_savepoints.py`: rollback-to twice keeps the savepoint (PG:
       rows [1]); rollback to `a` drops `b` (second gets `3B001`); `RELEASE` of an existing / after-rollback savepoint
       succeeds; unknown name → `3B001`, then `COMMIT` replies `ROLLBACK`, table empty; savepoint outside a transaction →
       `25P01` (FR-007a); duplicate names; a savepoint established, then a failure, then `ROLLBACK TO` it recovers.
-- [ ] T023 [US2] Suite checks in `tests/e2e/isolation/test_savepoints.py` (SC-004): psycopg nested `transaction()`
+- [X] T023 [US2] Suite checks in `tests/e2e/isolation/test_savepoints.py` (SC-004): psycopg nested `transaction()`
       blocks three deep, every combination of normal exit and exception at each level (8 cases), rows equal to
       PostgreSQL's; SQLAlchemy `Session.begin_nested()` normal exit and rollback (psycopg dialect); Django-style quoted
       `SAVEPOINT "s1_x1"` / `RELEASE SAVEPOINT "s1_x1"` / `ROLLBACK TO SAVEPOINT "s1_x1"` scripts.
-- [ ] T024 [US2] Suite check in `tests/e2e/isolation/test_savepoints.py`: 300 `SAVEPOINT`/`RELEASE` pairs in one
+- [X] T024 [US2] Suite check in `tests/e2e/isolation/test_savepoints.py`: 300 `SAVEPOINT`/`RELEASE` pairs in one
       transaction. PostgreSQL: all succeed. PGWire: the 255th `SAVEPOINT` gets `54000`, status `INERROR`, `COMMIT`
       replies `ROLLBACK`, table empty. Pin that outcome with the reason (IRIS limit, research R4, spec FR-008a).
-- [ ] T025 [US2] Also mark the T022 checks `permissive`, so the savepoint stack is shown unchanged under permissive
+- [X] T025 [US2] Also mark the T022 checks `permissive`, so the savepoint stack is shown unchanged under permissive
       mode (FR-004).
-- [ ] T026 [US2] Run `make isolation`; confirm T022–T023 fail on PGWire and pass on PostgreSQL.
+- [X] T026 [US2] Run `make isolation`; confirm T022–T023 fail on PGWire and pass on PostgreSQL.
 
 ### Implementation
 
-- [ ] T027 [US2] Implement `src/iris_pgwire/savepoints.py` until T021 passes.
-- [ ] T028 [US2] Create `src/iris_pgwire/_savepoint_mixin.py`: a mixin like `IsolationMixin` (`_isolation.py`) that
+- [X] T027 [US2] Implement `src/iris_pgwire/savepoints.py` until T021 passes.
+- [X] T028 [US2] Create `src/iris_pgwire/_savepoint_mixin.py`: a mixin like `IsolationMixin` (`_isolation.py`) that
       intercepts `SAVEPOINT` / `ROLLBACK TO` / `RELEASE` in `execute_query`, keeps one stack per session, sends the
       statements the stack returns (with `_skip_isolation=True`), and returns the command tag (`SAVEPOINT`,
       `ROLLBACK`, `RELEASE`) or the error with its SQLSTATE; `25P01` outside a transaction. Clear the stack on
       transaction end (hook the same boundary `_note_transaction_boundary` sees) and in `forget_isolation_level`'s
       caller on session close.
-- [ ] T029 [US2] Wire the mixin into `src/iris_pgwire/dbapi_executor.py` (`class DBAPIExecutor(SavepointMixin,
+- [X] T029 [US2] Wire the mixin into `src/iris_pgwire/dbapi_executor.py` (`class DBAPIExecutor(SavepointMixin,
   IsolationMixin)`, intercept before `rewrite_savepoint_verbs`) and `src/iris_pgwire/iris_executor.py` (same
       order), so both backends share it (constitution IV).
-- [ ] T030 [US2] Replace `_SessionIsolation.savepoint_depth` in `src/iris_pgwire/_isolation.py` with the stack's
+- [X] T030 [US2] Replace `_SessionIsolation.savepoint_depth` in `src/iris_pgwire/_isolation.py` with the stack's
       depth; delete `parse_savepoint_change`'s now-unused callers in `sql_translator/isolation.py` only if
       `tests/unit/test_isolation_mid_transaction.py` still passes unchanged.
-- [ ] T031 [US2] In `src/iris_pgwire/protocol.py`: a successful `ROLLBACK TO` in state `E` sets the status back to
+- [X] T031 [US2] In `src/iris_pgwire/protocol.py`: a successful `ROLLBACK TO` in state `E` sets the status back to
       `STATUS_IN_TRANSACTION` (data-model.md transitions).
-- [ ] T032 [US2] Remove the `savepoints/*` pins (rollback_to_unknown, rollback_to_unknown_with_savepoint,
+- [X] T032 [US2] Remove the `savepoints/*` pins (rollback_to_unknown, rollback_to_unknown_with_savepoint,
       rollback_to_twice, release/\*) from `tests/e2e/isolation/known_differences.py`; keep only T024's limit pin. Update
       the E4 table and "2.0.1 re-measurement" notes in `docs/investigations/mvcc-apps-on-iris-pgwire.md`.
 
-- [ ] T033 [US2] Slice 1 gate extras: (a) e2e coverage of `transaction_status.py`, `savepoints.py`, `_savepoint_mixin.py` under `make isolation`
+- [X] T033 [US2] Slice 1 gate extras: (a) e2e coverage of `transaction_status.py`, `savepoints.py`, `_savepoint_mixin.py` under `make isolation`
       (server started with `coverage run`, `PYTHONPATH=src`), 90%+ required, recorded in research.md R11 (constitution II);
       (b) the embedded backend's existing tests, run per the repo memory "Testing the embedded backend", show no new
       failures against HEAD (constitution IV); (c) translator and statement-path timing on the benchmark corpus, before
@@ -187,17 +187,17 @@ commit credits AI tooling.
 **Goal**: FR-027 to FR-029. **Independent test**: the checklist step exists; every compatibility-page claim names a
 check.
 
-- [ ] T034 [P] [US8] Unit test in `tests/unit/test_compatibility_doc.py`: every row of the "works / refused" tables in
+- [X] T034 [P] [US8] Unit test in `tests/unit/test_compatibility_doc.py`: every row of the "works / refused" tables in
       `docs/POSTGRES_APP_COMPATIBILITY.md` names a check key (`suite/key`) that appears in
       `tests/e2e/isolation/` source (assert the answer: grep the key in the test modules); `KNOWN_LIMITATIONS.md`
       links the page.
-- [ ] T035 [P] [US8] Unit test in `tests/unit/test_release_checklist.py`: `docs/RELEASE_CHECKLIST.md` contains a step
+- [X] T035 [P] [US8] Unit test in `tests/unit/test_release_checklist.py`: `docs/RELEASE_CHECKLIST.md` contains a step
       running `make isolation` on a fresh server and regenerating the Hermitage table.
-- [ ] T036 [US8] Write `docs/POSTGRES_APP_COMPATIBILITY.md` with slice 1's rows (aborted transactions, savepoints,
+- [X] T036 [US8] Write `docs/POSTGRES_APP_COMPATIBILITY.md` with slice 1's rows (aborted transactions, savepoints,
       the 254-savepoint limit and its workaround), the ORM/driver table (psycopg, SQLAlchemy, Django, Prisma, Rails,
       Hibernate: what each sends and what works), the Hermitage row, and a placeholder section per later story marked
       "not yet (spec 052 US3–US7)". Link it from `KNOWN_LIMITATIONS.md`.
-- [ ] T037 [US8] Add the release-gate step to `docs/RELEASE_CHECKLIST.md`: preconditions (one server, the two
+- [X] T037 [US8] Add the release-gate step to `docs/RELEASE_CHECKLIST.md`: preconditions (one server, the two
       containers), `make isolation`, `make isolation-permissive`, `make isolation-read-uncommitted`,
       `make isolation-table`, and "a pin change needs its reason in known_differences.py and the investigation doc". State
       that the gate is all three targets together: the default run skips the `permissive` and `default_isolation`

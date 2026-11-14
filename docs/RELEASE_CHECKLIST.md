@@ -37,6 +37,25 @@ so two at once produce "Unable to allocate a license" rather than failures that 
 | 2.7 | Installed-artifact smoke | build, install the wheel in a clean venv, run `iris-pgwire`                | ✅ no flags: exit 2 with the reason; `--allow-plaintext-password`: right password in, wrong out; SIGTERM stops it                            |
 | 2.8 | Container-backed suites  | `pytest tests/protocol tests/contract tests/e2e`                           | ⏭️ not run: their fixtures need `iris-devtester`, which this venv lacks, and its fixture loader errors in setup (051 `research.md` R6)       |
 
+### 2a. Transaction semantics gate (spec 052)
+
+The isolation suite runs every check against PGWire and against PostgreSQL 16 (`iris-pgwire-pgref`, 127.0.0.1:55433)
+and expects PostgreSQL's answer, or IRIS's pinned difference with its reason in
+`tests/e2e/isolation/known_differences.py`. Each target starts its own fresh server on 5442 against
+`pgwire-release-lab` (2992), so first check that nothing listens on 5442 and that `pgwire-bench-dbapi` is stopped:
+one PGWire server at a time on a Community Edition IRIS. Run the targets one after another, never together.
+
+| #    | Gate                                                              | Command                           | Status |
+| ---- | ----------------------------------------------------------------- | --------------------------------- | ------ |
+| 2a.1 | Default server                                                    | `make isolation`                  |        |
+| 2a.2 | `PGWIRE_TXN_COMPAT=permissive`                                    | `make isolation-permissive`       |        |
+| 2a.3 | `PGWIRE_DEFAULT_ISOLATION=read uncommitted`                       | `make isolation-read-uncommitted` |        |
+| 2a.4 | Hermitage table regenerated into the investigation doc, section 5 | `make isolation-table`            |        |
+
+The gate is the three runs together. The default run skips the `permissive` and `default_isolation` checks by design
+(`-rs` prints why); they count only once their own target has run. A pin that changes needs its reason in
+`known_differences.py` and in `docs/investigations/mvcc-apps-on-iris-pgwire.md`, in the same change.
+
 A suite that is red for a reason recorded in §5 is not a gate failure — it is a
 known state. A suite that is red for any other reason blocks the tag.
 

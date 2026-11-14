@@ -303,17 +303,25 @@ class TestSavepointRewrite:
             == 'ROLLBACK TO SAVEPOINT "my savepoint"'
         )
 
-    def test_the_dbapi_backend_sends_the_rewritten_statement(self, executor):
-        """The measured defect: the DBAPI path never applied the rewrite at all."""
+    def test_the_dbapi_backend_answers_psycopgs_rollback_to(self, executor):
+        """The measured defect: the DBAPI path sent `ROLLBACK TO "_pg3_1"` to IRIS unrewritten.
+
+        Since spec 052 the savepoint stack answers it: the client's name maps to an internal IRIS
+        savepoint, which is rolled back to and re-established.
+        """
         conn, sent = _connection()
         wrapper = _wrapper(conn)
         executor.pool.acquire = AsyncMock(return_value=wrapper)
         executor.session_connections["s1"] = wrapper
         executor.session_transactions["s1"] = True
 
-        result = asyncio.run(
-            executor.execute_query('ROLLBACK TO "_pg3_1"', session_id="s1", _skip_isolation=True)
-        )
+        for sql in ('SAVEPOINT "_pg3_1"', 'ROLLBACK TO "_pg3_1"'):
+            result = asyncio.run(executor.execute_query(sql, session_id="s1"))
+            assert result.get("success"), result
 
-        assert result.get("success"), result
-        assert any(s.rstrip(";").strip() == 'ROLLBACK TO SAVEPOINT "_pg3_1"' for s in sent), sent
+        sent = [s.rstrip(";").strip() for s in sent]
+        assert sent == [
+            "SAVEPOINT pgw_sp_1",
+            "ROLLBACK TO SAVEPOINT pgw_sp_1",
+            "SAVEPOINT pgw_sp_1",
+        ], sent

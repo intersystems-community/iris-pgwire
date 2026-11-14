@@ -296,7 +296,10 @@ class IsolationMixin:
         if request.level == self.get_isolation_level(session_id):
             return None
 
-        if state.savepoint_depth > 0:
+        # Savepoints are answered by SavepointMixin before this mixin sees them (spec 052), so
+        # its stack is the live depth; the local counter remains for hosts without it.
+        live_depth = getattr(self, "live_savepoint_depth", lambda _sid: 0)(session_id)
+        if state.savepoint_depth > 0 or live_depth > 0:
             message = MID_TRANSACTION_IN_SUBTRANSACTION
         elif state.transaction_did_query:
             message = MID_TRANSACTION_AFTER_QUERY

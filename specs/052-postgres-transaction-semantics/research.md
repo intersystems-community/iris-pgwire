@@ -173,3 +173,18 @@ except the locking-clause recogniser (one `FOR\s+(UPDATE|SHARE|NO KEY|KEY)` sear
 substring check) and the ON CONFLICT classifier (only on INSERTs containing `ON CONFLICT`, with a cached catalog
 lookup). The plan's measurement task times the translator on the existing benchmark corpus before and after, against
 the 5 ms budget.
+
+### R11 measured: slice 1 (2026-11-14)
+
+- **Cost**: the per-statement additions (the abort gate, the savepoint parse, the transaction-boundary check, the
+  status update) cost a median 1.5 to 2.0 µs per statement over a 600-statement corpus in each status (idle, in a
+  transaction, aborted), max 2.5 µs: 0.05% of the 5 ms budget.
+- **Coverage**: e2e branch coverage of the new modules from `test_failed_transaction.py` and `test_savepoints.py`
+  against a server run under `coverage run` (DBAPI, the lab): `transaction_status.py` 93%, `savepoints.py` 95%,
+  `_savepoint_mixin.py` 92%, 93% together. Uncovered: the stack's `clear()` (sessions end instead) and the path where
+  IRIS refuses a statement the stack issued.
+- **Embedded backend**: this tree and HEAD (2.0.1) run as the embedded server in `pgwire-release-lab`.
+  `tests/e2e/test_vector_projection.py` 5/5 on both. A single-session transaction smoke test (abort rule, savepoints,
+  psycopg nested block): 4/4 on this tree, 1/4 on HEAD. No regression, and slice 1 works on embedded for one session.
+  `irispython` execs `/usr/bin/python3`, so an embedded test server is found by the port it listens on (`ss -ltnp`),
+  not by an `irispython` command line.

@@ -26,6 +26,7 @@ back when the connection ends (protocol "Termination").
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -157,12 +158,30 @@ SWEEP = 10  # sequential sessions, enough to cycle through every connection PGWi
 POLLUTERS = 4  # concurrent sessions that change their level and disconnect
 
 
+def _wait_for_committed_value(target, deadline: float) -> float | None:
+    """Seconds until a fresh session reads row 1's committed 100, or None if it never did."""
+    started = time.monotonic()
+    while time.monotonic() - started < deadline:
+        with target.connect() as conn:
+            outcome = run_statement(conn, "select n from rc_t where id = 1")
+        if outcome.ok and outcome.rows == [(100,)]:
+            return round(time.monotonic() - started, 3)
+        time.sleep(0.05)
+    return None
+
+
 def test_h3_an_abandoned_transaction_is_rolled_back(target, expect):
     _fresh(target)
     abandoned = target.connect("extended")
     assert run_statement(abandoned, "begin").ok
     assert run_statement(abandoned, "update rc_t set n = 999 where id = 1").ok
     abandoned.close()  # Terminate, with the transaction still open
+
+    # The server ends an abandoned transaction after the client has gone, asynchronously, as
+    # PostgreSQL does. Until it has, a session at PGWire's default READ UNCOMMITTED legitimately
+    # reads the uncommitted 999 (measured: a 70 ms reset). So wait for the end, bounded: before
+    # 2.0.1 it never came, because the transaction stayed open on the pooled connection.
+    ended_after = _wait_for_committed_value(target, deadline=5.0)
 
     def each_session(statements):
         out = []
@@ -185,15 +204,18 @@ def test_h3_an_abandoned_transaction_is_rolled_back(target, expect):
     expect.check(
         "h3/abandoned_transaction",
         {
+            "abandoned_transaction_ended_within_5s": ended_after is not None,
             "default_level_reads_saw_999": 999 in reads,
             "committed_by_another_session": 999 in after,
             "row_still_locked": update.sqlstate == "40001",
         },
         {
+            "abandoned_transaction_ended_within_5s": True,
             "default_level_reads_saw_999": False,
             "committed_by_another_session": False,
             "row_still_locked": False,
         },
+        ended_after_seconds=ended_after,
         reads=reads,
         after_commit_sweep=after,
         update=update.sqlstate or update.status,

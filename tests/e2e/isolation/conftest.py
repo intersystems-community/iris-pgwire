@@ -37,6 +37,11 @@ POSTGRES_DSN = os.environ.get(
 )
 RESULTS = Path(os.environ.get("ISOLATION_RESULTS", ROOT / "build" / "isolation-results.jsonl"))
 ENABLED = os.environ.get("ISOLATION_SUITE") == "1"
+# Checks that need a server started with non-default settings carry one of these markers, and run
+# only when `ISOLATION_MARK` names it (the make target that starts that server sets it). In the
+# default run they skip by design, so the release gate is all three targets together.
+SERVER_MARKS = {"permissive": "isolation-permissive", "default_isolation": "isolation-read-uncommitted"}
+SERVER_MARK = os.environ.get("ISOLATION_MARK", "")
 
 TARGETS = {
     "postgres": Target("postgres", POSTGRES_DSN, reference=True),
@@ -72,6 +77,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.isolation)
             if not ENABLED:
                 item.add_marker(skip)
+                continue
+            for mark, target in SERVER_MARKS.items():
+                if item.get_closest_marker(mark) and SERVER_MARK != mark:
+                    item.add_marker(
+                        pytest.mark.skip(reason=f"needs its own server: runs under make {target}")
+                    )
 
 
 @pytest.fixture(scope="session")

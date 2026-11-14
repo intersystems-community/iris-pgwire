@@ -99,6 +99,18 @@ import re
 DEFAULT_SQLSTATE = "XX000"
 DEFAULT_CONDITION = "internal_error"
 
+# SQLSTATEs PGWire raises itself rather than classifies (spec 052).
+IN_FAILED_SQL_TRANSACTION = ("25P02", "in_failed_sql_transaction")
+NO_ACTIVE_SQL_TRANSACTION = ("25P01", "no_active_sql_transaction")
+INVALID_SAVEPOINT = ("3B001", "invalid_savepoint_specification")
+PROGRAM_LIMIT_EXCEEDED = ("54000", "program_limit_exceeded")
+QUERY_CANCELED = ("57014", "query_canceled")
+LOCK_NOT_AVAILABLE = ("55P03", "lock_not_available")
+
+# The two IRIS lock-timeout codes. When the client set `lock_timeout`, PostgreSQL reports its
+# expiry as 55P03; IRIS's default wait stays 40001 (see the module docstring).
+_LOCK_TIMEOUT_SQLCODES = frozenset({-110, -114})
+
 # IRIS SQLCODE -> (SQLSTATE, PostgreSQL condition name).
 SQLCODE_MAP: dict[int, tuple[str, str]] = {
     -1: ("42601", "syntax_error"),
@@ -115,7 +127,7 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
     -119: ("23505", "unique_violation"),
     -149: ("XX000", "internal_error"),
     -359: ("42883", "undefined_function"),
-    -375: ("3B001", "invalid_savepoint_specification"),
+    -375: INVALID_SAVEPOINT,
     -400: ("XX000", "internal_error"),
 }
 
@@ -244,7 +256,10 @@ _SQLCODE_RE = re.compile(r"SQLCODE:?\s*[<:]?\s*(-\d+)", re.I)
 
 
 def classify_iris_error(
-    message: str | None, default: tuple[str, str] | None = None
+    message: str | None,
+    default: tuple[str, str] | None = None,
+    *,
+    lock_timeout_set: bool = False,
 ) -> tuple[str, str]:
     """Return ``(sqlstate, condition_name)`` for an IRIS error message.
 
@@ -259,6 +274,9 @@ def classify_iris_error(
     the unclassified fallback for the non-IRIS case: a genuine transport failure
     on the query path really is `08000`, and only an IRIS error arriving as a
     Python exception should be reclassified.
+
+    ``lock_timeout_set`` says the session set `lock_timeout` itself, so an IRIS lock timeout
+    is that timeout expiring: PostgreSQL's `55P03` rather than the default wait's `40001`.
     """
     fallback = default if default is not None else (DEFAULT_SQLSTATE, DEFAULT_CONDITION)
     if not message:
@@ -266,12 +284,17 @@ def classify_iris_error(
 
     match = _SQLCODE_RE.search(message)
     if match:
-        mapped = SQLCODE_MAP.get(int(match.group(1)))
+        code = int(match.group(1))
+        if lock_timeout_set and code in _LOCK_TIMEOUT_SQLCODES:
+            return LOCK_NOT_AVAILABLE
+        mapped = SQLCODE_MAP.get(code)
         if mapped is not None:
             return mapped
 
     for pattern, mapped in _MESSAGE_PATTERNS:
         if pattern.search(message):
+            if lock_timeout_set and mapped[0] == "40001":
+                return LOCK_NOT_AVAILABLE
             return mapped
 
     return fallback

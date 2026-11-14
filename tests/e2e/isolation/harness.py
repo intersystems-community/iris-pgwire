@@ -21,6 +21,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 
 import psycopg
+import pytest
 
 from .cases import Outcome, Step, StepResult
 
@@ -57,6 +58,7 @@ def run_statement(conn: psycopg.Connection, sql: str, params=None) -> Outcome:
                 rowcount=cur.rowcount,
                 started=sent,
                 finished=time.monotonic(),
+                status_after=_status(conn),
             )
     except psycopg.Error as e:
         return Outcome(
@@ -66,7 +68,13 @@ def run_statement(conn: psycopg.Connection, sql: str, params=None) -> Outcome:
             elapsed=time.perf_counter() - started,
             started=sent,
             finished=time.monotonic(),
+            status_after=_status(conn),
         )
+
+
+def _status(conn: psycopg.Connection) -> str:
+    """The transaction status the server's last ReadyForQuery reported (UNKNOWN once closed)."""
+    return conn.info.transaction_status.name
 
 
 @dataclass
@@ -128,3 +136,11 @@ def play(sessions: dict[str, Session], steps) -> list[Played]:
 def with_table(sql: str, table: str) -> str:
     """Hermitage's scripts name their table ``test``; each target gets its own name."""
     return re.sub(r"\btest\b", table, sql)
+
+
+# Spec 052 FR-004: the aborted-transaction rule and the savepoint stack must not change under
+# PGWIRE_TXN_COMPAT=permissive. Checks decorated with this run once in `make isolation` and again
+# in `make isolation-permissive` (the second parameter carries the `permissive` marker).
+BOTH_SERVERS = pytest.mark.parametrize(
+    "server", ["default", pytest.param("permissive", marks=pytest.mark.permissive)]
+)

@@ -399,6 +399,27 @@ What the re-measurement changed in the findings above:
   the trials now get a fresh connection and `23505`. The pool's "driver out of step" in the race is most likely the same
   effect on the suite's recreated tables, not a protocol desync.
 
+### Spec 052 slice 1 (2026-11-14)
+
+The abort rule (US1) and PGWire's own savepoint stack (US2), on branch `052-postgres-transaction-semantics`.
+`make isolation`: 136 passed, then 2 fixed (below); `make isolation-permissive`: 22 of 22.
+
+| Check                                  | 2.0.1                                       | Slice 1                                                 |
+| -------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| E5, error then COMMIT (both protocols) | rows 1, 2 committed, status never `E`       | PostgreSQL's answer: `25P02`, COMMIT is ROLLBACK, empty |
+| 100 trials of the same                 | 200 rows committed                          | 0                                                       |
+| a pipeline with an error before Sync   | later statements ran                        | discarded until Sync, transaction aborted               |
+| a pipeline of two different INSERTs    | `<LIST ERROR>` (one SQL text for the batch) | both run                                                |
+| `ROLLBACK TO s` twice                  | second `3B001`, all rolled back             | PostgreSQL's answer                                     |
+| `RELEASE SAVEPOINT`                    | `XX000` (-51)                               | succeeds, nothing sent to IRIS                          |
+| psycopg nested blocks, 3 deep, 8 mixes | normal exits raise (-51)                    | PostgreSQL's rows in all 8                              |
+| 300 SAVEPOINT/RELEASE pairs            | `RELEASE` fails                             | 255th refused with `54000` (pinned: IRIS's limit)       |
+
+Two things the gate found: Hermitage's verdict rule counted the `25P02` that now follows a lock timeout's `40001` in
+the same transaction as an unexplained error (fixed in `cases.py`: a `25P02` is the earlier error's consequence); and
+SQLAlchemy's psycopg dialect cannot connect, because PGWire does not translate `current_schema()` (`42883`), so
+`begin_nested()` is unmeasured and pinned with that reason.
+
 ### Not measured
 
 The embedded backend (DBAPI only, by decision), E6 lock escalation and E7 pgbench (both need an enterprise-key lab),

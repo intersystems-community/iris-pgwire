@@ -37,6 +37,7 @@ from .sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolati
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.sqlstate import classify_iris_error
+from .transaction_status import after_error, after_success, commit_rolls_back, refusal
 from .value_encoding import ValueEncodingError, binary_encoding_is_defined, encode_binary
 from .vector_optimizer import VectorQueryOptimizer
 
@@ -125,6 +126,18 @@ MSG_COPY_BOTH_RESPONSE = b"W"
 STATUS_IDLE = b"I"
 STATUS_IN_TRANSACTION = b"T"
 STATUS_FAILED_TRANSACTION = b"E"
+
+def _result_sqlstate(result: dict, error_msg: str) -> tuple[str, str]:
+    """The SQLSTATE for a failed executor result: the executor's own if it set one (a savepoint
+    refusal, an isolation refusal), otherwise classified from the IRIS error text."""
+    if result.get("sqlstate"):
+        condition = result.get("condition") or classify_iris_error(error_msg)[1]
+        return result["sqlstate"], condition
+    return classify_iris_error(error_msg)
+
+
+# The messages after whose error PostgreSQL discards input until Sync (protocol "Extended Query").
+_EXTENDED_MESSAGES = frozenset({b"P", b"B", b"D", b"E", b"C"})
 
 # Authentication types
 AUTH_OK = 0
@@ -220,6 +233,13 @@ class PGWireProtocol:
         self.bulk_executor = BulkExecutor(self.iris_executor)
         self.copy_handler = CopyHandler(self.csv_processor, self.bulk_executor)
         self.copy_state = None  # Track ongoing COPY operation state
+
+        # Spec 052 FR-003a: after an error while handling an extended-protocol message, every
+        # message up to the next Sync is discarded, as PostgreSQL does.
+        self._in_extended_message = False
+        self._discard_until_sync = False
+        # Counts ErrorResponses sent, so a multi-statement Query can stop at its first error.
+        self._errors_sent = 0
 
         # Batch execution buffering (collapses repeated Bind/Execute into execute_many)
         self.batch_sql = None
@@ -904,6 +924,13 @@ class PGWireProtocol:
         self.writer.write(error_msg)
         await self.writer.drain()
 
+        if severity == "ERROR":
+            # Spec 052 US1: any ERROR inside a transaction block aborts it (ReadyForQuery E).
+            self._errors_sent += 1
+            self.transaction_status = after_error(self.transaction_status)
+            if self._in_extended_message:
+                self._discard_until_sync = True
+
     async def message_loop(self):
         """
         Main message processing loop (P0: basic structure)
@@ -932,6 +959,15 @@ class PGWireProtocol:
                     msg_type=msg_type,
                     length=length,
                 )
+
+                if self._discard_until_sync and msg_type not in (MSG_SYNC, MSG_TERMINATE):
+                    logger.debug(
+                        "Discarding message until Sync after an error",
+                        connection_id=self.connection_id,
+                        msg_type=msg_type,
+                    )
+                    continue
+                self._in_extended_message = msg_type in _EXTENDED_MESSAGES
 
                 # Handle message based on type
                 if msg_type == MSG_QUERY:
@@ -1033,7 +1069,13 @@ class PGWireProtocol:
             # Process each statement, sending ReadyForQuery only after the last one
             for i, statement in enumerate(statements):
                 is_last_statement = i == len(statements) - 1
+                errors_before = self._errors_sent
                 await self._handle_single_statement(statement, send_ready=is_last_statement)
+                if self._errors_sent > errors_before and not is_last_statement:
+                    # PostgreSQL stops a multi-statement Query at its first error and sends
+                    # ReadyForQuery; the remaining statements are not run.
+                    await self.send_ready_for_query()
+                    break
 
             return  # All statements processed
 
@@ -1068,6 +1110,13 @@ class PGWireProtocol:
             send_ready: If True, send ReadyForQuery after processing
         """
         try:
+            refused = refusal(self.transaction_status, query)
+            if refused is not None:
+                await self.send_error_response("ERROR", *refused)
+                if send_ready:
+                    await self.send_ready_for_query()
+                return
+
             # DEBUGGING: Log full SQL for CREATE TABLE statements
             if query.upper().strip().startswith("CREATE TABLE"):
                 logger.warning(f"FULL CREATE TABLE SQL (length={len(query)}): {query}")
@@ -1146,6 +1195,7 @@ class PGWireProtocol:
                 }
 
             if result["success"]:
+                self.transaction_status = after_success(self.transaction_status, query)
                 await self.send_query_result(result, send_ready=send_ready)
             else:
                 error_msg = result.get("error", "Query execution failed")
@@ -1175,8 +1225,8 @@ class PGWireProtocol:
                 else:
                     # FR-008e: classify rather than blaming the client for
                     # everything. An IRIS crash is XX000, not the caller's
-                    # syntax error.
-                    sqlstate, condition = classify_iris_error(error_msg)
+                    # syntax error. A SQLSTATE the executor chose itself wins.
+                    sqlstate, condition = _result_sqlstate(result, error_msg)
                     await self.send_error_response("ERROR", sqlstate, condition, error_msg)
                     # CRITICAL: Send ReadyForQuery after error (only if last statement)
                     if send_ready:
@@ -1217,6 +1267,11 @@ class PGWireProtocol:
             await self.send_transaction_response("BEGIN", send_ready=send_ready)
             return True
         elif query_upper in self._COMMIT_FORMS:
+            if commit_rolls_back(self.transaction_status):
+                # Spec 052 US1: COMMIT of an aborted transaction rolls it back, and says so.
+                await self.iris_executor.rollback_transaction(session_id=self.connection_id)
+                await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
+                return True
             await self.iris_executor.commit_transaction(session_id=self.connection_id)
             await self.send_transaction_response("COMMIT", send_ready=send_ready)
             return True
@@ -2149,6 +2204,12 @@ class PGWireProtocol:
             query = body[pos:query_end].decode("utf-8")
             pos = query_end + 1
 
+            # Spec 052 US1: an aborted block parses nothing but a statement that ends it.
+            refused = refusal(self.transaction_status, query)
+            if refused is not None:
+                await self.send_error_response("ERROR", *refused)
+                return
+
             # CRITICAL: Translate PostgreSQL $1, $2, $3 parameters to IRIS ? syntax
             # This must happen BEFORE translation to avoid IRIS SQL errors with $1 syntax
             query = self.translate_postgres_parameters(query)
@@ -3067,6 +3128,12 @@ class PGWireProtocol:
             # has_returning check below decides whether to fast-batch (DML without RETURNING).
             original_query = stmt.get("original_query", query)
 
+            # Spec 052 US1: a statement prepared before the abort is refused at Execute too.
+            refused = refusal(self.transaction_status, original_query)
+            if refused is not None:
+                await self.send_error_response("ERROR", *refused)
+                return
+
             # Log execution of prepared statement with translation metadata
             translation_metadata = stmt.get("translation_metadata", {})
             logger.info(
@@ -3140,6 +3207,9 @@ class PGWireProtocol:
                 if transaction_type == "BEGIN":
                     await self.iris_executor.begin_transaction(session_id=self.connection_id)
                     await self.send_transaction_response_extended_protocol("BEGIN")
+                elif transaction_type == "COMMIT" and commit_rolls_back(self.transaction_status):
+                    await self.iris_executor.rollback_transaction(session_id=self.connection_id)
+                    await self.send_transaction_response_extended_protocol("ROLLBACK")
                 elif transaction_type == "COMMIT":
                     await self.iris_executor.commit_transaction(session_id=self.connection_id)
                     await self.send_transaction_response_extended_protocol("COMMIT")
@@ -3169,6 +3239,13 @@ class PGWireProtocol:
             has_returning = self.iris_executor.sql_parser.has_returning_clause(original_query)
 
             if is_dml and not has_returning:
+                # A different statement cannot share the batch: flush executes one SQL text for
+                # every buffered row, so a pipeline of two different INSERTs ran the first twice.
+                if self.batch_params and query != self.batch_sql:
+                    await self.flush_batch()
+                    if self._discard_until_sync:
+                        return
+
                 # Store SQL if first row in batch
                 if not self.batch_params:
                     self.batch_sql = query
@@ -3208,6 +3285,7 @@ class PGWireProtocol:
             )
 
             if result["success"]:
+                self.transaction_status = after_success(self.transaction_status, original_query)
                 # Extended Protocol: Don't send ReadyForQuery here - Sync handler will send it
                 # Check if Describe sent NoData for RETURNING * - if so, we need to send RowDescription
                 needs_row_desc = portal.get("needs_row_description", False) if portal else False
@@ -3217,7 +3295,7 @@ class PGWireProtocol:
             else:
                 # FR-008e: same classification on the extended-protocol path.
                 error_msg = result.get("error", "Query execution failed")
-                sqlstate, condition = classify_iris_error(error_msg)
+                sqlstate, condition = _result_sqlstate(result, error_msg)
                 await self.send_error_response("ERROR", sqlstate, condition, error_msg)
 
             logger.info(
@@ -3243,6 +3321,13 @@ class PGWireProtocol:
         Sync message has no body.
         """
         try:
+            if self._discard_until_sync:
+                # Buffered DML belongs to the failed pipeline; PostgreSQL would have rolled it
+                # back with the implicit transaction, or the aborted block will.
+                self._discard_until_sync = False
+                self.batch_sql = None
+                self.batch_params = []
+
             # CRITICAL: Always flush batch on Sync if not empty.
             # PostgreSQL protocol expects visibility after Sync.
             if self.batch_params:

@@ -17,6 +17,7 @@ import structlog
 
 from iris_pgwire import row_limit
 from iris_pgwire._isolation import IsolationMixin
+from iris_pgwire._savepoint_mixin import SavepointMixin
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.iris_executor import (  # noqa: F401 — shared constants
@@ -138,7 +139,7 @@ _PYTHON_TYPE_TO_OID: dict[type, int] = {
 }
 
 
-class DBAPIExecutor(IsolationMixin):
+class DBAPIExecutor(SavepointMixin, IsolationMixin):
     """Execute SQL queries against IRIS via DBAPI backend.
 
     Uses connection pool for efficient connection management and supports
@@ -271,6 +272,12 @@ class DBAPIExecutor(IsolationMixin):
             # answers any parameter it does not recognise with the literal
             # "unknown", and `SET transaction_isolation = '...'` is not valid
             # IRIS SQL, so neither can be left to fall through.
+            # Savepoints first: PGWire keeps the stack itself (spec 052 US2).
+            if not kwargs.get("_skip_savepoints"):
+                savepoint_result = await self._handle_savepoint_statement(sql, session_id, **kwargs)
+                if savepoint_result is not None:
+                    return savepoint_result
+
             if not kwargs.get("_skip_isolation"):
                 isolation_result = await self._handle_isolation_statement(sql, session_id, **kwargs)
                 if isolation_result is not None:
@@ -1515,6 +1522,7 @@ class DBAPIExecutor(IsolationMixin):
         self.session_namespaces.pop(session_id, None)
         self.session_transactions.pop(session_id, None)
         self.forget_isolation_level(session_id)
+        self.forget_savepoints(session_id)
 
     @staticmethod
     def _reset_connection_sync(connection: Any) -> str | None:
