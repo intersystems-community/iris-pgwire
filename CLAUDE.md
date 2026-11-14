@@ -33,6 +33,8 @@ See `.specify/memory/constitution.md` for full project principles including:
 ## Active Technologies
 - Python 3.11 (irispython / CPython both supported) + existing iris-pgwire stack — `sql_translator/`, `catalog/`, (047-surp-lint-support)
 - IRIS catalog views (SQL DDL installed via `CatalogViewInstaller`); SQL (047-surp-lint-support)
+- Python 3.11+ (CPython for the DBAPI backend; `irispython` for embedded) + intersystems-irispython 5.3.2 (`import iris`), structlog, pydantic (BackendConfig); psycopg 3 (052-postgres-transaction-semantics)
+- IRIS 2026.2 (no schema changes; all new state is per session, in memory) (052-postgres-transaction-semantics)
 
 ## Recent Changes
 - 047-surp-lint-support: Added Python 3.11 (irispython / CPython both supported) + existing iris-pgwire stack — `sql_translator/`, `catalog/`,

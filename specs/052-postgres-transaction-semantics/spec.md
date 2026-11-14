@@ -277,6 +277,9 @@ from `KNOWN_LIMITATIONS.md`, and every claim in it is backed by a suite check.
   same way; the level is not changed by the abort.
 - **`ROLLBACK TO SAVEPOINT` in a transaction aborted before any savepoint existed**: refused with `3B001`; the
   transaction stays aborted.
+- **Many savepoints in one transaction**: an ORM that opens and releases a savepoint per row reaches IRIS's limit of
+  254 savepoints per transaction (released ones still count). The 255th is refused loudly (FR-008a); the
+  compatibility page names the limit and the workaround (commit in batches).
 - **Savepoint names**: case and quoting follow PostgreSQL (`"S1"` and `s1` are different; `S1` and `s1` are the same).
 - **A cancel that races the statement's completion**: either the statement's result or `57014` is delivered, never
   both, and never a write the client was told was cancelled.
@@ -310,6 +313,10 @@ from `KNOWN_LIMITATIONS.md`, and every claim in it is backed by a suite check.
 - **FR-007**: Rolling back to or releasing a name not on the stack MUST be refused with `3B001` and MUST abort the
   transaction.
 - **FR-008**: Savepoint names MUST follow PostgreSQL's identifier rules for case and quoting.
+- **FR-008a**: IRIS allows 254 savepoints per transaction, counting released ones (each raises `$TLEVEL`; the 255th
+  fails with SQLCODE -400, after which the transaction's work is lost and `COMMIT` still succeeds; measured
+  2026-11-14). The server MUST refuse the savepoint that would exceed the limit with `54000`
+  (`program_limit_exceeded`) and MUST abort the transaction (FR-001), so the loss is never silent.
 
 #### Row locking clauses (US3)
 
