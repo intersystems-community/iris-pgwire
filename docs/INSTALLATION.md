@@ -30,11 +30,13 @@ docker-compose ps
 ```
 
 **Services Started**:
+
 - PGWire server on port `5432`
 - IRIS database on port `1972`
 - IRIS Management Portal on port `52773`
 
 **Test Connection**:
+
 ```bash
 psql -h localhost -p 5432 -U _SYSTEM -d USER -c "SELECT 'Hello from IRIS!'"
 ```
@@ -67,6 +69,7 @@ python -m iris_pgwire.server
 ```
 
 **Package Note**: Install `intersystems-irispython` but import as `iris`:
+
 ```python
 import iris  # NOT import intersystems_irispython
 ```
@@ -81,20 +84,29 @@ import iris  # NOT import intersystems_irispython
 // Install the package
 zpm "install iris-pgwire"
 
-// Start the server manually
-do ##class(IrisPGWire.Service).Start()
+// Start the server. Clients log in with an IRIS username and password, so choose how the
+// password is protected; with no choice the server refuses to start and Start() says why.
+//   TLS (recommended):
+set sc = ##class(IrisPGWire.Service).Start(0, 0, "", "/certs/pgwire.pem", "/certs/pgwire.key")
+//   or a trusted network / TLS-terminating proxy:
+set sc = ##class(IrisPGWire.Service).Start(1)
+//   or no authentication, local development only:
+set sc = ##class(IrisPGWire.Service).Start(0, 1)
+// Start(pAllowPlaintextPassword, pTrust, pAllowedUsers, pSSLCert, pSSLKey, pPort, pWaitSeconds)
+// pAllowedUsers: comma-separated IRIS users who may log in (default: the service account only)
 
 // Check server status
 do ##class(IrisPGWire.Service).ShowStatus()
 ```
 
 **From terminal**:
+
 ```bash
 # Install
 iris session IRIS -U USER 'zpm "install iris-pgwire"'
 
-# Start server
-iris session IRIS -U USER 'do ##class(IrisPGWire.Service).Start()'
+# Start server (passwords over a trusted network; see above for TLS)
+iris session IRIS -U USER 'do ##class(IrisPGWire.Service).Start(1)'
 ```
 
 ---
@@ -115,6 +127,7 @@ irispython -m iris_pgwire.server
 ```
 
 **Benefits**:
+
 - Zero network overhead (no TCP to IRIS:1972)
 - True VECTOR type handling
 - Single-process deployment
