@@ -154,6 +154,7 @@ def test_h2_how_the_level_was_asked_for(target, writer, expect, protocol):
 
 
 SWEEP = 10  # sequential sessions, enough to cycle through every connection PGWire has pooled
+POLLUTERS = 4  # concurrent sessions that change their level and disconnect
 
 
 def test_h3_an_abandoned_transaction_is_rolled_back(target, expect):
@@ -230,6 +231,55 @@ def test_h3_read_committed_readers_after_an_abandoned_writer(target, expect):
         "h3/read_committed_after_abandoned_writer",
         {"an_accepted_read_committed_read_dirty_without_waiting": DIRTY in runs},
         {"an_accepted_read_committed_read_dirty_without_waiting": False},
+        runs=runs,
+        elapsed=elapsed,
+    )
+    expect.done()
+
+
+def test_h3_a_reused_connection_reports_and_runs_at_the_default_level(target, writer, expect):
+    """A session handed a pooled connection must start at the server's default level.
+
+    Earlier clients set another level for their session and disconnect. PGWire forgot their
+    level, so every later session reported the default, but the pooled IRIS connections kept
+    the old level: a session reporting READ UNCOMMITTED waited out the lock timeout like a READ
+    COMMITTED reader. Each later session here reports its level and reads the row ``writer``
+    holds; at READ UNCOMMITTED it reads 999 at once, at READ COMMITTED (PostgreSQL's default)
+    it reads 100 at once on PostgreSQL.
+    """
+    with target.connect() as probe:
+        default = run_statement(probe, "show transaction_isolation").rows[0][0]
+    other = "read committed" if default == "read uncommitted" else "read uncommitted"
+
+    # Concurrent, so each holds a different pooled connection when it changes the level.
+    polluters = [target.connect() for _ in range(POLLUTERS)]
+    for conn in polluters:
+        changed = run_statement(
+            conn, f"set session characteristics as transaction isolation level {other}"
+        )
+        assert changed.ok, f"{other}: {changed.sqlstate} {changed.message}"
+    for conn in polluters:
+        conn.close()
+
+    sql, committed, dirty = SHAPES["plain_pk"]
+    expected_outcome = {"read uncommitted": DIRTY, "read committed": COMMITTED}[default]
+    reported, runs, elapsed = [], [], []
+    for _ in range(SWEEP):
+        with target.connect() as conn:
+            reported.append(run_statement(conn, "show transaction_isolation").rows[0][0])
+            outcome = run_statement(conn, sql)
+        runs.append(classify(outcome, committed, dirty))
+        elapsed.append(round(outcome.elapsed, 2))
+    expect.check(
+        "h3/reused_connection_runs_at_the_default_level",
+        {
+            "every_session_reported_the_default": set(reported) == {default},
+            "every_session_ran_at_it": set(runs) == {expected_outcome},
+        },
+        {"every_session_reported_the_default": True, "every_session_ran_at_it": True},
+        default=default,
+        polluted_with=other,
+        reported=reported,
         runs=runs,
         elapsed=elapsed,
     )

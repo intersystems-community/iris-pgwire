@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The column names in a `COPY` header** now match `RowDescription`'s (lower case); the shared rule is `wire_column_name`.
 - **A bare `pg_type`** (no schema) reaches the view. The schema mapper keeps its own list of view-backed tables, and a test now compares it with the definitions, as a comment there had promised.
 
+## [2.0.1] - Unreleased
+
+Hotfix for three defects the track 4 isolation suite (`make isolation`) measured on the DBAPI backend. See `docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5.
+
+### Fixed
+
+- **A disconnected client's open transaction was handed to the next session** (critical, DBAPI backend). When a client disconnected, its IRIS connection went back to the pool with the transaction still open and the isolation level unchanged. The next session given that connection ran inside the abandoned transaction: it read the uncommitted writes, and a bare `COMMIT` from it made them permanent. A session that reported the default level could also run at the previous client's level. On session close PGWire now rolls back, resets the level to the server default, and discards the connection if either step fails. This was the cause of "an accepted `READ COMMITTED` is sometimes not in force"; on a clean connection IRIS honoured it every time.
+- **A connection that gave the driver's `<LIST ERROR> Incorrect list format` is no longer reused.** It stays with its session, so a transaction is never moved mid-way, and is discarded when the session ends. The error replaces a unique violation on a connection that had one on the same table before the table was recreated; it comes from below PGWire, and a fresh connection reports `23505`.
+- **psycopg's nested `transaction()` blocks committed the inner block's work on rollback** (critical, DBAPI backend). psycopg sends `ROLLBACK TO "_pg3_1"`; the DBAPI backend never added the `SAVEPOINT` keyword IRIS requires, so the statement failed, psycopg ignored the failure, and the inner block's rows were committed. SQLAlchemy's `begin_nested()` was not affected: it spells out `ROLLBACK TO SAVEPOINT`. The rewrite now runs on both backends and matches quoted names, including spaces and doubled quotes. `RELEASE SAVEPOINT` still fails (IRIS has none); psycopg ignores that failure after a rollback, but a nested block that exits normally still raises it.
+- **`ROLLBACK TO SAVEPOINT` no longer ends the transaction in PGWire's bookkeeping.** It was taken for a `ROLLBACK`, so the next statement was auto-committed, committing the work before the savepoint with it.
+- **Unmapped IRIS errors are `XX000`, not `08000`.** The query, `SET` and `COPY` paths reported any error the classifier did not recognise as `connection_exception`, which tells a client-side pool to discard a healthy connection. `08000` is now kept for a transport failure the error text names. IRIS SQLCODE -375 (unknown savepoint) is `3B001`, as on PostgreSQL.
+
 ## [2.0.0] - 2026-11-13
 
 ### BREAKING

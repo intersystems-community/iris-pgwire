@@ -58,9 +58,10 @@ def test_error_then_commit(target, expect):
 def test_unique_violation_on_a_new_table(target, expect):
     """A duplicate key on a table created moments before must still be 23505.
 
-    Measured on PGWire: on a freshly recreated table the IRIS error reaches the DBAPI driver as
-    "<LIST ERROR> Incorrect list format" and the client gets 08000, nearly every time; on a table
-    that has existed for a while it is 23505. Ten trials, each recreating the table.
+    Measured on PGWire: on a recreated table the IRIS error reaches the DBAPI driver as
+    "<LIST ERROR> Incorrect list format" (08000 before 2.0.1, XX000 since) on any connection that
+    had a -119 on the table before; a fresh connection gets 23505. Ten trials, each recreating
+    the table.
     """
     seen = []
     for _ in range(10):

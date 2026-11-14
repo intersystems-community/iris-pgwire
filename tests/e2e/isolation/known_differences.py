@@ -1,7 +1,8 @@
 """IRIS's measured outcomes where they differ from PostgreSQL's, pinned.
 
 Pinned, not endorsed. Each entry is what PGWire on IRIS did, measured by this suite on
-pgwire-release-lab (IRIS 2026.2.0.221.0com, DBAPI backend) on 2026-11-14. The expected answer
+pgwire-release-lab (IRIS 2026.2.0.221.0com, DBAPI backend) on 2026-11-14, and re-measured for
+2.0.1 the same day, which removed the pins its fixes made match PostgreSQL. The expected answer
 for every case is PostgreSQL's (Hermitage's postgres.md and README, or the reference server);
 an entry here only records how IRIS departs from it. A run whose verdicts differ from the pin
 fails, which means either the behaviour changed or the pin was wrong, and
@@ -54,25 +55,30 @@ PINS: dict[tuple[str, str], object] = {
         }
         for protocol in ("simple", "extended")
     },
-    # A unique violation on a table recreated moments before reaches the client as 08000: the
-    # DBAPI driver reports "<LIST ERROR> Incorrect list format" instead of SQLCODE -119. Usually
-    # every trial; 3 of 60 gave 23505 when probed by hand.
-    ("failed_transaction", "unique_violation_new_table"): AnyOf((["08000"], ["08000", "23505"])),
-    # E4. psycopg's `ROLLBACK TO "_pg3_1"` (a quoted name) is not rewritten, IRIS rejects it with
-    # SQLCODE -1, psycopg logs and ignores the failure, and the inner block's row is committed.
-    ("savepoints", "psycopg_nested"): {"ids": [1, 2, 3], "error": None},
-    # SQLCODE -375 reaches the client as 08000. For a name never created IRIS rolls back the whole
-    # transaction, as its ROLLBACK reference says, and the transaction stays open.
+    # A unique violation on a recreated table: the DBAPI driver reports "<LIST ERROR> Incorrect
+    # list format" (XX000) instead of SQLCODE -119 on any connection that already had a -119 on
+    # the table before it was recreated; a fresh connection gets -119 (23505). Reproduced with
+    # intersystems-irispython 5.3.2 alone, so the cause is below PGWire. Since 2.0.1 PGWire
+    # discards a connection that gave this error, so about half the trials get a fresh one.
+    ("failed_transaction", "unique_violation_new_table"): AnyOf((["XX000"], ["23505", "XX000"])),
+    # E4. psycopg's nested `transaction()` matches PostgreSQL since 2.0.1 (the DBAPI backend now
+    # rewrites `ROLLBACK TO "_pg3_1"`): no pin. Its `RELEASE "_pg3_1"` still fails (-51), and
+    # psycopg ignores that failure on the rollback path.
+    # SQLCODE -375 is 3B001, as on PostgreSQL. For a name never created IRIS rolls back the whole
+    # transaction, as its ROLLBACK reference says, but the transaction stays open and COMMIT
+    # succeeds, where PostgreSQL's aborted transaction turns COMMIT into ROLLBACK.
     ("savepoints", "rollback_to_unknown"): {
-        "steps": ["BEGIN", "INSERT", "08000", "COMMIT"],
+        "steps": ["BEGIN", "INSERT", "3B001", "COMMIT"],
         "ids": [],
     },
     ("savepoints", "rollback_to_unknown_with_savepoint"): {
-        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "INSERT", "08000", "COMMIT"],
+        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "INSERT", "3B001", "COMMIT"],
         "ids": [],
     },
-    # ROLLBACK TO deletes the savepoint; the second ROLLBACK TO gets -375 but, unlike the unknown
-    # name above, rolls back nothing, so row 3 is committed.
+    # ROLLBACK TO deletes the savepoint, so the second ROLLBACK TO is an unknown name: -375, and
+    # the whole transaction is rolled back, rows 1 and 3 with it. (Before 2.0.1 PGWire took the
+    # first ROLLBACK TO for the end of the transaction and auto-committed the next INSERT, which
+    # is why this used to leave rows 1 and 3 committed.)
     ("savepoints", "rollback_to_twice"): {
         "steps": [
             "BEGIN",
@@ -81,22 +87,22 @@ PINS: dict[tuple[str, str], object] = {
             "INSERT",
             "ROLLBACK",
             "INSERT",
-            "08000",
+            "3B001",
             "COMMIT",
         ],
-        "ids": [1, 3],
+        "ids": [],
     },
-    # IRIS has no RELEASE SAVEPOINT (SQLCODE -51, reaching the client as 08000); nothing rolls back.
+    # IRIS has no RELEASE SAVEPOINT (SQLCODE -51, unmapped, so XX000); nothing rolls back.
     ("savepoints", "release/existing"): {
-        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "08000", "COMMIT"],
+        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "XX000", "COMMIT"],
         "ids": [1],
     },
     ("savepoints", "release/after_rollback_to"): {
-        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "INSERT", "ROLLBACK", "08000", "COMMIT"],
+        "steps": ["BEGIN", "INSERT", "SAVEPOINT", "INSERT", "ROLLBACK", "XX000", "COMMIT"],
         "ids": [1],
     },
     ("savepoints", "release/unknown"): {
-        "steps": ["BEGIN", "INSERT", "08000", "COMMIT"],
+        "steps": ["BEGIN", "INSERT", "XX000", "COMMIT"],
         "ids": [1],
     },
     # E3. The emulation swallows any error whose text says "constraint": a foreign-key violation
@@ -174,18 +180,9 @@ PINS: dict[tuple[str, str], object] = {
             "default_then_begin",
         )
     },
-    # H3. A disconnected client's open transaction stays open on the pooled IRIS connection; later
-    # sessions read its value, and one that only says COMMIT makes it permanent.
-    ("read_committed", "h3/abandoned_transaction"): {
-        "default_level_reads_saw_999": True,
-        "committed_by_another_session": True,
-        "row_still_locked": False,
-    },
-    # ...and it is the "accepted READ COMMITTED is not in force" shape: readers that get another
-    # connection wait out the abandoned lock, the one handed the abandoned connection reads 999.
-    ("read_committed", "h3/read_committed_after_abandoned_writer"): {
-        "an_accepted_read_committed_read_dirty_without_waiting": True
-    },
+    # H3 matches PostgreSQL since 2.0.1: DBAPIExecutor.close_session rolls back a disconnected
+    # client's transaction and resets the isolation level before the connection is reused, and
+    # discards a connection whose reset fails. No pins.
     # Rows 10 to 12: the other locking clauses reach IRIS raw (42601), and so do the advisory-lock
     # functions (SQLCODE -359, 42883).
     **{

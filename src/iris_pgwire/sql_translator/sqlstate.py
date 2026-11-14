@@ -30,8 +30,18 @@ IRIS SQLCODE                 PostgreSQL SQLSTATE
 -119 UNIQUE/PK failed        23505  unique_violation
 -149 error inside a function XX000  internal_error
 -359 function not found      42883  undefined_function
+-375 savepoint not found     3B001  invalid_savepoint_specification
 -400 fatal error             XX000  internal_error
 ===========================  ======================================
+
+`-375` ("Cannot ROLLBACK to unestablished savepoint") was measured by the
+isolation suite in 2.0.1's run, for a savepoint never created and for one already
+rolled back to; PostgreSQL answers both with `3B001`.
+
+`08000` (`connection_exception`) is kept for the transport failing, recognised by
+its wording. Until 2.0.1 the query paths also used it as their fallback, so -14,
+-51, -375 and the DBAPI driver's `<LIST ERROR>` reached clients as a connection
+failure, which tells a client-side pool to throw away a connection that was fine.
 
 `-149` is the code IRIS raises when an installed SQL function throws — one of
 ours, in practice. IRIS does not surface the inner condition, so there is
@@ -105,6 +115,7 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
     -119: ("23505", "unique_violation"),
     -149: ("XX000", "internal_error"),
     -359: ("42883", "undefined_function"),
+    -375: ("3B001", "invalid_savepoint_specification"),
     -400: ("XX000", "internal_error"),
 }
 
@@ -213,6 +224,19 @@ _MESSAGE_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, str]], ...] = (
             re.I,
         ),
         ("XX000", "internal_error"),
+    ),
+    (
+        # The transport itself, in the wordings the DBAPI executor already treats
+        # as a lost connection. Only this is a connection exception.
+        re.compile(
+            r"communication link failure"
+            r"|connection (?:lost|reset|refused|closed)"
+            r"|\bnot connected\b"
+            r"|socket (?:error|closed)"
+            r"|broken pipe",
+            re.I,
+        ),
+        ("08000", "connection_exception"),
     ),
 )
 

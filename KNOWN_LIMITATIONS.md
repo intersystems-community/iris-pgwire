@@ -345,9 +345,9 @@ A row deleted by an in-progress transaction is never returned, at any level — 
 
 Note also that `READ VERIFIED` is **not** stronger than `READ COMMITTED` despite the name. It re-checks query _conditions_, not commit state; the same plain row query that raised `-114` at `READ COMMITTED` returned the uncommitted `999` immediately at `READ VERIFIED`.
 
-### ⚠️ An Accepted `READ COMMITTED` Is Not a Guarantee
+### An Accepted `READ COMMITTED` Was Not a Guarantee Before 2.0.1
 
-`SET TRANSACTION ISOLATION LEVEL READ COMMITTED` returning success, and `SHOW transaction_isolation` then reporting `read committed`, do not mean the level is in force for the next read.
+**Fixed in 2.0.1 on the DBAPI backend.** On 2.0.0 and earlier, `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` returning success, and `SHOW transaction_isolation` then reporting `read committed`, did not mean the level was in force for the next read.
 
 Measured against IRIS 2026.1 CE with a writer holding one row uncommitted, a reader whose `SET` was accepted with SQLCODE 0 does one of two things:
 
@@ -356,11 +356,13 @@ Measured against IRIS 2026.1 CE with a writer holding one row uncommitted, a rea
 | Lock timeout, SQLCODE `-114` → `40001`           | a flat **10s** |
 | Returns the writer's uncommitted value, no error | immediate      |
 
-Both shapes were reproduced repeatedly. **Cause found 2026-11-14** (track 4 spike, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): it is PGWire's DBAPI connection pool, not IRIS. When a client disconnects, its IRIS connection goes back to the pool with any open transaction still open and its isolation level unchanged. A session later handed that connection runs inside the abandoned transaction, so it reads the uncommitted value at once, and a `COMMIT` from it makes that value permanent. On a clean connection IRIS honoured `READ COMMITTED` in 50 of 50 reads. The fix is planned for 2.0.1; until then, end every transaction before disconnecting.
+Both shapes were reproduced repeatedly. **Cause found 2026-11-14** (track 4 spike, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): it is PGWire's DBAPI connection pool, not IRIS. When a client disconnects, its IRIS connection goes back to the pool with any open transaction still open and its isolation level unchanged. A session later handed that connection runs inside the abandoned transaction, so it reads the uncommitted value at once, and a `COMMIT` from it makes that value permanent. On a clean connection IRIS honoured `READ COMMITTED` in 50 of 50 reads.
+
+Since 2.0.1, when a session closes, PGWire rolls back its IRIS connection, resets the isolation level to the server default (`READ UNCOMMITTED`), and discards the connection instead of reusing it if either step fails. The isolation suite's `h3/*` checks, and a check that a new session on a reused connection reports and runs at the default level, now give PostgreSQL's answer. On 2.0.0 and earlier, end every transaction before disconnecting.
 
 Practical consequences:
 
-- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not use `SELECT ... FOR UPDATE` for this: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
+- On 2.0.0 and earlier, do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not use `SELECT ... FOR UPDATE` for this: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
 - Budget more than 10 seconds for any statement that may meet a contended row. A test or health check with a 5-second timeout reports a hang where the database was waiting out its normal lock timeout.
 
 ### Sessions Share One Transaction in the In-IRIS Deployment

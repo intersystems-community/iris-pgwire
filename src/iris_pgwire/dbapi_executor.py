@@ -6,6 +6,7 @@ vector query support, and performance monitoring.
 """
 
 import asyncio
+import contextlib
 import datetime as dt
 import re
 import time
@@ -41,12 +42,14 @@ from iris_pgwire.sql_translator.boolean_expr import (
     rewrite_boolean_literal_comparisons,
     rewrite_boolean_projections,
 )
+from iris_pgwire.sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolation
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.pg_functions import (
     has_pg_function_call,
     rewrite_pg_function_calls,
 )
 from iris_pgwire.sql_translator.returning_plan import ReturningPlan
+from iris_pgwire.sql_translator.transaction_translator import rewrite_savepoint_verbs
 from iris_pgwire.sql_translator.verbatim import is_verbatim
 
 logger = structlog.get_logger(__name__)
@@ -84,6 +87,20 @@ _CONNECTION_LOST_MARKERS = (
     "operationalerror",
     "interfaceerror",
 )
+
+# The DBAPI driver's "<LIST ERROR> Incorrect list format" in place of a real IRIS
+# error. Measured 2026-11-14 with intersystems-irispython alone, no PGWire: once a
+# connection has had a unique violation (-119) on a table, and the table is then
+# dropped and recreated, every later -119 on it arrives as this, 10 of 10; a fresh
+# connection gets -119 every time. The connection still answers, so it is not
+# "lost", but whoever is handed it next gets wrong errors, so it is not reused.
+_DRIVER_DESYNC_MARKERS = (
+    "<list error>",
+    "incorrect list format",
+)
+
+# `ROLLBACK [WORK|TRANSACTION] TO ...`, which ends no transaction.
+_ROLLBACK_TO_RE = re.compile(r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO\b", re.IGNORECASE)
 
 # Transaction control keywords
 _TX_CONTROL_KEYWORDS = ("BEGIN", "START TRANSACTION", "COMMIT", "ROLLBACK", "END")
@@ -262,6 +279,9 @@ class DBAPIExecutor(IsolationMixin):
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
+
+            # `ROLLBACK TO x` / `RELEASE x` -> IRIS's spelling with SAVEPOINT.
+            sql = rewrite_savepoint_verbs(sql)
 
             # Rewrite ARRAY['a','b'] constructor syntax to '{a,b}' (feature 047).
             sql = rewrite_array_literals(sql)
@@ -488,6 +508,12 @@ class DBAPIExecutor(IsolationMixin):
             if session_id:
                 self.session_connections.pop(session_id, None)
                 self.session_transactions.pop(session_id, None)
+        elif any(msg in error_str for msg in _DRIVER_DESYNC_MARKERS):
+            # Not dropped from the session: moving the session to another
+            # connection mid-transaction would silently run its next statement
+            # outside the transaction. Marked failed, the pool discards it when
+            # the session ends instead of handing it to the next client.
+            conn_wrapper.mark_failed(str(error))
         else:
             conn_wrapper.record_query_execution(acquisition_time_ms=0, success=False)
 
@@ -510,6 +536,11 @@ class DBAPIExecutor(IsolationMixin):
         normalized = sql_upper.strip().upper()
         if normalized.startswith("START TRANSACTION") or normalized.startswith("BEGIN"):
             self.session_transactions[session_id] = True
+        elif _ROLLBACK_TO_RE.match(normalized):
+            # A partial rollback: the transaction is still open. Treated as its
+            # end, the next statement was auto-committed, committing the work
+            # before the savepoint with it.
+            return
         elif normalized.startswith(("COMMIT", "ROLLBACK", "END")):
             self.session_transactions.pop(session_id, None)
 
@@ -1456,14 +1487,60 @@ class DBAPIExecutor(IsolationMixin):
         self.session_namespaces[session_id] = namespace
 
     async def close_session(self, session_id: str):
-        """Close resources for a specific session."""
+        """Close resources for a specific session.
+
+        The IRIS connection goes back to the pool for the next client, so it must
+        go back as a new one would arrive: no open transaction and the server's
+        default isolation level. It used to go back as the client left it. The
+        next session then ran inside the abandoned transaction, reading its
+        uncommitted writes, and a bare COMMIT made them permanent; a session that
+        reported the default level ran at the previous client's. PostgreSQL rolls
+        an abandoned transaction back when the connection ends.
+        """
         conn_wrapper = self.session_connections.pop(session_id, None)
         if conn_wrapper:
             logger.info("Closing session connection", session_id=session_id)
+            if conn_wrapper.is_healthy:
+                error = await asyncio.to_thread(self._reset_connection_sync, conn_wrapper.connection)
+                if error is not None:
+                    # Not knowing what state it is in, nobody else may have it:
+                    # the pool removes a failed connection instead of queueing it.
+                    logger.warning(
+                        "Discarding a connection that could not be reset",
+                        session_id=session_id,
+                        error=error,
+                    )
+                    conn_wrapper.mark_failed(f"reset on session close failed: {error}")
             await self.pool.release(conn_wrapper)
         self.session_namespaces.pop(session_id, None)
         self.session_transactions.pop(session_id, None)
         self.forget_isolation_level(session_id)
+
+    @staticmethod
+    def _reset_connection_sync(connection: Any) -> str | None:
+        """ROLLBACK, then the default isolation level; the error text, or None.
+
+        ROLLBACK is sent whether or not a transaction was tracked: the tracking is
+        bookkeeping, and IRIS's own state is what the next session inherits. It
+        comes first because IRIS refuses a level change inside a transaction.
+        """
+        reset_level = parse_set_isolation(
+            f"SET TRANSACTION ISOLATION LEVEL {DEFAULT_ISOLATION_LEVEL}"
+        )
+        statements = ["ROLLBACK"]
+        if reset_level is not None and reset_level.iris_sql:
+            statements.append(reset_level.iris_sql)
+        try:
+            cursor = connection.cursor()
+            try:
+                for statement in statements:
+                    cursor.execute(statement)
+            finally:
+                with contextlib.suppress(Exception):  # the reset already decided
+                    cursor.close()
+        except Exception as e:  # noqa: BLE001 - any failure means "do not reuse"
+            return str(e)
+        return None
 
     async def begin_transaction(self, session_id: str | None = None):
         """Begin a transaction."""

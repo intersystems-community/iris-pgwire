@@ -1039,9 +1039,7 @@ class PGWireProtocol:
 
         except Exception as e:
             logger.error("Query handling failed", connection_id=self.connection_id, error=str(e))
-            sqlstate, condition = classify_iris_error(
-                str(e), default=("08000", "connection_exception")
-            )
+            sqlstate, condition = classify_iris_error(str(e))
             await self.send_error_response(
                 "ERROR", sqlstate, condition, f"Query processing failed: {e}"
             )
@@ -1189,11 +1187,10 @@ class PGWireProtocol:
                 "Single statement handling failed", connection_id=self.connection_id, error=str(e)
             )
             # FR-008e: an IRIS SQL error arriving as a Python exception is still
-            # an IRIS SQL error. Only a genuinely unrecognised failure keeps
-            # 08000, which claims the connection itself is broken.
-            sqlstate, condition = classify_iris_error(
-                str(e), default=("08000", "connection_exception")
-            )
+            # an IRIS SQL error. 08000 claims the connection itself is broken, so
+            # it is reserved for a transport failure the wording names; anything
+            # unrecognised is XX000.
+            sqlstate, condition = classify_iris_error(str(e))
             await self.send_error_response(
                 "ERROR", sqlstate, condition, f"Statement processing failed: {e}"
             )
@@ -1917,8 +1914,9 @@ class PGWireProtocol:
                 error=str(e),
                 command=command,
             )
+            sqlstate, condition = classify_iris_error(str(e))
             await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"SET command processing failed: {e}"
+                "ERROR", sqlstate, condition, f"SET command processing failed: {e}"
             )
             if send_ready:
                 await self.send_ready_for_query()
@@ -3714,9 +3712,8 @@ class PGWireProtocol:
             logger.error(
                 "COPY command handling failed", connection_id=self.connection_id, error=str(e)
             )
-            await self.send_error_response(
-                "ERROR", "08000", "connection_exception", f"COPY command failed: {e}"
-            )
+            sqlstate, condition = classify_iris_error(str(e))
+            await self.send_error_response("ERROR", sqlstate, condition, f"COPY command failed: {e}")
             if send_ready:
                 await self.send_ready_for_query()
 
@@ -3845,9 +3842,7 @@ class PGWireProtocol:
 
         if not result.get("success"):
             error_msg = result.get("error", "Query execution failed")
-            sqlstate, condition = classify_iris_error(
-                error_msg, default=("08000", "connection_exception")
-            )
+            sqlstate, condition = classify_iris_error(error_msg)
             await self.send_error_response("ERROR", sqlstate, condition, error_msg)
             if send_ready:
                 await self.send_ready_for_query()

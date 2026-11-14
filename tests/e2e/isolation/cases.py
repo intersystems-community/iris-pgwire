@@ -119,7 +119,7 @@ def _g0(trace: Trace) -> bool:
 ALL_ROWS = [(1, 10), (2, 20)]
 
 # Hermitage writes `value % 3 = 0`. PGWire does not translate `%` (IRIS reports SQLCODE -14, which
-# reaches the client as 08000), so both targets are given the same predicate as `mod()`. The
+# reached the client as 08000, XX000 since 2.0.1), so both targets get the predicate as `mod()`. The
 # meaning is identical; the deviation is recorded in the investigation's Results section.
 MOD3 = "select * from test where mod(value, 3) = 0"
 

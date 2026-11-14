@@ -50,14 +50,6 @@ class TransactionTranslator:
 
     ROLLBACK_PATTERN = re.compile(r"^\s*ROLLBACK(?:\s+WORK|\s+TRANSACTION)?$", re.IGNORECASE)
 
-    # CRITICAL FIX (2025-11-14): SAVEPOINT syntax translation for IRIS compatibility
-    # PostgreSQL: ROLLBACK TO savepoint_name (SAVEPOINT keyword optional)
-    # IRIS: ROLLBACK TO SAVEPOINT savepoint_name (SAVEPOINT keyword REQUIRED)
-    ROLLBACK_TO_PATTERN = re.compile(
-        r"^\s*ROLLBACK\s+TO\s+(?!SAVEPOINT\s+)(\S+)\s*$", re.IGNORECASE
-    )
-    RELEASE_PATTERN = re.compile(r"^\s*RELEASE\s+(?!SAVEPOINT\s+)(\S+)\s*$", re.IGNORECASE)
-
     # String literal detection (to avoid translating inside strings)
     STRING_LITERAL_PATTERN = re.compile(r"'[^']*'", re.DOTALL)
 
@@ -120,22 +112,11 @@ class TransactionTranslator:
             self._record_translation_time(start_time)
             return "ROLLBACK"
 
-        # CRITICAL FIX (2025-11-14): ROLLBACK TO savepoint → ROLLBACK TO SAVEPOINT savepoint
-        # IRIS requires explicit SAVEPOINT keyword, PostgreSQL makes it optional
-        match = self.ROLLBACK_TO_PATTERN.match(sql_stripped)
-        if match:
-            savepoint_name = match.group(1)
-            result = f"ROLLBACK TO SAVEPOINT {savepoint_name}"
+        # ROLLBACK TO x / RELEASE x -> the IRIS spelling with SAVEPOINT.
+        rewritten = rewrite_savepoint_verbs(sql_stripped)
+        if rewritten != sql_stripped:
             self._record_translation_time(start_time)
-            return result
-
-        # RELEASE savepoint → RELEASE SAVEPOINT savepoint
-        match = self.RELEASE_PATTERN.match(sql_stripped)
-        if match:
-            savepoint_name = match.group(1)
-            result = f"RELEASE SAVEPOINT {savepoint_name}"
-            self._record_translation_time(start_time)
-            return result
+            return rewritten
 
         # Not a transaction command - return unchanged
         self._record_translation_time(start_time)
@@ -260,3 +241,34 @@ class TransactionTranslator:
 
         if elapsed_ms > self._sla_threshold_ms:
             self._sla_violations += 1
+
+
+# PostgreSQL makes the SAVEPOINT keyword optional in `ROLLBACK TO [SAVEPOINT] x` and
+# `RELEASE [SAVEPOINT] x`; IRIS requires it ("SAVEPOINT expected, IDENTIFIER found").
+# The name may be quoted, and psycopg always quotes it (`ROLLBACK TO "_pg3_1"`), so
+# a quoted identifier is matched whole, including spaces and doubled quotes.
+_SAVEPOINT_NAME = r'("(?:[^"]|"")+"|[^\s";]+)'
+_ROLLBACK_TO_RE = re.compile(
+    r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO\s+(?!SAVEPOINT\b)" + _SAVEPOINT_NAME
+    + r"\s*;?\s*$",
+    re.IGNORECASE,
+)
+_RELEASE_RE = re.compile(
+    r"^\s*RELEASE\s+(?!SAVEPOINT\b)" + _SAVEPOINT_NAME + r"\s*;?\s*$", re.IGNORECASE
+)
+
+
+def rewrite_savepoint_verbs(sql: str) -> str:
+    """Supply the SAVEPOINT keyword IRIS requires; return anything else unchanged.
+
+    Applied by both backends. On DBAPI it used to be missing altogether, so
+    psycopg's nested-transaction rollback (`ROLLBACK TO "_pg3_1"`) failed with
+    SQLCODE -1, psycopg ignored the failure, and the inner block was committed.
+    """
+    match = _ROLLBACK_TO_RE.match(sql)
+    if match:
+        return f"ROLLBACK TO SAVEPOINT {match.group(1)}"
+    match = _RELEASE_RE.match(sql)
+    if match:
+        return f"RELEASE SAVEPOINT {match.group(1)}"
+    return sql
