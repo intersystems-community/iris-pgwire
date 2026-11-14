@@ -356,11 +356,11 @@ Measured against IRIS 2026.1 CE with a writer holding one row uncommitted, a rea
 | Lock timeout, SQLCODE `-114` → `40001`           | a flat **10s** |
 | Returns the writer's uncommitted value, no error | immediate      |
 
-Both shapes were reproduced repeatedly. The trigger for the second was **not** isolated: not the statement text, not how many readers had run before, not whether the `SET` preceded or followed the first read, and not whether a transaction was explicitly open. Six successive fresh connections against a fresh table were deterministic (all ten-second timeouts), while other sequences returned the uncommitted value with no wait at all.
+Both shapes were reproduced repeatedly. **Cause found 2026-11-14** (track 4 spike, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): it is PGWire's DBAPI connection pool, not IRIS. When a client disconnects, its IRIS connection goes back to the pool with any open transaction still open and its isolation level unchanged. A session later handed that connection runs inside the abandoned transaction, so it reads the uncommitted value at once, and a `COMMIT` from it makes that value permanent. On a clean connection IRIS honoured `READ COMMITTED` in 50 of 50 reads. The fix is planned for 2.0.1; until then, end every transaction before disconnecting.
 
 Practical consequences:
 
-- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not rely on `SELECT ... FOR UPDATE` for this yet: see [Related PostgreSQL Statements](#related-postgresql-statements).
+- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not use `SELECT ... FOR UPDATE` for this: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
 - Budget more than 10 seconds for any statement that may meet a contended row. A test or health check with a 5-second timeout reports a hang where the database was waiting out its normal lock timeout.
 
 ### Sessions Share One Transaction in the In-IRIS Deployment
@@ -421,7 +421,7 @@ The mechanism: the version predicate matches no row while A holds the new value,
 
 **Workarounds**:
 
-- Prefer pessimistic locking with a writer lock: `UPDATE ... WHERE id = ?` by key alone (IRIS writer locks are real: a second writer gets `-110` → `40001`), or `LOCK TABLE ... IN EXCLUSIVE MODE` for the transaction. `SELECT ... FOR UPDATE` is **not** a verified substitute: see [Related PostgreSQL Statements](#related-postgresql-statements).
+- Prefer pessimistic locking with a writer lock: `UPDATE ... WHERE id = ?` by key alone (IRIS writer locks are real: a second writer gets `-110` → `40001`), or `LOCK TABLE ... IN EXCLUSIVE MODE` for the transaction. `SELECT ... FOR UPDATE` is **not** a substitute: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
 - Or treat a zero row count from a version-guarded update as inconclusive, re-read the row, and distinguish a real version change from a concurrent holder before raising a stale-data error.
 
 ### Related PostgreSQL Statements
@@ -430,13 +430,15 @@ Measured through PGWire against IRIS 2026.2:
 
 | Statement                           | Result                               |
 | ----------------------------------- | ------------------------------------ |
-| `SELECT ... FOR UPDATE`             | Accepted; exclusion **unverified**   |
+| `SELECT ... FOR UPDATE`             | Accepted; **takes no lock**          |
 | `SELECT ... FOR UPDATE NOWAIT`      | Not supported — `42601 syntax_error` |
 | `SELECT ... FOR UPDATE SKIP LOCKED` | Not supported — `42601 syntax_error` |
 | `INSERT ... ON CONFLICT DO NOTHING` | Emulated by PGWire                   |
 | `UPDATE ... RETURNING`              | Emulated by PGWire                   |
 
-**`SELECT ... FOR UPDATE` is accepted, but nothing yet shows that it locks.** IRIS documents `FOR UPDATE` on a cursor as performing no operation ([DECLARE](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_declare)). The contention measured at `READ COMMITTED` may be the ordinary read wait rather than an exclusive lock, in which case two sessions can both "lock" the same committed row and lose an update. Until experiment E2 in [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) settles it, do not use it for mutual exclusion; use a writer lock as above.
+**`SELECT ... FOR UPDATE` is accepted, but it takes no lock.** IRIS documents `FOR UPDATE` on a cursor as performing no operation ([DECLARE](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_declare)), and experiment E2 measured it (2026-11-14, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): a second `FOR UPDATE` and a writer both go straight through, at both isolation levels, and four workers doing read-`FOR UPDATE`-then-write ended at about 500 after 1000 commits. Half the updates were lost, with no error.
+
+To lock a row before reading it, touch it instead: `UPDATE t SET id = id WHERE id = ?`, then read and write. A second touch, or any writer, waits until the first transaction commits, exactly like PostgreSQL's row lock; the same four-worker counter ended at 1000 of 1000. Note that a touch-update fires UPDATE triggers and counts toward IRIS's 1000-lock escalation threshold.
 
 Neither lock modifier is translated, so both reach IRIS as trailing tokens it cannot parse. That means the standard PostgreSQL job-queue pattern (`SELECT ... FOR UPDATE SKIP LOCKED` plus `UPDATE ... RETURNING`) has no direct equivalent — use an IRIS-native queue or a single-consumer design.
 

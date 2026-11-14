@@ -300,6 +300,7 @@ markers = [
     # a failure means the limitation changed and KNOWN_LIMITATIONS.md is now
     # lying. Run them together with `pytest -m pinned_limitation`.
     "pinned_limitation: Pins a documented divergence from PostgreSQL; a failure means the docs are stale",
+    "isolation: Two-session isolation suite against PGWire and PostgreSQL 16 (make isolation)",
 ]
 
 # Flaky test detection configuration

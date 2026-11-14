@@ -70,7 +70,7 @@ concurrent transactions is spec 051 task T088.
 
 1. Done 2026-11-14: hedged the `SELECT ... FOR UPDATE` workaround in `KNOWN_LIMITATIONS.md`;
    added T088 to spec 051.
-2. **Spike session**, before any spec:
+2. **Spike session**, before any spec (done 2026-11-14; see the next section):
    - Build the isolation suite as pytest (`tests/e2e/isolation/`, marker `-m isolation`, a
      `make isolation` target, run in its own pytest process). Every case runs against PGWire and
      against `iris-pgwire-pgref` (PostgreSQL 16, port 55433). Expected answers come from
@@ -113,6 +113,47 @@ concurrent transactions is spec 051 task T088.
 4. **Later:** E6 and E7 (lock escalation, pgbench) on an enterprise-key lab; running the suite in
    CI; `statement_timeout` as a real `57014` once the cancel path is known; maybe advisory locks.
 5. **Ships as 2.1.0**, strict by default, with a "behaviour changes" section in the changelog.
+
+## Track 4 spike results and decisions (grilling with Thomas, 2026-11-14)
+
+Done: the spike ran (Order step 2). The suite is `tests/e2e/isolation/`, run by `make isolation`: 108 checks, green,
+with IRIS's outcomes pinned. The results, the Hermitage table and the updated gotcha table are in
+`docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5. These results contradicted the plan above, and were
+settled as follows:
+
+1. **Gotcha row 4 is a PGWire bug, so it ships as a 2.0.1 hotfix before spec 052.** `DBAPIExecutor.close_session`
+   returns a disconnected client's IRIS connection to the pool with its transaction open and its isolation level
+   unchanged; the next session runs inside it, and a bare `COMMIT` makes another client's uncommitted write permanent.
+   IRIS itself honoured READ COMMITTED in 50 of 50 clean reads. The fix: on session close, ROLLBACK, reset the level,
+   and discard a connection whose driver is out of step. The suite's `h3/*` checks are its regression tests. Spec 052
+   references it.
+2. **The 2.0.1 hotfix also carries three small fixes.**
+   - IRIS SQLCODEs with no mapping default to `XX000`, not `08000`.
+   - -375 maps to `3B001`.
+   - The savepoint rewrite matches a quoted name, which fixes psycopg's `ROLLBACK TO "_pg3_1"`. Today that statement
+     fails and psycopg ignores the failure, so a nested `transaction()` block commits its inner work.
+3. **US3 stays as planned, with two amendments.** Map to `INSERT OR UPDATE` only the one shape it expresses exactly:
+   the conflict target is the table's only unique key, and `DO UPDATE` sets every inserted column from `EXCLUDED`,
+   with no `WHERE`. With a second unique key, `INSERT OR UPDATE` rewrites the primary key. Refuse the rest in strict
+   mode.
+   - Drop "executemany dropping `DO UPDATE`" from US3's bug list: it is embedded-only, so it moves to spec 051.
+   - Add "the emulation classifies by SQLCODE -119, not by error text". On a just-created table the unique violation
+     arrives as the driver's `<LIST ERROR>` instead.
+4. **CancelRequest becomes loud in spec 052.** PGWire answers it by closing the session's IRIS connection, so the
+   statement fails and its transaction rolls back. Today the cancel is acknowledged, never reaches IRIS, and the
+   cancelled write lands. A true cancel through IRIS's own API joins the "later" list.
+5. **The 2.1 default isolation is READ COMMITTED**, with `PGWIRE_DEFAULT_ISOLATION=read uncommitted` as the escape
+   hatch, listed under "behaviour changes". READ UNCOMMITTED reads dirty data silently; READ COMMITTED fails loudly
+   (a 40001 after the lock timeout), and US5's `lock_timeout` mapping bounds the wait. GROUP BY, aggregates and
+   full-scan DISTINCT still read dirty at READ COMMITTED (gotcha row 3), which stays documented.
+6. **US4 is confirmed.** `FOR UPDATE` takes no lock (a counter lost half its updates), and the touch-update excludes
+   exactly (1000 of 1000). Run directly on IRIS, `SET OPTION LOCK_TIMEOUT = 0` failed a contended write in 0.00 s, so
+   `NOWAIT` and `lock_timeout` map as planned.
+7. **US2 grows.** IRIS has no `RELEASE` (-51), and a second `ROLLBACK TO` the same savepoint rolls back nothing. PGWire
+   therefore tracks the stack itself: it re-establishes a savepoint after `ROLLBACK TO`, answers `RELEASE` without
+   sending it, and returns `3B001` for an unknown name.
+8. `KNOWN_LIMITATIONS.md` now says `FOR UPDATE` takes no lock and recommends the touch-update instead. It also gives
+   the pool as the cause of the "accepted READ COMMITTED not in force" shape.
 
 ## Track 5 decision map
 
