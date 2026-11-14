@@ -1,0 +1,8 @@
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 100000, "frame": "pandas", "path": "official", "median_s": 0.4114, "runs_s": [0.4156, 0.4234, 0.405, 0.4114, 0.4062]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 100000, "frame": "pandas", "path": "native", "median_s": 0.1314, "runs_s": [0.1276, 0.1425, 0.1405, 0.1311, 0.1314]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 100000, "frame": "polars", "path": "official", "median_s": 0.5191, "runs_s": [0.5291, 0.5099, 0.5191, 0.5014, 0.5258]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 100000, "frame": "polars", "path": "native", "median_s": 0.1072, "runs_s": [0.1075, 0.1097, 0.1052, 0.1072, 0.1008]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 3000000, "frame": "pandas", "path": "official", "median_s": 11.6652, "runs_s": [11.5074, 11.6663, 11.6652, 11.2882, 11.889]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 3000000, "frame": "pandas", "path": "native", "median_s": 3.0876, "runs_s": [3.0876, 3.1278, 3.0836, 3.0891, 3.0734]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 3000000, "frame": "polars", "path": "official", "median_s": 15.0841, "runs_s": [15.9776, 15.0841, 14.4052, 14.376, 15.6176]}
+{"server": "2026.2-native-rerun", "connection": "tcp", "case": "read", "rows": 3000000, "frame": "polars", "path": "native", "median_s": 2.31, "runs_s": [2.2776, 2.29, 2.4722, 2.4288, 2.31]}
