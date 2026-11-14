@@ -3,7 +3,7 @@
   <Document name="iris-pgwire.ZPM">
     <Module>
       <Name>iris-pgwire</Name>
-      <Version>1.0.0</Version>
+      <Version>2.0.0</Version>
       <Description>PostgreSQL wire protocol server for InterSystems IRIS with DBAPI backend and vector support</Description>
       <Author>Thomas Dyar</Author>
       <Homepage>https://github.com/intersystems-community/iris-pgwire</Homepage>
@@ -40,8 +40,9 @@
         <Description>Install Python dependencies from requirements.txt</Description>
       </Invoke>
 
-      <!-- NOTE: Server does NOT auto-start after installation -->
-      <!-- User must manually start: do ##class(IrisPGWire.Service).Start() -->
+      <!-- NOTE: Server does NOT auto-start after installation. Start it with the options that
+           say how the password is protected, e.g. do ##class(IrisPGWire.Service).Start(1);
+           see docs/INSTALLATION.md. With no choice the server refuses to start. -->
 
       <!-- Deactivate Phase: Stop PGWire TCP server -->
       <Invoke Phase="Deactivate" Class="IrisPGWire.Service" Method="Stop" CheckStatus="true">
