@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from iris_pgwire import row_limit
 from iris_pgwire._isolation import IsolationMixin
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
@@ -49,6 +50,30 @@ from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 from iris_pgwire.sql_translator.verbatim import is_verbatim
 
 logger = structlog.get_logger(__name__)
+
+_NOT_WRAPPABLE = re.compile(r"\bFOR\s+UPDATE\b|\bINTO\b", re.IGNORECASE)
+_ORDER_BY = re.compile(r"\bORDER\s+BY\b", re.IGNORECASE)
+_TOP = re.compile(r"\bTOP\b", re.IGNORECASE)
+
+
+def describe_probe_sql(sql: str, rows: int) -> str | None:
+    """The query capped at `rows` rows in SQL, for a Describe; None to run it as it is.
+
+    The DBAPI driver (intersystems-irispython 5.4.1) cannot stop reading a result part-way: any
+    cursor left with rows unread, closed or not, puts the connection out of step ("Message out of
+    order"). So a Describe that only needs the columns used to read every row. Wrapped as
+    `SELECT TOP n * FROM (query)`, IRIS describes it exactly as it describes the query (checked
+    on 2026.2 across 15 query shapes) and sends n rows. IRIS refuses the wrapper around an ORDER BY
+    without TOP, a WITH and a FOR UPDATE, so those are not wrapped; nor is anything but a SELECT.
+    A query this lets through that IRIS still refuses is run unwrapped by the caller.
+    """
+    body = sql.strip().rstrip(";").strip()
+    if body[:6].upper() != "SELECT" or _NOT_WRAPPABLE.search(body):
+        return None
+    if _ORDER_BY.search(body) and not _TOP.search(body):
+        return None
+    return f"SELECT TOP {int(rows)} * FROM ({body}) AS pgwire_describe"
+
 
 # Connection-lost error indicators (shared by execute_query and execute_many)
 _CONNECTION_LOST_MARKERS = (
@@ -559,6 +584,24 @@ class DBAPIExecutor(IsolationMixin):
                 override_where_params=self._extract_where_params(plan.where_clause, params),
             )
 
+        limit = row_limit.current()
+        probe = (
+            describe_probe_sql(cleaned_sql, limit)
+            if limit is not None and not plan.has_returning
+            else None
+        )
+        if probe is not None:
+            try:
+                if execute_params:
+                    cursor.execute(probe, execute_params)
+                else:
+                    cursor.execute(probe)
+                return self._build_result(
+                    cursor, connection, plan, params, session_id, original_sql, [], None
+                )
+            except Exception as exc:  # noqa: BLE001 - run the query itself; its error is the one
+                logger.debug("Describe probe refused; running the query", error=str(exc)[:200])
+
         try:
             if execute_params:
                 cursor.execute(cleaned_sql, execute_params)
@@ -630,6 +673,10 @@ class DBAPIExecutor(IsolationMixin):
         """Fetch rows and column metadata from a cursor with results."""
         if not cursor.description:
             return [], []
+        # Every row, even under a row_limit cap. With intersystems-irispython 5.4.1, a
+        # fetchmany(1) of a result that spans several messages followed by close() leaves the
+        # connection out of step: the next statement fails with "Message out of order" and the
+        # connection is lost (reproduced 2026-11-14 with 1,000 rows of 12 columns).
         rows = cursor.fetchall()
         columns = self._build_metadata_from_description(cursor.description)
         if rows:

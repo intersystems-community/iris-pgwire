@@ -115,6 +115,12 @@ ai = [
     #   macOS:  brew install https://raw.githubusercontent.com/intersystems-community/iris-agentic-dev/master/Formula/iris-agentic-dev.rb
     # See docs/iris-pgwire-iad-setup-issues.md and AGENTS.md.
 ]
+fast = [
+    # psycopg's C extension encodes binary result rows (ADBC, binary COPY) several times faster.
+    # Optional: without it the server encodes them itself, to the same bytes. The server uses an
+    # internal psycopg function (row_encoding.py), so the range is pinned to versions tested.
+    "psycopg[binary]>=3.2,<3.4",
+]
 kerberos = [
     # Kerberos GSSAPI authentication (optional - not implemented in wire protocol yet)
     # Install with: pip install iris-pgwire[kerberos]

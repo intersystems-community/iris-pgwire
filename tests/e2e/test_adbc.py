@@ -174,3 +174,72 @@ class TestTransactionsAndErrors:
             fetch(conn, "SELECT * FROM NoSuchTable051Adbc", use_copy)
         conn.rollback()
         assert fetch(conn, "SELECT 1 AS n", use_copy).to_pylist() == [{"n": 1}]
+
+
+class TestDescribeOfALargeResult:
+    """Describe learns a statement's columns without reading its rows (2026-11-14).
+
+    The DBAPI backend runs `SELECT TOP 1 * FROM (query)` for it, because its driver
+    (intersystems-irispython 5.4.1) loses its place if a cursor is left with rows unread: the next
+    statement fails with "Message out of order" and the connection is gone. A few thousand rows of
+    text is enough to span several driver messages, which is when that happens. The embedded
+    backend stops reading after one row.
+    """
+
+    ROWS = 8192
+
+    @pytest.fixture
+    def table(self, conn):
+        name = "PgwE2eDescribe"
+        with conn.cursor() as cur:
+            try:
+                cur.execute(f"DROP TABLE {name}")
+            except adbc.Error:
+                conn.rollback()
+            cur.execute(f"CREATE TABLE {name} (id INT, s VARCHAR(100))")
+            cur.execute(f"INSERT INTO {name} (id, s) VALUES (1, 'row text that takes some room')")
+            count = 1
+            while count < self.ROWS:  # double the table until it has ROWS rows
+                cur.execute(f"INSERT INTO {name} (id, s) SELECT id + {count}, s FROM {name}")
+                count *= 2
+        conn.commit()
+        yield name
+        with conn.cursor() as cur:
+            cur.execute(f"DROP TABLE {name}")
+        conn.commit()
+
+    @FETCH_MODES
+    def test_every_row_arrives_and_the_connection_still_works(self, conn, table, use_copy):
+        rows = fetch(conn, f"SELECT id, s FROM {table}", use_copy).to_pylist()
+        assert sorted(r["id"] for r in rows) == list(range(1, self.ROWS + 1))
+        assert fetch(conn, "SELECT 42 AS n", use_copy).to_pylist() == [{"n": 42}]
+
+    @FETCH_MODES
+    def test_an_order_by_iris_will_not_wrap_still_describes(self, conn, table, use_copy):
+        rows = fetch(conn, f"SELECT id FROM {table} ORDER BY id DESC", use_copy).to_pylist()
+        # int(): embedded declares this column varchar (pinned in TestKnownTypeDeclarationDefects)
+        assert [int(r["id"]) for r in rows[:3]] == [self.ROWS, self.ROWS - 1, self.ROWS - 2]
+        assert len(rows) == self.ROWS
+        assert fetch(conn, "SELECT 42 AS n", use_copy).to_pylist() == [{"n": 42}]
+
+    @FETCH_MODES
+    def test_bound_parameters_reach_the_query(self, conn, table, use_copy):
+        with conn.cursor() as cur:
+            cur.adbc_statement.set_options(**{"adbc.postgresql.use_copy": str(use_copy).lower()})
+            cur.execute(f"SELECT id FROM {table} WHERE id > $1", parameters=(self.ROWS - 3,))
+            rows = cur.fetch_arrow_table().to_pylist()
+        assert sorted(r["id"] for r in rows) == [self.ROWS - 2, self.ROWS - 1, self.ROWS]
+
+    @FETCH_MODES
+    def test_an_int_column_is_declared_int4(self, request, target, conn, table, use_copy):
+        if target[0] != "dbapi":
+            request.applymarker(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason="051 US3: embedded guesses types from values; this INT column comes "
+                    "back as string under ORDER BY and int64 without (found 2026-11-14, same at "
+                    "3938502)",
+                )
+            )
+        for sql in (f"SELECT id FROM {table} ORDER BY id DESC", f"SELECT id FROM {table}"):
+            assert fetch(conn, sql, use_copy).schema.types == [pa.int32()], sql

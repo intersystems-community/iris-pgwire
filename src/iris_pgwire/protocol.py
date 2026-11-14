@@ -22,12 +22,14 @@ from typing import Any
 
 import structlog
 
+from . import row_limit
 from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
 from .copy_export import copy_data, copy_out_response, export_messages, resolve_export_format
 from .copy_handler import CopyHandler
 from .csv_processor import CSVParsingError, CSVProcessor
 from .password_auth import AuthRefused, AuthUnavailable, parse_password_message
+from .row_encoding import data_row_encoder, text_value
 from .schema_mapper import IRIS_SCHEMA
 from .sql_translator import PerformanceStats, get_translator
 from .sql_translator.copy_parser import CopyCommandParser, CopyDirection
@@ -1554,10 +1556,11 @@ class PGWireProtocol:
             return result_formats[index]
         return 0
 
-    async def send_data_row(self, row: list[Any], columns: list[dict[str, Any]]):
-        """Send DataRow message for a single row"""
+    async def send_data_row(self, row: list[Any], columns: list[dict[str, Any]]) -> int:
+        """Write the DataRow message for one row and return its size in bytes."""
+        # Nothing is logged per row: it cost more than encoding the row, and put every value a
+        # client read into the server's log.
         field_count = len(columns)
-        logger.debug("Data row", field_count=field_count, row=row)
 
         # Ensure field_count is valid
         if field_count < 0 or field_count > 65535:
@@ -1568,12 +1571,6 @@ class PGWireProtocol:
         for i, col in enumerate(columns):
             # Row is a list of values, access by index
             value = row[i] if i < len(row) else None
-
-            # DEBUG: Log value being sent for each column
-            col_name = col.get("name", "unknown")
-            logger.info(
-                f"📦 DataRow column {i}: name='{col_name}' value='{value}' type={type(value).__name__}"
-            )
 
             if value is None:
                 # NULL value
@@ -1586,16 +1583,10 @@ class PGWireProtocol:
         total_length = len(data_row_data) - 1  # Subtract the message type byte
         data_row_data = data_row_data[:1] + struct.pack("!I", total_length) + data_row_data[5:]
 
-        # DEBUG: Hex dump of DataRow message (first 200 bytes)
-        hex_preview = data_row_data[:200].hex()
-        logger.info(f"🔍 DataRow hex dump (first 200 bytes): {hex_preview}")
-        logger.info("🔍 DataRow message structure:")
-        logger.info(f"   - Message type: {data_row_data[0:1].hex()} ('D')")
-        logger.info(f"   - Total length: {struct.unpack('!I', data_row_data[1:5])[0]} bytes")
-        logger.info(f"   - Field count: {struct.unpack('!H', data_row_data[5:7])[0]}")
-
+        # No drain here: send_data_rows_with_backpressure drains once per batch. Draining every
+        # row yielded to the event loop once per row.
         self.writer.write(data_row_data)
-        await self.writer.drain()
+        return len(data_row_data)
 
     def _get_data_row_format_code(self, index: int) -> int:
         result_formats = getattr(self, "_current_result_formats", [])
@@ -1630,13 +1621,7 @@ class PGWireProtocol:
         return struct.pack("!I", len(value_bytes)) + value_bytes
 
     def _format_text_value(self, value: Any, type_oid: int) -> str:
-        if type_oid == 16:
-            if value in (1, "1", True, "t", "true", "TRUE"):
-                return "t"
-            if value in (0, "0", False, "f", "false", "FALSE"):
-                return "f"
-            return "t" if value else "f"
-        return str(value)
+        return text_value(value, type_oid)
 
     def _encode_binary_column_value(self, type_oid: int, value: Any, column_index: int) -> bytes:
         """The binary wire form of one value, as PostgreSQL would send it.
@@ -1710,19 +1695,28 @@ class PGWireProtocol:
                 batch_size=self.result_batch_size,
             )
 
+            # The encoders for each column are chosen once for the result (see row_encoding), and
+            # the DataRows of a batch go to the socket in one write.
+            encode_row = data_row_encoder(
+                [column.get("type_oid", 25) for column in columns],
+                getattr(self, "_current_result_formats", []),
+            )
+            batch: list[bytes] = []
             for i, row in enumerate(rows):
-                # Send individual DataRow
-                await self.send_data_row(row, columns)
-
-                # Estimate bytes sent (rough calculation)
-                # Row is a list of values, not a dict
-                estimated_row_bytes = sum(
-                    len(str(row[i] if i < len(row) else "")) + 8 for i in range(len(columns))
-                )
-                pending_bytes += estimated_row_bytes
+                try:
+                    message = encode_row(row)
+                except Exception:
+                    # The rows before this one go out before the error, as they did when each
+                    # row was written as it was encoded.
+                    self.writer.write(b"".join(batch))
+                    raise
+                batch.append(message)
+                pending_bytes += len(message)
 
                 # Apply back-pressure controls
                 if (i + 1) % self.result_batch_size == 0 or pending_bytes > self.max_pending_bytes:
+                    self.writer.write(b"".join(batch))
+                    batch.clear()
                     # Force drain to apply network back-pressure
                     await self.writer.drain()
                     pending_bytes = 0
@@ -1739,6 +1733,7 @@ class PGWireProtocol:
                     if (i + 1) % (self.result_batch_size * 10) == 0:
                         await asyncio.sleep(0.001)  # 1ms yield for very large sets
 
+            self.writer.write(b"".join(batch))
             # Final drain
             await self.writer.drain()
 
@@ -2783,13 +2778,14 @@ class PGWireProtocol:
                         )
 
                         in_txn, autocommit = self._transaction_flags()
-                        result = await self.iris_executor.execute_query(
-                            query,
-                            params=dummy_params,
-                            session_id=self.connection_id,
-                            in_transaction=in_txn,
-                            autocommit=autocommit,
-                        )
+                        with row_limit.at_most(1):  # the columns, not the rows
+                            result = await self.iris_executor.execute_query(
+                                query,
+                                params=dummy_params,
+                                session_id=self.connection_id,
+                                in_transaction=in_txn,
+                                autocommit=autocommit,
+                            )
 
                         if result.get("success") and result.get("columns"):
                             await self.send_row_description(result["columns"])
@@ -2902,13 +2898,14 @@ class PGWireProtocol:
                             return
 
                         in_txn, autocommit = self._transaction_flags()
-                        result = await self.iris_executor.execute_query(
-                            query,
-                            params=portal.get("params", []),
-                            session_id=self.connection_id,
-                            in_transaction=in_txn,
-                            autocommit=autocommit,
-                        )
+                        with row_limit.at_most(1):  # the columns, not the rows
+                            result = await self.iris_executor.execute_query(
+                                query,
+                                params=portal.get("params", []),
+                                session_id=self.connection_id,
+                                in_transaction=in_txn,
+                                autocommit=autocommit,
+                            )
 
                         if result.get("success") and result.get("columns"):
                             result_formats = portal.get("result_formats", [])
@@ -3866,12 +3863,21 @@ class PGWireProtocol:
         await self.writer.drain()
 
         try:
-            for sent, payload in enumerate(export_messages(fmt, columns, rows), start=1):
-                self.writer.write(copy_data(payload))
-                if sent % 500 == 0:
+            # Still one CopyData message per row, as PostgreSQL sends them; but 500 of them go to
+            # the socket in one write, as one write per row cost more than encoding the row.
+            batch: list[bytes] = []
+            for payload in export_messages(fmt, columns, rows):
+                batch.append(copy_data(payload))
+                if len(batch) == 500:
+                    self.writer.write(b"".join(batch))
+                    batch.clear()
                     await self.writer.drain()  # back-pressure on a large export
+            self.writer.write(b"".join(batch))
             await self.writer.drain()
         except ValueEncodingError as exc:
+            # The rows encoded before the bad value go out first, as when each was written as
+            # it was encoded.
+            self.writer.write(b"".join(batch))
             # Mid-COPY, so the only honest report is an error that ends the statement: no CopyDone,
             # no CommandComplete. Sending the value's text instead would hand a binary client bytes
             # it cannot decode.

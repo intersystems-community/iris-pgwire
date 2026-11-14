@@ -22,8 +22,9 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from .row_encoding import BinaryRowEncoder
 from .sql_translator.copy_parser import CSVOptions
-from .value_encoding import encode_binary, encode_text
+from .value_encoding import encode_text
 
 BINARY_HEADER = b"PGCOPY\n\xff\r\n\x00" + struct.pack("!ii", 0, 0)  # signature, flags, extension
 BINARY_TRAILER = struct.pack("!h", -1)
@@ -106,17 +107,10 @@ def export_messages(
 
 
 def _binary_messages(oids: list[int], rows: Iterable[Iterable[Any]]) -> Iterator[bytes]:
+    encode = BinaryRowEncoder(oids).encode
     pending = BINARY_HEADER
     for row in rows:
-        values = list(row)
-        parts = [struct.pack("!h", len(oids))]
-        for oid, value in zip(oids, values, strict=False):
-            if value is None:
-                parts.append(struct.pack("!i", -1))
-            else:
-                encoded = encode_binary(oid, value)
-                parts.append(struct.pack("!i", len(encoded)) + encoded)
-        yield pending + b"".join(parts)
+        yield pending + encode(row) if pending else encode(row)
         pending = b""
     yield pending + BINARY_TRAILER
 

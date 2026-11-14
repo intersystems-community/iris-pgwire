@@ -339,6 +339,18 @@ class TestTheCopyFlow:
         assert kinds[-2:] == [b"E", b"Z"]
         assert b"c" not in kinds, "an aborted copy must not be reported as done"
 
+    async def test_the_rows_before_an_unencodable_value_are_still_sent(self):
+        # Rows go to the socket in batches; a bad value must not swallow the good rows batched
+        # before it. They were sent when each row was written as it was encoded.
+        bad = dict(OK, rows=[(1, "a"), (2, "b"), ("not-an-int", "c")])
+        protocol, wire, _ = make_protocol(bad)
+        await protocol.handle_copy_command("COPY (SELECT 1) TO STDOUT (FORMAT binary)")
+        sent = messages(bytes(wire.out))
+        assert [k for k, _ in sent] == [b"H", b"d", b"d", b"E", b"Z"]
+        assert sent[1][1] == BINARY_HEADER + struct.pack("!hi", 2, 4) + struct.pack("!i", 1) + (
+            struct.pack("!i", 1) + b"a"
+        )
+
     async def test_text_copy_without_any_options_is_postgresql_text(self):
         protocol, wire, _ = make_protocol(OK)
         await protocol.handle_copy_command("COPY (SELECT n, s FROM t) TO STDOUT")

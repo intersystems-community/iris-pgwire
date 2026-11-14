@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import random
 import uuid
 from decimal import Decimal
 
@@ -23,6 +24,7 @@ import pytest
 
 from iris_pgwire.value_encoding import (
     ValueEncodingError,
+    binary_encoder,
     binary_encoding_is_defined,
     encode_binary,
     encode_text,
@@ -151,3 +153,83 @@ class TestTextForCopy:
     )  # fmt: skip
     def test_text_form(self, oid, value, expected):
         assert encode_text(oid, value) == expected
+
+
+# ---------------------------------------------------------------------------------------------
+# binary_encoder: the per-column encoder chosen once per result
+# ---------------------------------------------------------------------------------------------
+
+
+class TestPerColumnEncoder:
+    """`binary_encoder(oid)` is what a result's columns use, once per column, instead of looking the
+    type up for every value. It must give the same bytes as `encode_binary`, and refuse the same
+    values, for every input; its fast paths are only allowed to be faster."""
+
+    @pytest.mark.parametrize("oid,value,expected_hex", ALL)
+    def test_gives_postgresqls_bytes(self, oid, value, expected_hex):
+        assert binary_encoder(oid)(value).hex() == expected_hex
+
+    @pytest.mark.parametrize(
+        "oid,value",
+        [
+            (23, "not a number"),
+            (23, 2**40),
+            (23, 2**31),
+            (21, 2**20),
+            (20, 2**63),
+            (1082, "not a date"),
+            (1114, "yesterday"),
+            (1700, "twelve"),
+            (1700, Decimal("Infinity")),
+            (701, "x"),
+            (701, None.__class__),
+            (25, "a\udcffb"),
+            (1043, "a\udcffb"),
+        ],
+    )
+    def test_refuses_what_encode_binary_refuses(self, oid, value):
+        with pytest.raises(ValueEncodingError):
+            binary_encoder(oid)(value)
+
+    def test_an_oid_with_no_binary_form_still_raises(self):
+        with pytest.raises(ValueEncodingError):
+            binary_encoder(999_999)("x")
+
+    def test_numeric_matches_encode_binary_across_scales_and_signs(self):
+        rng = random.Random(51)
+        values = [Decimal("0"), Decimal("-0"), Decimal("0.00"), Decimal("1E+14"), Decimal("1E-20"),
+                  Decimal("-0.0001"), Decimal("10000"), Decimal("9999.9999"), Decimal("123E+3")]  # fmt: skip
+        for _ in range(20_000):
+            digits = rng.randint(0, 10 ** rng.randint(0, 30))
+            values.append(Decimal(rng.choice((1, -1)) * digits).scaleb(-rng.randint(-6, 24)))
+        encode = binary_encoder(1700)
+        for value in values:
+            assert encode(value) == encode_binary(1700, value), value
+
+    def test_timestamps_and_dates_match_encode_binary(self):
+        rng = random.Random(51)
+        encode_ts, encode_date = binary_encoder(1114), binary_encoder(1082)
+        for _ in range(20_000):
+            moment = datetime.datetime(1, 1, 1) + datetime.timedelta(
+                microseconds=rng.randint(0, 315_537_897_599_999_999)
+            )
+            assert encode_ts(moment) == encode_binary(1114, moment), moment
+            assert encode_date(moment.date()) == encode_binary(1082, moment.date()), moment
+
+    def test_an_aware_timestamp_still_goes_to_utc(self):
+        moment = datetime.datetime(2026, 10, 24, 14, 34, 56, tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
+        assert binary_encoder(1114)(moment) == encode_binary(1114, moment)
+        assert binary_encoder(1184)(moment) == encode_binary(1184, moment)
+
+    def test_a_bool_is_not_taken_for_an_integer(self):
+        assert binary_encoder(23)(True) == encode_binary(23, True)
+
+    def test_subclasses_take_the_general_path_and_agree(self):
+        class MyInt(int):
+            pass
+
+        class MyStr(str):
+            pass
+
+        assert binary_encoder(23)(MyInt(7)) == encode_binary(23, MyInt(7))
+        assert binary_encoder(25)(MyStr("é")) == encode_binary(25, MyStr("é"))

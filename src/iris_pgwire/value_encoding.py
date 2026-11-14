@@ -24,7 +24,7 @@ import json
 import math
 import struct
 import uuid
-from decimal import Decimal, InvalidOperation
+from decimal import MAX_EMAX, MAX_PREC, MIN_EMIN, Context, Decimal, InvalidOperation
 from typing import Any
 
 PG_EPOCH_DATE = datetime.date(2000, 1, 1)
@@ -355,6 +355,121 @@ _SCALAR_ENCODERS = {
     3802: lambda oid, v: _encode_jsonb(oid, v),
     VECTOR_OID: _encode_vector,
 }
+
+
+# ---------------------------------------------------------------------------------------------
+# per-column encoders
+# ---------------------------------------------------------------------------------------------
+
+# A result's columns each get one encoder, chosen once, instead of a type lookup per value. Each
+# has a fast path for the exact Python type the DBAPI backend returns for that column type (an
+# `int`, a `float`, a `Decimal`, a `datetime`, a `date`, a `str`) and hands everything else,
+# subclasses included, to `encode_binary`. So the bytes and the refusals are encode_binary's;
+# the fast paths only skip work. `tests/unit/test_value_encoding.py` holds them to that.
+
+_INT2, _INT4, _INT8 = struct.Struct("!h"), struct.Struct("!i"), struct.Struct("!q")
+_FLOAT8 = struct.Struct("!d")
+_NUMERIC_HEADER = struct.Struct("!hhHh")
+_PG_EPOCH_ORDINAL = PG_EPOCH_DATE.toordinal()
+_EXACT = Context(prec=MAX_PREC, Emax=MAX_EMAX, Emin=MIN_EMIN)
+
+
+def _fast_int(packer: struct.Struct, type_oid: int):
+    pack = packer.pack
+
+    def encode(value: Any) -> bytes:
+        if type(value) is int:
+            try:
+                return pack(value)
+            except struct.error:
+                pass  # out of range: the general path raises the right error
+        return encode_binary(type_oid, value)
+
+    return encode
+
+
+def _fast_float8(value: Any) -> bytes:
+    if type(value) is float:
+        return _FLOAT8.pack(value)
+    return encode_binary(701, value)
+
+
+def _fast_text(type_oid: int):
+    def encode(value: Any) -> bytes:
+        if type(value) is str:
+            try:
+                return value.encode("utf-8")
+            except UnicodeEncodeError:
+                pass  # a lone surrogate: the general path raises ValueEncodingError for it
+        return encode_binary(type_oid, value)
+
+    return encode
+
+
+def _fast_numeric(value: Any) -> bytes:
+    if type(value) is not Decimal:
+        return encode_binary(1700, value)
+    sign, _, exponent = value.as_tuple()
+    if type(exponent) is not int:  # NaN or infinity
+        return encode_binary(1700, value)
+    scale = -exponent if exponent < 0 else 0
+    pad = -scale % 4
+    # The value as an integer of base-10000 digits, the fraction padded to whole groups.
+    whole = abs(int(value.scaleb(scale + pad, _EXACT)))
+    fraction_groups = (scale + pad) // 4
+    groups = []
+    while whole:
+        whole, group = divmod(whole, 10000)
+        groups.append(group)
+    if not groups:
+        return _NUMERIC_HEADER.pack(0, 0, 0, scale)
+    weight = len(groups) - fraction_groups - 1
+    start = 0
+    while groups[start] == 0:  # trailing zero groups carry nothing (groups are low first here)
+        start += 1
+    groups = groups[start:]
+    groups.reverse()
+    count = len(groups)
+    return _NUMERIC_HEADER.pack(count, weight, _NUMERIC_NEG if sign else 0, scale) + struct.pack(
+        f"!{count}H", *groups
+    )
+
+
+def _fast_timestamp(type_oid: int):
+    def encode(value: Any) -> bytes:
+        if type(value) is datetime.datetime and value.tzinfo is None:
+            delta = value - PG_EPOCH_TS
+            return _INT8.pack((delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds)
+        return encode_binary(type_oid, value)
+
+    return encode
+
+
+def _fast_date(value: Any) -> bytes:
+    if type(value) is datetime.date:
+        return _INT4.pack(value.toordinal() - _PG_EPOCH_ORDINAL)
+    return encode_binary(1082, value)
+
+
+_FAST_ENCODERS = {
+    20: _fast_int(_INT8, 20),
+    21: _fast_int(_INT2, 21),
+    23: _fast_int(_INT4, 23),
+    701: _fast_float8,
+    1082: _fast_date,
+    1114: _fast_timestamp(1114),
+    1184: _fast_timestamp(1184),
+    1700: _fast_numeric,
+    **{oid: _fast_text(oid) for oid in _TEXT_LIKE},
+}
+
+
+def binary_encoder(type_oid: int):
+    """A function giving `encode_binary(type_oid, value)` for one column's values, faster."""
+    fast = _FAST_ENCODERS.get(type_oid)
+    if fast is not None:
+        return fast
+    return lambda value: encode_binary(type_oid, value)
 
 
 # ---------------------------------------------------------------------------------------------

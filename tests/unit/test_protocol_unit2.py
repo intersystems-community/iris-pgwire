@@ -1629,3 +1629,26 @@ class TestProcessCopyBatch:
         # Should return without error
         await protocol.process_copy_batch()
         assert protocol.copy_data_buffer == []
+
+
+class TestSendDataRowLogsNothingPerRow:
+    """A DataRow wrote 17 INFO lines, one per column with its value, plus a hex dump.
+
+    Measured 2026-11-14 with adbc-driver-postgresql in its binary-row mode: 100,000 rows of 12
+    columns took 16.4 s, against 1.8 s for the same rows over COPY. It also put every value a
+    client read into the server's log.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_row_writes_no_log_line_and_no_value_reaches_the_log(self, protocol):
+        from structlog.testing import capture_logs
+
+        columns = [
+            {"name": "id", "type_oid": 23, "type_size": 4, "type_modifier": -1},
+            {"name": "secret", "type_oid": 25, "type_size": -1, "type_modifier": -1},
+        ]
+        with capture_logs() as logs:
+            for i in range(50):
+                await protocol.send_data_row([i, "s3cr3t-value"], columns)
+        assert [e for e in logs if e["log_level"] != "debug"] == []
+        assert "s3cr3t-value" not in repr(logs)
