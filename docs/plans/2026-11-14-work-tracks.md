@@ -10,20 +10,20 @@ Track 5 is second.
 
 ## The tracks
 
-| #   | Track                                             | What is in it                                                                                                                                                                                                                           | Route                                                                                                           | Where                                     |
-| --- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| 1   | Finish the read-performance work                  | The Describe row cap, the row encoder, the optional psycopg accelerator, the benchmark. See `docs/investigations/adbc-read-performance-2026-11.md`                                                                                      | `/code-review` against `main`, then fix, then commit. **Done 2026-11-14**                                       | iris-pgwire                               |
-| 2   | Text-format values are Python's, not PostgreSQL's | Text DataRows send `str(value)`: `bytea` as `b'\xde\xad'`, JSON as `{'a': 1}`, arrays as `[1, 2, 3]`, NUMERIC as `1E+14`, `inf`/`nan`, `+00:00` offsets. `value_encoding.encode_text` already gives PostgreSQL's text                   | `/tdd`: one slice. Changes what text clients receive, so it is its own change. **Done 2026-11-14**, uncommitted | iris-pgwire                               |
-| 3   | Embedded backend typing and memory                | Types guessed from values (DATE as a Horolog integer, NUMERIC as float8, INT as int64 or varchar on large results), the whole result held in memory (6.4 GB at 3M rows), `iris.sql.exec` read speed                                     | Already specified: spec 051 US3 (T034–T038) and T087. `/implement` the existing tasks                           | iris-pgwire                               |
-| 4   | **Transactions for PostgreSQL-style apps**        | COMMIT after an error commits earlier work (STATUS_FAILED_TRANSACTION never set), FOR UPDATE may not lock, ON CONFLICT is not atomic, savepoint differences, aggregates reading uncommitted rows. Hermitage and pgbench as the measures | `/grilling` on `docs/investigations/mvcc-apps-on-iris-pgwire.md`, then a spec, then tickets. Several sessions   | iris-pgwire                               |
-| 5   | IRIS for the Python data world                    | Lazy server-side dataframes (an Ibis IRIS backend, "dbplyr for IRIS"), DuckDB `ATTACH` through iris-pgwire, dbplyr through RPostgres, Flight SQL, dbt Python models, the release of the native IRIS ADBC driver                         | `/wayfinder`: decisions before code. See below                                                                  | Probably irispython-dx (Thomas to decide) |
-| 6   | Answers that sit with other people                | Releasing the native IRIS ADBC driver (irispython-dx spec 21, Q13, with Jim Nelson); the intersystems-irispython unread-rows desync (recorded in irispython-dx `dxlab/results/fetchmany-close-desync-2026-11-14/`)                      | `/to-questionnaire` for Jim if the agent-bus thread does not settle it                                          | Outside these repos                       |
-| 7   | Not engineering                                   | Where the 1.x security note goes (unpublished, awaiting Thomas), PyPI token rotation, expired IRIS key copies in `~/ws/iris-fhirsqlbuilder-dbt-integratedml`, release-branch cleanup                                                    | Thomas's To Do list                                                                                             | —                                         |
+| #   | Track                                             | What is in it                                                                                                                                                                                                                           | Route                                                                                                                     | Where                                     |
+| --- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| 1   | Finish the read-performance work                  | The Describe row cap, the row encoder, the optional psycopg accelerator, the benchmark. See `docs/investigations/adbc-read-performance-2026-11.md`                                                                                      | `/code-review` against `main`, then fix, then commit. **Done 2026-11-14**                                                 | iris-pgwire                               |
+| 2   | Text-format values are Python's, not PostgreSQL's | Text DataRows send `str(value)`: `bytea` as `b'\xde\xad'`, JSON as `{'a': 1}`, arrays as `[1, 2, 3]`, NUMERIC as `1E+14`, `inf`/`nan`, `+00:00` offsets. `value_encoding.encode_text` already gives PostgreSQL's text                   | `/tdd`: one slice. Changes what text clients receive, so it is its own change. **Done 2026-11-14** (`5a9bafc`, `7b6385e`) | iris-pgwire                               |
+| 3   | Embedded backend typing and memory                | Types guessed from values (DATE as a Horolog integer, NUMERIC as float8, INT as int64 or varchar on large results), the whole result held in memory (6.4 GB at 3M rows), `iris.sql.exec` read speed                                     | Already specified: spec 051 US3 (T034–T038) and T087. `/implement` the existing tasks                                     | iris-pgwire                               |
+| 4   | **Transactions for PostgreSQL-style apps**        | COMMIT after an error commits earlier work (STATUS_FAILED_TRANSACTION never set), FOR UPDATE may not lock, ON CONFLICT is not atomic, savepoint differences, aggregates reading uncommitted rows. Hermitage and pgbench as the measures | `/grilling` on `docs/investigations/mvcc-apps-on-iris-pgwire.md`, then a spec, then tickets. Several sessions             | iris-pgwire                               |
+| 5   | IRIS for the Python data world                    | Lazy server-side dataframes (an Ibis IRIS backend, "dbplyr for IRIS"), DuckDB `ATTACH` through iris-pgwire, dbplyr through RPostgres, Flight SQL, dbt Python models, the release of the native IRIS ADBC driver                         | `/wayfinder`: decisions before code. See below                                                                            | Probably irispython-dx (Thomas to decide) |
+| 6   | Answers that sit with other people                | Releasing the native IRIS ADBC driver (irispython-dx spec 21, Q13, with Jim Nelson); the intersystems-irispython unread-rows desync (recorded in irispython-dx `dxlab/results/fetchmany-close-desync-2026-11-14/`)                      | `/to-questionnaire` for Jim if the agent-bus thread does not settle it                                                    | Outside these repos                       |
+| 7   | Not engineering                                   | Where the 1.x security note goes (unpublished, awaiting Thomas), PyPI token rotation, expired IRIS key copies in `~/ws/iris-fhirsqlbuilder-dbt-integratedml`, release-branch cleanup                                                    | Thomas's To Do list                                                                                                       | —                                         |
 
 ## Order
 
 1. Track 1. Done.
-2. Track 2. Done 2026-11-14 (not yet committed), with the DISTINCT ticket as its own slice.
+2. Track 2. Done 2026-11-14 (`5a9bafc`, `7b6385e`), with the DISTINCT ticket as its own slice.
    - Text DataRows now use `value_encoding.encode_text`. A timestamp's fraction drops its trailing
      zeros (`.5`), as PostgreSQL's does, in COPY text too. On embedded, NUMERIC and DATE still go out
      wrong because the _OID_ is guessed (track 3); `tests/e2e/test_text_format_values.py` holds
@@ -37,7 +37,7 @@ Track 5 is second.
    - Seen on the way, not fixed: `BYTEA` and `TIMESTAMPTZ` in `CREATE TABLE` are not translated
      (IRIS error 5373); a `TIME` insert on embedded fails validation; `ORDER BY` on strings sorts
      by IRIS's collation, not PostgreSQL's.
-3. Track 4, the next big track (Thomas, 2026-11-14). Decisions below.
+3. Track 4, the next big track (Thomas, 2026-11-14). Decisions below. The 2.0.1 hotfix is done; spec 052 is next.
 4. Track 5 after it.
 5. Track 3 whenever spec 051 is next.
 
@@ -121,13 +121,18 @@ with IRIS's outcomes pinned. The results, the Hermitage table and the updated go
 `docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5. These results contradicted the plan above, and were
 settled as follows:
 
-1. **Gotcha row 4 is a PGWire bug, so it ships as a 2.0.1 hotfix before spec 052.** `DBAPIExecutor.close_session`
+1. **Gotcha row 4 is a PGWire bug, so it ships as a 2.0.1 hotfix before spec 052.** Done 2026-11-14 on branch
+   `hotfix/2.0.1` (`3424acb`), not yet released. `DBAPIExecutor.close_session`
    returns a disconnected client's IRIS connection to the pool with its transaction open and its isolation level
    unchanged; the next session runs inside it, and a bare `COMMIT` makes another client's uncommitted write permanent.
    IRIS itself honoured READ COMMITTED in 50 of 50 clean reads. The fix: on session close, ROLLBACK, reset the level,
    and discard a connection whose driver is out of step. The suite's `h3/*` checks are its regression tests. Spec 052
    references it.
-2. **The 2.0.1 hotfix also carries three small fixes.**
+2. **The 2.0.1 hotfix also carries three small fixes.** Done in `3424acb`. The re-measurement (investigation doc,
+   section 5, "2.0.1 re-measurement") changed three things for spec 052: the second `ROLLBACK TO` does roll back the
+   whole transaction (the spike's "rolls back nothing" was PGWire auto-committing); a psycopg nested block that exits
+   normally raises on `RELEASE` and loses the outer transaction, which raises US2's priority; and the `<LIST ERROR>`
+   comes from below PGWire, per connection, after a table is recreated.
    - IRIS SQLCODEs with no mapping default to `XX000`, not `08000`.
    - -375 maps to `3B001`.
    - The savepoint rewrite matches a quoted name, which fixes psycopg's `ROLLBACK TO "_pg3_1"`. Today that statement
