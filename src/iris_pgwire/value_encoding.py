@@ -601,9 +601,25 @@ def encode_text(type_oid: int, value: Any) -> str:
         seconds, micro = divmod(micro, 1_000_000)
         text = f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
         return f"{text}.{micro:06d}".rstrip("0") if micro else text
+    if type_oid in (1114, 1184) and isinstance(value, str):
+        # The embedded backend's form, '2026-11-14 12:34:56.500000'. Anything that does not parse
+        # (PostgreSQL's 'infinity', say) or that carries an offset a timestamp would drop is sent
+        # as it is.
+        try:
+            if type_oid == 1184:
+                value = _to_naive_utc(type_oid, value)
+            else:
+                parsed = datetime.datetime.fromisoformat(value.strip())
+                if parsed.tzinfo is not None:
+                    return value
+                value = parsed
+        except ValueError:
+            return value
     if type_oid in (1114, 1184) and isinstance(value, datetime.datetime):
         local = _to_naive_utc(type_oid, value)
         text = local.isoformat(sep=" ")
+        if local.microsecond:
+            text = text.rstrip("0")  # PostgreSQL prints .5, not .500000
         return text + "+00" if type_oid == 1184 else text
     if type_oid == 17 and isinstance(value, bytes | bytearray | memoryview):
         return "\\x" + bytes(value).hex()

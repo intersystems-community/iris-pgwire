@@ -29,7 +29,7 @@ from typing import Any
 
 import structlog
 
-from .value_encoding import binary_encoder, binary_encoding_is_defined
+from .value_encoding import binary_encoder, binary_encoding_is_defined, encode_text
 
 logger = structlog.get_logger(__name__)
 
@@ -179,18 +179,21 @@ class BinaryRowEncoder:
 
 
 def text_value(value: Any, type_oid: int) -> str:
-    """The text form this server sends for a value: str(), and a boolean as t or f."""
-    if type_oid == 16:
-        if value in (1, "1", True, "t", "true", "TRUE"):
-            return "t"
-        if value in (0, "0", False, "f", "false", "FALSE"):
-            return "f"
-        return "t" if value else "f"
-    return str(value)
+    """The text form this server sends for a value: PostgreSQL's text output for its type."""
+    return encode_text(type_oid, value)
 
 
-def _bool_text(value: Any) -> bytes:
-    return text_value(value, 16).encode("utf-8")
+def _text_encoder(type_oid: int) -> Callable[[Any], bytes]:
+    """`text_value(value, type_oid)` as UTF-8, with a fast path for a string, sent as it is."""
+    if type_oid in (16, 1114, 1184):  # 'true' becomes t; a timestamp string is reformatted
+        return lambda value: encode_text(type_oid, value).encode("utf-8")
+
+    def encode(value: Any) -> bytes:
+        if type(value) is str:
+            return value.encode("utf-8")
+        return encode_text(type_oid, value).encode("utf-8")
+
+    return encode
 
 
 def _plain_text(value: Any) -> bytes:
@@ -210,9 +213,9 @@ def data_row_encoder(
 ) -> Callable[[Sequence[Any]], bytes]:
     """A function giving the DataRow message for a row, with each column in its format code.
 
-    As the DataRow code this replaced did: format 0 is the text form (`text_value`); format 1 is
-    the binary form, or the text if the type has none; any other code sends str(value). The two
-    fallbacks are logged once per result, not per row.
+    Format 0 is PostgreSQL's text form (`text_value`); format 1 is the binary form, or str(value)
+    if the type has none; any other code sends str(value). The two fallbacks are logged once per
+    result, not per row.
     """
     codes = [_column_format(formats, index) for index in range(len(oids))]
 
@@ -234,7 +237,7 @@ def data_row_encoder(
                            column_index=index, type_oid=oid)  # fmt: skip
             fields.append(_plain_text)
         elif code == 0:
-            fields.append(_bool_text if oid == 16 else _plain_text)
+            fields.append(_text_encoder(oid))
         else:
             logger.warning("Unknown format code, sending text", column_index=index,
                            format_code=code)  # fmt: skip

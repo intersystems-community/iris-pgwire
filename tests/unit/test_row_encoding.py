@@ -177,6 +177,61 @@ class TestDataRow:
         body = struct.pack("!h", 5) + b"".join(struct.pack("!i", len(f)) + f for f in fields)
         assert message == b"D" + struct.pack("!I", len(body) + 4) + body
 
+    def test_text_format_is_postgresqls_text_output(self):
+        # Expected text captured from PostgreSQL 16 (iris-pgwire-pgref, TimeZone Etc/UTC):
+        # SELECT '\xdead'::bytea, '{"a": 1}'::jsonb, ARRAY[1,2,3], ARRAY['a b','c'],
+        #        1E+14::numeric, 'inf'::float8, '-inf'::float8, 'nan'::float8,
+        #        '2026-11-14 12:34:56.5+00'::timestamptz, 1e20::float8, 12.50::numeric(10,2)
+        oids = [17, 3802, 1007, 1009, 1700, 701, 701, 701, 1184, 701, 1700]
+        row = (
+            b"\xde\xad",
+            {"a": 1},
+            [1, 2, 3],
+            ["a b", "c"],
+            Decimal("1E+14"),
+            float("inf"),
+            float("-inf"),
+            float("nan"),
+            datetime.datetime(2026, 11, 14, 12, 34, 56, 500000, tzinfo=datetime.UTC),
+            1e20,
+            Decimal("12.50"),
+        )
+        fields = [
+            b"\\xdead",
+            b'{"a": 1}',
+            b"{1,2,3}",
+            b'{"a b",c}',
+            b"100000000000000",
+            b"Infinity",
+            b"-Infinity",
+            b"NaN",
+            b"2026-11-14 12:34:56.5+00",
+            b"1e+20",
+            b"12.50",
+        ]
+        body = struct.pack("!h", len(fields)) + b"".join(
+            struct.pack("!i", len(f)) + f for f in fields
+        )
+        assert data_row_encoder(oids, [0])(row) == b"D" + struct.pack("!I", len(body) + 4) + body
+
+    def test_timestamps_given_as_strings_are_postgresqls_text_too(self):
+        # The embedded backend returns a TIMESTAMP as a string with six fraction digits.
+        # PostgreSQL 16 (TimeZone Etc/UTC) sends '2026-11-14 12:34:56.5'::timestamp as below.
+        oids = [1114, 1114, 1184]
+        row = (
+            "2026-11-14 12:34:56.500000",
+            "2026-11-14 12:34:56.000000",
+            "2026-11-14 12:34:56.5+00",
+        )
+        fields = [b"2026-11-14 12:34:56.5", b"2026-11-14 12:34:56", b"2026-11-14 12:34:56.5+00"]
+        body = struct.pack("!h", 3) + b"".join(struct.pack("!i", len(f)) + f for f in fields)
+        assert data_row_encoder(oids, [0])(row) == b"D" + struct.pack("!I", len(body) + 4) + body
+
+    def test_a_timestamp_string_that_does_not_parse_is_sent_as_it_is(self):
+        message = data_row_encoder([1114], [0])(("infinity",))
+        body = struct.pack("!h", 1) + struct.pack("!i", 8) + b"infinity"
+        assert message == b"D" + struct.pack("!I", len(body) + 4) + body
+
     def test_mixed_formats_and_a_type_with_no_binary_form(self):
         # Per-column format codes; a binary column whose type has no binary form sends its text.
         encode = data_row_encoder([23, 23, 999_999], [0, 1, 1])
