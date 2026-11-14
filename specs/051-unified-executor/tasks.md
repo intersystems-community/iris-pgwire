@@ -445,6 +445,26 @@ adding a second one here was the duplication `/speckit.analyze` caught.)
       is small and the probe already exists; only the position in the list is wrong.
       `isolation_levels_in_force` stays empty on both adapters either way
 
+### Added after 2.0.0 (agreed with Tom, 2026-11-13)
+
+- [ ] T086 [P] Adopt the SQLCODE-to-SQLSTATE mappings that irispython-dx's `iris_dx/_sqlstate.py`
+      measured against PostgreSQL 16 and pgwire lacks. Of its 26 codes pgwire agrees on 14; the other
+      12 pgwire reports as `XX000` (-400, -384, -324, -201, -146, -124, -121, -111, -51, -20, -14,
+      -12; for example -201 is `42P07`, -121/-124 are `23503`, -146 is `22007`). Write the tests first
+      from that table, then extend `sql_translator/sqlstate.py`. Copy the measured values, not the
+      module: no new runtime dependency (FR-028)
+- [ ] T087 Spike: an embedded adapter on the iris_dx layer's DB-API connection instead of
+      `iris.sql.exec`, measured on the differential corpus against both. Two modes, both measured:
+      `same_job` (SQL in the server's own `$JOB`, transactions shared as today) and `server_job`
+      (a second job per connection, which may give embedded per-session transactions and so change
+      ADR-0001's capability table). Expected gains: column types from `description`, VECTOR values as
+      text without the ODBC re-fetch, `-114` raised rather than an empty result. Settle first how the
+      layer installs under `irispython` (a stock kit's built-in `iris` shadows the vendor wheel's
+      `iris.irissdk`) and whether that satisfies FR-029; `same_job` reproduces a vendor-gated helper
+      (DP-451138) and silently falls back to `server_job`, which an adapter must refuse rather than
+      accept. Whether pgwire depends on the layer, vendors it, or neither is Tom's decision; this
+      task produces the measurements for it
+
 ---
 
 ## Dependencies
