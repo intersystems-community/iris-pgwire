@@ -10,6 +10,7 @@ import asyncio
 import importlib
 import logging
 import os
+import signal
 import ssl
 import sys
 from typing import Any
@@ -396,6 +397,43 @@ class PGWireServer:
             logger.info("PGWire server stopped", connections_closed=len(self.active_connections))
 
 
+async def serve_until_signalled(server: Any) -> None:
+    """Run `server.start()` until it returns, fails, or SIGTERM/SIGINT arrives; then stop it.
+
+    `main()` used to catch KeyboardInterrupt and nothing else. Under asyncio SIGTERM did not stop
+    the server at all, so `docker stop` waited out its grace period and the IPM package's Stop()
+    (SIGTERM, then wait) reported failure, which also failed an IPM uninstall. The handlers are
+    removed again on the way out.
+    """
+    loop = asyncio.get_running_loop()
+    requested = asyncio.Event()
+    installed = []
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(signum, requested.set)
+            installed.append(signum)
+        except (NotImplementedError, RuntimeError):  # Windows, or not the main thread
+            pass
+
+    serving = asyncio.ensure_future(server.start())
+    waiting = asyncio.ensure_future(requested.wait())
+    try:
+        done, _ = await asyncio.wait({serving, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        if serving in done:
+            serving.result()  # re-raise a startup or serving failure
+            return
+        logger.info("Stop signal received, shutting down")
+        await server.stop()
+        try:
+            await asyncio.wait_for(serving, timeout=10)
+        except (asyncio.CancelledError, TimeoutError):
+            serving.cancel()
+    finally:
+        waiting.cancel()
+        for signum in installed:
+            loop.remove_signal_handler(signum)
+
+
 def _gather_main_config() -> dict[str, Any]:
     """Read server configuration from environment variables."""
     return {
@@ -458,10 +496,7 @@ async def main(overrides: dict[str, Any] | None = None):
     )
 
     try:
-        await server.start()
-    except KeyboardInterrupt:
-        logger.info("Received interrupt signal, shutting down...")
-        await server.stop()
+        await serve_until_signalled(server)
     except Exception as e:
         logger.error("Server error", error=str(e))
         sys.exit(1)
