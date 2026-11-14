@@ -23,19 +23,86 @@ Track 5 is second.
 ## Order
 
 1. Track 1. Done.
-2. Track 2, in a fresh session: small and self-contained.
-3. Track 4, the next big track (Thomas, 2026-11-14).
+2. Track 2, in a fresh session: small and self-contained. Next to it, as its own small `/tdd`
+   ticket: IRIS `SELECT DISTINCT` returned an uppercased value (`'ALPHA'` for a stored `alpha`)
+   under its default collation. The fix (EXACT collation, or `%EXACT` around DISTINCT and GROUP BY
+   columns) concerns collation, not transactions, so it is not part of track 4.
+3. Track 4, the next big track (Thomas, 2026-11-14). Decisions below.
 4. Track 5 after it.
 5. Track 3 whenever spec 051 is next.
 
 ## Track 4 starting point
 
 `docs/investigations/mvcc-apps-on-iris-pgwire.md` lists the gotchas and recommends Hermitage
-first, then pgbench TPC-B. Two related findings from 2026-11-14:
+first, then pgbench TPC-B. The memory note "READ COMMITTED is unreliable" (accepted is not the
+same as in force) applies.
 
-- IRIS `SELECT DISTINCT` returned an uppercased value (`'ALPHA'` for a stored `alpha`) under its
-  default collation. A PostgreSQL application would not expect that.
-- The memory note "READ COMMITTED is unreliable" (accepted is not the same as in force) applies.
+## Track 4 decisions (grilling with Thomas, 2026-11-14)
+
+**Goal.** Measure, then fix what the wire layer can fix faithfully, and document the rest.
+Emulating advisory locks (for Rails and Prisma migrations, Flyway) could be a later spec. `SKIP
+LOCKED` has no faithful mapping and stays refused.
+
+**The rule.** For each gotcha: emulate in PGWire when the emulation is exact; otherwise refuse
+loudly with a PostgreSQL SQLSTATE; never pass a Critical or High gotcha through silently. The one
+forced exception is dirty aggregates, `DISTINCT` and `GROUP BY` at READ COMMITTED (gotcha row 3),
+which cannot be detected cheaply and stay documented.
+
+**Strict by default.** A server-wide `PGWIRE_TXN_COMPAT=permissive` restores the old behaviour for
+the _refusals only_ (locking clauses, ON CONFLICT forms with no atomic mapping), with a warning
+logged once per statement shape. The exact emulations (25P02, the savepoint stack, `3B001`) are
+always on: permissive mode never brings back commit-after-error.
+
+**Backends.** DBAPI only. The embedded backend stays single-client in the docs; its guard against
+concurrent transactions is spec 051 task T088.
+
+**Order.**
+
+1. Done 2026-11-14: hedged the `SELECT ... FOR UPDATE` workaround in `KNOWN_LIMITATIONS.md`;
+   added T088 to spec 051.
+2. **Spike session**, before any spec:
+   - Build the isolation suite as pytest (`tests/e2e/isolation/`, marker `-m isolation`, a
+     `make isolation` target, run in its own pytest process). Every case runs against PGWire and
+     against `iris-pgwire-pgref` (PostgreSQL 16, port 55433). Expected answers come from
+     PostgreSQL or from Hermitage's published `postgres.md`, never from IRIS. IRIS's outcomes are
+     pinned as known differences. A thin script renders the Hermitage-style table from the suite.
+   - Run it on `pgwire-release-lab` (port 2992) with this checkout's DBAPI server.
+   - Cover E1 to E5, plus three added checks: whether a touch-update's lock
+     (`UPDATE t SET pk = pk WHERE ...`) excludes a second one; which `ON CONFLICT` forms IRIS
+     `INSERT OR UPDATE` can express exactly; and whether a CancelRequest reaches IRIS on DBAPI.
+   - Test the hypothesis that the flaky READ COMMITTED sequences (gotcha row 4) used one of
+     IRIS's documented exceptions.
+   - Write the results into the investigation doc: a "Results" section, each "(inferred)" in the
+     gotcha table updated to "(measured)", the Hermitage table. Then a short grilling round for any
+     result that contradicts an assumption below.
+3. **Spec 052, "PostgreSQL transaction semantics on IRIS"**, written from the results, one spec:
+   - US1: a failed statement aborts the transaction. Later statements get `25P02`, and `COMMIT`
+     becomes `ROLLBACK`.
+   - US2: savepoints follow PostgreSQL. PGWire tracks the savepoint stack, returns `3B001` for an
+     unknown name, and handles psycopg's `ROLLBACK TO` followed by `RELEASE`.
+   - US3: ON CONFLICT. Map to `INSERT OR UPDATE` what it expresses exactly; refuse the rest with
+     `0A000` in strict mode. Permissive keeps insert-catch-update, with its bugs fixed (executemany
+     dropping `DO UPDATE`, swallowing any error whose text says "constraint", `DO NOTHING`
+     ignoring its target, the embedded path not emulating). Amends spec 049 FR-002.
+   - US4: locking clauses. If E2 shows `FOR UPDATE` does not lock, emulate it with a touch-update
+     where the shape allows (single-table FROM, a predicate PGWire can lift), and refuse other
+     shapes. Its known gaps: it fires UPDATE triggers, bumps `ROWVERSION`, and counts toward the
+     1000-lock escalation. `NOWAIT` becomes `LOCK_TIMEOUT 0` around the statement and fails with
+     `55P03`. `SKIP LOCKED` becomes a clean `0A000` (today `42601`).
+   - US5: `lock_timeout` maps to `SET OPTION LOCK_TIMEOUT`, rounded up to whole seconds; `0`
+     restores the server default. `statement_timeout` stays an accepted no-op, logged and
+     documented.
+   - US6: the isolation suite (Hermitage, E2 to E6, the pgbench invariant) is the phase gate and a
+     release-checklist item. Plus a user-facing `docs/POSTGRES_APP_COMPATIBILITY.md` (what works,
+     what needs redesign, the ORM table, permissive mode, the Hermitage row), linked from
+     `KNOWN_LIMITATIONS.md`.
+   - A server setting `PGWIRE_DEFAULT_ISOLATION`, with READ UNCOMMITTED as the default in 2.1.
+     Revisit the default from E1's results before 052's plan is frozen.
+   - Tickets are `specs/052-.../tasks.md` through `/speckit.tasks`, tests first. No GitHub issues
+     unless Thomas says to file them.
+4. **Later:** E6 and E7 (lock escalation, pgbench) on an enterprise-key lab; running the suite in
+   CI; `statement_timeout` as a real `57014` once the cancel path is known; maybe advisory locks.
+5. **Ships as 2.1.0**, strict by default, with a "behaviour changes" section in the changelog.
 
 ## Track 5 decision map
 

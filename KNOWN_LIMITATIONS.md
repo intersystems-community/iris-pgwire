@@ -360,7 +360,7 @@ Both shapes were reproduced repeatedly. The trigger for the second was **not** i
 
 Practical consequences:
 
-- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, lock explicitly (`SELECT ... FOR UPDATE`) and keep the transaction short.
+- Do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not rely on `SELECT ... FOR UPDATE` for this yet: see [Related PostgreSQL Statements](#related-postgresql-statements).
 - Budget more than 10 seconds for any statement that may meet a contended row. A test or health check with a 5-second timeout reports a hang where the database was waiting out its normal lock timeout.
 
 ### Sessions Share One Transaction in the In-IRIS Deployment
@@ -421,7 +421,7 @@ The mechanism: the version predicate matches no row while A holds the new value,
 
 **Workarounds**:
 
-- Prefer pessimistic locking: `SELECT ... FOR UPDATE` at `READ COMMITTED` (it does contend there; at the default level it returns the uncommitted value and buys nothing), then update by key alone.
+- Prefer pessimistic locking with a writer lock: `UPDATE ... WHERE id = ?` by key alone (IRIS writer locks are real: a second writer gets `-110` → `40001`), or `LOCK TABLE ... IN EXCLUSIVE MODE` for the transaction. `SELECT ... FOR UPDATE` is **not** a verified substitute: see [Related PostgreSQL Statements](#related-postgresql-statements).
 - Or treat a zero row count from a version-guarded update as inconclusive, re-read the row, and distinguish a real version change from a concurrent holder before raising a stale-data error.
 
 ### Related PostgreSQL Statements
@@ -430,11 +430,13 @@ Measured through PGWire against IRIS 2026.2:
 
 | Statement                           | Result                               |
 | ----------------------------------- | ------------------------------------ |
-| `SELECT ... FOR UPDATE`             | Works                                |
+| `SELECT ... FOR UPDATE`             | Accepted; exclusion **unverified**   |
 | `SELECT ... FOR UPDATE NOWAIT`      | Not supported — `42601 syntax_error` |
 | `SELECT ... FOR UPDATE SKIP LOCKED` | Not supported — `42601 syntax_error` |
 | `INSERT ... ON CONFLICT DO NOTHING` | Emulated by PGWire                   |
 | `UPDATE ... RETURNING`              | Emulated by PGWire                   |
+
+**`SELECT ... FOR UPDATE` is accepted, but nothing yet shows that it locks.** IRIS documents `FOR UPDATE` on a cursor as performing no operation ([DECLARE](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_declare)). The contention measured at `READ COMMITTED` may be the ordinary read wait rather than an exclusive lock, in which case two sessions can both "lock" the same committed row and lose an update. Until experiment E2 in [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) settles it, do not use it for mutual exclusion; use a writer lock as above.
 
 Neither lock modifier is translated, so both reach IRIS as trailing tokens it cannot parse. That means the standard PostgreSQL job-queue pattern (`SELECT ... FOR UPDATE SKIP LOCKED` plus `UPDATE ... RETURNING`) has no direct equivalent — use an IRIS-native queue or a single-consumer design.
 

@@ -465,6 +465,18 @@ adding a second one here was the duplication `/speckit.analyze` caught.)
       accept. Whether pgwire depends on the layer, vendors it, or neither is Tom's decision; this
       task produces the measurements for it
 
+### Added by track 4 (agreed with Tom, 2026-11-14)
+
+- [ ] T088 Guard the embedded adapter against concurrent transactions. Every wire session on it
+      shares one IRIS process and therefore one transaction, so one client's `COMMIT` commits
+      another's work (`KNOWN_LIMITATIONS.md`, "Sessions Share One Transaction"). While one session
+      has a transaction open, refuse `BEGIN` (and the first statement of an implicit transaction)
+      from any other session with a clear error, rather than letting the two merge. Test first: two
+      psycopg sessions on the embedded backend; assert the second `BEGIN` is refused and that A's
+      `ROLLBACK` afterwards leaves the table empty. T087's `server_job` mode would retire this guard
+      if it gives per-session transactions. Spec 052 (PostgreSQL transaction semantics) targets
+      DBAPI only and relies on this task for embedded
+
 ---
 
 ## Dependencies
