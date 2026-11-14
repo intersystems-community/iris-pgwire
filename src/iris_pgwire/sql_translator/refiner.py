@@ -55,6 +55,8 @@ class SQLRefiner:
 
         if self.config.enforce_exact_collation:
             sql = self._enforce_exact_collation(sql)
+            sql = self._exact_group_by(sql)
+            sql = self._exact_count_distinct(sql)
 
         return sql
 
@@ -89,6 +91,14 @@ class SQLRefiner:
                 expression = parts[-1].strip()
 
             alias = match.group(2)
+            # The first column's match starts at the select list, so it carries the DISTINCT.
+            expression = re.sub(r"(?is)^DISTINCT\s+", "", expression)
+            # An alias naming its own column (`%EXACT name AS name`, what the collation rewrite
+            # below produces) is already a valid ORDER BY term; expanding it would grow on every
+            # refine, and the same statement is refined at Parse, Describe and Execute.
+            bare = re.sub(r"(?is)^%EXACT\b\s*", "", expression).strip("() ")
+            if bare.lower() == alias.lower():
+                continue
             aliases[alias.lower()] = expression
 
         if not aliases:
@@ -155,6 +165,77 @@ class SQLRefiner:
 
         logger.info("🔧 Enforced exact collation for IRIS 2024.2+")
         return "".join(parts)
+
+    # IRIS groups by its default collation (SQLUPPER): 'alpha' and 'Alpha' become one group and come
+    # back as 'ALPHA', and COUNT(DISTINCT name) counts them once. %EXACT keeps the stored value, as
+    # PostgreSQL does. A GROUP BY ordinal (GROUP BY 1) is left alone: %EXACT(1) is a constant.
+    _group_by_pattern = re.compile(r"\bGROUP\s+BY\s+", re.IGNORECASE)
+    _group_by_end_pattern = re.compile(
+        r"\s*\b(HAVING|ORDER\s+BY|LIMIT|OFFSET|FETCH|UNION|INTERSECT|EXCEPT)\b", re.IGNORECASE
+    )
+    _count_distinct_pattern = re.compile(r"\bCOUNT\s*\(\s*DISTINCT\s+", re.IGNORECASE)
+
+    @staticmethod
+    def _matches_outside_literals(pattern: re.Pattern, sql: str) -> list[re.Match]:
+        return [m for m in pattern.finditer(sql) if sql.count("'", 0, m.start()) % 2 == 0]
+
+    @staticmethod
+    def _expression_end(sql: str, start: int, stop: re.Pattern | None) -> int:
+        """Where the expression list starting at `start` ends: an unmatched `)`, a `;`, the end of
+        the statement, or (at depth 0, outside quotes) a match of `stop`."""
+        depth = 0
+        quote = ""
+        index = start
+        while index < len(sql):
+            char = sql[index]
+            if quote:
+                if char == quote:
+                    quote = ""
+            elif char in "'\"":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    return index
+                depth -= 1
+            elif char == ";" and depth == 0:
+                return index
+            elif depth == 0 and stop is not None and stop.match(sql, index):
+                return index
+            index += 1
+        return len(sql)
+
+    def _exact_group_by(self, sql: str) -> str:
+        for match in reversed(self._matches_outside_literals(self._group_by_pattern, sql)):
+            start = match.end()
+            end = self._expression_end(sql, start, self._group_by_end_pattern)
+            clause = sql[start:end].rstrip()
+            wrapped = []
+            for item in self._split_select_list(clause):
+                item = item.strip()
+                if not item or item.isdigit() or item.upper().startswith("%EXACT"):
+                    wrapped.append(item)
+                else:
+                    wrapped.append(f"%EXACT({item})")
+            new_clause = ", ".join(wrapped)
+            if clause != new_clause:
+                sql = sql[:start] + new_clause + sql[start + len(clause) :]
+        return sql
+
+    def _exact_count_distinct(self, sql: str) -> str:
+        for match in reversed(self._matches_outside_literals(self._count_distinct_pattern, sql)):
+            start = match.end()
+            end = self._expression_end(sql, start, None)
+            argument = sql[start:end].strip()
+            if (
+                not argument
+                or argument.upper().startswith("%EXACT")
+                or len(self._split_select_list(argument)) != 1
+            ):
+                continue
+            sql = sql[:start] + f"%EXACT({argument})" + sql[end:]
+        return sql
 
     def _wrap_select_segment(self, segment: str) -> str:
         select_match = self._select_from_pattern.search(segment)
