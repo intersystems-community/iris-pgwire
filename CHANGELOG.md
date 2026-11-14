@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-13
+
 ### BREAKING
 
 - **Clients must now authenticate.** Every earlier version accepted any client and ignored the password: the server answered `AuthenticationOk` before any credential was exchanged, and every session ran as the configured IRIS service account. The server now asks for the client's IRIS password (PostgreSQL's cleartext password exchange) and checks it by logging in to IRIS with it; IRIS remains the only store of users and passwords, and pgwire keeps no verifier. A wrong password, an unknown user and an empty password are refused identically (`28P01`), so the answer does not reveal which accounts exist; an IRIS outage is reported as `57P03`, never as a wrong password.
@@ -25,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The IPM package could not start the server, in any release.** `IrisPGWire.Service.Start()` ran `irispython -m iris_pgwire.server` from the IRIS process's directory, where the package IPM installs (`mgr/python/iris-pgwire/`) is not importable, and it used `%Library.Pipe`, which does not exist in IRIS 2026. It also printed "started successfully" before checking anything. `Start()` now takes the authentication options (`Start(pAllowPlaintextPassword, pTrust, pAllowedUsers, pSSLCert, pSSLKey, pPort, pWaitSeconds)`), launches from the package directory, waits until the server reports that it is listening, and returns the server's own reason when it refuses to start. Values that reach the shell (users list, port, certificate paths) are checked first. `Restart()` keeps the options. See `docs/INSTALLATION.md`.
+- **SIGTERM did not stop the server**, so `docker stop` waited out its grace period and `IrisPGWire.Service.Stop()` reported failure, which also failed IPM's Deactivate (uninstall). The server now shuts down on SIGTERM and SIGINT, and `Stop()` falls back to SIGKILL after a grace period.
 - **TLS never completed.** `handle_ssl_probe` slept 0.1 s between answering `S` and upgrading the connection, but a client sends its ClientHello the moment it reads `S`, so the plain `StreamReader` consumed those bytes as application data and the handshake hung until it timed out. Reading is now paused before `S` is sent. A client with `sslmode=require` against a TLS-enabled server connected to nothing before this.
 
 - **The embedded backend returned zero rows for any query that selected a `VECTOR` value**, with no error and a normal `CommandComplete`. This covered `SELECT v`, `SELECT *` on a table with a vector column, a computed `TO_VECTOR(...)` in the select list, and `INSERT … RETURNING v`. IRIS cannot hand a logical vector to embedded Python, so the row fetch raised `<OBJECT DISPATCH> *Invalid argument type`, and the executor logged that as a warning and returned an empty result. The DBAPI backend was unaffected. A read-only statement that fails this way is now re-executed in ODBC select mode, where vectors arrive as text, byte-identical to DBAPI's. Every other column keeps exactly the value it had before. A statement that could write is never re-executed, and any other fetch error is now reported to the client instead of becoming an empty result. `tests/e2e/test_vector_projection.py` runs the same assertions against each backend.
