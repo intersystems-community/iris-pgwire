@@ -398,7 +398,7 @@ SC-003.
 - [X] T078 [US7] Add US5–US7 rows to `docs/POSTGRES_APP_COMPATIBILITY.md`; update `KNOWN_LIMITATIONS.md`'s isolation
       section for the new default.
 
-- [ ] T079 [US7] Slice 3 gate extras: (a) e2e coverage of `timeouts.py` and the US6/US7 changes under `make isolation`
+- [X] T079 [US7] Slice 3 gate extras: (a) e2e coverage of `timeouts.py` and the US6/US7 changes under `make isolation`
       (server started with `coverage run`, `PYTHONPATH=src`), 90%+ required, recorded in research.md R11 (constitution II);
       (b) the embedded backend's existing tests, run per the repo memory "Testing the embedded backend", show no new
       failures against HEAD (constitution IV); (c) translator and statement-path timing on the benchmark corpus, before
