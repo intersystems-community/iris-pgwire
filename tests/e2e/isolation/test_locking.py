@@ -317,7 +317,13 @@ REFUSED_SHAPES = {
     "subquery_in_from": "select n from (select n from lock_m) x for update",
     "limit": "select n from lock_m order by id limit 2 for update",
     "view": "select n from lock_v where id = 1 for update",
+    "with": "with x as (select n from lock_m) select n from x for update",
+    "several_locking_clauses": "select n from lock_m for update of lock_m for share of lock_m",
+    # PostgreSQL: 42P01 (the relation is not in FROM); PGWire refuses it before IRIS sees it.
+    "of_unknown_table": "select n from lock_m for update of lock_d",
     # PostgreSQL refuses these itself, with 0A000.
+    "union": "select n from lock_m union select m from lock_d for update",
+    "window": "select n, row_number() over (order by n) from lock_m for update",
     "group_by": "select n from lock_m group by n for update",
     "aggregate": "select count(*) from lock_m for update",
     "distinct": "select distinct n from lock_m for update",
@@ -332,7 +338,8 @@ def test_refused_shapes(target, expect):
             assert run_statement(conn, "begin").ok
             outcome = run_statement(conn, sql)
             run_statement(conn, "rollback")
-        expected = "0A000" if name in ("group_by", "aggregate", "distinct") else "ok"
+        expected = {"group_by": "0A000", "aggregate": "0A000", "distinct": "0A000", "union": "0A000",
+                    "window": "0A000", "of_unknown_table": "42P01"}.get(name, "ok")
         expect.check(
             f"refused/{name}", outcome.sqlstate or "ok", expected, message=outcome.message
         )
@@ -381,4 +388,58 @@ def test_permissive_runs_a_refused_shape_and_warns_once(target, expect):
             if "strict mode refuses" in line and "LOCK_D" in line.upper()
         ]
         expect.check("permissive/warned_once", len(warned), 1)
+    expect.done()
+
+
+def test_locking_edge_shapes(target, expect):
+    """A SELECT with no FROM locks nothing; a missing table keeps the database's own error."""
+    _shapes_fixture(target)
+    with target.connect("extended") as conn:
+        assert run_statement(conn, "begin").ok
+        no_from = run_statement(conn, "select 1 for update")
+        run_statement(conn, "rollback")
+        assert run_statement(conn, "begin").ok
+        missing = run_statement(conn, "select n from lock_no_such_table where id = 1 for update")
+        run_statement(conn, "rollback")
+    expect.check(
+        "edge/no_from_and_missing_table",
+        {"no_from": no_from.rows, "missing_table": missing.sqlstate},
+        {"no_from": [(1,)], "missing_table": "42P01"},
+        message=missing.message,
+    )
+    expect.done()
+
+
+def test_refused_update_trigger_table(target, expect):
+    """A touch-update fires UPDATE triggers, so the emulation refuses a table that has one.
+
+    PostgreSQL's run uses the same table without the trigger (IRIS's trigger syntax is its own),
+    which is PostgreSQL's answer for the same statement.
+    """
+    with target.connect() as conn:
+        for sql in ("drop table if exists lock_tr", "create table lock_tr (id int primary key, n int)"):
+            assert run_statement(conn, sql).ok, sql
+        if not target.reference:
+            created = run_statement(
+                conn,
+                "create trigger lock_tr_upd after update on lock_tr language objectscript { set x = 1 }",
+            )
+            assert created.ok, created.message
+    with target.connect("extended") as conn:
+        assert run_statement(conn, "begin").ok
+        outcome = run_statement(conn, "select id from lock_tr where id = 1 for update")
+        run_statement(conn, "rollback")
+    expect.check("refused/update_trigger", outcome.sqlstate or "ok", "ok", message=outcome.message)
+    expect.done()
+
+
+@pytest.mark.permissive
+def test_permissive_runs_a_view_unlocked(target, expect):
+    """Permissive mode runs a catalog-refused shape (a view) unlocked, as 2.0 did."""
+    _shapes_fixture(target)
+    with target.connect("extended") as conn:
+        assert run_statement(conn, "begin").ok
+        outcome = run_statement(conn, "select n from lock_v where id = 2 for update")
+        run_statement(conn, "rollback")
+    expect.check("permissive/view_runs", outcome.rows if outcome.ok else outcome.sqlstate, [(2,)])
     expect.done()

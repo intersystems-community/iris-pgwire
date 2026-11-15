@@ -103,3 +103,22 @@ def test_other_statements_are_not_split(sql):
 
 def test_a_parameter_count_that_does_not_add_up_is_not_split():
     assert split_insertmanyvalues(TWO_ROWS, ("only one",)) is None
+
+
+def test_a_failed_row_fails_the_statement():
+    """A row's error reply (a refusal, an aborted transaction) is the statement's, not skipped."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from iris_pgwire.dbapi_executor import DBAPIExecutor
+
+    executor = DBAPIExecutor.__new__(DBAPIExecutor)
+    failure = {"success": False, "error": "refused", "sqlstate": "0A000", "rows": []}
+    executor.execute_query = AsyncMock(
+        side_effect=[{"success": True, "rows": [(1,)], "row_count": 1}, failure, AssertionError]
+    )
+    result = asyncio.run(
+        executor._execute_split_insert([("INSERT 1", None), ("INSERT 2", None), ("INSERT 3", None)], "s")
+    )
+    assert result is failure
+    assert executor.execute_query.await_count == 2

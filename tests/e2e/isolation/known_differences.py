@@ -84,6 +84,10 @@ PINS: dict[tuple[str, str], object] = {
         )
     },
     ("on_conflict", "strict/executemany_set_subset"): {"rows": [[1, 1, 1]], "error": "0A000"},
+    **{
+        ("on_conflict", f"strict/other/{name}"): {"rows": [[1, 1, 1]], "error": "0A000"}
+        for name in ("multi_row", "insert_select", "on_constraint", "set_constant")
+    },
     # Racing a DELETE, the upsert is now IRIS's INSERT OR UPDATE, which never affected 0 rows but
     # sometimes waited out a lock and failed with -110 (40001), or, on a pooled connection that had
     # an error on the table before it was recreated, with the DBAPI driver's "<LIST ERROR>" (XX000).
@@ -133,7 +137,17 @@ PINS: dict[tuple[str, str], object] = {
     # a table with a ROWVERSION column (the touch would bump it).
     **{
         ("locking", f"refused/{name}"): "0A000"
-        for name in ("join", "subquery_in_from", "limit", "view", "rowversion")
+        for name in (
+            "join",
+            "subquery_in_from",
+            "limit",
+            "view",
+            "rowversion",
+            "update_trigger",
+            "with",
+            "several_locking_clauses",
+            "of_unknown_table",
+        )
     },
     # The touch-update (`SET id = id`, or `SET n = n`) excludes like PostgreSQL's UPDATE: no pin.
     # Gotcha row 4, H1. At READ COMMITTED a read of a row another session holds waits out the

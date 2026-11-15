@@ -1382,3 +1382,34 @@ class TestConflictValuesFromTheStatement:
         values = executor._map_insert_column_values(plan, None, ("k", "v", "w"))
         assert executor._prepare_conflict_set_clause(plan, values) == ("v = 9", [])
         assert executor._prepare_conflict_where_clause(plan, values) == ('"K" = 2', [])
+
+
+class TestRollbackUsesTheDriver:
+    """IRIS's SQL `ROLLBACK` costs about 33 ms per open savepoint (8.7 s with 254, measured
+    2026-11-14 through the DBAPI driver alone); the driver's `rollback()` costs 30 to 55 ms at any
+    depth, with the same rows discarded. So a transaction-ending ROLLBACK goes to the driver."""
+
+    def _setup(self, executor, session="s1"):
+        cursor = _make_cursor(rows=[], description=None, rowcount=0)
+        conn = _make_connection(cursor=cursor)
+        wrapper = _make_conn_wrapper(connection=conn)
+        executor.pool.acquire = AsyncMock(return_value=wrapper)
+        executor.pool.release = AsyncMock()
+        executor._mock_catalog.handle_catalog_query = AsyncMock(return_value=None)
+        executor.session_transactions[session] = True
+        return conn, cursor
+
+    @pytest.mark.parametrize("sql", ["ROLLBACK", "rollback;", "ROLLBACK WORK", "ROLLBACK TRANSACTION"])
+    async def test_rollback_calls_the_driver(self, executor, sql):
+        conn, cursor = self._setup(executor)
+        result = await executor.execute_query(sql, session_id="s1")
+        assert result["success"] is True
+        assert result["command_tag"] == "ROLLBACK"
+        conn.rollback.assert_called_once_with()
+        cursor.execute.assert_not_called()
+        assert "s1" not in executor.session_transactions
+
+    async def test_rollback_to_a_savepoint_is_not_a_transaction_end(self, executor):
+        conn, _ = self._setup(executor)
+        await executor.execute_query("ROLLBACK TO SAVEPOINT pgw_sp_1", session_id="s1", _skip_savepoints=True)
+        conn.rollback.assert_not_called()

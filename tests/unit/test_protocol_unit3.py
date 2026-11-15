@@ -1395,6 +1395,32 @@ class TestHandleExecuteMessageExtended:
         assert f"{verb} 0 1".encode() not in written
 
     @pytest.mark.asyncio
+    async def test_an_on_conflict_insert_is_not_batched(self, protocol):
+        """Spec 052 US4: an ON CONFLICT INSERT may be refused (0A000), and the refusal must come
+        back for that Execute, not at Sync after every row was already reported as inserted.
+        Measured 2026-11-14: refused at the Sync flush, psycopg's connection was left unusable."""
+        query = "INSERT INTO t (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v"
+        protocol.iris_executor.sql_parser.is_dml_statement.return_value = True
+        protocol.iris_executor.sql_parser.has_returning_clause.return_value = False
+        protocol.iris_executor.execute_query = AsyncMock(
+            return_value={
+                "success": False,
+                "error": "refused",
+                "sqlstate": "0A000",
+                "condition": "feature_not_supported",
+                "rows": [],
+            }
+        )
+        self._setup_portal(protocol, "p_oc", "s_oc", query, params=[1, 2])
+        await protocol.handle_execute_message(self._make_execute_body("p_oc"))
+        assert protocol.batch_params == []
+        protocol.iris_executor.execute_query.assert_awaited_once()
+        written = collected_bytes(protocol.writer)
+        assert MSG_ERROR_RESPONSE in written
+        assert b"0A000" in written
+        assert b"INSERT 0 1" not in written
+
+    @pytest.mark.asyncio
     async def test_portal_not_found_sends_error(self, protocol):
         body = self._make_execute_body("nonexistent_portal")
         await protocol.handle_execute_message(body)

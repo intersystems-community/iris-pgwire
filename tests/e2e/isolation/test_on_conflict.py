@@ -421,3 +421,41 @@ def test_executemany_inexact_form(target, expect):
             {"rows": [[1, 9, 1], [2, 2, 2]], "error": None},
         )
     expect.done()
+
+
+OTHER_INEXACT = {
+    "multi_row": "insert into oc_m (k, v, w) values (1, 9, 9), (2, 2, 2) on conflict (k) "
+    "do update set v = excluded.v, w = excluded.w",
+    "insert_select": "insert into oc_m (k, v, w) select k, v, w from oc_src on conflict (k) "
+    "do update set v = excluded.v, w = excluded.w",
+    "on_constraint": "insert into oc_m values (1, 5, 5) on conflict on constraint oc_m_pkey "
+    "do update set v = excluded.v, w = excluded.w",
+    "set_constant": "insert into oc_m (k, v) values (1, 4) on conflict (k) "
+    "do update set v = excluded.v, w = 0",
+}
+# PostgreSQL 16's answers, measured on the reference server 2026-11-14.
+OTHER_INEXACT_ROWS = {
+    "multi_row": [[1, 9, 9], [2, 2, 2]],
+    "insert_select": [[1, 7, 7]],
+    "on_constraint": [[1, 5, 5]],
+    "set_constant": [[1, 4, 0]],
+}
+
+
+@pytest.mark.parametrize("name", list(OTHER_INEXACT))
+def test_other_inexact_forms(target, expect, name):
+    """FR-014: forms INSERT OR UPDATE cannot take (several rows, a SELECT, ON CONSTRAINT, a SET
+    that is not from EXCLUDED) are refused in strict mode, naming the form."""
+    with target.connect("extended") as conn:
+        _table(conn, "create table oc_src (k int, v int, w int)", (1, 7, 7))
+        # PostgreSQL names the primary key constraint <table>_pkey; IRIS's name differs, which
+        # does not matter because PGWire refuses ON CONSTRAINT before IRIS sees it.
+        _table(conn, "create table oc_m (k int primary key, v int, w int)", (1, 1, 1))
+        outcome = _exec(conn, OTHER_INEXACT[name])
+        expect.check(
+            f"strict/other/{name}",
+            {"rows": _rows(conn, "oc_m"), "error": outcome.sqlstate},
+            {"rows": OTHER_INEXACT_ROWS[name], "error": None},
+            message=outcome.message,
+        )
+    expect.done()

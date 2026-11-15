@@ -3245,6 +3245,10 @@ class PGWireProtocol:
             # PostgreSQL's format (psycopg read rowcount -1). SQLAlchemy's ORM checks those
             # counts and raised StaleDataError on every update.
             is_insert = query.lstrip().upper().startswith("INSERT")
+            # Not ON CONFLICT either: strict mode may refuse it (spec 052 US4), and the refusal
+            # has to answer this Execute, not arrive at Sync after "INSERT 0 1" for every row.
+            if is_insert and "ON CONFLICT" in query.upper():
+                is_insert = False
 
             if is_dml and is_insert and not has_returning:
                 # A different statement cannot share the batch: flush executes one SQL text for

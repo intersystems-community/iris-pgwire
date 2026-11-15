@@ -127,6 +127,11 @@ def _bind(value: Any, params: list) -> str:
     return "?"
 
 
+# `ROLLBACK [WORK|TRANSACTION]` alone: the end of the transaction, not a partial rollback.
+_TRANSACTION_ROLLBACK_RE = re.compile(
+    r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s*;?\s*$", re.IGNORECASE
+)
+
 # `ROLLBACK [WORK|TRANSACTION] TO ...`, which ends no transaction.
 _ROLLBACK_TO_RE = re.compile(r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO\b", re.IGNORECASE)
 
@@ -314,6 +319,23 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
             if intercept_result.intercepted:
                 return intercept_result.result
 
+            # A ROLLBACK that ends the transaction goes to the driver: IRIS's SQL ROLLBACK costs
+            # about 33 ms per open savepoint (8.7 s with 254), the driver's 30-55 ms at any depth.
+            if _TRANSACTION_ROLLBACK_RE.match(sql):
+                conn_wrapper, pinned = await self._acquire_connection(session_id)
+                release_connection = not pinned
+                await asyncio.to_thread(conn_wrapper.connection.rollback)
+                self._update_transaction_state(session_id, "ROLLBACK")
+                self._record_success(conn_wrapper, (time.perf_counter() - start_time) * 1000)
+                return {
+                    "success": True,
+                    "rows": [],
+                    "columns": [],
+                    "row_count": 0,
+                    "command_tag": "ROLLBACK",
+                    "execution_time_ms": (time.perf_counter() - start_time) * 1000,
+                }
+
             # `ROLLBACK TO x` / `RELEASE x` -> IRIS's spelling with SAVEPOINT.
             sql = rewrite_savepoint_verbs(sql)
 
@@ -456,6 +478,8 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
         inserted = 0
         for statement, statement_params in statements:
             result = await self.execute_query(statement, statement_params, session_id, **kwargs)
+            if not result.get("success"):
+                return result  # the statement fails with that row's error
             rows.extend(result.get("rows") or [])
             columns = columns or result.get("columns") or []
             inserted += result.get("row_count") or 0
