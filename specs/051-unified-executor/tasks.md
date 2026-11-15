@@ -477,6 +477,18 @@ adding a second one here was the duplication `/speckit.analyze` caught.)
       if it gives per-session transactions. Spec 052 (PostgreSQL transaction semantics) targets
       DBAPI only and relies on this task for embedded
 
+### Added by spec 052 (T059, 2026-11-14)
+
+- [ ] T089 Embedded executemany drops `ON CONFLICT ... DO UPDATE`: the batch path strips the clause
+      and treats a duplicate as `DO NOTHING` (`iris_executor.py`, the executemany ON CONFLICT
+      handling; investigation doc section 5, E3 row "executemany of DO UPDATE", predicted, not run
+      on embedded). Test first: on the embedded backend, `cur.executemany("insert into u values
+    (%s, %s) on conflict (k) do update set v = excluded.v", [(1, 99), (2, 2)])` over a seeded
+      `(1, 1)` must leave `(1, 99), (2, 2)`, PostgreSQL's answer. Adopt spec 052 US4's rule when the
+      executors merge: IRIS's `INSERT OR UPDATE` for the exact form
+      (`sql_translator/on_conflict.py`), `0A000` for the rest in strict mode, and in permissive mode
+      the emulation deciding on SQLCODE -119 on the target (`_on_conflict_mixin.py`)
+
 ---
 
 ## Dependencies

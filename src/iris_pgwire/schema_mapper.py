@@ -117,6 +117,10 @@ def translate_input_schema(sql: str) -> str:
         if prefix_candidate.endswith(".") or prefix_candidate.upper().endswith(IRIS_SCHEMA.upper()):
             return match.group(0)
 
+        # `FOR UPDATE NOWAIT`, `FOR NO KEY UPDATE OF t`: a row-locking clause, not a table.
+        if keyword.upper() == "UPDATE" and re.search(r"(?i)\b(?:FOR|KEY)$", prefix_candidate):
+            return match.group(0)
+
         # Skip CTE aliases — they are defined in WITH clauses, not real tables
         if table_name.upper() in cte_names:
             return match.group(0)

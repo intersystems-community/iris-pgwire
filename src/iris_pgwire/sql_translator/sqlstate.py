@@ -28,6 +28,7 @@ IRIS SQLCODE                 PostgreSQL SQLSTATE
 -110 writer lock conflict    40001  serialization_failure
 -114 reader lock conflict    40001  serialization_failure
 -119 UNIQUE/PK failed        23505  unique_violation
+-121 to -124 foreign key     23503  foreign_key_violation
 -149 error inside a function XX000  internal_error
 -359 function not found      42883  undefined_function
 -375 savepoint not found     3B001  invalid_savepoint_specification
@@ -125,6 +126,11 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
     -110: ("40001", "serialization_failure"),
     -114: ("40001", "serialization_failure"),
     -119: ("23505", "unique_violation"),
+    # Foreign key: INSERT/UPDATE of a referencing row, UPDATE/DELETE of a referenced one.
+    -121: ("23503", "foreign_key_violation"),
+    -122: ("23503", "foreign_key_violation"),
+    -123: ("23503", "foreign_key_violation"),
+    -124: ("23503", "foreign_key_violation"),
     -149: ("XX000", "internal_error"),
     -359: ("42883", "undefined_function"),
     -375: INVALID_SAVEPOINT,
@@ -140,6 +146,13 @@ SQLCODE_MAP: dict[int, tuple[str, str]] = {
 # Ordered: the first match wins, so the specific patterns precede the general
 # ones ("Table or view not found" also contains "not found").
 _MESSAGE_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, str]], ...] = (
+    (
+        # The DBAPI driver's own failure to decode IRIS's error (no SQLCODE survives): XX000 on
+        # every path, never a call site's fallback (measured 2026-11-14 for -110 and -119 on a
+        # connection that had an error on a table since recreated).
+        re.compile(r"<LIST ERROR>", re.IGNORECASE),
+        ("XX000", "internal_error"),
+    ),
     (
         # Writer, measured: "Unable to acquire lock for UPDATE of table
         # 'SQLUser.LkProbe' on row with RowID = '1'" (-110). Reader, measured:

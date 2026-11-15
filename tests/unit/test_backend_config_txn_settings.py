@@ -71,3 +71,36 @@ class TestTxnCompat:
         monkeypatch.setenv("IRIS_PASSWORD", "SYS")
         monkeypatch.setenv("PGWIRE_TXN_COMPAT", "permissive")
         assert BackendConfig.from_env().txn_compat == "permissive"
+
+
+class TestTheServerReadsTheSetting:
+    """FR-025: `PGWIRE_TXN_COMPAT` reaches the executor; the server built its BackendConfig by hand
+    and dropped it (found by the slice 2 permissive run: every refusal stayed on)."""
+
+    def _config_passed(self, monkeypatch, value):
+        from unittest.mock import MagicMock, patch
+
+        import iris_pgwire.server as srv
+
+        if value is None:
+            monkeypatch.delenv("PGWIRE_TXN_COMPAT", raising=False)
+        else:
+            monkeypatch.setenv("PGWIRE_TXN_COMPAT", value)
+        selector = MagicMock()
+        with patch.object(srv, "BackendSelector", return_value=selector), patch.object(
+            srv, "enhance_iris_executor_with_integratedml", side_effect=lambda x: x
+        ):
+            srv.PGWireServer(host="127.0.0.1", port=15432, backend_type="dbapi", auth_mode="trust")
+        return selector.select_backend.call_args.args[0]
+
+    def test_permissive_reaches_the_executor(self, monkeypatch):
+        assert self._config_passed(monkeypatch, "permissive").txn_compat == "permissive"
+
+    def test_strict_by_default(self, monkeypatch):
+        assert self._config_passed(monkeypatch, None).txn_compat == "strict"
+
+    def test_an_unknown_value_stops_the_server(self, monkeypatch):
+        import pytest
+
+        with pytest.raises(ValueError, match="PGWIRE_TXN_COMPAT"):
+            self._config_passed(monkeypatch, "lenient")

@@ -255,3 +255,169 @@ EXPECTED_FORMS = {
     "target_is_secondary_unique_key": {"rows": [[1, 1, 9]], "error": None},
     "target_is_secondary_key_new_pk": {"rows": [[1, 1, 9]], "error": None},
 }
+
+
+# Spec 052 US4. PostgreSQL's own ON CONFLICT statements, on both targets. PGWire sends IRIS's
+# INSERT OR UPDATE for the exact form and refuses the rest with 0A000 in strict mode (pinned with
+# the reason); in permissive mode it runs its 2.0 emulation, with the bugs E3 found fixed.
+
+
+@pytest.mark.parametrize(
+    "name, ddl, seed, postgres_sql, iris_sql", FORMS, ids=[f[0] for f in FORMS]
+)
+def test_on_conflict_forms(target, expect, name, ddl, seed, postgres_sql, iris_sql):
+    """US4 scenarios 1 and 2: the exact form matches PostgreSQL; every other form is refused."""
+    with target.connect("extended") as conn:
+        _table(conn, ddl, *seed)
+        outcome = _exec(conn, postgres_sql)
+        expect.check(
+            f"strict/{name}",
+            {"rows": _rows(conn, "oc_m"), "error": outcome.sqlstate},
+            EXPECTED_FORMS[name],
+            sql=postgres_sql,
+            message=outcome.message,
+        )
+    expect.done()
+
+
+def test_exact_form_with_parameters_and_returning(target, expect):
+    """The exact form as an ORM sends it: bound parameters, RETURNING, both paths."""
+    sql = (
+        "insert into oc_u (k, v) values (%s, %s) on conflict (k) do update "
+        "set v = excluded.v returning k, v"
+    )
+    with target.connect("extended") as conn:
+        _table(conn, "create table oc_u (k int primary key, v int)", (1, 1))
+        updated = _exec(conn, sql, (1, 5))
+        inserted = _exec(conn, sql, (2, 6))
+        expect.check(
+            "strict/exact_params_returning",
+            {
+                "update_path": updated.rows,
+                "insert_path": inserted.rows,
+                "rows": _rows(conn, "oc_u"),
+                "error": updated.sqlstate or inserted.sqlstate,
+            },
+            {
+                "update_path": [(1, 5)],
+                "insert_path": [(2, 6)],
+                "rows": [[1, 5], [2, 6]],
+                "error": None,
+            },
+            message=updated.message or inserted.message,
+        )
+    expect.done()
+
+
+@pytest.mark.permissive
+def test_permissive_do_nothing_reports_other_errors(target, expect):
+    """US4 scenario 3 / FR-015, FR-017: only a conflict on the target is the conflict."""
+    with target.connect("extended") as conn:
+        _exec(conn, "drop table if exists oc_child")
+        _table(conn, "create table oc_parent (id int primary key)", (1,))
+        assert _exec(
+            conn,
+            "create table oc_child (id int primary key, parent int references oc_parent (id))",
+        ).ok
+        fk = _exec(conn, "insert into oc_child (id, parent) values (1, 42) on conflict do nothing")
+        _exec(conn, "drop table oc_child")
+
+        _table(conn, "create table oc_two (k int primary key, u int unique, v int)", (1, 10, 1))
+        other_key = _exec(conn, "insert into oc_two values (2, 10, 2) on conflict (k) do nothing")
+        on_target = _exec(conn, "insert into oc_two values (1, 99, 2) on conflict (k) do nothing")
+        other_target = _exec(
+            conn, "insert into oc_two values (1, 77, 3) on conflict (u) do nothing"
+        )
+        no_target = _exec(conn, "insert into oc_two values (3, 10, 3) on conflict do nothing")
+        update_other_key = _exec(
+            conn,
+            "insert into oc_two values (4, 10, 4) on conflict (k) do update set v = excluded.v",
+        )
+        expect.check(
+            "permissive/do_nothing_errors",
+            {
+                "fk_violation": fk.sqlstate,
+                "conflict_on_another_key": other_key.sqlstate,
+                "conflict_on_the_target": on_target.sqlstate,
+                "target_u_conflict_on_k": other_target.sqlstate,
+                "no_target_any_conflict": no_target.sqlstate,
+                "do_update_conflict_on_another_key": update_other_key.sqlstate,
+                "rows": _rows(conn, "oc_two"),
+            },
+            {
+                "fk_violation": "23503",
+                "conflict_on_another_key": "23505",
+                "conflict_on_the_target": None,
+                "target_u_conflict_on_k": "23505",
+                "no_target_any_conflict": None,
+                "do_update_conflict_on_another_key": "23505",
+                "rows": [[1, 10, 1]],
+            },
+        )
+    expect.done()
+
+
+@pytest.mark.permissive
+def test_permissive_do_update_on_the_target(target, expect):
+    """The emulation still updates on a conflict on its target (both paths)."""
+    with target.connect("extended") as conn:
+        _table(conn, "create table oc_m (k int primary key, v int, w int)", (1, 1, 1))
+        subset = _exec(
+            conn, "insert into oc_m values (1, 9, 9) on conflict (k) do update set v = excluded.v"
+        )
+        fresh = _exec(
+            conn, "insert into oc_m values (2, 9, 9) on conflict (k) do update set v = excluded.v"
+        )
+        expect.check(
+            "permissive/do_update_subset",
+            {"rows": _rows(conn, "oc_m"), "errors": [subset.sqlstate, fresh.sqlstate]},
+            {"rows": [[1, 9, 1], [2, 9, 9]], "errors": [None, None]},
+        )
+    expect.done()
+
+
+@pytest.mark.permissive
+def test_permissive_list_error_is_not_a_conflict(target, expect):
+    """US4 scenario 5 / FR-016: the driver's <LIST ERROR> fails the statement; it is not a conflict.
+
+    On a connection that had a unique violation on a table, a recreated table's violations reach
+    the DBAPI driver as "<LIST ERROR>" (see test_failed_transaction's unique_violation_new_table).
+    The emulation must not take that for the conflict, and the connection must not be reused.
+    """
+    with target.connect("extended") as conn:
+        _table(conn, "create table oc_le (k int primary key, v int)", (1, 1))
+        first = _exec(conn, "insert into oc_le values (1, 2) on conflict (k) do nothing")
+        _table(conn, "create table oc_le (k int primary key, v int)", (1, 1))
+        recreated = _exec(conn, "insert into oc_le values (1, 2) on conflict (k) do nothing")
+    with target.connect("extended") as conn:
+        next_session = _exec(conn, "insert into oc_le values (1, 3)")
+    expect.check(
+        "permissive/list_error",
+        {
+            "first": first.sqlstate,
+            "after_recreate": recreated.sqlstate,
+            "next_session": next_session.sqlstate,
+        },
+        {"first": None, "after_recreate": None, "next_session": "23505"},
+        message=recreated.message,
+    )
+    expect.done()
+
+
+def test_executemany_inexact_form(target, expect):
+    """Batched ON CONFLICT follows the same rule (spec 049 FR-002): a subset SET is refused."""
+    sql = "insert into oc_m (k, v, w) values (%s, %s, %s) on conflict (k) do update set v = excluded.v"
+    with target.connect("extended") as conn:
+        _table(conn, "create table oc_m (k int primary key, v int, w int)", (1, 1, 1))
+        error = None
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(sql, [(1, 9, 9), (2, 2, 2)])
+        except psycopg.Error as e:
+            error = e.sqlstate
+        expect.check(
+            "strict/executemany_set_subset",
+            {"rows": _rows(conn, "oc_m"), "error": error},
+            {"rows": [[1, 9, 1], [2, 2, 2]], "error": None},
+        )
+    expect.done()

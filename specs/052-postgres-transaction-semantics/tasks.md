@@ -216,42 +216,42 @@ SC-003.
 
 ### Tests first
 
-- [ ] T039 [P] [US3] Unit tests in `tests/unit/test_locking_clauses.py` for `src/iris_pgwire/sql_translator/
+- [X] T039 [P] [US3] Unit tests in `tests/unit/test_locking_clauses.py` for `src/iris_pgwire/sql_translator/
   locking_clauses.py` (research R6): recognise `FOR UPDATE`, `FOR UPDATE OF t`, `NOWAIT`, `SKIP LOCKED`,
       `FOR SHARE`, `FOR NO KEY UPDATE`, `FOR KEY SHARE`; classify a statement as `emulate` (one base table, `WHERE`
       reusable) or a named refusal (join, subquery or view in FROM, GROUP BY/DISTINCT/aggregate, LIMIT/OFFSET, several
       tables in `OF`); for `emulate`, produce the touch-update (`UPDATE t SET pk = pk WHERE <same predicate>`, `%ID`
       when there is no primary key) and the SELECT without the clause; parameter markers keep their positions; no
       match inside string literals or comments; the cheap pre-check skips SELECTs without `FOR`.
-- [ ] T040 [US3] Suite checks in `tests/e2e/isolation/test_locking.py`: the existing `for_update_vs_*` and
+- [X] T040 [US3] Suite checks in `tests/e2e/isolation/test_locking.py`: the existing `for_update_vs_*` and
       `counter_for_update` checks at both levels expect PostgreSQL's answer (SC-003: 1000 of 1000, 5 runs); add
       `NOWAIT` against a held row → `55P03` within 1 s; a join `FOR UPDATE` → `0A000` (strict); `FOR UPDATE` in
       autocommit returns the rows; rows returned equal the rows without the clause.
-- [ ] T041 [US3] Update `tests/e2e/isolation/test_unsupported_clauses.py`: expectation stays PostgreSQL's (`ok`); the
+- [X] T041 [US3] Update `tests/e2e/isolation/test_unsupported_clauses.py`: expectation stays PostgreSQL's (`ok`); the
       pins for `for_share`, `for_no_key_update`, `for_key_share`, `for_update_skip_locked` change from `42601` to
       `0A000`; `for_update_nowait` loses its pin (now emulated).
-- [ ] T042 [US3] Permissive checks, marker `permissive`, in `tests/e2e/isolation/test_locking.py`: a refused shape
+- [X] T042 [US3] Permissive checks, marker `permissive`, in `tests/e2e/isolation/test_locking.py`: a refused shape
       runs (rows returned) and the server log contains one warning for two identical statements (read
       `build/isolation-server.log`).
-- [ ] T043 [US3] Run `make isolation` and `make isolation-permissive`; confirm the new checks fail first.
+- [X] T043 [US3] Run `make isolation` and `make isolation-permissive`; confirm the new checks fail first.
 
 ### Implementation
 
-- [ ] T044 [US3] Implement `src/iris_pgwire/sql_translator/locking_clauses.py` until T039 passes.
-- [ ] T045 [US3] Call it from `src/iris_pgwire/dbapi_executor.py` `execute_query` after the interceptor: inside an
+- [X] T044 [US3] Implement `src/iris_pgwire/sql_translator/locking_clauses.py` until T039 passes.
+- [X] T045 [US3] Call it from `src/iris_pgwire/dbapi_executor.py` `execute_query` after the interceptor: inside an
       explicit transaction run the touch-update, then the SELECT; `NOWAIT` wraps the touch in `SET OPTION
   LOCK_TIMEOUT = 0` and restores the session's value after, mapping -110 to `55P03`; outside a transaction run the
       SELECT only; refusals return `0A000` in strict mode. Primary key from `_get_primary_key_columns`. Refuse tables
       with an UPDATE trigger or a ROWVERSION column (catalog lookup, cached per table).
-- [ ] T046 [US3] Add the permissive-mode warning registry (data-model.md "Statement shape", bounded at 1000) in
+- [X] T046 [US3] Add the permissive-mode warning registry (data-model.md "Statement shape", bounded at 1000) in
       `src/iris_pgwire/compat_mode.py`, read `BackendConfig.txn_compat`, and use it for US3's refusals.
-- [ ] T047 [US3] Remove the `locking/*` pins and update the `unsupported_clauses/*` pins in
+- [X] T047 [US3] Remove the `locking/*` pins and update the `unsupported_clauses/*` pins in
       `tests/e2e/isolation/known_differences.py`; update gotcha rows for `FOR UPDATE` in
       `docs/investigations/mvcc-apps-on-iris-pgwire.md` and the `FOR UPDATE` paragraph in `KNOWN_LIMITATIONS.md`.
-- [ ] T048 [US3] Measure the translator cost on SELECTs with and without `FOR` (existing benchmark corpus,
+- [X] T048 [US3] Measure the translator cost on SELECTs with and without `FOR` (existing benchmark corpus,
       `benchmarks/`), record in `specs/052-postgres-transaction-semantics/research.md` R11; must stay under 5 ms (the
       slice 2 gate repeats it for the whole slice).
-- [ ] T049 [US3] Add US3's rows to `docs/POSTGRES_APP_COMPATIBILITY.md` (touch-update side effects: triggers,
+- [X] T049 [US3] Add US3's rows to `docs/POSTGRES_APP_COMPATIBILITY.md` (touch-update side effects: triggers,
       ROWVERSION, lock escalation past 1000 rows).
 
 **Checkpoint (gate)**: `make isolation` and `make isolation-permissive` pass.
@@ -264,41 +264,41 @@ SC-003.
 
 ### Tests first
 
-- [ ] T050 [P] [US4] Unit tests in `tests/unit/test_on_conflict_classifier.py` for
+- [X] T050 [P] [US4] Unit tests in `tests/unit/test_on_conflict_classifier.py` for
       `src/iris_pgwire/sql_translator/on_conflict.py` (research R7): given a `ReturningPlan` and the table's unique
       keys, label `exact` only when the target is the only unique key and `DO UPDATE SET` assigns every inserted
       non-key column from `EXCLUDED` with no `WHERE`; name each inexact form (subset SET, SET reading the row,
       `DO UPDATE ... WHERE`, second unique key, target not the only key, `DO NOTHING`); produce
       `INSERT OR UPDATE t (...) VALUES (...)` without `INTO` for `exact`.
-- [ ] T051 [US4] Suite checks in `tests/e2e/isolation/test_on_conflict.py` (strict, default run): the exact form
+- [X] T051 [US4] Suite checks in `tests/e2e/isolation/test_on_conflict.py` (strict, default run): the exact form
       matches PostgreSQL on the insert and the update path; each inexact form (the `insert_or_update/*` table's ON
       CONFLICT spellings) gets `0A000` (pin: PostgreSQL accepts them); `do_nothing_*` get `0A000` (pin);
       `upsert_vs_delete/on_conflict` now runs as `INSERT OR UPDATE` (pin `AnyOf` of no errors / `40001`).
-- [ ] T052 [US4] Permissive checks, marker `permissive`, in `tests/e2e/isolation/test_on_conflict.py`: `DO NOTHING`
+- [X] T052 [US4] Permissive checks, marker `permissive`, in `tests/e2e/isolation/test_on_conflict.py`: `DO NOTHING`
       with a foreign-key violation → `23503`; a collision on a non-target key → `23505`; `DO NOTHING` honours its
       target; a `<LIST ERROR>` conflict (recreate the table on the same connection after a -119, as in
       `test_unique_violation_on_a_new_table`) → `XX000`, not treated as the conflict. Assert the connection is not reused afterwards (the next
       session's duplicate key reports `23505`).
-- [ ] T053 [US4] Run both suites; confirm the new checks fail first.
+- [X] T053 [US4] Run both suites; confirm the new checks fail first.
 
 ### Implementation
 
-- [ ] T054 [US4] Implement `src/iris_pgwire/sql_translator/on_conflict.py` until T050 passes; unique keys from
+- [X] T054 [US4] Implement `src/iris_pgwire/sql_translator/on_conflict.py` until T050 passes; unique keys from
       `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` / `KEY_COLUMN_USAGE`, cached per table and invalidated by DDL on it.
-- [ ] T055 [US4] In `src/iris_pgwire/dbapi_executor.py`: route `exact` to the rewritten `INSERT OR UPDATE`; refuse
+- [X] T055 [US4] In `src/iris_pgwire/dbapi_executor.py`: route `exact` to the rewritten `INSERT OR UPDATE`; refuse
       inexact forms in strict mode (`0A000`, through `compat_mode.py`); in permissive mode keep
       `_handle_on_conflict_update` (line 784) and the handler at line 659, now deciding on `SQLCODE: <-119>` for the
       target only, honouring `DO NOTHING`'s target, and failing `<LIST ERROR>` with `XX000`.
-- [ ] T056 [US4] Apply the same strict/permissive rule to batched ON CONFLICT (spec 049 FR-002, `protocol.py`
+- [X] T056 [US4] Apply the same strict/permissive rule to batched ON CONFLICT (spec 049 FR-002, `protocol.py`
       `flush_batch` path); amend `specs/049-pipeline-mode-executemany/spec.md` FR-002 to point here.
-- [ ] T057 [US4] Fix the `INSERT OR UPDATE INTO t` rewrite to `SQLUser."INTO"` only if T054's rewrite needs it; else
+- [X] T057 [US4] Fix the `INSERT OR UPDATE INTO t` rewrite to `SQLUser."INTO"` only if T054's rewrite needs it; else
       leave it (out of scope) and note it in research R7.
-- [ ] T058 [US4] Update `on_conflict/*` pins in `tests/e2e/isolation/known_differences.py` (remove what now matches,
+- [X] T058 [US4] Update `on_conflict/*` pins in `tests/e2e/isolation/known_differences.py` (remove what now matches,
       re-pin refusals with the reason); keep the `insert_or_update/*` pins (they measure IRIS's native statement).
-- [ ] T059 [US4] Move "executemany drops DO UPDATE" (embedded) to spec 051: add a task to
+- [X] T059 [US4] Move "executemany drops DO UPDATE" (embedded) to spec 051: add a task to
       `specs/051-unified-executor/tasks.md` referencing the spike's E3 row.
-- [ ] T060 [US4] Update the ON CONFLICT rows of the gotcha table in `docs/investigations/mvcc-apps-on-iris-pgwire.md`.
-- [ ] T061 [US4] Add US4's rows to `docs/POSTGRES_APP_COMPATIBILITY.md` (the exact form, how to rewrite the rest, the
+- [X] T060 [US4] Update the ON CONFLICT rows of the gotcha table in `docs/investigations/mvcc-apps-on-iris-pgwire.md`.
+- [X] T061 [US4] Add US4's rows to `docs/POSTGRES_APP_COMPATIBILITY.md` (the exact form, how to rewrite the rest, the
       ORM upsert table).
 
 - [ ] T062 [US4] Slice 2 gate extras: (a) e2e coverage of `locking_clauses.py`, `on_conflict.py`, `compat_mode.py` under `make isolation`

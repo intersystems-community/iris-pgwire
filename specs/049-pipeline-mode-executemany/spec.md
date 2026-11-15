@@ -51,7 +51,7 @@ A developer uses psycopg3's explicit pipeline context (`with conn.pipeline():`) 
 ### Functional Requirements
 
 - **FR-001**: Server MUST handle `executemany()` by executing all parameter sets against the same SQL template and returning a single CommandComplete with the total row count.
-- **FR-002**: Server MUST strip ON CONFLICT clauses from batched SQL and treat per-row duplicate key errors as silent skips when ON CONFLICT DO NOTHING was specified.
+- **FR-002** _(amended by spec 052 US4, 2026-11-14)_: Batched ON CONFLICT follows the rule for single statements in `specs/052-postgres-transaction-semantics/spec.md` (FR-013 to FR-017), per statement shape: IRIS's `INSERT OR UPDATE` for the one exact form, `0A000` for every other form (`DO NOTHING` included) in strict mode, and in permissive mode the emulation, which treats only a unique violation (SQLCODE -119) on the conflict target as the conflict. _Was_: strip ON CONFLICT clauses from batched SQL and treat per-row duplicate key errors as silent skips when ON CONFLICT DO NOTHING was specified.
 - **FR-003**: Server MUST handle pipeline Sync by flushing the DML batch, sending CommandComplete for each buffered statement, then sending ReadyForQuery.
 - **FR-004**: Server MUST handle Flush without sending ReadyForQuery (Flush drains the write buffer; Sync terminates the pipeline cycle).
 - **FR-005**: ~~In pipeline mode, a statement error SHOULD NOT abort subsequent statements.~~ **Replaced by spec 052

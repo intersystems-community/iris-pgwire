@@ -21,15 +21,18 @@ ISOLATION_LOG ?= build/isolation-server.log
 # selected") counts as success, so a target whose checks do not exist yet still passes.
 ISOLATION_SERVER_ENV ?=
 ISOLATION_MARK ?=
+# The interpreter that runs the server; `make isolation-coverage` runs it under coverage.
+ISOLATION_SERVER_PY ?= $(PYTHON)
 
-.PHONY: isolation isolation-permissive isolation-read-uncommitted isolation-server isolation-table
+.PHONY: isolation isolation-permissive isolation-read-uncommitted isolation-server isolation-table \
+	coverage-052 isolation-coverage
 
 isolation:
 	@mkdir -p build
 	@if nc -z 127.0.0.1 $(ISOLATION_PORT) 2>/dev/null; then \
 		echo "port $(ISOLATION_PORT) is in use; stop that server first" >&2; exit 1; fi
 	rm -f $(ISOLATION_RESULTS)
-	$(ISOLATION_SERVER_ENV) IRIS_PORT=$(IRIS_PORT) PYTHONPATH=src $(PYTHON) tests/e2e/_auth_server.py $(ISOLATION_PORT) trust dbapi \
+	$(ISOLATION_SERVER_ENV) IRIS_PORT=$(IRIS_PORT) PYTHONPATH=src $(ISOLATION_SERVER_PY) tests/e2e/_auth_server.py $(ISOLATION_PORT) trust dbapi \
 		> $(ISOLATION_LOG) 2>&1 & echo $$! > build/isolation-server.pid; \
 	for i in $$(seq 1 60); do nc -z 127.0.0.1 $(ISOLATION_PORT) 2>/dev/null && break; sleep 1; done; \
 	ISOLATION_SUITE=1 ISOLATION_RESULTS=$(ISOLATION_RESULTS) ISOLATION_MARK="$(ISOLATION_MARK)" ISOLATION_LOG=$(ISOLATION_LOG) \
@@ -49,6 +52,29 @@ isolation-permissive:
 isolation-read-uncommitted:
 	$(MAKE) isolation ISOLATION_SERVER_ENV="PGWIRE_DEFAULT_ISOLATION='read uncommitted'" ISOLATION_MARK=default_isolation \
 		ISOLATION_RESULTS=build/isolation-results-read-uncommitted.jsonl ISOLATION_LOG=build/isolation-server-read-uncommitted.log
+
+# Spec 052's new modules must stay at 90% coverage or more (tests/coverage/spec052.ini); both
+# targets fail below it. coverage-052 runs their unit tests; isolation-coverage runs the default
+# and permissive isolation suites with the server under coverage, and reports the two together.
+SPEC052_UNIT_TESTS = tests/unit/test_transaction_status.py tests/unit/test_savepoint_stack.py \
+	tests/unit/test_compat_mode.py tests/unit/test_locking_clauses.py tests/unit/test_locking_mixin.py \
+	tests/unit/test_on_conflict_classifier.py tests/unit/test_savepoint_mixin.py
+COVERAGE_052 = $(PYTHON) -m coverage
+
+coverage-052:
+	@mkdir -p build
+	$(COVERAGE_052) erase --rcfile=tests/coverage/spec052.ini
+	PYTHONPATH=src $(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini -m pytest $(SPEC052_UNIT_TESTS) \
+		-p no:cacheprovider -p no:randomly -q
+	$(COVERAGE_052) report --rcfile=tests/coverage/spec052.ini
+
+isolation-coverage:
+	@mkdir -p build
+	$(COVERAGE_052) erase --rcfile=tests/coverage/spec052.ini
+	$(MAKE) isolation ISOLATION_SERVER_PY="$(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini --parallel-mode"
+	$(MAKE) isolation-permissive ISOLATION_SERVER_PY="$(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini --parallel-mode"
+	$(COVERAGE_052) combine --rcfile=tests/coverage/spec052.ini
+	$(COVERAGE_052) report --rcfile=tests/coverage/spec052.ini
 
 isolation-table:
 	$(PYTHON) scripts/render_hermitage_table.py $(ISOLATION_RESULTS)

@@ -152,6 +152,8 @@ class PGWireServer:
             pool_timeout=int(connection_pool_timeout),
             query_timeout=query_timeout,
             strict_single_connection=strict_single_connection,
+            # Spec 052: strict refuses what IRIS cannot run exactly; permissive runs it as 2.0 did.
+            txn_compat=os.getenv("PGWIRE_TXN_COMPAT", "strict"),
         )
 
         # Select appropriate executor (DBAPIExecutor or IRISExecutor)

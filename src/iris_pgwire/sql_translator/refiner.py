@@ -171,7 +171,7 @@ class SQLRefiner:
     # PostgreSQL does. A GROUP BY ordinal (GROUP BY 1) is left alone: %EXACT(1) is a constant.
     _group_by_pattern = re.compile(r"\bGROUP\s+BY\s+", re.IGNORECASE)
     _group_by_end_pattern = re.compile(
-        r"\s*\b(HAVING|ORDER\s+BY|LIMIT|OFFSET|FETCH|UNION|INTERSECT|EXCEPT)\b", re.IGNORECASE
+        r"\s*\b(HAVING|ORDER\s+BY|LIMIT|OFFSET|FETCH|UNION|INTERSECT|EXCEPT|FOR|WINDOW)\b", re.IGNORECASE
     )
     _count_distinct_pattern = re.compile(r"\bCOUNT\s*\(\s*DISTINCT\s+", re.IGNORECASE)
 

@@ -125,6 +125,18 @@ UPDATE INTO t` mis-rewritten to `SQLUser."INTO"`).
 `INFORMATION_SCHEMA.TABLE_CONSTRAINTS`, cached per table with the catalog's existing cache; a `DROP`/`CREATE`
 invalidates it.
 
+### R7 implemented: slice 2 (2026-11-14)
+
+- **`INSERT OR UPDATE INTO` (T057)**: not needed. The exact form is rewritten from the statement after translation
+  (`INSERT INTO SQLUser."T" ...` becomes `INSERT OR UPDATE SQLUser."T" ...`), so the schema rewrite never sees an
+  `INTO` after `UPDATE`. The `SQLUser."INTO"` bug stays, out of scope.
+- **Measured on the lab, DBAPI driver alone**: `INSERT OR UPDATE` rejects several rows of VALUES (SQLCODE -25), so
+  multi-row upserts are inexact; it accepts no column list. A `CREATE UNIQUE INDEX` is listed in
+  `INFORMATION_SCHEMA.TABLE_CONSTRAINTS` as `UNIQUE`, with its columns in `KEY_COLUMN_USAGE`. A -119 names the key's
+  fields (`Field(s) u=10`), which is how the permissive emulation tells a conflict on its target from one on another
+  key. `<LIST ERROR>` in place of a -119 was also seen on a table created moments before on the same connection, after
+  an `INSERT OR UPDATE` on it, not only after a table was recreated.
+
 ## R8. `lock_timeout` and `statement_timeout` (US5)
 
 **Decision**: `SET lock_timeout` is handled next to the isolation `SET`s (`_isolation.py`'s statement handling is the
@@ -188,3 +200,12 @@ the 5 ms budget.
   psycopg nested block): 4/4 on this tree, 1/4 on HEAD. No regression, and slice 1 works on embedded for one session.
   `irispython` execs `/usr/bin/python3`, so an embedded test server is found by the port it listens on (`ss -ltnp`),
   not by an `irispython` command line.
+
+### R11 measured: slice 2 (2026-11-14)
+
+- **Cost (T048)**: `plan_locking` costs 0.6 µs on a SELECT without a locking clause (the regex pre-check), 26 to 29 µs
+  to plan one, and 19 µs to pre-check a 4 KB SELECT. `classify_on_conflict` costs 3.4 µs; `statement_shape`, run only
+  in permissive mode when a refused statement arrives, 4.1 µs. All well under 1% of the 5 ms budget. The emulation
+  costs IRIS round trips, not translation: one extra statement per locked SELECT (the touch-update), four with
+  `NOWAIT` (read the lock timeout, set it to 0, touch, restore), and the catalog lookups (three queries for a locked
+  table, two for an upsert's table) once per table until the next DDL.

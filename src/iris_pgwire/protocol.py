@@ -2174,6 +2174,9 @@ class PGWireProtocol:
             logger.error("Batch flush failed", connection_id=self.connection_id, error=str(e))
             # FR-008e: a duplicate key in a batched INSERT is 23505, which is the
             # one an ORM actually recognises. XX000 stays the fallback.
+            if getattr(e, "sqlstate", None):  # refused by the executor (spec 052), not by IRIS
+                await self.send_error_response("ERROR", e.sqlstate, e.condition, str(e))
+                return
             sqlstate, condition = classify_iris_error(str(e), default=("XX000", "internal_error"))
             await self.send_error_response("ERROR", sqlstate, condition, f"Batch failed: {e}")
 

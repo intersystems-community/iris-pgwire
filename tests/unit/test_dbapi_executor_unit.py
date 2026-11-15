@@ -40,6 +40,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from iris_pgwire._on_conflict_mixin import conflict_fields
+
 # ---------------------------------------------------------------------------
 # Helpers to build connection mocks
 # ---------------------------------------------------------------------------
@@ -528,22 +530,34 @@ class TestTranslateSchemaReferences:
 
 
 # ---------------------------------------------------------------------------
-# _is_unique_violation
+# What counts as the ON CONFLICT conflict (spec 052 FR-015): SQLCODE -119 on the target, never
+# the wording. The rule itself is tested in test_on_conflict_mixin.py.
 # ---------------------------------------------------------------------------
 
 
-class TestIsUniqueViolation:
-    def test_unique_keyword(self, executor):
-        assert executor._is_unique_violation(Exception("unique constraint violation"))
+class TestConflictIsDecidedBySqlcode:
+    def test_wording_alone_is_not_a_conflict(self, executor):
+        from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
-    def test_duplicate_keyword(self, executor):
-        assert executor._is_unique_violation(Exception("duplicate key value"))
+        plan = ReturningPlan.from_sql(
+            "INSERT INTO t (id, val) VALUES (?, ?) ON CONFLICT (id) DO NOTHING"
+        )
+        for text in ("unique constraint violation", "duplicate key value", "constraint failed"):
+            assert not executor.is_target_conflict(plan, conflict_fields(Exception(text)))
 
-    def test_constraint_keyword(self, executor):
-        assert executor._is_unique_violation(Exception("constraint failed"))
+    def test_a_foreign_key_violation_raises(self, executor):
+        from iris_pgwire.sql_translator.returning_plan import ReturningPlan
 
-    def test_other_error(self, executor):
-        assert not executor._is_unique_violation(Exception("table not found"))
+        plan = ReturningPlan.from_sql(
+            "INSERT INTO t (id, val) VALUES (?, ?) ON CONFLICT (id) DO NOTHING"
+        )
+        error = Exception(
+            "[SQLCODE: <-121>:<FOREIGN KEY constraint failed referential check upon INSERT>]"
+        )
+        cursor = _make_cursor(side_effect=error)
+        conn = _make_connection(cursor=cursor)
+        with pytest.raises(Exception, match="FOREIGN KEY"):
+            executor._execute_with_cursor(cursor, conn, plan, [1, "x"], None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -1237,7 +1251,13 @@ class TestExecuteWithCursorConflict:
         plan = ReturningPlan.from_sql(
             "INSERT INTO t (id, val) VALUES (?, ?) ON CONFLICT (id) DO NOTHING"
         )
-        cursor = _make_cursor(side_effect=Exception("unique constraint violation"))
+        cursor = _make_cursor(
+            side_effect=Exception(
+                "[SQLCODE: <-119>:<UNIQUE or PRIMARY KEY constraint failed uniqueness check upon "
+                "INSERT>] [%msg: <Table 'SQLUser.t', Constraint 'TPKEY1', Field(s) id=1; failed "
+                "unique check>]"
+            )
+        )
         conn = _make_connection(cursor=cursor)
 
         rows, cols, count = executor._execute_with_cursor(cursor, conn, plan, [1, "x"], None, None)
@@ -1324,3 +1344,41 @@ class TestClose:
         executor.pool.close = AsyncMock()
         await executor.close()
         executor.pool.close.assert_called_once()
+
+
+class TestConflictValuesFromTheStatement:
+    """Spec 052 FR-015 (permissive): the emulation uses the VALUES row as written, literals included,
+    and the table's columns when the INSERT names none."""
+
+    def _plan(self, sql):
+        from iris_pgwire.sql_translator.returning_plan import ReturningPlan
+
+        return ReturningPlan.from_sql(sql)
+
+    def test_literals_are_inlined(self, executor):
+        plan = self._plan(
+            "INSERT INTO t (k, v) VALUES (1, 9) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v"
+        )
+        values = executor._map_insert_column_values(plan, None)
+        assert executor._prepare_conflict_set_clause(plan, values) == ("v = 9", [])
+        assert executor._prepare_conflict_where_clause(plan, values) == ('"K" = 1', [])
+
+    def test_markers_are_bound_in_order(self, executor):
+        plan = self._plan(
+            "INSERT INTO t (k, v, w) VALUES (?, 5, COALESCE(?, 0)) ON CONFLICT (k) "
+            "DO UPDATE SET v = EXCLUDED.v, w = EXCLUDED.w"
+        )
+        values = executor._map_insert_column_values(plan, [7, 8])
+        assert executor._prepare_conflict_set_clause(plan, values) == (
+            "v = 5, w = COALESCE(?, 0)",
+            [8],
+        )
+        assert executor._prepare_conflict_where_clause(plan, values) == ('"K" = ?', [7])
+
+    def test_no_column_list_uses_the_table_columns(self, executor):
+        plan = self._plan(
+            "INSERT INTO t VALUES (2, 9, 9) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v"
+        )
+        values = executor._map_insert_column_values(plan, None, ("k", "v", "w"))
+        assert executor._prepare_conflict_set_clause(plan, values) == ("v = 9", [])
+        assert executor._prepare_conflict_where_clause(plan, values) == ('"K" = 2', [])

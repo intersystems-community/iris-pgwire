@@ -471,3 +471,33 @@ class TestSpec052States:
         assert sqlstate.PROGRAM_LIMIT_EXCEEDED == ("54000", "program_limit_exceeded")
         assert sqlstate.QUERY_CANCELED == ("57014", "query_canceled")
         assert sqlstate.INVALID_SAVEPOINT == ("3B001", "invalid_savepoint_specification")
+
+
+class TestDriverListError:
+    """The DBAPI driver's "<LIST ERROR>" replaces IRIS's own error on a connection that had an error
+    on a table since recreated (measured 2026-11-14, -110 and -119 alike). It carries no SQLCODE, so
+    it is XX000 on every path, never a call site's fallback such as Execute's 42P03 (spec 052)."""
+
+    MESSAGE = (
+        "<LIST ERROR> Incorrect list format, unsupported type for IRISList; Details: type detected : 0"
+    )
+
+    def test_is_internal_error(self):
+        assert classify_iris_error(self.MESSAGE) == ("XX000", "internal_error")
+
+    def test_overrides_a_call_sites_default(self):
+        assert classify_iris_error(self.MESSAGE, default=("42P03", "undefined_cursor"))[0] == "XX000"
+        assert classify_iris_error(self.MESSAGE, default=("08000", "connection_exception"))[0] == "XX000"
+
+
+class TestForeignKeyViolation:
+    """IRIS's foreign-key failures (-121 to -124) are PostgreSQL's 23503; they reached clients as
+    XX000 (found by spec 052's permissive ON CONFLICT check, 2026-11-14)."""
+
+    @pytest.mark.parametrize("code", [-121, -122, -123, -124])
+    def test_is_foreign_key_violation(self, code):
+        message = (
+            f"<SQL ERROR>; Details: [SQLCODE: <{code}>:<FOREIGN KEY constraint failed referential "
+            "check upon INSERT of row in referencing table>]"
+        )
+        assert classify_iris_error(message) == ("23503", "foreign_key_violation")

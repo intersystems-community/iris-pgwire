@@ -10,6 +10,7 @@ import contextlib
 import datetime as dt
 import re
 import time
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +18,8 @@ import structlog
 
 from iris_pgwire import row_limit
 from iris_pgwire._isolation import IsolationMixin
+from iris_pgwire._locking_mixin import LockingMixin, StatementRefused
+from iris_pgwire._on_conflict_mixin import OnConflictMixin, conflict_fields
 from iris_pgwire._savepoint_mixin import SavepointMixin
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
@@ -44,6 +47,7 @@ from iris_pgwire.sql_translator.boolean_expr import (
     rewrite_boolean_projections,
 )
 from iris_pgwire.sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolation
+from iris_pgwire.sql_translator.on_conflict import insert_row_expressions
 from iris_pgwire.sql_translator.parser import get_parser
 from iris_pgwire.sql_translator.pg_functions import (
     has_pg_function_call,
@@ -100,6 +104,27 @@ _DRIVER_DESYNC_MARKERS = (
     "incorrect list format",
 )
 
+# String literals (skipped) and `?` markers, for counting the markers in a VALUES expression.
+_MARKERS = re.compile(r"'(?:[^']|'')*'|\?")
+
+
+@dataclass(frozen=True)
+class _SqlExpression:
+    """A VALUES expression used as written in the ON CONFLICT emulation, with its bound values."""
+
+    sql: str
+    params: list
+
+
+def _bind(value: Any, params: list) -> str:
+    """The SQL for one value in the emulation's UPDATE: the expression itself, or a `?`."""
+    if isinstance(value, _SqlExpression):
+        params.extend(value.params)
+        return value.sql
+    params.append(value)
+    return "?"
+
+
 # `ROLLBACK [WORK|TRANSACTION] TO ...`, which ends no transaction.
 _ROLLBACK_TO_RE = re.compile(r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s+TO\b", re.IGNORECASE)
 
@@ -139,7 +164,7 @@ _PYTHON_TYPE_TO_OID: dict[type, int] = {
 }
 
 
-class DBAPIExecutor(SavepointMixin, IsolationMixin):
+class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixin):
     """Execute SQL queries against IRIS via DBAPI backend.
 
     Uses connection pool for efficient connection management and supports
@@ -330,6 +355,8 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
                 sql = rewrite_boolean_literal_comparisons(sql)
 
             sql = self._translate_placeholders(sql)
+            # `FOR UPDATE` locks nothing on IRIS: lock the rows first, or refuse (spec 052 US3).
+            sql, lock_plan = self.prepare_locking(sql, session_id)
             plan = ReturningPlan.from_sql(sql)
             converted_params = self._convert_params_for_iris(params)
 
@@ -340,8 +367,16 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
                 if session_id and session_id in self.session_namespaces:
                     ns = self.session_namespaces[session_id]
                     logger.debug(f"Session {session_id} using namespace {ns}")
+                if lock_plan is not None:
+                    self.run_touch_sync(conn_wrapper.connection, lock_plan, converted_params, sql)
+                # ON CONFLICT: IRIS's INSERT OR UPDATE where it is exact, else refused (US4).
+                run_plan = (
+                    self.plan_on_conflict_sync(conn_wrapper.connection, plan, sql)
+                    if plan.on_conflict_clause
+                    else plan
+                )
                 return self._execute_statement_sync(
-                    conn_wrapper.connection, plan, converted_params, session_id, original_sql
+                    conn_wrapper.connection, run_plan, converted_params, session_id, original_sql
                 )
 
             query_timeout = getattr(self.config, "query_timeout", 30.0)
@@ -365,6 +400,7 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
                 )
 
             tx_sql_upper = original_sql.strip().upper()
+            self.note_ddl(tx_sql_upper)
             self._update_transaction_state(session_id, tx_sql_upper)
             self._maybe_auto_commit(conn_wrapper.connection, session_id, tx_sql_upper)
 
@@ -386,6 +422,10 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
                 "command_tag": self._determine_command_tag(sql, row_count),
                 "execution_time_ms": elapsed_ms,
             }
+
+        except StatementRefused as e:
+            logger.info("Statement refused", sqlstate=e.sqlstate, error=str(e), session_id=session_id)
+            return e.result()
 
         except Exception as e:
             self._handle_execution_error(e, conn_wrapper, session_id, sql[:200], "Query")
@@ -410,6 +450,11 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
 
             conn_wrapper, pinned = await self._acquire_connection(session_id)
             release_connection = not pinned
+            if plan.on_conflict_clause:
+                # The same rule per statement shape as execute_query (spec 052 US4, spec 049 FR-002).
+                plan = await asyncio.to_thread(
+                    self.plan_on_conflict_sync, conn_wrapper.connection, plan, sql
+                )
 
             all_rows, columns_info, rows_affected = await self._execute_batch_loop(
                 conn_wrapper,
@@ -440,6 +485,9 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
                     "dbapi_executemany_returning" if plan.has_returning else "dbapi_executemany"
                 ),
             }
+
+        except StatementRefused:
+            raise  # carries its SQLSTATE to the protocol's batch error
 
         except Exception as e:
             self._handle_execution_error(e, conn_wrapper, session_id, sql[:200], "Batch")
@@ -479,6 +527,7 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
             rows_affected += row_count
 
             tx_sql_upper = original_sql.strip().upper()
+            self.note_ddl(tx_sql_upper)
             self._update_transaction_state(session_id, tx_sql_upper)
             self._maybe_auto_commit(conn_wrapper.connection, session_id, tx_sql_upper)
 
@@ -664,9 +713,14 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
         original_sql: str | None,
     ) -> tuple[list[Any], list[dict[str, Any]], int]:
         """Handle ON CONFLICT exceptions during execution."""
-        if plan.conflict_action == "DO NOTHING" and self._is_unique_violation(exc):
+        # Permissive mode only (strict refuses these forms first): a conflict is SQLCODE -119 on
+        # the clause's target; any other error, the driver's <LIST ERROR> included, is raised.
+        is_conflict = plan.conflict_action is not None and self.is_target_conflict(
+            plan, conflict_fields(exc)
+        )
+        if plan.conflict_action == "DO NOTHING" and is_conflict:
             return [], [], 0
-        if plan.conflict_action == "DO UPDATE" and self._is_unique_violation(exc):
+        if plan.conflict_action == "DO UPDATE" and is_conflict:
             rows, columns = self._handle_on_conflict_update(
                 plan, params, connection, session_id, original_sql
             )
@@ -801,7 +855,11 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
         if not plan.conflict_set_clause or not plan.conflict_target_columns:
             raise RuntimeError("ON CONFLICT DO UPDATE clause is incomplete")
 
-        column_values = self._map_insert_column_values(plan, params)
+        table_columns = None
+        if not plan.insert_columns:
+            keys = self._table_keys_sync(connection, plan.original_sql)
+            table_columns = keys.columns if keys else None
+        column_values = self._map_insert_column_values(plan, params, table_columns)
         set_clause, set_params = self._prepare_conflict_set_clause(plan, column_values)
         where_clause, where_params = self._prepare_conflict_where_clause(plan, column_values)
 
@@ -823,20 +881,35 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
         )
         return rows, columns
 
-    def _is_unique_violation(self, error: Exception) -> bool:
-        message = str(error).lower()
-        return any(keyword in message for keyword in ("unique", "duplicate", "constraint"))
-
     def _map_insert_column_values(
-        self, plan: ReturningPlan, params: list | tuple | None
+        self,
+        plan: ReturningPlan,
+        params: list | tuple | None,
+        table_columns: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        if not params or not plan.insert_columns:
-            return {}
-        return {
-            column.lower(): params[idx]
-            for idx, column in enumerate(plan.insert_columns)
-            if idx < len(params)
-        }
+        """Each inserted column's value: a bound parameter, or the VALUES expression as written.
+
+        2.0 read bound parameters only, so an upsert written with literals (or without a column
+        list) updated nothing and reported success (spec 052, permissive mode).
+        """
+        columns = plan.insert_columns or list(table_columns or ())
+        expressions = insert_row_expressions(plan.stripped_sql)
+        if expressions is None:
+            if not params or not columns:
+                return {}
+            return {c.lower(): params[i] for i, c in enumerate(columns) if i < len(params)}
+        markers = [sum(1 for t in _MARKERS.findall(e) if t == "?") for e in expressions]
+        if sum(markers) > len(params or ()):
+            return {}  # not every value is bound (a Describe): nothing to emulate with
+        remaining = iter(params or ())
+        values: dict[str, Any] = {}
+        for column, expression, count in zip(columns, expressions, markers, strict=False):
+            bound = [next(remaining) for _ in range(count)]
+            if expression.strip() == "?":
+                values[column.lower()] = bound[0]
+            else:
+                values[column.lower()] = _SqlExpression(expression.strip(), bound)
+        return values
 
     def _prepare_conflict_set_clause(
         self, plan: ReturningPlan, column_values: dict[str, Any]
@@ -847,8 +920,7 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
         pattern = re.compile(r"\bEXCLUDED\.\"?(\w+)\"?", re.IGNORECASE)
 
         def _replace(match: re.Match) -> str:
-            params.append(column_values.get(match.group(1).lower()))
-            return "?"
+            return _bind(column_values.get(match.group(1).lower()), params)
 
         return pattern.sub(_replace, plan.conflict_set_clause), params
 
@@ -858,8 +930,7 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin):
         clauses: list[str] = []
         params: list[Any] = []
         for column in plan.conflict_target_columns:
-            clauses.append(f'"{column.upper()}" = ?')
-            params.append(column_values.get(column.lower()))
+            clauses.append(f'"{column.upper()}" = ' + _bind(column_values.get(column.lower()), params))
 
         where_clause = " AND ".join(clauses)
         if plan.conflict_where_clause:

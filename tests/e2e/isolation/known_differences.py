@@ -67,17 +67,44 @@ PINS: dict[tuple[str, str], object] = {
         "commit": "ROLLBACK",
         "ids": [],
     },
-    # E3. The emulation swallows any error whose text says "constraint": a foreign-key violation
-    # under DO NOTHING, and a conflict on a key that is not the ON CONFLICT target.
-    ("on_conflict", "do_nothing_fk_violation"): {"error": None, "rows": []},
-    ("on_conflict", "do_nothing_other_key"): {"error": None, "rows": [[1, 10, 1]]},
-    # Racing a DELETE, the emulation never reported 0 rows but sometimes failed with the DBAPI
-    # driver's "<LIST ERROR> Incorrect list format" (XX000); native INSERT OR UPDATE sometimes hit
-    # a -110 lock timeout (40001). Both varied from run to run.
+    # E3 since spec 052 US4. Strict mode sends IRIS's INSERT OR UPDATE for the one form it expresses
+    # exactly (the target is the table's only unique key, DO UPDATE sets every inserted column from
+    # EXCLUDED, no WHERE) and refuses every other form with 0A000, DO NOTHING included, where
+    # PostgreSQL runs them (research.md R7). Before 2.1 the emulation swallowed any error whose text
+    # said "constraint": a foreign-key violation, a conflict on another key.
+    ("on_conflict", "do_nothing_fk_violation"): {"error": "0A000", "rows": []},
+    ("on_conflict", "do_nothing_other_key"): {"error": "0A000", "rows": [[1, 10, 1]]},
+    **{
+        ("on_conflict", f"strict/{name}"): {"rows": [[1, 1, 1]], "error": "0A000"}
+        for name in (
+            "pk_only_set_subset",
+            "set_uses_existing_row",
+            "do_update_where_false",
+            "second_unique_key_conflicts",
+            "target_is_secondary_unique_key",
+            "target_is_secondary_key_new_pk",
+        )
+    },
+    ("on_conflict", "strict/executemany_set_subset"): {"rows": [[1, 1, 1]], "error": "0A000"},
+    # Racing a DELETE, the upsert is now IRIS's INSERT OR UPDATE, which never affected 0 rows but
+    # sometimes waited out a lock and failed with -110 (40001), or, on a pooled connection that had
+    # an error on the table before it was recreated, with the DBAPI driver's "<LIST ERROR>" (XX000).
     ("on_conflict", "upsert_vs_delete/on_conflict"): AnyOf(
         (
             {"zero_row_upserts": False, "errors": []},
+            {"zero_row_upserts": False, "errors": ["40001"]},
             {"zero_row_upserts": False, "errors": ["XX000"]},
+            {"zero_row_upserts": False, "errors": ["40001", "XX000"]},
+        )
+    ),
+    # Permissive mode, on a connection where the DBAPI driver reports "<LIST ERROR>" in place of
+    # the unique violation (a table recreated after a -119 on it): the emulation cannot tell it is
+    # the conflict, so the statement fails with XX000 instead of doing nothing (FR-016). When the
+    # driver reports the -119 itself, it matches PostgreSQL.
+    ("on_conflict", "permissive/list_error"): AnyOf(
+        (
+            {"first": None, "after_recreate": None, "next_session": "23505"},
+            {"first": None, "after_recreate": "XX000", "next_session": "23505"},
         )
     ),
     ("on_conflict", "upsert_vs_delete/insert_or_update"): AnyOf(
@@ -101,16 +128,14 @@ PINS: dict[tuple[str, str], object] = {
         "rows": [[5, 1, 9]],
         "error": None,
     },
-    # E2. SELECT ... FOR UPDATE takes no lock on IRIS: a second FOR UPDATE and a writer both go
-    # straight through, and the read-then-write counter loses about half its increments.
+    # E2 matches PostgreSQL since spec 052 US3: PGWire locks a single-table FOR UPDATE with a
+    # touch-update (`UPDATE t SET pk = pk WHERE <same predicate>`). The shapes a touch cannot lock
+    # exactly are refused with 0A000 where PostgreSQL runs them (research.md R6): a join or a
+    # subquery in FROM, LIMIT (the touch would lock rows the SELECT does not return), a view, and
+    # a table with a ROWVERSION column (the touch would bump it).
     **{
-        ("locking", f"{name}@{level}"): {"waited_for_commit": False, "result": "ok"}
-        for name in ("for_update_vs_for_update", "for_update_vs_update")
-        for level in ("read committed", "read uncommitted")
-    },
-    **{
-        ("locking", f"counter_for_update@{level}"): {"lost_updates": True, "all_committed": True}
-        for level in ("read committed", "read uncommitted")
+        ("locking", f"refused/{name}"): "0A000"
+        for name in ("join", "subquery_in_from", "limit", "view", "rowversion")
     },
     # The touch-update (`SET id = id`, or `SET n = n`) excludes like PostgreSQL's UPDATE: no pin.
     # Gotcha row 4, H1. At READ COMMITTED a read of a row another session holds waits out the
@@ -145,17 +170,13 @@ PINS: dict[tuple[str, str], object] = {
     # H3 matches PostgreSQL since 2.0.1: DBAPIExecutor.close_session rolls back a disconnected
     # client's transaction and resets the isolation level before the connection is reused, and
     # discards a connection whose reset fails. No pins.
-    # Rows 10 to 12: the other locking clauses reach IRIS raw (42601), and so do the advisory-lock
-    # functions (SQLCODE -359, 42883).
+    # Rows 10 to 12. FOR UPDATE NOWAIT is emulated since spec 052 US3 (no pin). FOR SHARE, FOR NO
+    # KEY UPDATE, FOR KEY SHARE and SKIP LOCKED have no IRIS equivalent and are refused with 0A000
+    # (before 2.1 they reached IRIS raw, 42601). The advisory-lock functions reach IRIS raw
+    # (SQLCODE -359, 42883).
     **{
-        ("unsupported_clauses", f"answer/{name}"): "42601"
-        for name in (
-            "for_share",
-            "for_no_key_update",
-            "for_key_share",
-            "for_update_nowait",
-            "for_update_skip_locked",
-        )
+        ("unsupported_clauses", f"answer/{name}"): "0A000"
+        for name in ("for_share", "for_no_key_update", "for_key_share", "for_update_skip_locked")
     },
     **{
         ("unsupported_clauses", f"answer/{name}"): "42883"

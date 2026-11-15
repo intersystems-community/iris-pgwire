@@ -366,7 +366,7 @@ Since 2.0.1, when a session closes, PGWire rolls back its IRIS connection, reset
 
 Practical consequences:
 
-- On 2.0.0 and earlier, do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Do not use `SELECT ... FOR UPDATE` for this: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
+- On 2.0.0 and earlier, do not treat an accepted level as a guarantee. Correctness must not depend on `READ COMMITTED` having applied; where it matters, take a writer lock (`UPDATE ... SET n = n + 1 WHERE id = ?`, or `LOCK TABLE ... IN EXCLUSIVE MODE`) and keep the transaction short. Before 2.1, do not use `SELECT ... FOR UPDATE` for this: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
 - Budget more than 10 seconds for any statement that may meet a contended row. A test or health check with a 5-second timeout reports a hang where the database was waiting out its normal lock timeout.
 
 ### Sessions Share One Transaction in the In-IRIS Deployment
@@ -427,26 +427,27 @@ The mechanism: the version predicate matches no row while A holds the new value,
 
 **Workarounds**:
 
-- Prefer pessimistic locking with a writer lock: `UPDATE ... WHERE id = ?` by key alone (IRIS writer locks are real: a second writer gets `-110` → `40001`), or `LOCK TABLE ... IN EXCLUSIVE MODE` for the transaction. `SELECT ... FOR UPDATE` is **not** a substitute: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)).
+- Prefer pessimistic locking with a writer lock: `UPDATE ... WHERE id = ?` by key alone (IRIS writer locks are real: a second writer gets `-110` → `40001`), or `LOCK TABLE ... IN EXCLUSIVE MODE` for the transaction. Before 2.1, `SELECT ... FOR UPDATE` is **not** a substitute: it takes no lock (see [Related PostgreSQL Statements](#related-postgresql-statements)); since 2.1 a single-table `FOR UPDATE` locks.
 - Or treat a zero row count from a version-guarded update as inconclusive, re-read the row, and distinguish a real version change from a concurrent holder before raising a stale-data error.
 
 ### Related PostgreSQL Statements
 
 Measured through PGWire against IRIS 2026.2:
 
-| Statement                           | Result                               |
-| ----------------------------------- | ------------------------------------ |
-| `SELECT ... FOR UPDATE`             | Accepted; **takes no lock**          |
-| `SELECT ... FOR UPDATE NOWAIT`      | Not supported — `42601 syntax_error` |
-| `SELECT ... FOR UPDATE SKIP LOCKED` | Not supported — `42601 syntax_error` |
-| `INSERT ... ON CONFLICT DO NOTHING` | Emulated by PGWire                   |
-| `UPDATE ... RETURNING`              | Emulated by PGWire                   |
+| Statement                                                        | Since 2.1 (DBAPI backend)                                            | 2.0                                  |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------ |
+| `SELECT ... FOR UPDATE`, one table, in a transaction             | Locks the selected rows until the transaction ends, as on PostgreSQL | Accepted; **takes no lock**          |
+| `SELECT ... FOR UPDATE NOWAIT`                                   | Locks, or fails at once with `55P03` if a row is locked              | Not supported — `42601 syntax_error` |
+| `FOR UPDATE` on a join, subquery, view, with `LIMIT`             | Refused, `0A000`                                                     | Accepted; takes no lock              |
+| `FOR SHARE`, `FOR NO KEY UPDATE`, `FOR KEY SHARE`, `SKIP LOCKED` | Refused, `0A000`                                                     | Not supported — `42601 syntax_error` |
+| `INSERT ... ON CONFLICT DO NOTHING`                              | Emulated by PGWire                                                   | Emulated by PGWire                   |
+| `UPDATE ... RETURNING`                                           | Emulated by PGWire                                                   | Emulated by PGWire                   |
 
-**`SELECT ... FOR UPDATE` is accepted, but it takes no lock.** IRIS documents `FOR UPDATE` on a cursor as performing no operation ([DECLARE](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_declare)), and experiment E2 measured it (2026-11-14, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): a second `FOR UPDATE` and a writer both go straight through, at both isolation levels, and four workers doing read-`FOR UPDATE`-then-write ended at about 500 after 1000 commits. Half the updates were lost, with no error.
+**Since 2.1, `SELECT ... FOR UPDATE` locks.** IRIS itself takes no lock for it: it documents `FOR UPDATE` on a cursor as performing no operation ([DECLARE](https://docs.intersystems.com/irislatest/csp/docbook/DocBook.UI.Page.cls?KEY=RSQL_declare)), and experiment E2 measured that on 2.0 a second `FOR UPDATE` and a writer went straight through, so four workers doing read-`FOR UPDATE`-then-write lost half their increments with no error ([`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5). PGWire now locks the rows itself, inside a transaction, by running `UPDATE t SET pk = pk WHERE <the same predicate>` (a touch-update) before the SELECT. That excludes a second locker and a writer exactly like PostgreSQL's row lock; the same counter ends at 1000 of 1000.
 
-To lock a row before reading it, touch it instead: `UPDATE t SET id = id WHERE id = ?`, then read and write. A second touch, or any writer, waits until the first transaction commits, exactly like PostgreSQL's row lock; the same four-worker counter ended at 1000 of 1000. Note that a touch-update fires UPDATE triggers and counts toward IRIS's 1000-lock escalation threshold.
+It does this only where the touch locks exactly the rows the SELECT returns: one base table in `FROM` and a `WHERE` it can reuse. Every other shape is refused with `0A000` and a message naming the shape and what to do instead, including a table with an UPDATE trigger or a ROWVERSION or other generated column (the touch would fire the trigger or change the column), and a view. `PGWIRE_TXN_COMPAT=permissive` runs the refused shapes as 2.0 did, unlocked, with one warning per statement shape in the server log. A touch of more than 1000 rows counts toward IRIS's lock-escalation threshold and can become a table lock. Outside a transaction, `FOR UPDATE` returns the rows and takes no lock beyond the statement, as on PostgreSQL in autocommit. [`docs/POSTGRES_APP_COMPATIBILITY.md`](docs/POSTGRES_APP_COMPATIBILITY.md) lists each case with the check that measures it.
 
-Neither lock modifier is translated, so both reach IRIS as trailing tokens it cannot parse. That means the standard PostgreSQL job-queue pattern (`SELECT ... FOR UPDATE SKIP LOCKED` plus `UPDATE ... RETURNING`) has no direct equivalent — use an IRIS-native queue or a single-consumer design.
+`SKIP LOCKED` has no IRIS equivalent, so the standard PostgreSQL job-queue pattern (`SELECT ... FOR UPDATE SKIP LOCKED` plus `UPDATE ... RETURNING`) still has no direct equivalent: claim rows with `FOR UPDATE NOWAIT` and retry on `55P03`, use an IRIS-native queue, or use a single-consumer design.
 
 ---
 
