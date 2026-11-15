@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.1.0] - Unreleased
+## [2.1.0] - 2026-11-15
 
 PostgreSQL's transaction rules on the DBAPI backend (spec 052). An application written for PostgreSQL gets the same answer from IRIS through PGWire, or a PostgreSQL error naming what IRIS cannot do. In 2.0 it often got a wrong answer and no error: a failed statement left the transaction committable, `FOR UPDATE` locked nothing, an upsert updated nothing and reported success, and a cancel was ignored. Every behaviour below is checked against PostgreSQL 16 by the isolation suite (`make isolation`); what each PostgreSQL feature does through PGWire, and what is refused, is in `docs/POSTGRES_APP_COMPATIBILITY.md`.
 
