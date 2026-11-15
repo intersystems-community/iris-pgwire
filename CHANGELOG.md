@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.1] - Unreleased
+## [2.0.1] - 2026-11-15
 
 Transaction fixes for the DBAPI backend, two of them critical, and the ADBC work done since 2.0.0. The first five `Fixed` entries were measured by the track 4 isolation suite (`make isolation`); see `docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5.
 
