@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import datetime as dt
 import re
+import threading
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -1740,6 +1741,15 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, TimeoutMixin, LockingMixin, 
         await self.execute_query("ROLLBACK", session_id=session_id)
 
     @property
+    def _cancel_control(self) -> dict[str, Any]:
+        """The cancel's control connection and its lock: {"lock": Lock, "native": (conn, IRIS) | None}."""
+        control = getattr(self, "_cancel_control_store", None)
+        if control is None:
+            control = {"lock": threading.Lock(), "native": None}
+            self._cancel_control_store: dict[str, Any] = control
+        return control
+
+    @property
     def _statements_running(self) -> dict[str, Any]:
         """session_id -> the connection its statement is running on, while it runs."""
         running = getattr(self, "_statements_running_store", None)
@@ -1759,15 +1769,25 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, TimeoutMixin, LockingMixin, 
     async def cancel_session(self, session_id: str) -> bool:
         """End the session's running statement (spec 052 US6, research R9); False if none runs.
 
-        Closing the IRIS connection from another thread makes the blocked call fail at once and
-        IRIS roll the connection's transaction back (measured). The statement then reports 57014,
-        and the session's next statement starts on a fresh pooled connection at its own level.
+        Ends the connection's IRIS process from a control connection (`%SYSTEM.Process.Terminate`):
+        the blocked call fails at once and IRIS rolls the transaction back (40 of 40, 2026-11-15).
+        The statement then reports 57014, and the session's next statement starts on a fresh
+        pooled connection at its own level. The session's connection is never touched from this
+        thread: closing it while the driver was blocked on it crashed the server (SIGSEGV, about
+        one cancel in 35). If IRIS refuses the terminate, the statement runs on, and is still
+        neither committed nor reported as done.
         """
         wrapper = self._statements_running.get(session_id)
         if wrapper is None:
             return False
+        process = getattr(wrapper, "iris_process", None)
+        if process is None:
+            logger.warning(
+                "Cancel ignored: the connection's IRIS process is not known", session_id=session_id
+            )
+            return False
         # Everything that must hold before the statement can see the cancel happens before the first
-        # await: the statement may finish and release its connection while close() runs, and the
+        # await: the statement may finish and release its connection while the terminate runs, and the
         # pool must already know not to hand that connection out again.
         self._statements_cancelled.add(session_id)
         wrapper.mark_failed("cancelled by the client")
@@ -1781,13 +1801,43 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, TimeoutMixin, LockingMixin, 
             state.override, state.in_transaction = None, False
             state.iris_level = self.default_isolation_level
 
-        def close() -> None:
-            with contextlib.suppress(Exception):
-                wrapper.connection.close()
-
-        await asyncio.to_thread(close)
-        logger.info("Cancelled the running statement", session_id=session_id)
+        if await asyncio.to_thread(self._terminate_iris_process, process):
+            logger.info("Cancelled the running statement", session_id=session_id)
+        else:
+            logger.error(
+                "Cancel could not end the statement's IRIS process; it will not be committed",
+                session_id=session_id,
+                iris_process=process,
+            )
         return True
+
+    def _terminate_iris_process(self, process: int) -> bool:
+        """End one IRIS process from the control connection, opened on first use and reused."""
+        import iris
+
+        control = self._cancel_control
+        with control["lock"]:
+            for attempt in (1, 2):
+                try:
+                    if control["native"] is None:
+                        import iris.dbapi as dbapi
+
+                        connection = dbapi.connect(
+                            hostname=self.config.iris_hostname,
+                            port=self.config.iris_port,
+                            namespace=self.config.iris_namespace,
+                            username=self.config.iris_username,
+                            password=self.config.iris_password,
+                        )
+                        control["native"] = (connection, iris.createIRIS(connection))
+                    status = control["native"][1].classMethodValue(
+                        "%SYSTEM.Process", "Terminate", process
+                    )
+                    return status == 1
+                except Exception as e:
+                    logger.warning("Ending an IRIS process failed", attempt=attempt, error=str(e))
+                    control["native"] = None
+            return False
 
     async def cancel_query(self, backend_pid: int, backend_secret: int) -> bool:
         """Cancel a running query (DBAPI implementation)."""

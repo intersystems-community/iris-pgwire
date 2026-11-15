@@ -142,3 +142,38 @@ def test_a_new_connection_does_not_autocommit(monkeypatch):
     config = BackendConfig(backend_type="dbapi", iris_password="SYS")
     asyncio.run(IRISConnectionPool(config)._create_connection())
     assert made and made[0].autocommit_calls == [False]
+
+
+def test_a_new_connection_records_its_iris_process(monkeypatch):
+    """A cancel ends the session's IRIS process (`%SYSTEM.Process.Terminate`), so the pool records
+    each connection's process number (`$JOB`) when it creates it."""
+    import asyncio
+    import sys
+    import types
+
+    sent = []
+
+    class FakeCursor:
+        def execute(self, sql, *a):
+            sent.append(sql)
+
+        def fetchone(self):
+            return (48213,)
+
+        def close(self):
+            pass
+
+    class FakeConnection:
+        def setAutoCommit(self, value):  # noqa: N802 - the driver's name
+            pass
+
+        def cursor(self):
+            return FakeCursor()
+
+    fake_dbapi = types.SimpleNamespace(connect=lambda **kw: FakeConnection())
+    monkeypatch.setitem(sys.modules, "iris.dbapi", fake_dbapi)
+    monkeypatch.setitem(sys.modules, "iris", types.SimpleNamespace(dbapi=fake_dbapi))
+    config = BackendConfig(backend_type="dbapi", iris_password="SYS")
+    wrapper = asyncio.run(IRISConnectionPool(config)._create_connection())
+    assert "SELECT $JOB" in sent
+    assert wrapper.iris_process == 48213

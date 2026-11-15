@@ -286,3 +286,16 @@ SQLAlchemy fix):
 
 Both removed, each with a budget test (`tests/unit/test_protocol_message_budget.py`). The isolation level makes no
 measurable difference here: READ COMMITTED costs about 0.1 ms over READ UNCOMMITTED on these uncontended statements.
+
+### R9 revised: end the IRIS process, don't close the connection (2026-11-15)
+
+Closing the session's DBAPI connection from another thread, as R9 measured, makes the blocked call fail at once, but
+it also crashes the process now and then: the PGWire server died with SIGSEGV (exit 139) in one of three runs of 12
+cancels (`intersystems-irispython` 5.3.2, macOS arm64). The isolation gate had caught it only as a flaky
+`cancel/ten_trials`. The cancel now ends the session's IRIS process instead, with `%SYSTEM.Process.Terminate` through the
+Native API on a control connection of its own, and never touches the session's connection from the cancelling thread.
+Measured with the driver alone: 40 of 40 blocked calls failed at once with `<COMMUNICATION LINK ERROR>`, none of the
+writes landed, and the row lock was free afterwards. Through PGWire, 150 cancels on one server: 150 `57014`, no write
+landed, the row free within 1 s every time, the server up throughout (the old cancel: one SIGSEGV in 36). The pool records each
+connection's process (`SELECT $JOB`) when it opens it. If IRIS refuses the terminate, the statement runs to completion
+and is not committed, because PGWire commits only after a statement it has not cancelled.

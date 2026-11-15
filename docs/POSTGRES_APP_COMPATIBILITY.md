@@ -1,7 +1,7 @@
 # PostgreSQL applications on IRIS through PGWire: transactions
 
 What a PostgreSQL application can rely on when it talks to IRIS through PGWire, what PGWire refuses, and what to do
-instead. It covers transaction behaviour only; SQL dialect and type differences are in
+instead. It covers transaction behaviour and string comparison; other SQL dialect and type differences are in
 [`KNOWN_LIMITATIONS.md`](../KNOWN_LIMITATIONS.md).
 
 Every row below names the check in the isolation suite (`tests/e2e/isolation/`, run by `make isolation`) that measures
@@ -9,7 +9,7 @@ it against IRIS through PGWire and against PostgreSQL 16, with PostgreSQL's answ
 check would be a claim nobody measured, so `tests/unit/test_compatibility_doc.py` fails if one appears. Measured on the
 DBAPI backend; the embedded backend runs every session in one IRIS process and is documented as single-client.
 
-Status: spec 052 complete (aborted transactions, savepoints, row locking, ON CONFLICT, default isolation, lock timeouts, cancel).
+Status: spec 052 complete (aborted transactions, savepoints, row locking, ON CONFLICT, default isolation, lock timeouts, cancel), plus string comparison.
 
 ## Aborted transactions
 
@@ -156,9 +156,11 @@ New sessions run at READ COMMITTED since 2.1, as on PostgreSQL; before 2.1 they 
 
 ## Cancel
 
-A CancelRequest (psycopg's `cancel()`, `Ctrl-C` in psql) closes the session's IRIS connection, so the running
+A CancelRequest (psycopg's `cancel()`, `Ctrl-C` in psql) ends the session's IRIS process, so the running
 statement fails at once with `57014` and IRIS rolls its work back. The session carries on with a fresh connection, at
 its own isolation level. Before 2.1 the request was acknowledged and ignored, and the cancelled write still happened.
+The IRIS user PGWire connects as must be allowed to end processes (`%SYSTEM.Process.Terminate`). If IRIS refuses, the
+statement runs until it finishes, is still not committed, and the server logs an error.
 
 | Behaviour                                                                                                   | Check                                 |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
@@ -167,6 +169,22 @@ its own isolation level. Before 2.1 the request was acknowledged and ignored, an
 | After a cancel the session keeps its isolation level                                                        | `cancel/cancel/keeps_isolation_level` |
 | Inside `BEGIN`, the cancelled statement aborts the transaction (`25P02` until `ROLLBACK`), as on PostgreSQL | `cancel/cancel/inside_transaction`    |
 | A cancel with no statement running, or with a wrong secret, changes nothing                                 | `cancel/cancel/no_effect`             |
+
+## String comparison
+
+IRIS's default collation for a string column, `%SQLUPPER`, ignores case. Before 2.1, on a table created through
+PGWire, `c = 'RED'` matched `red` and `Red`, `IN` and `LIKE` ignored case, `min(c)` returned an upper-cased value
+that wasn't in the table, and a unique key refused `'X'` after `'x'`. Since 2.1, PGWire declares each character
+column of a table it creates or alters `COLLATE %EXACT`, so these compare as on PostgreSQL. Tables created in IRIS
+by other means keep their own collation and still ignore case.
+
+| Behaviour                                                                                              | Check                           |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `=`, `<>`, `IN`, `LIKE`, `CASE` and bound parameters are case-sensitive; `ILIKE` and `upper()` are not | `string_collation/comparisons`  |
+| A unique key holds `'x'` and `'X'` as two values and refuses a second `'x'`                            | `string_collation/unique_key`   |
+| A column added with `ALTER TABLE ... ADD COLUMN` compares the same way                                 | `string_collation/added_column` |
+| `COLLATE "C"` (or any PostgreSQL collation name) is accepted, as IRIS's exact collation                | `string_collation/collate_c`    |
+| Strings sort by code point, as PostgreSQL's `C` collation, not by a locale (pinned: `en_US` differs)   | `string_collation/ordering`     |
 
 ## Drivers and ORMs
 

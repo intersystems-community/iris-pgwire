@@ -47,13 +47,13 @@ one PGWire server at a time on a Community Edition IRIS. Run the targets one aft
 
 | #    | Gate                                                              | Command                           | Status                                             |
 | ---- | ----------------------------------------------------------------- | --------------------------------- | -------------------------------------------------- |
-| 2a.1 | Default server                                                    | `make isolation`                  | ✅ 2.1.0: 220 passed, 46 skipped by design         |
+| 2a.1 | Default server                                                    | `make isolation`                  | ✅ 2.1.0: 230 passed, 46 skipped by design         |
 | 2a.2 | `PGWIRE_TXN_COMPAT=permissive`                                    | `make isolation-permissive`       | ✅ 2.1.0: 42 passed                                |
 | 2a.3 | `PGWIRE_DEFAULT_ISOLATION=read uncommitted`                       | `make isolation-read-uncommitted` | ✅ 2.1.0: 2 passed                                 |
 | 2a.4 | Hermitage table regenerated into the investigation doc, section 5 | `make isolation-table`            | ✅ 2.1.0: unchanged cells, §5 "2.1.0 release gate" |
 
 Measured for **2.1.0** on 2026-11-15 with `make isolation-coverage`, which runs all three under coverage (spec 052's
-modules 91%, floor 90%). The unit suite (2.2) passed 6874 the same day, `test_sql_metrics.py` deselected; the build and
+modules 91%, floor 90%). The unit suite (2.2) passed 6899 the same day, `test_sql_metrics.py` deselected; the build and
 wheel checks (3.3, 3.4, 3.5, 2.7) passed for `iris_pgwire-2.1.0`. SC-008's benchmark is in spec 052 `research.md` R11.
 
 The gate is the three runs together. The default run skips the `permissive` and `default_isolation` checks by design

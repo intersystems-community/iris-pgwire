@@ -333,14 +333,16 @@ class IRISConnectionPool:
             # connection) still commits once it completes: measured 2026-11-14 (spec 052 US6).
             connection.setAutoCommit(False)
 
-            setup = self.connection_setup_statements()
-            if setup:
-                cursor = connection.cursor()
-                try:
-                    for statement in setup:
-                        cursor.execute(statement)
-                finally:
-                    cursor.close()
+            # The connection's IRIS process number: a cancel ends that process (spec 052 US6).
+            cursor = connection.cursor()
+            try:
+                for statement in self.connection_setup_statements():
+                    cursor.execute(statement)
+                cursor.execute("SELECT $JOB")
+                row = cursor.fetchone()
+                iris_process = int(row[0]) if row else None
+            finally:
+                cursor.close()
 
             # Wrap in DBAPIConnection model
             conn_id = str(uuid.uuid4())[:8]
@@ -355,6 +357,7 @@ class IRISConnectionPool:
 
             # Store raw DBAPI connection (not tracked by Pydantic)
             conn_wrapper.connection = connection  # type: ignore
+            conn_wrapper.iris_process = iris_process  # type: ignore
 
             self._connections[conn_wrapper.connection_id] = conn_wrapper
             self._total_created += 1
