@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 import structlog
 
+from .positional_group_by import resolve_group_by_positions
+
 logger = structlog.get_logger("iris_pgwire.sql_translator.refiner")
 
 
@@ -20,6 +22,7 @@ class RefinerConfig:
     fix_order_by_aliases: bool = True
     preserve_case_for_quoted: bool = True
     enforce_exact_collation: bool = True
+    resolve_group_by_positions: bool = True
 
 
 class SQLRefiner:
@@ -49,6 +52,11 @@ class SQLRefiner:
         """Apply all configured refinements to the SQL"""
         if not sql:
             return sql
+
+        # First, while each select list is still as the client wrote it: IRIS reads GROUP BY 1
+        # as a constant (see positional_group_by.py).
+        if self.config.resolve_group_by_positions:
+            sql = resolve_group_by_positions(sql)
 
         if self.config.fix_order_by_aliases:
             sql = self._fix_order_by_aliases(sql)
@@ -168,7 +176,7 @@ class SQLRefiner:
 
     # IRIS groups by its default collation (SQLUPPER): 'alpha' and 'Alpha' become one group and come
     # back as 'ALPHA', and COUNT(DISTINCT name) counts them once. %EXACT keeps the stored value, as
-    # PostgreSQL does. A GROUP BY ordinal (GROUP BY 1) is left alone: %EXACT(1) is a constant.
+    # PostgreSQL does. An unresolved GROUP BY ordinal is left alone: %EXACT(1) is a constant.
     _group_by_pattern = re.compile(r"\bGROUP\s+BY\s+", re.IGNORECASE)
     _group_by_end_pattern = re.compile(
         r"\s*\b(HAVING|ORDER\s+BY|LIMIT|OFFSET|FETCH|UNION|INTERSECT|EXCEPT|FOR|WINDOW)\b", re.IGNORECASE

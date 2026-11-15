@@ -199,6 +199,14 @@ PINS: dict[tuple[str, str], object] = {
             "pg_advisory_unlock",
         )
     },
+    # GROUP BY 3 on a two-column select: PostgreSQL refuses it (42P10). PGWire has no column to
+    # substitute, so IRIS reads 3 as a constant and returns one row over all ten, status arbitrary.
+    **{
+        ("positional_clauses", f"group_by_position_out_of_range/{protocol}"): AnyOf(
+            ([["new", 10]], [["paid", 10]], [["void", 10]])
+        )
+        for protocol in ("simple", "extended")
+    },
     # The CancelRequest is acknowledged, never reaches IRIS (DBAPIExecutor.cancel_query returns
     # False), and the "cancelled" UPDATE is applied once the lock is released.
     ("cancel", "cancel_lock_wait"): {
