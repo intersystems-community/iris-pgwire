@@ -15,7 +15,7 @@ Track 5 is second.
 | 1   | Finish the read-performance work                  | The Describe row cap, the row encoder, the optional psycopg accelerator, the benchmark. See `docs/investigations/adbc-read-performance-2026-11.md`                                                                                      | `/code-review` against `main`, then fix, then commit. **Done 2026-11-14**                                                 | iris-pgwire                               |
 | 2   | Text-format values are Python's, not PostgreSQL's | Text DataRows send `str(value)`: `bytea` as `b'\xde\xad'`, JSON as `{'a': 1}`, arrays as `[1, 2, 3]`, NUMERIC as `1E+14`, `inf`/`nan`, `+00:00` offsets. `value_encoding.encode_text` already gives PostgreSQL's text                   | `/tdd`: one slice. Changes what text clients receive, so it is its own change. **Done 2026-11-14** (`5a9bafc`, `7b6385e`) | iris-pgwire                               |
 | 3   | Embedded backend typing and memory                | Types guessed from values (DATE as a Horolog integer, NUMERIC as float8, INT as int64 or varchar on large results), the whole result held in memory (6.4 GB at 3M rows), `iris.sql.exec` read speed                                     | Already specified: spec 051 US3 (T034–T038) and T087. `/implement` the existing tasks                                     | iris-pgwire                               |
-| 4   | **Transactions for PostgreSQL-style apps**        | COMMIT after an error commits earlier work (STATUS_FAILED_TRANSACTION never set), FOR UPDATE may not lock, ON CONFLICT is not atomic, savepoint differences, aggregates reading uncommitted rows. Hermitage and pgbench as the measures | `/grilling` on `docs/investigations/mvcc-apps-on-iris-pgwire.md`, then a spec, then tickets. Several sessions             | iris-pgwire                               |
+| 4   | **Transactions for PostgreSQL-style apps**        | COMMIT after an error commits earlier work (STATUS_FAILED_TRANSACTION never set), FOR UPDATE may not lock, ON CONFLICT is not atomic, savepoint differences, aggregates reading uncommitted rows. Hermitage and pgbench as the measures | Spec 052, three slices. **Done 2026-11-15**, ships as 2.1.0 (unpushed)                                                    | iris-pgwire                               |
 | 5   | IRIS for the Python data world                    | Lazy server-side dataframes (an Ibis IRIS backend, "dbplyr for IRIS"), DuckDB `ATTACH` through iris-pgwire, dbplyr through RPostgres, Flight SQL, dbt Python models, the release of the native IRIS ADBC driver                         | `/wayfinder`: decisions before code. See below                                                                            | Probably irispython-dx (Thomas to decide) |
 | 6   | Answers that sit with other people                | Releasing the native IRIS ADBC driver (irispython-dx spec 21, Q13, with Jim Nelson); the intersystems-irispython unread-rows desync (recorded in irispython-dx `dxlab/results/fetchmany-close-desync-2026-11-14/`)                      | `/to-questionnaire` for Jim if the agent-bus thread does not settle it                                                    | Outside these repos                       |
 | 7   | Not engineering                                   | Where the 1.x security note goes (unpublished, awaiting Thomas), PyPI token rotation, expired IRIS key copies in `~/ws/iris-fhirsqlbuilder-dbt-integratedml`, release-branch cleanup                                                    | Thomas's To Do list                                                                                                       | —                                         |
@@ -37,7 +37,16 @@ Track 5 is second.
    - Seen on the way, not fixed: `BYTEA` and `TIMESTAMPTZ` in `CREATE TABLE` are not translated
      (IRIS error 5373); a `TIME` insert on embedded fails validation; `ORDER BY` on strings sorts
      by IRIS's collation, not PostgreSQL's.
-3. Track 4, the next big track (Thomas, 2026-11-14). Decisions below. The 2.0.1 hotfix is done; spec 052 is next.
+3. Track 4. Done 2026-11-15 as spec 052 (`specs/052-postgres-transaction-semantics/`), released as 2.1.0 once
+   Thomas pushes it. What it changed is in `CHANGELOG.md` `[2.1.0]` and `docs/POSTGRES_APP_COMPATIBILITY.md`.
+   - Moved to later: E6 and E7 (lock escalation, pgbench) on an enterprise-key lab; advisory locks (Rails, Prisma
+     and Flyway migrations); a true cancel through IRIS's own API rather than closing the connection; the
+     isolation suite in CI; the embedded backend's executemany upsert (spec 051 T089).
+   - Found and not fixed: Describe runs a statement to learn its columns and Execute runs it again, so an
+     extended-protocol read of a held row at READ COMMITTED waits twice (20 s) before `40001`; the DBAPI
+     driver's `<LIST ERROR>` (reported to irispython-dx, to be retried on driver 5.4.1).
+   - Waiting on Thomas: whether read-only transactions may run at REPEATABLE READ (DuckDB opens every scan
+     with it, and 2.1.0 refuses it).
 4. Track 5 after it.
 5. Track 3 whenever spec 051 is next.
 

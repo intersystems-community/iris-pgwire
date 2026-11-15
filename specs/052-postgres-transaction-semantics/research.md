@@ -257,3 +257,32 @@ the 5 ms budget.
     a plain SELECT of a held row waits out the lock, so `FOR UPDATE NOWAIT` waited 20 s before refusing. A NOWAIT
     Describe now takes the lock (fails at once). Not fixed, and true of every extended-protocol read of a held row at
     READ COMMITTED: it waits twice, 20 s, before `40001`.
+
+### R11 measured: release (T081, 2026-11-15)
+
+SC-008 on a throwaway Enterprise IRIS 2026.1.6 (`pgwire-bench-ent`, arm64 key, 127.0.0.1:2993), not the Community lab.
+`benchmarks/spec052_statement_overhead.py` starts one DBAPI server from a given tree and runs, over psycopg's extended
+protocol in autocommit, a SELECT by primary key, a one-row INSERT and an UPDATE by primary key, plus a BEGIN / SELECT /
+2 UPDATEs / COMMIT block: none of spec 052's features. 500 iterations after 50 warm-up; three rounds alternating 2.0.1
+(`hotfix/2.0.1` worktree), 2.1.0 and 2.1.0 with `PGWIRE_DEFAULT_ISOLATION=read uncommitted`. Median of the three round
+medians, in ms (raw: `build/sc008-results.jsonl`):
+
+| Tree                     | SELECT | INSERT | UPDATE | Block |
+| ------------------------ | -----: | -----: | -----: | ----: |
+| 2.0.1                    |   3.16 |   1.27 |   0.95 |  5.26 |
+| 2.1.0 (read committed)   |   1.79 |   0.93 |   0.81 |  3.55 |
+| 2.1.0 (read uncommitted) |   1.65 |   0.86 |   0.76 |  3.25 |
+
+The first run failed SC-008: 2.1.0 was 0.3 ms slower on SELECT, 1.4 ms on UPDATE and 3.2 ms on the block. Not spec
+052's own code: called directly, `DBAPIExecutor.execute_query` was faster on 2.1.0 (UPDATE 0.39 ms against 0.46,
+SELECT 0.45 against 0.85). A cProfile of the server and a timer around the Execute path found two costs that 2.0.1
+already had, which 2.1.0 hit more often once UPDATE and DELETE left the fast-batch path (for correct row counts, the
+SQLAlchemy fix):
+
+- `send_query_result` slept 1 ms (`asyncio.sleep(0.001)`) after every extended-protocol result, "for Sync to arrive".
+  The message loop reads a buffered stream, so nothing can be missed. On macOS the sleep takes about 1.3 ms.
+- `send_no_data`, sent for every INSERT, UPDATE and DELETE, formatted the whole call stack for a debug log line:
+  0.9 ms in 2.0.1, 2.1 ms in 2.1.0's deeper stack.
+
+Both removed, each with a budget test (`tests/unit/test_protocol_message_budget.py`). The isolation level makes no
+measurable difference here: READ COMMITTED costs about 0.1 ms over READ UNCOMMITTED on these uncontended statements.

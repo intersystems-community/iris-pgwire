@@ -1411,13 +1411,6 @@ class PGWireProtocol:
             await self._maybe_send_data_rows(rows, columns)
             await self._send_command_complete(command, row_count)
 
-            # CRITICAL: For Extended Protocol, give time for Sync message to arrive
-            # Without this, rapid return to message loop can miss the Sync message
-            if not send_ready:
-                await asyncio.sleep(
-                    0.001
-                )  # 1ms grace period for Sync to arrive (allows Sync to be enqueued)
-
             # Send ReadyForQuery ONLY for Simple Query Protocol
             # Extended Protocol (Parse/Bind/Execute/Sync) will send it in Sync handler
             if send_ready:
@@ -3516,19 +3509,8 @@ class PGWireProtocol:
 
     async def send_no_data(self):
         """Send NoData response"""
-        # DEBUGGING: Track when NoData is sent (should NOT be sent for SHOW queries!)
-        import traceback
-
-        caller_info = "".join(traceback.format_stack()[-3:-1])
-        logger.warning(
-            "📛 SEND_NO_DATA CALLED", connection_id=self.connection_id, caller=caller_info
-        )
-
-        message = struct.pack("!cI", MSG_NO_DATA, 4)
-        self.writer.write(message)
+        self.writer.write(struct.pack("!cI", MSG_NO_DATA, 4))
         await self.writer.drain()
-
-        logger.info("📛 NoData message sent", connection_id=self.connection_id)
 
     def _convert_postgres_to_iris_syntax(self, query: str) -> str:
         """

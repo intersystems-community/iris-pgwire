@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - Unreleased
+
+PostgreSQL's transaction rules on the DBAPI backend (spec 052). An application written for PostgreSQL gets the same answer from IRIS through PGWire, or a PostgreSQL error naming what IRIS cannot do. In 2.0 it often got a wrong answer and no error: a failed statement left the transaction committable, `FOR UPDATE` locked nothing, an upsert updated nothing and reported success, and a cancel was ignored. Every behaviour below is checked against PostgreSQL 16 by the isolation suite (`make isolation`); what each PostgreSQL feature does through PGWire, and what is refused, is in `docs/POSTGRES_APP_COMPATIBILITY.md`.
+
+The embedded backend is unchanged except for the abort rule and the savepoint stack, which live in the protocol layer and apply to both.
+
+### Behaviour changes
+
+Read these before upgrading. Each one turns a silent wrong answer into PostgreSQL's behaviour or an error. Two settings restore parts of 2.0's behaviour.
+
+- **A failed statement aborts its transaction.** Inside `BEGIN`, an error sets the transaction status to failed (`E` in ReadyForQuery). Every later statement except `COMMIT`, `ROLLBACK` and `ROLLBACK TO SAVEPOINT` gets `25P02`, and `COMMIT` rolls back and replies `ROLLBACK`. In 2.0 the statements around the failure committed. After an error on the extended protocol, messages up to `Sync` are discarded, and a multi-statement `Query` stops at its first error. Both backends.
+- **New DBAPI sessions run at READ COMMITTED**, PostgreSQL's default; 2.0 ran them at IRIS's READ UNCOMMITTED, so they read other sessions' uncommitted writes. Reads of a row another transaction is writing now wait for it (IRIS's lock timeout, 10 s by default) and then fail with `40001`. `PGWIRE_DEFAULT_ISOLATION=read uncommitted` restores 2.0's default; any other value stops the server at startup, naming the accepted ones. The pool applies the level to every new connection and to every connection it takes back.
+- **What IRIS cannot do exactly is refused with `0A000`**, naming the shape, instead of running something else:
+  - `SELECT ... FOR UPDATE` on a join, a subquery or view in `FROM`, with `LIMIT`/`OFFSET`/`TOP`, or on a table with an UPDATE trigger or a `ROWVERSION` or generated column; `FOR SHARE`, `FOR NO KEY UPDATE`, `FOR KEY SHARE` and `SKIP LOCKED`. These were `42601` (IRIS's syntax error) or, for some shapes, ran without a lock.
+  - `INSERT ... ON CONFLICT` in any form but the exact one below, `DO NOTHING` included.
+  - `PGWIRE_TXN_COMPAT=permissive` runs refused `ON CONFLICT` statements through 2.0's emulation, with its bugs fixed (see Fixed), and logs a warning once per statement shape. Locking clauses are refused in both modes. Any other value stops the server at startup.
+- **New SQLSTATEs**:
+  - `55P03` when a lock wait runs out under a `lock_timeout` the client set, and for `FOR UPDATE NOWAIT`. A wait under the server's default timeout is still `40001`.
+  - `54000` for the 255th savepoint in one transaction. IRIS keeps 254 alive, released ones included, and the 255th failed with SQLCODE -400 and lost the transaction's work.
+  - `57014` for a cancelled statement.
+  - `23503` for a foreign-key violation (IRIS SQLCODE -121 to -124), which was `XX000`.
+  - `XX000` for the DBAPI driver's `<LIST ERROR>` on every path; the Execute path reported `42P03`.
+- **A CancelRequest cancels the statement.** It closes the session's IRIS connection, so the running statement fails with `57014` within a second and IRIS rolls back its transaction; the session carries on, at its own isolation level, on a fresh connection. In 2.0 the request was acknowledged and ignored, and the cancelled write still ran.
+- **Pool connections are out of the DBAPI driver's autocommit mode.** In that mode a write whose client had gone still committed once its lock wait ended (measured with the driver alone; with autocommit off the write was discarded). PGWire commits after each statement of an autocommit session, as before.
+
+### Added
+
+- **Savepoints are tracked by PGWire** (`savepoints.py`). `RELEASE SAVEPOINT`, which IRIS lacks, is answered without sending anything, so psycopg's nested `transaction()` blocks that exit normally no longer raise. A savepoint is re-established after `ROLLBACK TO`, an unknown name is `3B001` and a savepoint outside a transaction `25P01`, as on PostgreSQL.
+- **`SELECT ... FOR UPDATE` locks the rows.** IRIS takes no lock for it. Inside a transaction, a single-table `FOR UPDATE` first runs `UPDATE t SET pk = pk WHERE <the same predicate>` and then the `SELECT` without the clause, so a read-then-write counter no longer loses updates. `NOWAIT` runs that update with IRIS's lock timeout at 0.
+- **`ON CONFLICT` runs as IRIS's `INSERT OR UPDATE`** when its target is the table's only unique key and `DO UPDATE` sets every inserted column from `EXCLUDED`, with no `WHERE`. Only then do the two statements do the same thing.
+- **`SET lock_timeout`** sends IRIS's `SET OPTION LOCK_TIMEOUT`, rounded up to whole seconds (IRIS has no finer unit); `0` and `RESET` restore the server's default wait, and `SHOW` gives PostgreSQL's spelling. Values parse as PostgreSQL 16 parses them, units and `22023` messages included. A session's value is undone when its connection goes back to the pool.
+- **SQLAlchemy 2 (`postgresql+psycopg`)** connects, runs Core and ORM CRUD, and nests savepoints with `begin_nested()`. Before, `engine.connect()` failed at `select current_schema()`. Fixed along the way: `current_schema()` and `current_schemas()`, psycopg's `TypeInfo.fetch()` (so pgvector's `register_vector` finds `vector`), `has_table()`, the ORM's multi-row `INSERT ... RETURNING` (now one insert per row, in order), ORM updates (which raised `StaleDataError`), and `SHOW transaction_read_only`.
+- **`docs/POSTGRES_APP_COMPATIBILITY.md`**, linked from `KNOWN_LIMITATIONS.md`: each statement about what works or is refused names the isolation-suite check that backs it, and a unit test keeps the two in step.
+- **The isolation suite is a release gate** (`docs/RELEASE_CHECKLIST.md` 2a): `make isolation`, `make isolation-permissive` and `make isolation-read-uncommitted`. `make isolation-coverage` and `make coverage-052` fail below 90% coverage of spec 052's modules.
+
+### Fixed
+
+- **Extended-protocol statements are faster** than in 2.0.1: a SELECT by primary key 1.8 ms instead of 3.2, an UPDATE 0.8 instead of 1.0, a three-statement transaction 3.6 instead of 5.3 (DBAPI backend, Enterprise IRIS 2026.1, median of three alternating runs of `benchmarks/spec052_statement_overhead.py`). Every result over the extended protocol waited 1 ms before going back to read the next message, and every NoData formatted the whole call stack for a log line. Both are removed.
+- **`GROUP BY 1` grouped nothing.** IRIS reads `GROUP BY <number>` as a constant, so `SELECT status, count(*) FROM orders GROUP BY 1` returned one row over every order. Each position now becomes the matching select-list expression. Ibis writes this form for every aggregation. An out-of-range position still gives one row where PostgreSQL raises `42P10`.
+- **2.0's `ON CONFLICT` emulation** (used under `PGWIRE_TXN_COMPAT=permissive`) decided by error text; it now decides by SQLCODE -119 on the target's own fields. It honours `DO NOTHING`'s target, reports a conflict on another key (`23505`) and a foreign-key violation (`23503`), and reads literal `VALUES` and the table's columns: for those, 2.0 updated nothing and reported success.
+- **`PGWIRE_TXN_COMPAT` and `PGWIRE_DEFAULT_ISOLATION` were never read by the server**: `server.py` built its configuration by hand and dropped them.
+- **`SET lock_timeout` and `SET statement_timeout` were answered with success** by the protocol layer and never reached IRIS.
+- **A transaction-ending `ROLLBACK` uses the driver's rollback.** IRIS's SQL `ROLLBACK` costs about 33 ms per open savepoint (8.7 s with 254); the driver's takes 30 to 55 ms at any depth.
+- **Batched statements**: two different statements in one pipeline no longer share the fast-batch path (it ran the first one twice, or failed with `<LIST ERROR>`); `ON CONFLICT`, `UPDATE` and `DELETE` stay off it, so a refusal answers its own Execute and psycopg's rowcount is right.
+- **The translator**: the word after `FOR UPDATE` was schema-qualified as a table (`FOR UPDATE SQLUser."NOWAIT"`), and the `GROUP BY` collation rewrite swallowed a following locking clause.
+
+### Not changed
+
+- **`statement_timeout`** is accepted and shown but not enforced; it is logged once per session.
+- **An extended-protocol read of a row another transaction holds waits twice** at READ COMMITTED (20 s by default) before `40001`: Describe runs the statement to learn its columns, and Execute runs it again.
+- **REPEATABLE READ and SERIALIZABLE are refused** with `0A000`, as in 2.0: IRIS gives neither guarantee. Advisory locks are not provided. `docs/POSTGRES_APP_COMPATIBILITY.md` lists the rest.
+
 ## [2.0.1] - Unreleased
 
 Transaction fixes for the DBAPI backend, two of them critical, and the ADBC work done since 2.0.0. The first five `Fixed` entries were measured by the track 4 isolation suite (`make isolation`); see `docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5.

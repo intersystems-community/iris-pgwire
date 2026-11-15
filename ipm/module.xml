@@ -3,7 +3,7 @@
   <Document name="iris-pgwire.ZPM">
     <Module>
       <Name>iris-pgwire</Name>
-      <Version>2.0.1</Version>
+      <Version>2.1.0</Version>
       <Description>PostgreSQL wire protocol server for InterSystems IRIS with DBAPI backend and vector support</Description>
       <Author>Thomas Dyar</Author>
       <Homepage>https://github.com/intersystems-community/iris-pgwire</Homepage>
