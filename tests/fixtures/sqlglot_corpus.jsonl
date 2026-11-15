@@ -11,6 +11,7 @@
 {"iris": "CREATE TABLE T1 (id INT)", "note": "test_generated_columns.py::test_generated_column_skip; stage: nm.normalize", "pg": "CREATE TABLE t1 (id int, col1 int GENERATED ALWAYS AS (id * 2) STORED)"}
 {"iris": "CREATE TABLE T1 (id INT, col2 TEXT)", "note": "test_generated_columns.py::test_generated_column_multiple_skip; stage: nm.normalize", "pg": "CREATE TABLE t1 (id int, col1 int GENERATED ALWAYS AS (id * 2) STORED, col2 text)"}
 {"iris": "CREATE TABLE foo (id INT)", "note": "test_026_optimizer_extensions.py::test_hnsw_ddl_no_match_passthrough; stage: opt._translate_hnsw_index_ddl", "pg": "CREATE TABLE foo (id INT)"}
+{"iris": "CREATE TABLE t (id INT, name VARCHAR(100))", "note": "contract/test_enum_translation.py::TestEnumTranslatorColumnTypes::test_no_translation_when_no_enums; stage: translator.translate", "pg": "CREATE TABLE t (id INT, name VARCHAR(100))"}
 {"iris": "CREATE TABLE test (id INT)", "note": "test_transaction_translator.py::TestTransactionTranslator::test_create_table_unchanged; stage: self.translator.translate_transaction_command", "pg": "CREATE TABLE test (id INT)"}
 {"iris": "CREATE TABLE txn_log (cmd VARCHAR(50))", "note": "test_transaction_edge_cases.py::TestTransactionEdgeCases::test_create_table_unchanged; stage: self.translator.translate_transaction_command", "pg": "CREATE TABLE txn_log (cmd VARCHAR(50))"}
 {"iris": "DELETE FROM t WHERE id = 1", "note": "test_sql_refiner.py::TestFixOrderByAliases::test_no_select_from_no_change; stage: alias_only_refiner.refine", "pg": "DELETE FROM t WHERE id = 1"}
@@ -63,6 +64,7 @@
 {"iris": "SELECT (oid) AS x FROM t", "note": "test_boolean_expr.py::TestWhatMustNotBeTouched::test_left_alone; stage: rewrite_boolean_projections", "pg": "SELECT (oid) AS x FROM t"}
 {"iris": "SELECT * FROM a INNER JOIN b ON a.id = b.id", "note": "test_iris_constructs.py::TestIRISSQLExtensionTranslator::test_translate_joins_no_match_unchanged; stage: t.translate", "pg": "SELECT * FROM a INNER JOIN b ON a.id = b.id"}
 {"iris": "SELECT * FROM t GROUP BY 1", "note": "test_iris_collation_refiner.py::TestGroupByAndCountDistinctUseExactValues::test_group_by_an_ordinal_is_left_alone; stage: refiner.refine", "pg": "SELECT * FROM t GROUP BY 1"}
+{"iris": "SELECT * FROM t WHERE active = true", "note": "contract/test_boolean_defaults.py::TestNoDefaultKeyword::test_bare_true_unchanged; stage: translator.translate", "pg": "SELECT * FROM t WHERE active = true"}
 {"iris": "SELECT * FROM t WHERE id = 1", "note": "test_protocol_unit2.py::TestConvertPostgresToIrisSyntax::test_returns_query_unchanged; stage: protocol._convert_postgres_to_iris_syntax", "pg": "SELECT * FROM t WHERE id = 1"}
 {"iris": "SELECT * FROM t WHERE x = 1", "note": "test_protocol_unit3.py::TestConvertPostgresToIrisSyntax::test_passthrough; stage: protocol._convert_postgres_to_iris_syntax", "pg": "SELECT * FROM t WHERE x = 1"}
 {"iris": "SELECT * FROM t", "note": "test_integratedml.py::TestIRISSystemFunctionTranslator::test_no_op_on_plain_sql; stage: self.translator.translate_system_functions", "pg": "SELECT * FROM t"}
@@ -161,6 +163,7 @@
 {"iris": "START TRANSACTION", "note": "test_transaction_translator.py::TestTransactionTranslator::test_case_insensitive_begin_mixed; stage: self.translator.translate_transaction_command", "pg": "Begin"}
 {"iris": "START TRANSACTION", "note": "test_transaction_translator.py::TestTransactionTranslator::test_case_insensitive_begin_upper; stage: self.translator.translate_transaction_command", "pg": "BEGIN"}
 {"iris": "START TRANSACTION", "note": "test_transaction_translator.py::TestTransactionTranslator::test_whitespace_handling; stage: self.translator.translate_transaction_command", "pg": "  BEGIN  "}
+{"iris": "UPDATE t SET deleted = false", "note": "contract/test_boolean_defaults.py::TestNoDefaultKeyword::test_bare_false_unchanged; stage: translator.translate", "pg": "UPDATE t SET deleted = false"}
 {"iris": "insert into release values (1)", "note": "test_hotfix_2_0_1.py::TestSavepointRewrite::test_everything_else_is_unchanged; stage: rewrite_savepoint_verbs", "pg": "insert into release values (1)"}
 {"iris": "select 'rollback to x'", "note": "test_hotfix_2_0_1.py::TestSavepointRewrite::test_everything_else_is_unchanged; stage: rewrite_savepoint_verbs", "pg": "select 'rollback to x'"}
 {"iris": "select 1 where x IN (1, 2)", "note": "test_sqlalchemy_connect.py::test_any_array_constructor_shapes; stage: rewrite_any_array_constructor", "pg": "select 1 where x = any (array[1, 2])"}

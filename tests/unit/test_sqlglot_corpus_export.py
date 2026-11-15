@@ -128,3 +128,58 @@ def test_the_committed_corpus_still_holds():
     assert lines, "the corpus is empty"
     assert all(set(json.loads(line)) <= {"pg", "iris", "note", "iris_version"} for line in lines)
     assert verify_corpus() == []
+
+
+_FRAGMENTS = textwrap.dedent("""
+    def shout(sql):
+        return sql.upper().replace("LIMIT 5", "TOP 5")
+
+    def test_fragments():
+        out = shout("select a from t limit 5")
+        assert "TOP 5" in out
+        assert "SELECT A" in out
+        assert "LIMIT" not in out
+
+    def test_a_fragment_that_fails_today_drops_the_case():
+        out = shout("select b limit 5")
+        assert "TOP 5" in out
+        assert "LIMIT 5" in out
+
+    def test_direct_call():
+        assert "FROM U" in shout("select c from u")
+
+    def test_exact_only_is_not_a_fragment_case():
+        assert shout("select d") == "SELECT D"
+
+    def command_tag(sql):
+        return "SELECT 1"
+
+    def test_a_non_translation_is_dropped():
+        assert "SELECT" in command_tag("select e")
+""")
+
+
+def test_fragment_cases_group_a_tests_assertions_on_one_output(tmp_path):
+    path = tmp_path / "test_fake_fragments.py"
+    path.write_text(_FRAGMENTS)
+    cases = sorted(_exporter.extract_fragments([path]), key=lambda c: c["pg"])
+    assert cases == [
+        {
+            "pg": "select a from t limit 5",
+            "iris_contains": ["TOP 5", "SELECT A"],
+            "iris_excludes": ["LIMIT"],
+            "note": "test_fake_fragments.py::test_fragments; stage: shout",
+        },
+        {
+            "pg": "select c from u",
+            "iris_contains": ["FROM U"],
+            "iris_excludes": [],
+            "note": "test_fake_fragments.py::test_direct_call; stage: shout",
+        },
+    ]
+
+
+def test_the_committed_fragments_still_hold():
+    lines = _exporter.FRAGMENTS.read_text().splitlines()
+    assert lines, "the fragment file is empty"
+    assert _exporter.verify_fragments() == []

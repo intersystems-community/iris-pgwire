@@ -28,8 +28,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "tests" / "fixtures" / "sqlglot_corpus.jsonl"
+FRAGMENTS = ROOT / "tests" / "fixtures" / "sqlglot_fragments.jsonl"
 TEST_DIR = ROOT / "tests" / "unit"
 
 _SQL = re.compile(
@@ -46,11 +49,22 @@ _NOT_A_TRANSLATION = re.compile(
     re.IGNORECASE,
 )
 
+# The exporter runs fixtures and calls, so outside tests/unit a file that may reach a live
+# server is not scanned at all.
+_CONNECTS = re.compile(r"psycopg|asyncpg|\.connect\(|createConnection|iris\.dbapi|socket\.")
+
+# pytest.skip() inside a fixture or at module level raises this, a BaseException.
+_FAILED = (Exception, pytest.skip.Exception)
+
 skipped: Counter[str] = Counter()
 
 
 def _is_sql(value: object) -> bool:
     return isinstance(value, str) and bool(_SQL.match(value))
+
+
+def _not_a_translation(stage: str) -> bool:
+    return bool(_NOT_A_TRANSLATION.search(stage.split(" (via")[0]))
 
 
 def _load(path: Path):
@@ -135,7 +149,8 @@ class _Case:
             isinstance(node, ast.Name) and node.id in self.expected_names
         )
 
-    def pairs(self):
+    def _comparisons(self):
+        """(operator, left, right) of each one-operator assert, after the assignments before it."""
         for stmt in self.func.body:
             if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
                 self._assign(stmt)
@@ -143,11 +158,49 @@ class _Case:
                 isinstance(stmt, ast.Assert)
                 and isinstance(stmt.test, ast.Compare)
                 and len(stmt.test.ops) == 1
-                and isinstance(stmt.test.ops[0], ast.Eq)
             ):
-                pair = self._compare(stmt.test.left, stmt.test.comparators[0])
+                yield type(stmt.test.ops[0]), stmt.test.left, stmt.test.comparators[0]
+
+    def pairs(self):
+        for op, left, right in self._comparisons():
+            if op is ast.Eq:
+                pair = self._compare(left, right)
                 if pair:
                     yield pair
+
+    def fragments(self):
+        """One case per translation output the test checks with `in` / `not in`. A case whose
+        checks do not all hold today is dropped whole."""
+        cases: dict[tuple[str, str], dict] = {}
+        broken: set[tuple[str, str]] = set()
+        for op, left, right in self._comparisons():
+            if op not in (ast.In, ast.NotIn) or not self._expected(left):
+                continue
+            found = self._output(right)
+            if not found:
+                continue
+            case = cases.setdefault(
+                found, {"pg": found[1], "iris_contains": [], "iris_excludes": []}
+            )
+            try:
+                fragment = _eval(left, self.namespace, self.local)
+                actual = _eval(right, self.namespace, self.local)
+            except Exception:
+                skipped["fragment raised"] += 1
+                broken.add(found)
+                continue
+            if not isinstance(actual, str) or (fragment in actual) != (op is ast.In):
+                skipped["fragment does not hold"] += 1
+                broken.add(found)
+                continue
+            case["iris_contains" if op is ast.In else "iris_excludes"].append(fragment)
+        for (stage, sql), case in cases.items():
+            if (stage, sql) in broken:
+                continue
+            if _not_a_translation(stage):
+                skipped["not a translation"] += 1
+                continue
+            yield {**case, "note": f"{self.test_id}; stage: {stage}"}
 
     def _assign(self, stmt: ast.Assign) -> None:
         target = stmt.targets[0]
@@ -186,7 +239,7 @@ class _Case:
             if not isinstance(expected, str) or actual != expected:
                 skipped["assertion does not hold"] += 1
                 return None
-            if _NOT_A_TRANSLATION.search(stage.split(" (via")[0]) or not _is_sql(expected):
+            if _not_a_translation(stage) or not _is_sql(expected):
                 skipped["not a translation"] += 1
                 return None
             return {"pg": sql, "iris": expected, "note": f"{self.test_id}; stage: {stage}"}
@@ -235,7 +288,7 @@ def _cases(path: Path, module, tree: ast.Module):
     for cls_name, func in tests:
         if not func.name.startswith("test_"):
             continue
-        test_id = "::".join(filter(None, [path.name, cls_name, func.name]))
+        test_id = "::".join(filter(None, [_test_name(path), cls_name, func.name]))
         try:
             param_sets = _parametrize_sets(func, namespace)
         except Exception:
@@ -247,7 +300,7 @@ def _cases(path: Path, module, tree: ast.Module):
             if cls_name:
                 try:
                     local["self"] = _instance(namespace[cls_name])
-                except Exception:
+                except _FAILED:
                     skipped["class setup raised"] += 1
                     break
             try:
@@ -257,48 +310,88 @@ def _cases(path: Path, module, tree: ast.Module):
             except LookupError:
                 skipped["needs a fixture"] += 1
                 break
-            except Exception:
+            except _FAILED:
                 skipped["fixture raised"] += 1
                 break
             yield _Case(path, test_id, func, namespace, local)
 
 
-def extract_pairs(paths) -> list[dict]:
-    seen, pairs = set(), []
+def _cases_in(paths):
     for path in paths:
         path = Path(path)
         try:
             tree = ast.parse(path.read_text())
             module = _load(path)
-        except Exception:
+        except _FAILED:
             skipped["module would not import"] += 1
             continue
-        for case in _cases(path, module, tree):
-            for pair in case.pairs():
-                key = (pair["pg"], pair["iris"], pair["note"])
-                if key not in seen:
-                    seen.add(key)
-                    pairs.append(pair)
-    return pairs
+        yield from _cases(path, module, tree)
+
+
+def _unique(items) -> list[dict]:
+    seen, kept = set(), []
+    for item in items:
+        key = json.dumps(item, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            kept.append(item)
+    return kept
+
+
+def extract_pairs(paths) -> list[dict]:
+    return _unique(pair for case in _cases_in(paths) for pair in case.pairs())
+
+
+def extract_fragments(paths) -> list[dict]:
+    return _unique(frag for case in _cases_in(paths) for frag in case.fragments())
 
 
 def _test_files() -> list[Path]:
+    """Unit, contract and protocol tests, and the top-level tests/test_*.py. Not integration or
+    e2e: their fixtures start servers."""
+    tests = ROOT / "tests"
+    files = [
+        *TEST_DIR.glob("test_*.py"),
+        *(tests / "contract").glob("test_*.py"),
+        *(tests / "protocol").glob("test_*.py"),
+        *tests.glob("test_*.py"),
+    ]
     return sorted(
-        p for p in TEST_DIR.glob("test_*.py") if p.name != "test_sqlglot_corpus_export.py"
+        p
+        for p in files
+        if p.name != "test_sqlglot_corpus_export.py"
+        and (p.parent == TEST_DIR or not _CONNECTS.search(p.read_text()))
     )
+
+
+def _test_name(path: Path) -> str:
+    """`test_x.py` for a unit test (as before), `contract/test_x.py` for the others."""
+    try:
+        relative = path.resolve().relative_to(ROOT / "tests")
+    except ValueError:
+        return path.name
+    return path.name if relative.parts[0] == "unit" else str(relative)
 
 
 def _lines(pairs) -> list[str]:
     return sorted(json.dumps(p, ensure_ascii=False, sort_keys=True) for p in pairs)
 
 
-def verify_corpus() -> list[str]:
-    """Lines of the committed corpus that today's tests no longer give, plus ones they add."""
-    committed = set(CORPUS.read_text().splitlines())
-    current = set(_lines(extract_pairs(_test_files())))
+def _diff(path: Path, extract) -> list[str]:
+    """Lines of the committed file that today's tests no longer give, plus ones they add."""
+    committed = set(path.read_text().splitlines())
+    current = set(_lines(extract(_test_files())))
     return sorted(f"- {line}" for line in committed - current) + sorted(
         f"+ {line}" for line in current - committed
     )
+
+
+def verify_corpus() -> list[str]:
+    return _diff(CORPUS, extract_pairs)
+
+
+def verify_fragments() -> list[str]:
+    return _diff(FRAGMENTS, extract_fragments)
 
 
 def main() -> int:
@@ -306,11 +399,15 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="exit 1 if the corpus is stale")
     args = parser.parse_args()
     if args.check:
-        diff = verify_corpus()
+        diff = verify_corpus() + verify_fragments()
         print("\n".join(diff) or "corpus up to date")
         return 1 if diff else 0
-    pairs = extract_pairs(_test_files())
+    files = _test_files()
+    pairs = extract_pairs(files)
     CORPUS.write_text("".join(f"{line}\n" for line in _lines(pairs)))
+    fragments = extract_fragments(files)
+    FRAGMENTS.write_text("".join(f"{line}\n" for line in _lines(fragments)))
+    print(f"{len(fragments)} fragment cases")
     stages = Counter(p["note"].split("; stage: ")[1].split(" (via")[0] for p in pairs)
     print(f"{len(pairs)} pairs from {len({p['note'].split('::')[0] for p in pairs})} test files")
     print("skipped:", dict(skipped))
