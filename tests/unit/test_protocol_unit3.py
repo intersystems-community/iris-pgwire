@@ -1359,6 +1359,42 @@ class TestHandleExecuteMessageExtended:
         assert MSG_COMMAND_COMPLETE in written
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, matched, tag",
+        [
+            ("UPDATE t SET a = ? WHERE id = ?", 1, b"UPDATE 1\x00"),
+            ("UPDATE t SET a = ? WHERE id = ?", 0, b"UPDATE 0\x00"),
+            ("DELETE FROM t WHERE id = ?", 1, b"DELETE 1\x00"),
+        ],
+    )
+    async def test_update_and_delete_report_the_rows_they_matched(
+        self, protocol, query, matched, tag
+    ):
+        """An UPDATE or DELETE is not buffered behind a synthetic "1 row": SQLAlchemy's ORM reads
+        the count to detect a concurrent change (StaleDataError), and the synthetic tag
+        `UPDATE 0 1` is not even PostgreSQL's format, so psycopg read rowcount -1. Measured with
+        SQLAlchemy 2.0.54 on 2026-11-14: every ORM update failed."""
+        protocol.iris_executor.sql_parser.is_dml_statement.return_value = True
+        protocol.iris_executor.sql_parser.has_returning_clause.return_value = False
+        verb = query.split()[0]
+        protocol.iris_executor.execute_query = AsyncMock(
+            return_value={
+                "success": True,
+                "rows": [],
+                "columns": [],
+                "row_count": matched,
+                "command_tag": verb,
+            }
+        )
+        self._setup_portal(protocol, "p_upd", "s_upd", query, params=["a", 7][-query.count("?") :])
+        await protocol.handle_execute_message(self._make_execute_body("p_upd"))
+        assert protocol.batch_params == []
+        protocol.iris_executor.execute_query.assert_awaited_once()
+        written = collected_bytes(protocol.writer)
+        assert tag in written
+        assert f"{verb} 0 1".encode() not in written
+
+    @pytest.mark.asyncio
     async def test_portal_not_found_sends_error(self, protocol):
         body = self._make_execute_body("nonexistent_portal")
         await protocol.handle_execute_message(body)

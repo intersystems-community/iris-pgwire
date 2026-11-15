@@ -141,9 +141,10 @@ class SQLTranslator:
             iris_type = type_map.get(pg_type, pg_type.upper())
             return f"CAST({expr} AS {iris_type})"
 
-        # Pattern 1: Shorthand ::type (handles ?, %s, 'literal', or 123)
+        # Pattern 1: Shorthand ::type (handles ?, %s, 'literal', or 123). A number must
+        # stand alone: the `0` of SQLAlchemy's `p0::VARCHAR` belongs to a column name.
         if "::" in sql:
-            sql = re.sub(r"(\?|%s|'[^']*'|\d+)::(\w+)", replace_typecast, sql)
+            sql = re.sub(r"(\?|%s|'[^']*'|(?<![\w.])\d+)::(\w+)", replace_typecast, sql)
 
         # Pattern 2: Explicit CAST(expr AS type)
         if "CAST" in sql.upper():

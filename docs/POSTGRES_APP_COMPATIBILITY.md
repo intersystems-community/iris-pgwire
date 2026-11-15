@@ -64,14 +64,20 @@ of [`KNOWN_LIMITATIONS.md`](../KNOWN_LIMITATIONS.md).
 
 ## Drivers and ORMs
 
-| Client    | What it sends                                                    | Works                             | Check                               |
-| --------- | ---------------------------------------------------------------- | --------------------------------- | ----------------------------------- |
-| psycopg 3 | `SAVEPOINT "_pg3_n"`, `RELEASE "_pg3_n"`, `ROLLBACK TO "_pg3_n"` | nested `transaction()`, pipelines | `savepoints/psycopg_three_deep/oox` |
-| Django    | quoted `"s<thread>_x<n>"` savepoints                             | `atomic()` nesting                | `savepoints/django_style`           |
+| Client                              | What it sends                                                                               | Works                                                                             | Check                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| psycopg 3                           | `SAVEPOINT "_pg3_n"`, `RELEASE "_pg3_n"`, `ROLLBACK TO "_pg3_n"`                            | nested `transaction()`, pipelines                                                 | `savepoints/psycopg_three_deep/oox`                                                |
+| Django                              | quoted `"s<thread>_x<n>"` savepoints                                                        | `atomic()` nesting                                                                | `savepoints/django_style`                                                          |
+| SQLAlchemy 2 (`postgresql+psycopg`) | `current_schema()`, psycopg's `to_regtype()` type lookup, `has_table()` through pg_class    | `engine.connect()`, `create_all()`                                                | `sqlalchemy/connect`, `sqlalchemy/core_crud`                                       |
+| SQLAlchemy 2 ORM                    | multi-row `INSERT ... SELECT ... FROM (VALUES ...) RETURNING`, `UPDATE`/`DELETE` row counts | add, update, delete, read back                                                    | `sqlalchemy/orm_crud`                                                              |
+| SQLAlchemy 2                        | unquoted `SAVEPOINT sa_savepoint_n`, `RELEASE`, `ROLLBACK TO`                               | `begin_nested()` on a Connection and a Session, a duplicate key caught inside one | `savepoints/sqlalchemy_begin_nested`, `savepoints/sqlalchemy_session_begin_nested` |
 
-SQLAlchemy 2 with the psycopg dialect does not connect yet: it asks `select current_schema()` while connecting,
-and PGWire does not translate `current_schema()` (`42883`). Its `begin_nested()` sends the same three statements as
-the rows above. Prisma, Rails and Hibernate use them too; none is measured yet.
+PGWire answers SQLAlchemy's connect-time questions itself: `current_schema()` is `public`, the name PGWire gives the
+IRIS schema in pg_namespace and information_schema. `current_schemas(true)` is `{pg_catalog,public}`. A type lookup
+for `hstore` finds nothing, as on a PostgreSQL without that extension. `show transaction isolation level` reports
+PGWire's default, `read uncommitted`, where PostgreSQL reports `read committed` (default isolation, above). The ORM's
+multi-row INSERT runs as one INSERT per row, in the order SQLAlchemy expects its keys back. Outside an explicit
+transaction those rows commit one by one, not as one statement. Prisma, Rails and Hibernate are not measured yet.
 
 ## The Hermitage row
 

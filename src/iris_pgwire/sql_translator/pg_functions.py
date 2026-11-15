@@ -121,7 +121,48 @@ def has_pg_function_call(sql: str) -> bool:
     if "(" not in sql:
         return False
     lowered = sql.lower()
-    return any(name in lowered for name in {**PG_FUNCTION_MAP, **{n: n for n in _VARIADIC_NAMES}})
+    return any(
+        name in lowered
+        for name in (*PG_FUNCTION_MAP, *_VARIADIC_NAMES, *_SEARCH_PATH_FUNCTIONS)
+    )
+
+
+# Search-path functions SQLAlchemy and psql call inside catalog queries. Both may be qualified
+# with pg_catalog, unlike the map above, because the replacement is the answer, not a lookup.
+_SEARCH_PATH_FUNCTIONS = ("current_schema", "pg_table_is_visible")
+
+# current_schema() -> PGWire.PG_PUBLIC_SCHEMA(): `public`, the name pg_namespace already gives
+# the IRIS schema. A bare `current_schema` keyword is not rewritten: inside a statement it is
+# indistinguishable from a column of that name.
+_CURRENT_SCHEMA_CALL = re.compile(
+    r"(?<![\w.])(?:pg_catalog\s*\.\s*)?current_schema\s*\(\s*\)", re.IGNORECASE
+)
+
+# pg_table_is_visible(oid) as a predicate -> 1 = 1. Every relation PGWire's pg_class lists is in
+# `public`, the only schema holding user relations and the one on the search path, so PostgreSQL
+# would answer true for each. Outside a predicate (a projected boolean) it is left for IRIS to
+# refuse: IRIS has no boolean value to project.
+_TABLE_IS_VISIBLE_PREDICATE = re.compile(
+    r"\b(WHERE|AND|OR)(\s+)(?:pg_catalog\s*\.\s*)?pg_table_is_visible\s*\(", re.IGNORECASE
+)
+
+
+def _rewrite_table_is_visible(sql: str) -> str:
+    result, pos = [], 0
+    for m in _TABLE_IS_VISIBLE_PREDICATE.finditer(sql):
+        if m.start() < pos:
+            continue
+        depth, i = 1, m.end()
+        while i < len(sql) and depth:
+            depth += {"(": 1, ")": -1}.get(sql[i], 0)
+            i += 1
+        if depth:
+            break  # unbalanced: leave the rest as it is
+        result.append(sql[pos : m.start()])
+        result.append(f"{m.group(1)}{m.group(2)}1 = 1")
+        pos = i
+    result.append(sql[pos:])
+    return "".join(result)
 
 
 def rewrite_pg_function_calls(sql: str) -> str:
@@ -134,4 +175,10 @@ def rewrite_pg_function_calls(sql: str) -> str:
 
     for name, replacement in PG_FUNCTION_MAP.items():
         sql = _CALL_PATTERNS[name].sub(f"{replacement}(", sql)
+
+    lowered = sql.lower()
+    if "current_schema" in lowered:
+        sql = _CURRENT_SCHEMA_CALL.sub("PGWire.PG_PUBLIC_SCHEMA()", sql)
+    if "pg_table_is_visible" in lowered:
+        sql = _rewrite_table_is_visible(sql)
     return sql

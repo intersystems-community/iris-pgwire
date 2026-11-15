@@ -98,6 +98,9 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.5.0",
+    # A client we claim compatibility with: tests/e2e/isolation/test_sqlalchemy.py and
+    # test_savepoints.py drive it on the postgresql+psycopg dialect.
+    "sqlalchemy>=2.0",
     # NOTE: iris-devtools is an internal development tool.
     # For local development, install separately if needed:
     #   pip install -e /path/to/iris-devtools

@@ -42,6 +42,23 @@ class Target:
         return psycopg.connect(self.dsn, autocommit=autocommit, cursor_factory=factory)
 
 
+def sqlalchemy_engine(target: Target, **kwargs):
+    """A SQLAlchemy 2 engine on the postgresql+psycopg dialect, pointed at ``target``."""
+    from sqlalchemy import create_engine
+
+    params = dict(item.split("=", 1) for item in target.dsn.split())
+    url = (
+        f"postgresql+psycopg://{params['user']}:{params['password']}@{params['host']}:"
+        f"{params['port']}/{params['dbname']}"
+    )
+    return create_engine(url, connect_args={"sslmode": params.get("sslmode", "disable")}, **kwargs)
+
+
+def sqlstate_of(error: Exception) -> str:
+    """The SQLSTATE behind a SQLAlchemy or psycopg error, else the exception's type name."""
+    return getattr(getattr(error, "orig", error), "sqlstate", None) or type(error).__name__
+
+
 def run_statement(conn: psycopg.Connection, sql: str, params=None) -> Outcome:
     started = time.perf_counter()
     sent = time.monotonic()
