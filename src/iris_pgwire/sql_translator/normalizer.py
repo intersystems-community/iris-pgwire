@@ -39,6 +39,7 @@ from .models import (
 from .refiner import SQLRefiner
 from .skipped_table_set import SkippedTableSet
 from .statement_filter import StatementFilter
+from .string_collation import exact_string_collation
 
 
 class SQLTranslator:
@@ -256,6 +257,8 @@ class SQLTranslator:
         normalized_sql, bool_count = self.boolean_translator.translate(normalized_sql)
 
         normalized_sql, identifier_count = self.identifier_normalizer.normalize(normalized_sql)
+        # PostgreSQL compares strings case-sensitively; IRIS's default column collation does not.
+        normalized_sql = exact_string_collation(normalized_sql)
         normalized_sql = self.sql_refiner.refine(normalized_sql)
         normalized_sql, date_count = self.date_translator.translate(normalized_sql)
         normalized_sql, json_count = self._translate_json_operators(normalized_sql)

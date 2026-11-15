@@ -226,6 +226,14 @@ PINS: dict[tuple[str, str], object] = {
         "default": [["read uncommitted"]],
         "read": [[1]],
     },
-    # US6: a CancelRequest closes the session's IRIS connection, so its statement fails with 57014 and
+    # US6: a CancelRequest ends the session's IRIS process, so its statement fails with 57014 and
     # IRIS rolls the transaction back, as PostgreSQL cancels it (spec 052, research R9): no pins.
+    # String columns PGWire creates are COLLATE %EXACT (gotcha row 21), so comparisons and unique
+    # keys match PostgreSQL. Sorting is then by code point, as PostgreSQL's "C" collation; the
+    # reference database is en_US.utf8, which sorts case-insensitively first. Before the fix,
+    # %SQLUPPER sorted case-insensitively and min(c) returned 'BLUE', a value not in the table.
+    ("string_collation", "ordering"): {
+        "order_by": [["RED"], ["Red"], ["blue"], ["red"]],
+        "min_max": [["RED", "red"]],
+    },
 }

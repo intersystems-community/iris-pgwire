@@ -453,6 +453,29 @@ It does this only where the touch locks exactly the rows the SELECT returns: one
 
 ---
 
+## 🟡 String Collation: Exact on PGWire's Tables, Case-Insensitive on Others
+
+**Severity**: Medium since 2.1 (Critical before: wrong rows, no error)
+**Affects**: Applications that compare strings in tables not created through PGWire, or that rely on a locale's sort order
+
+IRIS's default collation for a string column, `%SQLUPPER`, ignores case: `c = 'RED'` matches `red`, `IN` and `LIKE`
+ignore case, and a unique key treats `'x'` and `'X'` as one value. PostgreSQL's collations are case-sensitive. Since
+2.1, a `CREATE TABLE` or `ALTER TABLE ... ADD COLUMN` through PGWire declares every character column
+(`VARCHAR`, `CHAR`, `CHARACTER VARYING`, `NVARCHAR`, ...) `COLLATE %EXACT`, so comparisons and unique keys behave as
+on PostgreSQL. A PostgreSQL `COLLATE "name"` is accepted and becomes `%EXACT`; an IRIS collation written in the
+statement (`COLLATE %SQLUPPER`) is kept. Measured against PostgreSQL 16 by `string_collation/*` in the isolation
+suite (see [`docs/POSTGRES_APP_COMPATIBILITY.md`](docs/POSTGRES_APP_COMPATIBILITY.md)).
+
+What remains:
+
+- **Tables created in IRIS by other means** (ObjectScript classes, IRIS SQL clients, tables made before 2.1) keep their
+  collation and still compare case-insensitively through PGWire. Compare with `%EXACT(col) = ?` or change the
+  column's collation in IRIS.
+- **Sorting follows code points** (`RED`, `Red`, `blue`, `red`), as PostgreSQL's `C` collation does, not a linguistic
+  locale such as `en_US` (`blue`, `red`, `Red`, `RED`).
+- **`TEXT` columns are streams in IRIS** and get no collation; comparing one with `=` fails (SQLCODE -313). Use
+  `VARCHAR(n)` for a column you filter on.
+
 ## 🟡 Two-Phase Commit Not Supported
 
 **Severity**: Medium
