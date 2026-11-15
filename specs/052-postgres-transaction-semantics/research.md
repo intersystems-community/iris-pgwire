@@ -151,6 +151,19 @@ reset only for the session that set it: `close_session` (2.0.1) adds `SET OPTION
 per process (so per pooled connection) is assumed from the docs; a suite check confirms it before US5 ships
 (constitution III).
 
+### R8 measured (T063, 2026-11-14)
+
+`spikes/lock_timeout_scope.py`, plain intersystems-irispython 5.3.2 on the lab:
+
+- **Per connection.** After connection A sent `SET OPTION LOCK_TIMEOUT = 2`, A's write to a held row failed in 2.07 s
+  (-110) and connection B's in 10.00 s; `%SYSTEM_SQL.Util_GetOption('ProcessLockTimeout')` read 2 on A, 10 on B.
+- **It outlives the transaction.** Still 2 after COMMIT, after a SQL `ROLLBACK` and after the driver's `rollback()`.
+  So the design holds: the pool's reset on close restores it (`_reset_connection_sync`'s `lock_timeout_seconds`).
+- **The server default** is `%SYSTEM_SQL.Util_GetOption('LockTimeout')` (10 on the lab); a connection's current
+  value is `...('ProcessLockTimeout')`. `SET OPTION LOCK_TIMEOUT = 10` restores it.
+
+No change to US5's design.
+
 ## R9. Cancel (US6)
 
 Today `handle_cancel_request` (`protocol.py:3601`) calls `iris_executor.cancel_query`, which on DBAPI logs and
@@ -166,6 +179,21 @@ a fresh pooled connection at the session's isolation level.
 **Rationale**: closing the socket is the only way to stop a blocked DBAPI call; IRIS rolls back a transaction whose
 process ends. To confirm in tasks: the `irispython` connection's `close()` is safe from another thread while a call is
 blocked (if not, close the underlying socket). This is a spike task, run before US6's design is frozen.
+
+### R9 measured (T064, 2026-11-14)
+
+`spikes/close_blocked_connection.py`, plain intersystems-irispython 5.3.2 on the lab. A held a row; B inserted a row
+of its own, then blocked updating A's row with a 30 s lock timeout; after 1 s the main thread called B's
+`connection.close()`:
+
+- `close()` returned at once (0.00 s), from the other thread.
+- B's blocked `execute` returned 1.0 s after it started, i.e. when `close()` ran, with
+  `OperationalError: <COMMUNICATION LINK ERROR> Failed to receive message`, not after its 30 s timeout.
+- B's transaction was rolled back: its inserted row was gone, seen from a third connection.
+- Not measured: whether IRIS lists B's process afterwards (the process-count query in the spike counted 0 before and
+  after, so it measured nothing). The rollback shows IRIS ended B's transaction.
+
+No change to US6's design: close the session's connection from the cancel handler, mark it failed, report `57014`.
 
 ## R10. Default isolation (US7) and settings
 
@@ -209,3 +237,23 @@ the 5 ms budget.
   costs IRIS round trips, not translation: one extra statement per locked SELECT (the touch-update), four with
   `NOWAIT` (read the lock timeout, set it to 0, touch, restore), and the catalog lookups (three queries for a locked
   table, two for an upsert's table) once per table until the next DDL.
+
+### R11 measured: slice 3 (2026-11-15)
+
+- **Cost (T079c)**: `parse_timeout_statement`, which now sees every statement on the DBAPI backend, costs 0.10 µs on a
+  short SELECT and 0.12 µs on a 4 KB one (the anchored regex fails on the first word), 0.54 µs on a `SET lock_timeout`.
+  The emulations cost IRIS round trips, not translation: `SET lock_timeout` sends one `SET OPTION` (plus one read of
+  the server default, once per server), and a cancel one `close()` from a worker thread.
+- **Coverage (T079a)**: `make isolation-coverage` (default, permissive and read-uncommitted runs, server under
+  coverage): spec 052's modules 90% together, the floor; `make coverage-052` (unit tests) 97%.
+- **Found by the gate**:
+  - The pool's connections ran in the DBAPI driver's autocommit mode, in which a write whose client closed the
+    connection still commits once its lock wait ends (measured with the driver alone: `n = 5`; autocommit off:
+    `n = 0`). So a cancelled write landed, 10 of 10. The pool now turns the driver's autocommit off; PGWire commits
+    after each statement of an autocommit session, as it already did.
+  - A cancel could release the statement's connection back to the pool before it was marked failed, so the next
+    session got a closed connection (`08000`). It is now marked failed before the first `await`.
+  - Describe runs a statement to learn its columns, once for the statement and once for the portal. At READ COMMITTED
+    a plain SELECT of a held row waits out the lock, so `FOR UPDATE NOWAIT` waited 20 s before refusing. A NOWAIT
+    Describe now takes the lock (fails at once). Not fixed, and true of every extended-protocol read of a held row at
+    READ COMMITTED: it waits twice, 20 s, before `40001`.

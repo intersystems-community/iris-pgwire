@@ -55,10 +55,12 @@ isolation-read-uncommitted:
 
 # Spec 052's new modules must stay at 90% coverage or more (tests/coverage/spec052.ini); both
 # targets fail below it. coverage-052 runs their unit tests; isolation-coverage runs the default
-# and permissive isolation suites with the server under coverage, and reports the two together.
+# , permissive and read-uncommitted isolation suites with the server under coverage, and reports the two together.
 SPEC052_UNIT_TESTS = tests/unit/test_transaction_status.py tests/unit/test_savepoint_stack.py \
 	tests/unit/test_compat_mode.py tests/unit/test_locking_clauses.py tests/unit/test_locking_mixin.py \
-	tests/unit/test_on_conflict_classifier.py tests/unit/test_savepoint_mixin.py
+	tests/unit/test_on_conflict_classifier.py tests/unit/test_savepoint_mixin.py \
+	tests/unit/test_lock_timeout_parsing.py tests/unit/test_timeout_mixin.py tests/unit/test_cancel_routing.py \
+	tests/unit/test_default_isolation_config.py
 COVERAGE_052 = $(PYTHON) -m coverage
 
 coverage-052:
@@ -73,6 +75,7 @@ isolation-coverage:
 	$(COVERAGE_052) erase --rcfile=tests/coverage/spec052.ini
 	$(MAKE) isolation ISOLATION_SERVER_PY="$(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini --parallel-mode"
 	$(MAKE) isolation-permissive ISOLATION_SERVER_PY="$(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini --parallel-mode"
+	$(MAKE) isolation-read-uncommitted ISOLATION_SERVER_PY="$(COVERAGE_052) run --rcfile=tests/coverage/spec052.ini --parallel-mode"
 	$(COVERAGE_052) combine --rcfile=tests/coverage/spec052.ini
 	$(COVERAGE_052) report --rcfile=tests/coverage/spec052.ini
 

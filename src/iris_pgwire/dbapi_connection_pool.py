@@ -25,6 +25,7 @@ from iris_pgwire.models.dbapi_connection import (
     ConnectionState,
     DBAPIConnection,
 )
+from iris_pgwire.sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolation
 
 logger = structlog.get_logger(__name__)
 
@@ -294,6 +295,15 @@ class IRISConnectionPool:
         self._connections.clear()
         logger.info("Connection pool closed")
 
+    def connection_setup_statements(self) -> list[str]:
+        """What a new connection is sent before anyone uses it: the server's default isolation level
+        (spec 052 US7), unless that is IRIS's own default, READ UNCOMMITTED."""
+        level = getattr(self.config, "default_isolation", None) or "read committed"
+        if level == DEFAULT_ISOLATION_LEVEL:
+            return []
+        parsed = parse_set_isolation(f"SET TRANSACTION ISOLATION LEVEL {level}")
+        return [parsed.iris_sql] if parsed is not None and parsed.iris_sql else []
+
     async def _create_connection(self) -> DBAPIConnection:
         """
         Create new IRIS DBAPI connection.
@@ -317,6 +327,20 @@ class IRISConnectionPool:
                 username=self.config.iris_username,
                 password=self.config.iris_password,
             )
+
+            # Commits are PGWire's, sent after a statement's result is in (`_maybe_auto_commit`). With
+            # the driver's default autocommit, a write whose client went away (a cancel, a dropped
+            # connection) still commits once it completes: measured 2026-11-14 (spec 052 US6).
+            connection.setAutoCommit(False)
+
+            setup = self.connection_setup_statements()
+            if setup:
+                cursor = connection.cursor()
+                try:
+                    for statement in setup:
+                        cursor.execute(statement)
+                finally:
+                    cursor.close()
 
             # Wrap in DBAPIConnection model
             conn_id = str(uuid.uuid4())[:8]

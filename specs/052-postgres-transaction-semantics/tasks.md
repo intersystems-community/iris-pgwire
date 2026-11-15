@@ -301,7 +301,7 @@ SC-003.
 - [X] T061 [US4] Add US4's rows to `docs/POSTGRES_APP_COMPATIBILITY.md` (the exact form, how to rewrite the rest, the
       ORM upsert table).
 
-- [ ] T062 [US4] Slice 2 gate extras: (a) e2e coverage of `locking_clauses.py`, `on_conflict.py`, `compat_mode.py` under `make isolation`
+- [X] T062 [US4] Slice 2 gate extras: (a) e2e coverage of `locking_clauses.py`, `on_conflict.py`, `compat_mode.py` under `make isolation`
       (server started with `coverage run`, `PYTHONPATH=src`), 90%+ required, recorded in research.md R11 (constitution II);
       (b) the embedded backend's existing tests, run per the repo memory "Testing the embedded backend", show no new
       failures against HEAD (constitution IV); (c) translator and statement-path timing on the benchmark corpus, before
@@ -314,11 +314,11 @@ SC-003.
 
 **Purpose**: run the two measurements research R8 and R9 depend on, before any US5/US6 code.
 
-- [ ] T063 Spike R8 in `specs/052-postgres-transaction-semantics/spikes/lock_timeout_scope.py` (plain
+- [X] T063 Spike R8 in `specs/052-postgres-transaction-semantics/spikes/lock_timeout_scope.py` (plain
       intersystems-irispython on 2992, no PGWire): does `SET OPTION LOCK_TIMEOUT = n` on one connection affect another
       connection? Survive COMMIT/ROLLBACK? How is the server default read (which call, value on the lab)? Write results
       into research.md R8, revise US5's design if any assumption fails.
-- [ ] T064 Spike R9 in `specs/052-postgres-transaction-semantics/spikes/close_blocked_connection.py`: a thread blocked
+- [X] T064 Spike R9 in `specs/052-postgres-transaction-semantics/spikes/close_blocked_connection.py`: a thread blocked
       in `cursor.execute` on a locked row; another thread calls `connection.close()`. Does the blocked call return
       promptly with an error? Does IRIS roll back that connection's transaction (check from a third connection)? Is
       the process left clean? If `close()` blocks, try closing the socket. Write results into research.md R9 and
@@ -332,20 +332,20 @@ SC-003.
 
 **Goal**: FR-018 to FR-020. **Independent test**: `timeouts/*`; SC-006.
 
-- [ ] T065 [P] [US5] Unit tests in `tests/unit/test_lock_timeout_parsing.py`: PostgreSQL units (`2000`, `2000ms`,
+- [X] T065 [P] [US5] Unit tests in `tests/unit/test_lock_timeout_parsing.py`: PostgreSQL units (`2000`, `2000ms`,
       `2s`, `1min`, `'1500ms'`) → whole seconds rounded up; `0` / `RESET` → default; `SHOW` echoes the client's
       spelling as PostgreSQL normalises it (`2s`, `1500ms`); invalid values → `22023` as PostgreSQL.
-- [ ] T066 [US5] Suite checks in new `tests/e2e/isolation/test_timeouts.py`: contended write after `lock_timeout`
+- [X] T066 [US5] Suite checks in new `tests/e2e/isolation/test_timeouts.py`: contended write after `lock_timeout`
       `2s` fails in 2–3 s with `55P03`; `1500ms` rounds to 2 s; `0` and `RESET` restore the default (`40001` after
       ~10 s); `statement_timeout` accepted and not enforced (pin: PostgreSQL enforces it, `57014`); a new session on a
       reused connection has the default lock timeout.
-- [ ] T067 [US5] Implement parsing in `src/iris_pgwire/sql_translator/timeouts.py` and the SET/SHOW handling in
+- [X] T067 [US5] Implement parsing in `src/iris_pgwire/sql_translator/timeouts.py` and the SET/SHOW handling in
       `src/iris_pgwire/_isolation.py` (next to the isolation SETs), per research R8 as revised by T063; log
       `statement_timeout` once per session.
-- [ ] T068 [US5] Pass `lock_timeout_set` to `classify_iris_error` from the error paths in `protocol.py` (the sites
+- [X] T068 [US5] Pass `lock_timeout_set` to `classify_iris_error` from the error paths in `protocol.py` (the sites
       changed in 2.0.1) via a session flag; extend `DBAPIExecutor._reset_connection_sync` to restore the default lock
       timeout.
-- [ ] T069 [US5] Pin `timeouts/statement_timeout` with its reason in `tests/e2e/isolation/known_differences.py`.
+- [X] T069 [US5] Pin `timeouts/statement_timeout` with its reason in `tests/e2e/isolation/known_differences.py`.
 
 **Checkpoint (gate)**: `make isolation` passes.
 
@@ -355,21 +355,21 @@ SC-003.
 
 **Goal**: FR-021, FR-022. **Independent test**: `cancel/*`; SC-007.
 
-- [ ] T070 [P] [US6] Unit tests in `tests/unit/test_cancel_routing.py`: `server.find_connection_for_cancellation`
+- [X] T070 [P] [US6] Unit tests in `tests/unit/test_cancel_routing.py`: `server.find_connection_for_cancellation`
       rejects a wrong secret; a protocol with no statement in progress ignores the cancel; one with a statement in
       progress is marked cancelled and asks its executor to close the session's IRIS connection (a real
       `DBAPIExecutor` object built as in `tests/unit/test_isolation_session_lifecycle.py`, no IRIS needed).
-- [ ] T071 [US6] Suite checks in `tests/e2e/isolation/test_cancel.py`: `cancel_lock_wait` expects PostgreSQL's
+- [X] T071 [US6] Suite checks in `tests/e2e/isolation/test_cancel.py`: `cancel_lock_wait` expects PostgreSQL's
       answer (`57014` before the lock is released, write not applied; 10 trials, SC-007: within 1 s); the next
       statement in the cancelled session works, status `IDLE`, at the session's isolation level; cancel with no
       statement running changes nothing; cancel with a wrong secret changes nothing. Also: a statement cancelled inside `BEGIN` leaves the session
       `IDLE` (PostgreSQL: `INERROR`, transaction open); pin it with the reason (spec US6 scenario 5).
-- [ ] T072 [US6] Implement in `src/iris_pgwire/protocol.py` `handle_cancel_request` (line 3601) via
+- [X] T072 [US6] Implement in `src/iris_pgwire/protocol.py` `handle_cancel_request` (line 3601) via
       `server.find_connection_for_cancellation`, a per-protocol "statement in progress" flag and a cancelled mark;
       `DBAPIExecutor.cancel_session(session_id)` in `src/iris_pgwire/dbapi_executor.py` closes the connection per
       research R9 (as revised by T064), marks it failed, and drops the session's transaction, savepoint and
       isolation-override state. The cancelled statement reports `57014`.
-- [ ] T073 [US6] Remove the `cancel/cancel_lock_wait` pin from `tests/e2e/isolation/known_differences.py`; add the
+- [X] T073 [US6] Remove the `cancel/cancel_lock_wait` pin from `tests/e2e/isolation/known_differences.py`; add the
       in-transaction cancel pin from T071; update
       gotcha table and headline 4 in `docs/investigations/mvcc-apps-on-iris-pgwire.md`.
 
@@ -381,21 +381,21 @@ SC-003.
 
 **Goal**: FR-023, FR-024. **Independent test**: `default_isolation/*` on both server settings.
 
-- [ ] T074 [P] [US7] Unit tests in `tests/unit/test_default_isolation_config.py`: `IsolationMixin` reports the
+- [X] T074 [P] [US7] Unit tests in `tests/unit/test_default_isolation_config.py`: `IsolationMixin` reports the
       configured default; `DBAPIExecutor._reset_connection_sync` resets to it; the pool applies it to a new connection
       (statement list returned, no IRIS).
-- [ ] T075 [US7] Suite checks in new `tests/e2e/isolation/test_default_isolation.py`: default run — a new session
+- [X] T075 [US7] Suite checks in new `tests/e2e/isolation/test_default_isolation.py`: default run — a new session
       reports `read committed` and does not read a held row's uncommitted value (times out `40001`, or reads the
       committed value on PostgreSQL); marker `default_isolation` run — reports and runs at `read uncommitted`; the
       2.0.1 check `h3/reused_connection_runs_at_the_default_level` passes on both runs. Startup with `PGWIRE_DEFAULT_ISOLATION=serializable`, and separately with `PGWIRE_TXN_COMPAT=bogus`
       (FR-025), exits non-zero with the accepted values in its message (subprocess).
-- [ ] T076 [US7] Implement: pass `BackendConfig.default_isolation` into `IsolationMixin` and
+- [X] T076 [US7] Implement: pass `BackendConfig.default_isolation` into `IsolationMixin` and
       `_reset_connection_sync` (`src/iris_pgwire/_isolation.py`, `src/iris_pgwire/dbapi_executor.py`), with
       `sql_translator/isolation.py`'s `DEFAULT_ISOLATION_LEVEL` as the fallback; apply it on connection creation in
       `src/iris_pgwire/dbapi_connection_pool.py`.
-- [ ] T077 [US7] Re-run the Hermitage section; the table's levels are explicit so no pin should change. Any that does
+- [X] T077 [US7] Re-run the Hermitage section; the table's levels are explicit so no pin should change. Any that does
       is investigated, not re-pinned.
-- [ ] T078 [US7] Add US5–US7 rows to `docs/POSTGRES_APP_COMPATIBILITY.md`; update `KNOWN_LIMITATIONS.md`'s isolation
+- [X] T078 [US7] Add US5–US7 rows to `docs/POSTGRES_APP_COMPATIBILITY.md`; update `KNOWN_LIMITATIONS.md`'s isolation
       section for the new default.
 
 - [ ] T079 [US7] Slice 3 gate extras: (a) e2e coverage of `timeouts.py` and the US6/US7 changes under `make isolation`

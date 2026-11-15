@@ -175,6 +175,11 @@ class TestTheIrisSpellingOfTheTransactionStart:
 
 class _RecordingExecutor(IsolationMixin):
     """Records what the mixin forwards, and answers as IRIS would on success."""
+    # These tests pin the override mechanics against IRIS's own default, READ UNCOMMITTED: the
+    # server run with PGWIRE_DEFAULT_ISOLATION=read uncommitted. The READ COMMITTED default of spec
+    # 052 US7 is tested in test_default_isolation_config.py.
+    default_isolation_level = "read uncommitted"
+
 
     def __init__(self, succeed: bool = True):
         self.session_isolation: dict[str, str] = {}

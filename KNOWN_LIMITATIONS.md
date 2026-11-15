@@ -317,12 +317,12 @@ All behavior below was measured against IRIS 2026.2 through PGWire, not inferred
 
 ### Which Levels Exist
 
-| Requested level    | Result                                                           |
-| ------------------ | ---------------------------------------------------------------- |
-| `READ UNCOMMITTED` | Applied. This is the default — IRIS's default, not PostgreSQL's. |
-| `READ COMMITTED`   | Applied, with the documented exceptions below.                   |
-| `REPEATABLE READ`  | **Rejected** with `0A000 feature_not_supported`.                 |
-| `SERIALIZABLE`     | **Rejected** with `0A000 feature_not_supported`.                 |
+| Requested level    | Result                                                                                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `READ UNCOMMITTED` | Applied. The default before 2.1, and IRIS's own default.                                                                                                                          |
+| `READ COMMITTED`   | Applied, with the documented exceptions below. **The default since 2.1** (DBAPI backend), as on PostgreSQL; `PGWIRE_DEFAULT_ISOLATION=read uncommitted` restores the 2.0 default. |
+| `REPEATABLE READ`  | **Rejected** with `0A000 feature_not_supported`.                                                                                                                                  |
+| `SERIALIZABLE`     | **Rejected** with `0A000 feature_not_supported`.                                                                                                                                  |
 
 `SET TRANSACTION ISOLATION LEVEL`, `SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL`, and the `SET transaction_isolation = '...'` GUC spelling that psycopg and SQLAlchemy send are all forwarded to IRIS. `SHOW transaction_isolation` and `SHOW TRANSACTION ISOLATION LEVEL` report the level IRIS actually accepted for that session — a level is never reported unless it was applied.
 
@@ -362,7 +362,7 @@ Measured against IRIS 2026.1 CE with a writer holding one row uncommitted, a rea
 
 Both shapes were reproduced repeatedly. **Cause found 2026-11-14** (track 4 spike, [`docs/investigations/mvcc-apps-on-iris-pgwire.md`](docs/investigations/mvcc-apps-on-iris-pgwire.md) section 5): it is PGWire's DBAPI connection pool, not IRIS. When a client disconnects, its IRIS connection goes back to the pool with any open transaction still open and its isolation level unchanged. A session later handed that connection runs inside the abandoned transaction, so it reads the uncommitted value at once, and a `COMMIT` from it makes that value permanent. On a clean connection IRIS honoured `READ COMMITTED` in 50 of 50 reads.
 
-Since 2.0.1, when a session closes, PGWire rolls back its IRIS connection, resets the isolation level to the server default (`READ UNCOMMITTED`), and discards the connection instead of reusing it if either step fails. The isolation suite's `h3/*` checks, and a check that a new session on a reused connection reports and runs at the default level, now give PostgreSQL's answer. On 2.0.0 and earlier, end every transaction before disconnecting.
+Since 2.0.1, when a session closes, PGWire rolls back its IRIS connection, resets the isolation level to the server default (`READ UNCOMMITTED` in 2.0, `READ COMMITTED` since 2.1), and discards the connection instead of reusing it if either step fails. The isolation suite's `h3/*` checks, and a check that a new session on a reused connection reports and runs at the default level, now give PostgreSQL's answer. On 2.0.0 and earlier, end every transaction before disconnecting.
 
 Practical consequences:
 
@@ -406,6 +406,8 @@ Because there is no snapshot, a lock timeout is how _all_ conflicts surface. PGW
 | `-114`       | A reader at `READ COMMITTED` meets a held row (at fetch time) | `40001`  |
 
 Applications should retry `40001` with backoff, as they would on PostgreSQL. The default lock wait is 10 seconds.
+
+Since 2.1, `SET lock_timeout` sets that wait for the session, in whole seconds rounded up (`1500ms` waits 2 s), and a wait that runs out is PostgreSQL's `55P03 lock_not_available`, as PostgreSQL reports it; the server's default wait stays `40001`. `0` and `RESET` restore the 10-second default, since IRIS has no unbounded wait. `statement_timeout` is accepted and **not enforced**, logged once per session. A CancelRequest (psycopg's `cancel()`, `Ctrl-C` in psql) ends the running statement with `57014` and rolls its transaction back, by closing that session's IRIS connection; before 2.1 it was acknowledged and ignored, and the cancelled statement still ran. See [`docs/POSTGRES_APP_COMPATIBILITY.md`](docs/POSTGRES_APP_COMPATIBILITY.md).
 
 ### ⚠️ Optimistic Locking Reports False Conflicts
 

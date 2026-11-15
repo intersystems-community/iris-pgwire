@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from iris_pgwire.sql_translator.isolation import DEFAULT_ISOLATION_LEVEL
 from iris_pgwire.sql_translator.sqlstate import classify_iris_error
 from iris_pgwire.sql_translator.transaction_translator import (
     TransactionTranslator,
@@ -74,6 +73,7 @@ def executor():
     cfg.iris_username, cfg.iris_password = "_SYSTEM", "SYS"
     cfg.pool_size, cfg.pool_max_overflow, cfg.pool_timeout, cfg.pool_recycle = 5, 2, 30, 3600
     cfg.query_timeout, cfg.strict_single_connection, cfg.enable_otel = 30.0, False, False
+    cfg.default_isolation, cfg.txn_compat = "read committed", "strict"
     with (
         patch("iris_pgwire.dbapi_executor.IRISConnectionPool") as pool_cls,
         patch("iris_pgwire.dbapi_executor.CatalogRouter") as catalog_cls,
@@ -123,7 +123,8 @@ class TestCloseSessionResetsTheConnection:
 
         asyncio.run(executor.close_session("s1"))
 
-        expected = f"SET TRANSACTION ISOLATION LEVEL {DEFAULT_ISOLATION_LEVEL.upper()}"
+        # The server's default (spec 052 US7: READ COMMITTED unless PGWIRE_DEFAULT_ISOLATION says).
+        expected = f"SET TRANSACTION ISOLATION LEVEL {executor.default_isolation_level.upper()}"
         assert [s.upper() for s in sent] == ["ROLLBACK", expected]
         # The ROLLBACK comes first: IRIS refuses a level change inside a transaction.
 

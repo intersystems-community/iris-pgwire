@@ -59,13 +59,18 @@ class TestCloseSessionForgetsTheLevel:
 
         assert "session-1" not in executor.session_isolation
 
-    def test_the_level_reverts_to_the_iris_default(self, executor):
-        """A reused session id must not inherit the last client's level."""
-        executor.session_isolation["session-1"] = "read committed"
+    def test_the_level_reverts_to_the_server_default(self, executor):
+        """A reused session id must not inherit the last client's level.
+
+        The server default is READ COMMITTED on DBAPI since spec 052 US7, and IRIS's own READ
+        UNCOMMITTED on embedded, whose sessions share one process."""
+        default = executor.default_isolation_level
+        other = "read uncommitted" if default == "read committed" else "read committed"
+        executor.session_isolation["session-1"] = other
 
         asyncio.run(executor.close_session("session-1"))
 
-        assert executor.get_isolation_level("session-1") == "read uncommitted"
+        assert executor.get_isolation_level("session-1") == default
 
     def test_other_sessions_are_untouched(self, executor):
         executor.session_isolation["session-1"] = "read committed"

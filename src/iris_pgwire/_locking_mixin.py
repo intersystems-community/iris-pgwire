@@ -92,9 +92,12 @@ class LockingMixin(CompatMixin):
                 return sql, None
             raise StatementRefused(FEATURE_NOT_SUPPORTED, plan.message)
         in_transaction = bool(session_id and self.session_transactions.get(session_id))  # type: ignore[attr-defined]
-        if not in_transaction or plan.table is None or row_limit.current() is not None:
+        describing = row_limit.current() is not None
+        if not in_transaction or plan.table is None or (describing and not plan.nowait):
             # No lock to take: autocommit (the statement's own lock ends with it), no table, or a
             # Describe, which runs the statement for its columns only; its Execute takes the lock.
+            # A NOWAIT Describe does take it: its SELECT would otherwise wait out a held row's lock
+            # (at READ COMMITTED, twice: statement and portal) before Execute could refuse it.
             return plan.select_sql, None
         return plan.select_sql, plan
 

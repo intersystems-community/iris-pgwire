@@ -284,7 +284,12 @@ def test_h3_a_reused_connection_reports_and_runs_at_the_default_level(target, wr
         conn.close()
 
     sql, committed, dirty = SHAPES["plain_pk"]
-    expected_outcome = {"read uncommitted": DIRTY, "read committed": COMMITTED}[default]
+    # Running at READ COMMITTED shows on IRIS as the read waiting out the lock (H1, pinned): the
+    # default is READ COMMITTED since spec 052 US7, so that wait is the evidence there.
+    expected_outcome = {
+        "read uncommitted": DIRTY,
+        "read committed": COMMITTED if target.reference else "timeout",
+    }[default]
     reported, runs, elapsed = [], [], []
     for _ in range(SWEEP):
         with target.connect() as conn:

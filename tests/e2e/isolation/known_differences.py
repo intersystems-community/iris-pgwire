@@ -207,11 +207,25 @@ PINS: dict[tuple[str, str], object] = {
         )
         for protocol in ("simple", "extended")
     },
-    # The CancelRequest is acknowledged, never reaches IRIS (DBAPIExecutor.cancel_query returns
-    # False), and the "cancelled" UPDATE is applied once the lock is released.
-    ("cancel", "cancel_lock_wait"): {
-        "sqlstate": None,
-        "answered_before_the_lock_was_released": False,
-        "update_applied": True,
+    # US5: statement_timeout is accepted, reported by SHOW and not enforced (spec 052 FR-020): IRIS
+    # has no per-statement timeout PGWire could set, so the write waits for the holder instead of
+    # being cancelled after 1 s (57014). Logged once per session.
+    ("timeouts", "statement_timeout"): {"result": "ok", "cancelled_within_2s": False, "show": [["1s"]]},
+    # US7: a new session runs at READ COMMITTED, as on PostgreSQL. IRIS's READ COMMITTED read of a
+    # row another session holds waits out the 10 s lock timeout (40001) instead of reading the
+    # committed version (H1 above, now the default rather than opt-in).
+    ("default_isolation", "default/read_committed"): {
+        "level": [["read committed"]],
+        "default": [["read committed"]],
+        "read": "40001",
     },
+    # With PGWIRE_DEFAULT_ISOLATION='read uncommitted', IRIS reads the uncommitted value (1);
+    # PostgreSQL runs READ UNCOMMITTED as READ COMMITTED and reads 0.
+    ("default_isolation", "default/read_uncommitted_server"): {
+        "level": [["read uncommitted"]],
+        "default": [["read uncommitted"]],
+        "read": [[1]],
+    },
+    # US6: a CancelRequest closes the session's IRIS connection, so its statement fails with 57014 and
+    # IRIS rolls the transaction back, as PostgreSQL cancels it (spec 052, research R9): no pins.
 }

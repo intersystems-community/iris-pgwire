@@ -21,6 +21,7 @@ from iris_pgwire._isolation import IsolationMixin
 from iris_pgwire._locking_mixin import LockingMixin, StatementRefused
 from iris_pgwire._on_conflict_mixin import OnConflictMixin, conflict_fields
 from iris_pgwire._savepoint_mixin import SavepointMixin
+from iris_pgwire._timeout_mixin import TimeoutMixin
 from iris_pgwire.catalog import CatalogRouter
 from iris_pgwire.dbapi_connection_pool import IRISConnectionPool
 from iris_pgwire.iris_executor import (  # noqa: F401 — shared constants
@@ -127,6 +128,17 @@ def _bind(value: Any, params: list) -> str:
     return "?"
 
 
+# PostgreSQL's reply to a statement cancelled by a CancelRequest.
+_CANCELLED = {
+    "success": False,
+    "error": "canceling statement due to user request",
+    "sqlstate": "57014",
+    "condition": "query_canceled",
+    "rows": [],
+    "columns": [],
+    "row_count": 0,
+}
+
 # `ROLLBACK [WORK|TRANSACTION]` alone: the end of the transaction, not a partial rollback.
 _TRANSACTION_ROLLBACK_RE = re.compile(
     r"^\s*ROLLBACK(?:\s+(?:WORK|TRANSACTION))?\s*;?\s*$", re.IGNORECASE
@@ -171,7 +183,7 @@ _PYTHON_TYPE_TO_OID: dict[type, int] = {
 }
 
 
-class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixin):
+class DBAPIExecutor(SavepointMixin, IsolationMixin, TimeoutMixin, LockingMixin, OnConflictMixin):
     """Execute SQL queries against IRIS via DBAPI backend.
 
     Uses connection pool for efficient connection management and supports
@@ -315,6 +327,12 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
                 if isolation_result is not None:
                     return isolation_result
 
+            # lock_timeout / statement_timeout (spec 052 US5).
+            if not kwargs.get("_skip_timeouts"):
+                timeout_result = await self._handle_timeout_statement(sql, session_id, **kwargs)
+                if timeout_result is not None:
+                    return timeout_result
+
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
@@ -414,6 +432,8 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
                 )
 
             query_timeout = getattr(self.config, "query_timeout", 30.0)
+            if session_id:
+                self._statements_running[session_id] = conn_wrapper  # a CancelRequest may close it
             try:
                 rows, columns, row_count = await asyncio.wait_for(
                     asyncio.to_thread(execute_in_thread), timeout=query_timeout
@@ -432,6 +452,17 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
                     f"Query execution timed out after {query_timeout}s. "
                     "The IRIS connection is being evicted to prevent pool exhaustion."
                 )
+            finally:
+                if session_id:
+                    self._statements_running.pop(session_id, None)
+
+            if session_id in self._statements_cancelled:
+                # Cancelled while it ran (spec 052 US6): its result is not delivered and it is not
+                # committed; IRIS rolls the closed connection's transaction back.
+                self._statements_cancelled.discard(session_id)
+                conn_wrapper.mark_failed("cancelled by the client")  # never back into the pool
+                release_connection = True
+                return dict(_CANCELLED)
 
             tx_sql_upper = original_sql.strip().upper()
             self.note_ddl(tx_sql_upper)
@@ -462,6 +493,11 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
             return e.result()
 
         except Exception as e:
+            if session_id in self._statements_cancelled:
+                self._statements_cancelled.discard(session_id)
+                release_connection = True  # marked failed: the pool discards it
+                logger.info("Statement cancelled by the client", session_id=session_id)
+                return dict(_CANCELLED)
             self._handle_execution_error(e, conn_wrapper, session_id, sql[:200], "Query")
             raise
 
@@ -1631,11 +1667,20 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
         reported the default level ran at the previous client's. PostgreSQL rolls
         an abandoned transaction back when the connection ends.
         """
+        # The client's lock_timeout outlives COMMIT and ROLLBACK on IRIS (research R8): restore it.
+        restore_lock_timeout = None
+        if self.lock_timeout_set(session_id) and session_id in self.session_connections:
+            restore_lock_timeout = await self.server_lock_timeout(session_id)
         conn_wrapper = self.session_connections.pop(session_id, None)
         if conn_wrapper:
             logger.info("Closing session connection", session_id=session_id)
             if conn_wrapper.is_healthy:
-                error = await asyncio.to_thread(self._reset_connection_sync, conn_wrapper.connection)
+                error = await asyncio.to_thread(
+                    self._reset_connection_sync,
+                    conn_wrapper.connection,
+                    self.default_isolation_level,
+                    restore_lock_timeout,
+                )
                 if error is not None:
                     # Not knowing what state it is in, nobody else may have it:
                     # the pool removes a failed connection instead of queueing it.
@@ -1650,21 +1695,26 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
         self.session_transactions.pop(session_id, None)
         self.forget_isolation_level(session_id)
         self.forget_savepoints(session_id)
+        self.forget_timeouts(session_id)
 
     @staticmethod
-    def _reset_connection_sync(connection: Any) -> str | None:
+    def _reset_connection_sync(
+        connection: Any,
+        default_level: str = DEFAULT_ISOLATION_LEVEL,
+        lock_timeout_seconds: int | None = None,
+    ) -> str | None:
         """ROLLBACK, then the default isolation level; the error text, or None.
 
         ROLLBACK is sent whether or not a transaction was tracked: the tracking is
         bookkeeping, and IRIS's own state is what the next session inherits. It
         comes first because IRIS refuses a level change inside a transaction.
         """
-        reset_level = parse_set_isolation(
-            f"SET TRANSACTION ISOLATION LEVEL {DEFAULT_ISOLATION_LEVEL}"
-        )
+        reset_level = parse_set_isolation(f"SET TRANSACTION ISOLATION LEVEL {default_level}")
         statements = ["ROLLBACK"]
         if reset_level is not None and reset_level.iris_sql:
             statements.append(reset_level.iris_sql)
+        if lock_timeout_seconds is not None:
+            statements.append(f"SET OPTION LOCK_TIMEOUT = {lock_timeout_seconds}")
         try:
             cursor = connection.cursor()
             try:
@@ -1688,6 +1738,56 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
     async def rollback_transaction(self, session_id: str | None = None):
         """Rollback a transaction."""
         await self.execute_query("ROLLBACK", session_id=session_id)
+
+    @property
+    def _statements_running(self) -> dict[str, Any]:
+        """session_id -> the connection its statement is running on, while it runs."""
+        running = getattr(self, "_statements_running_store", None)
+        if running is None:
+            running = {}
+            self._statements_running_store: dict[str, Any] = running
+        return running
+
+    @property
+    def _statements_cancelled(self) -> set[str]:
+        cancelled = getattr(self, "_statements_cancelled_store", None)
+        if cancelled is None:
+            cancelled = set()
+            self._statements_cancelled_store: set[str] = cancelled
+        return cancelled
+
+    async def cancel_session(self, session_id: str) -> bool:
+        """End the session's running statement (spec 052 US6, research R9); False if none runs.
+
+        Closing the IRIS connection from another thread makes the blocked call fail at once and
+        IRIS roll the connection's transaction back (measured). The statement then reports 57014,
+        and the session's next statement starts on a fresh pooled connection at its own level.
+        """
+        wrapper = self._statements_running.get(session_id)
+        if wrapper is None:
+            return False
+        # Everything that must hold before the statement can see the cancel happens before the first
+        # await: the statement may finish and release its connection while close() runs, and the
+        # pool must already know not to hand that connection out again.
+        self._statements_cancelled.add(session_id)
+        wrapper.mark_failed("cancelled by the client")
+        self.session_connections.pop(session_id, None)
+        self.session_transactions.pop(session_id, None)
+        self.forget_savepoints(session_id)
+        self.forget_timeouts(session_id)
+        state = self._isolation_sessions.get(session_id)
+        if state is not None:
+            # The fresh connection runs at the server default; the next statement resyncs it.
+            state.override, state.in_transaction = None, False
+            state.iris_level = self.default_isolation_level
+
+        def close() -> None:
+            with contextlib.suppress(Exception):
+                wrapper.connection.close()
+
+        await asyncio.to_thread(close)
+        logger.info("Cancelled the running statement", session_id=session_id)
+        return True
 
     async def cancel_query(self, backend_pid: int, backend_secret: int) -> bool:
         """Cancel a running query (DBAPI implementation)."""

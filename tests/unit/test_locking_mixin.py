@@ -192,3 +192,11 @@ def test_catalog_answers_are_cached_until_ddl():
     executor.note_ddl("DROP TABLE lock_c")
     _run(executor, conn=conn)
     assert len([s for s, _ in conn.sent if "INFORMATION_SCHEMA.TABLES" in s]) == 2
+
+
+def test_a_nowait_describe_takes_the_lock_so_a_held_row_fails_at_once():
+    """Found by the slice 3 gate: at READ COMMITTED the Describe's plain SELECT waited out the held
+    row's lock twice (20 s) before Execute's NOWAIT touch could refuse it."""
+    with row_limit.at_most(1):
+        _, conn = _run(Executor(), SQL.replace("FOR UPDATE", "FOR UPDATE NOWAIT"))
+    assert "SET OPTION LOCK_TIMEOUT = 0" in conn.statements()

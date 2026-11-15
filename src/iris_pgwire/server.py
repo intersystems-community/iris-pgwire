@@ -154,6 +154,7 @@ class PGWireServer:
             strict_single_connection=strict_single_connection,
             # Spec 052: strict refuses what IRIS cannot run exactly; permissive runs it as 2.0 did.
             txn_compat=os.getenv("PGWIRE_TXN_COMPAT", "strict"),
+            default_isolation=os.getenv("PGWIRE_DEFAULT_ISOLATION", "read committed"),
         )
 
         # Select appropriate executor (DBAPIExecutor or IRISExecutor)
@@ -280,6 +281,8 @@ class PGWireServer:
                 allowed_users=self.allowed_users,
                 failed_login_delay=FAILED_LOGIN_DELAY_SECONDS,
             )
+
+            protocol.cancel_lookup = self.find_connection_for_cancellation
 
             # P0 Phase: Handle SSL probe first
             await protocol.handle_ssl_probe(self.ssl_context)

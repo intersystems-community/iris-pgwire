@@ -96,6 +96,12 @@ class IsolationMixin:
     def _isolation_state(self, session_id: str) -> _SessionIsolation:
         return self._isolation_sessions.setdefault(session_id, _SessionIsolation())
 
+    @property
+    def default_isolation_level(self) -> str:
+        """The level a new session starts at: `PGWIRE_DEFAULT_ISOLATION`, READ COMMITTED unless set
+        (spec 052 US7). The pool applies it to every connection it creates or takes back."""
+        return getattr(getattr(self, "config", None), "default_isolation", None) or "read committed"
+
     def get_isolation_level(self, session_id: str | None) -> str:
         """`transaction_isolation`: the level this session is running at now.
 
@@ -104,7 +110,7 @@ class IsolationMixin:
         PostgreSQL's READ COMMITTED default.
         """
         if session_id is None:
-            return DEFAULT_ISOLATION_LEVEL
+            return self.default_isolation_level
         state = self._isolation_sessions.get(session_id)
         if state is not None and state.override is not None:
             return state.override
@@ -118,8 +124,8 @@ class IsolationMixin:
         at the next COMMIT would be the wrong answer to that question.
         """
         if session_id is None:
-            return DEFAULT_ISOLATION_LEVEL
-        return self.session_isolation.get(session_id, DEFAULT_ISOLATION_LEVEL)
+            return self.default_isolation_level
+        return self.session_isolation.get(session_id, self.default_isolation_level)
 
     def forget_isolation_level(self, session_id: str | None) -> None:
         """Drop a closed session's state so the dicts cannot grow without bound.

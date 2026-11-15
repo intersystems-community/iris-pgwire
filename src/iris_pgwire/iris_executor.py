@@ -60,6 +60,7 @@ from .sql_translator.boolean_expr import (
     rewrite_boolean_literal_comparisons,
     rewrite_boolean_projections,
 )
+from .sql_translator.isolation import DEFAULT_ISOLATION_LEVEL
 from .sql_translator.metadata_cache import MetadataCache
 from .sql_translator.parser import get_parser
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
@@ -198,6 +199,10 @@ class IRISExecutor(SavepointMixin, IsolationMixin):
     or external connection as fallback. Implements patterns proven in caretdev
     SQLAlchemy implementation.
     """
+
+    # Spec 052 US7 (READ COMMITTED by default) is DBAPI only: embedded sessions share one IRIS
+    # process, which runs at IRIS's own default, so that is what they report.
+    default_isolation_level = DEFAULT_ISOLATION_LEVEL
 
     backend_type: str = "embedded"
 

@@ -23,6 +23,7 @@ from typing import Any
 import structlog
 
 from . import row_limit
+from ._timeout_mixin import TimeoutMixin, lock_timeout_sqlstate
 from .backend_selector import Executor
 from .bulk_executor import BulkExecutor
 from .copy_export import copy_data, copy_out_response, export_messages, resolve_export_format
@@ -37,6 +38,7 @@ from .sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolati
 from .sql_translator.performance_monitor import MetricType, PerformanceTracker, get_monitor
 from .sql_translator.returning_plan import ReturningPlan
 from .sql_translator.sqlstate import classify_iris_error
+from .sql_translator.timeouts import parse_timeout_statement
 from .transaction_status import after_error, after_success, commit_rolls_back, refusal
 from .value_encoding import ValueEncodingError, binary_encoding_is_defined, encode_binary
 from .vector_optimizer import VectorQueryOptimizer
@@ -189,6 +191,8 @@ class PGWireProtocol:
         self.writer = writer
         self.iris_executor = iris_executor
         self.connection_id = connection_id
+        # Set by the server: (backend_pid, secret) -> the protocol to cancel, or None.
+        self.cancel_lookup = None
 
         # Session state
         self.startup_params = {}
@@ -910,6 +914,14 @@ class PGWireProtocol:
 
     async def send_error_response(self, severity: str, code: str, message_type: str, message: str):
         """Send ErrorResponse message"""
+        # Spec 052 US5: a lock timeout the client set with `lock_timeout` is 55P03, not 40001.
+        lock_timeout_set = getattr(self.iris_executor, "lock_timeout_set", None)
+        if (
+            severity == "ERROR"
+            and callable(lock_timeout_set)
+            and lock_timeout_set(self.connection_id) is True
+        ):
+            code = lock_timeout_sqlstate(code, message, True)[0]
         # ErrorResponse: E + length + fields
         fields = []
         fields.append(b"S" + severity.encode("utf-8") + b"\x00")  # Severity
@@ -1121,6 +1133,9 @@ class PGWireProtocol:
             if query.upper().strip().startswith("CREATE TABLE"):
                 logger.warning(f"FULL CREATE TABLE SQL (length={len(query)}): {query}")
 
+            if await self._maybe_route_timeout_statement(query, send_ready):
+                return
+
             query_upper = query.upper().strip()
             if await self._maybe_handle_transaction_command(query_upper, send_ready):
                 return
@@ -1280,6 +1295,30 @@ class PGWireProtocol:
             await self.send_transaction_response("ROLLBACK", send_ready=send_ready)
             return True
         return False
+
+    async def _maybe_route_timeout_statement(
+        self, query: str, send_ready: bool, extended: bool = False
+    ) -> bool:
+        """SET/RESET/SHOW lock_timeout and statement_timeout go to the executor (spec 052 US5).
+
+        The SET shim below answers every other parameter with success and sends IRIS nothing; these
+        two the DBAPI executor applies. The statement is passed as written: the value's units are
+        case-sensitive in PostgreSQL ('2s', not '2S').
+        """
+        if not isinstance(self.iris_executor, TimeoutMixin) or parse_timeout_statement(query) is None:
+            return False
+        result = await self.iris_executor.execute_query(query, session_id=self.connection_id)
+        if result.get("success"):
+            await self.send_query_result(
+                result, send_ready=send_ready, send_row_description=not extended
+            )
+        else:
+            error_msg = result.get("error", "Query execution failed")
+            sqlstate, condition = _result_sqlstate(result, error_msg)
+            await self.send_error_response("ERROR", sqlstate, condition, error_msg)
+            if send_ready:
+                await self.send_ready_for_query()
+        return True
 
     async def _maybe_handle_deallocate_command(self, query_upper: str, send_ready: bool) -> bool:
         if query_upper.startswith("DEALLOCATE"):
@@ -3186,6 +3225,10 @@ class PGWireProtocol:
             is_set_command = translation_metadata.get("is_set_command", False)
             query_upper = query.upper().strip().rstrip(";")
             if is_set_command or query_upper.startswith("SET "):
+                if await self._maybe_route_timeout_statement(
+                    query, send_ready=False, extended=True
+                ):
+                    return
                 logger.info(
                     "PostgreSQL SET command intercepted in Execute phase",
                     connection_id=self.connection_id,
@@ -3717,8 +3760,14 @@ class PGWireProtocol:
                 provided_secret="***",
             )
 
-            # Find and cancel the target connection
-            success = await self.iris_executor.cancel_query(backend_pid, backend_secret)
+            # Find the session the request names and end its running statement (spec 052 US6).
+            lookup = getattr(self, "cancel_lookup", None)
+            target = lookup(backend_pid, backend_secret) if callable(lookup) else None
+            cancel = getattr(getattr(target, "iris_executor", None), "cancel_session", None)
+            if target is not None and callable(cancel):
+                success = bool(await cancel(target.connection_id))
+            else:
+                success = await self.iris_executor.cancel_query(backend_pid, backend_secret)
 
             if success:
                 logger.info(

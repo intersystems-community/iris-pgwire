@@ -9,7 +9,7 @@ it against IRIS through PGWire and against PostgreSQL 16, with PostgreSQL's answ
 check would be a claim nobody measured, so `tests/unit/test_compatibility_doc.py` fails if one appears. Measured on the
 DBAPI backend; the embedded backend runs every session in one IRIS process and is documented as single-client.
 
-Status: spec 052 slices 1 and 2 (aborted transactions, savepoints, row locking, ON CONFLICT). The sections marked "not yet" are spec 052's later slices.
+Status: spec 052 complete (aborted transactions, savepoints, row locking, ON CONFLICT, default isolation, lock timeouts, cancel).
 
 ## Aborted transactions
 
@@ -132,10 +132,41 @@ unique key; `on_conflict_do_nothing()` and Django's `ignore_conflicts=True` are 
 `bulk_create(update_conflicts=True)` and Rails's `upsert_all` send several rows of `VALUES`, refused (send one row per
 statement).
 
-## Timeouts, cancel, default isolation
+## Default isolation
 
-Not yet: spec 052 user stories 5 to 7. Until then, see the "Isolation" section of
-[`KNOWN_LIMITATIONS.md`](../KNOWN_LIMITATIONS.md).
+New sessions run at READ COMMITTED since 2.1, as on PostgreSQL; before 2.1 they ran at IRIS's default, READ UNCOMMITTED.
+`PGWIRE_DEFAULT_ISOLATION=read uncommitted` restores that. IRIS's READ COMMITTED is narrower than PostgreSQL's (see
+`KNOWN_LIMITATIONS.md`): a read of a row another transaction holds waits instead of reading the committed version.
+
+| Behaviour                                                                                                                | Check                                                |
+| ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| A new session reports `read committed`; its read of a held row waits (IRIS) or reads the committed value                 | `default_isolation/default/read_committed`           |
+| With `PGWIRE_DEFAULT_ISOLATION='read uncommitted'` new sessions report and run at it (`make isolation-read-uncommitted`) | `default_isolation/default/read_uncommitted_server`  |
+| Any other value of `PGWIRE_DEFAULT_ISOLATION` or `PGWIRE_TXN_COMPAT` stops the server, naming the accepted values        | `default_isolation/startup/pgwire_default_isolation` |
+
+## Lock timeouts
+
+| Behaviour                                                                                                   | Check                                       |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `SET lock_timeout = '2s'` (or `2000`, `'2000ms'`): a write to a held row gives up after 2 s with `55P03`    | `timeouts/lock_timeout/gives_up`            |
+| A fraction of a second rounds up to whole seconds (IRIS's unit); `SHOW` reports the value as set (`1500ms`) | `timeouts/lock_timeout/fraction`            |
+| `0` and `RESET` restore the default wait (IRIS's 10 s; PostgreSQL's 0 waits forever, IRIS has no such wait) | `timeouts/lock_timeout/zero_and_reset`      |
+| A session's `lock_timeout` ends with it; the next session on the pooled connection has the default          | `timeouts/lock_timeout/new_session_default` |
+| `statement_timeout` is accepted and reported but **not enforced** (pinned: PostgreSQL cancels with `57014`) | `timeouts/statement_timeout`                |
+
+## Cancel
+
+A CancelRequest (psycopg's `cancel()`, `Ctrl-C` in psql) closes the session's IRIS connection, so the running
+statement fails at once with `57014` and IRIS rolls its work back. The session carries on with a fresh connection, at
+its own isolation level. Before 2.1 the request was acknowledged and ignored, and the cancelled write still happened.
+
+| Behaviour                                                                                                   | Check                                 |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| A write waiting on a lock is cancelled with `57014` before the lock is released, and never applied          | `cancel/cancel_lock_wait`             |
+| 10 of 10 cancels answered within 1 s, none applied, the session usable afterwards                           | `cancel/cancel/ten_trials`            |
+| After a cancel the session keeps its isolation level                                                        | `cancel/cancel/keeps_isolation_level` |
+| Inside `BEGIN`, the cancelled statement aborts the transaction (`25P02` until `ROLLBACK`), as on PostgreSQL | `cancel/cancel/inside_transaction`    |
+| A cancel with no statement running, or with a wrong secret, changes nothing                                 | `cancel/cancel/no_effect`             |
 
 ## Drivers and ORMs
 
