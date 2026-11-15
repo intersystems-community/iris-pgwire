@@ -58,10 +58,8 @@ PINS: dict[tuple[str, str], object] = {
     # RELEASE) and fails the 255th with SQLCODE -400, losing the work while COMMIT still succeeds.
     # PGWire refuses the 255th with 54000 and aborts the transaction, so the loss is loud
     # (research.md R4, spec FR-008a). PostgreSQL has no such limit.
-    # SQLAlchemy's psycopg dialect asks `select current_schema()` while connecting; PGWire does not
-    # translate current_schema() (SQLCODE -359, 42883), so the connection fails before any
-    # savepoint is sent and begin_nested() is unmeasured. A SQL-function gap, not spec 052's.
-    ("savepoints", "sqlalchemy_begin_nested"): {"ids": [], "error": "42883"},
+    # SQLAlchemy's begin_nested() matches PostgreSQL since PGWire answers current_schema() and the
+    # rest of the dialect's connect-time questions (test_sqlalchemy.py): no pin.
     ("savepoints", "savepoint_limit"): {
         "first_failure": [255, "54000", "INERROR"],
         "commit": "ROLLBACK",

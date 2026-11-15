@@ -3240,8 +3240,13 @@ class PGWireProtocol:
             # (because has_returning=False on translated_query), INSERT would execute but
             # zero DataRows would be returned to the client.
             has_returning = self.iris_executor.sql_parser.has_returning_clause(original_query)
+            # INSERT only. The synthetic tag below claims one row before anything runs: true for
+            # a one-row INSERT, a guess for UPDATE and DELETE, and "UPDATE 0 1" is not even
+            # PostgreSQL's format (psycopg read rowcount -1). SQLAlchemy's ORM checks those
+            # counts and raised StaleDataError on every update.
+            is_insert = query.lstrip().upper().startswith("INSERT")
 
-            if is_dml and not has_returning:
+            if is_dml and is_insert and not has_returning:
                 # A different statement cannot share the batch: flush executes one SQL text for
                 # every buffered row, so a pipeline of two different INSERTs ran the first twice.
                 if self.batch_params and query != self.batch_sql:

@@ -37,6 +37,7 @@ from iris_pgwire.sql_translator.array_params import (
     encode_inlist_params,
     expand_array_literals,
     has_array_param,
+    rewrite_any_array_constructor,
     rewrite_any_col_to_instr,
     rewrite_any_to_inlist,
 )
@@ -46,6 +47,7 @@ from iris_pgwire.sql_translator.boolean_expr import (
     rewrite_boolean_literal_comparisons,
     rewrite_boolean_projections,
 )
+from iris_pgwire.sql_translator.insertmanyvalues import split_insertmanyvalues
 from iris_pgwire.sql_translator.isolation import DEFAULT_ISOLATION_LEVEL, parse_set_isolation
 from iris_pgwire.sql_translator.on_conflict import insert_row_expressions
 from iris_pgwire.sql_translator.parser import get_parser
@@ -315,6 +317,16 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
             # `ROLLBACK TO x` / `RELEASE x` -> IRIS's spelling with SAVEPOINT.
             sql = rewrite_savepoint_verbs(sql)
 
+            # SQLAlchemy's multi-row ORM INSERT selects from a VALUES list, which IRIS has
+            # no syntax for: insert the rows one at a time, in the order it expects back.
+            split = split_insertmanyvalues(sql, params)
+            if split is not None:
+                return await self._execute_split_insert(split, session_id, **kwargs)
+
+            # `x = ANY (ARRAY[e1, e2])` -> `x IN (e1, e2)` first: SQLAlchemy's has_table()
+            # builds the array from casts, which the literal rewrite below does not match.
+            sql = rewrite_any_array_constructor(sql)
+
             # Rewrite ARRAY['a','b'] constructor syntax to '{a,b}' (feature 047).
             sql = rewrite_array_literals(sql)
 
@@ -434,6 +446,26 @@ class DBAPIExecutor(SavepointMixin, IsolationMixin, LockingMixin, OnConflictMixi
         finally:
             if conn_wrapper and release_connection:
                 await self.pool.release(conn_wrapper)
+
+    async def _execute_split_insert(
+        self, statements: list[tuple[str, tuple | None]], session_id: str | None, **kwargs
+    ) -> dict[str, Any]:
+        """Run one-row INSERTs in order and answer as the multi-row statement would have."""
+        rows: list[Any] = []
+        columns: list[dict[str, Any]] = []
+        inserted = 0
+        for statement, statement_params in statements:
+            result = await self.execute_query(statement, statement_params, session_id, **kwargs)
+            rows.extend(result.get("rows") or [])
+            columns = columns or result.get("columns") or []
+            inserted += result.get("row_count") or 0
+        return {
+            "success": True,
+            "rows": rows,
+            "columns": columns,
+            "row_count": inserted,
+            "command_tag": f"INSERT 0 {inserted}",
+        }
 
     async def execute_many(
         self, sql: str, params_list: list[tuple] | list[list], session_id: str | None = None

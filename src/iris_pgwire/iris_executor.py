@@ -50,6 +50,7 @@ from .sql_translator.array_params import (
     encode_inlist_params,
     expand_array_literals,
     has_array_param,
+    rewrite_any_array_constructor,
     rewrite_any_col_to_instr,
     rewrite_any_to_inlist,
 )
@@ -1245,6 +1246,10 @@ class IRISExecutor(SavepointMixin, IsolationMixin):
             intercept_result = self.sql_interceptor.intercept(sql, params, session_id)
             if intercept_result.intercepted:
                 return intercept_result.result
+
+            # `x = ANY (ARRAY[e1, e2])` -> `x IN (e1, e2)` first: SQLAlchemy's has_table()
+            # builds the array from casts, which the literal rewrite below does not match.
+            sql = rewrite_any_array_constructor(sql)
 
             # Rewrite ARRAY['a','b'] constructor syntax to '{a,b}' before IRIS
             # sees the query — IRIS cannot parse the constructor at all (feature 047).

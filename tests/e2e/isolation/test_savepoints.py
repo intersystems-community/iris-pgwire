@@ -8,7 +8,9 @@ RELEASE SAVEPOINT reference pages). psycopg 3 rolls back a nested ``transaction(
 
 from __future__ import annotations
 
-from .harness import BOTH_SERVERS, run_statement
+import uuid
+
+from .harness import BOTH_SERVERS, run_statement, sqlalchemy_engine, sqlstate_of
 
 
 class Boom(Exception):
@@ -364,18 +366,14 @@ def _expected_three_deep(raises):
     return kept if not raises[0] else []
 
 
-def test_sqlalchemy_begin_nested(target, expect):
-    """SQLAlchemy's Session.begin_nested(): unquoted sa_savepoint_n, ROLLBACK TO / RELEASE."""
-    from sqlalchemy import create_engine, text
+@BOTH_SERVERS
+def test_sqlalchemy_begin_nested(target, expect, server):
+    """SQLAlchemy's Connection.begin_nested(): unquoted sa_savepoint_n, ROLLBACK TO / RELEASE."""
+    from sqlalchemy import text
 
-    params = dict(item.split("=", 1) for item in target.dsn.split())
-    url = (
-        f"postgresql+psycopg://{params['user']}:{params['password']}@{params['host']}:"
-        f"{params['port']}/{params['dbname']}"
-    )
     with target.connect() as setup:
         _fresh(setup)
-    engine = create_engine(url, connect_args={"sslmode": params.get("sslmode", "disable")})
+    engine = sqlalchemy_engine(target)
     error = None
     try:
         with engine.connect() as conn:
@@ -388,11 +386,70 @@ def test_sqlalchemy_begin_nested(target, expect):
                 nested.rollback()
                 conn.execute(text("insert into sp_t values (4)"))
     except Exception as e:  # noqa: BLE001 - the error is the observation
-        error = getattr(getattr(e, "orig", e), "sqlstate", None) or type(e).__name__
+        error = sqlstate_of(e)
     finally:
         engine.dispose()
     expect.check("sqlalchemy_begin_nested", {"ids": _ids(target), "error": error},
                  {"ids": [1, 2, 4], "error": None})
+    expect.done()
+
+
+@BOTH_SERVERS
+def test_sqlalchemy_session_begin_nested(target, expect, server):
+    """The ORM's Session.begin_nested(): a released savepoint keeps its row, a rolled-back one
+    loses it, and a duplicate key caught inside one leaves the outer transaction able to commit,
+    the pattern SQLAlchemy documents for "insert unless it exists"."""
+    from sqlalchemy import Column, Integer, select
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import DeclarativeBase, Session
+
+    class Base(DeclarativeBase):
+        pass
+
+    # A table no connection has seen an error on: once a pooled DBAPI connection has had one on a
+    # table that is then recreated, the driver reports "<LIST ERROR>" (XX000) instead of IRIS's
+    # error, which would hide the 23505 this check is about.
+    table = f"sp_sa_{uuid.uuid4().hex[:8]}"
+
+    class Row(Base):
+        __tablename__ = table
+        id = Column(Integer, primary_key=True, autoincrement=False)
+
+    engine = sqlalchemy_engine(target)
+    error, duplicate, ids = None, None, None
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add(Row(id=1))
+            with session.begin_nested():
+                session.add(Row(id=2))
+            dropped = session.begin_nested()
+            session.add(Row(id=3))
+            session.flush()
+            dropped.rollback()
+            try:
+                with session.begin_nested():
+                    session.add(Row(id=1))
+            except IntegrityError as e:
+                duplicate = sqlstate_of(e)
+            session.add(Row(id=4))
+            session.commit()
+        with Session(engine) as session:
+            seen = list(session.scalars(select(Row.id).order_by(Row.id)))
+        with target.connect() as conn:  # and through plain psycopg, outside SQLAlchemy
+            ids = [r[0] for r in run_statement(conn, f"select id from {table} order by id").rows]
+    except Exception as e:  # noqa: BLE001 - the error is the observation
+        error, seen = sqlstate_of(e), None
+    finally:
+        try:
+            Base.metadata.drop_all(engine)
+        finally:
+            engine.dispose()
+    expect.check(
+        "sqlalchemy_session_begin_nested",
+        {"ids": ids, "seen": seen, "duplicate": duplicate, "error": error},
+        {"ids": [1, 2, 4], "seen": [1, 2, 4], "duplicate": "23505", "error": None},
+    )
     expect.done()
 
 

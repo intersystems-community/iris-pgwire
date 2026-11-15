@@ -116,6 +116,39 @@ def expand_array_literals(sql: str) -> str:
     return _ANY_LITERAL.sub(replace, sql)
 
 
+# `= ANY (ARRAY[e1, e2, ...])`: an array built in the statement from expressions, which is how
+# SQLAlchemy writes `relkind IN (...)` in has_table(). IRIS cannot parse ARRAY[...], and the
+# elements are arbitrary expressions (here `CAST(? AS VARCHAR)`), so they are kept as written.
+_ANY_ARRAY_CONSTRUCTOR = re.compile(r"=\s*ANY\s*\(\s*ARRAY\s*\[", re.IGNORECASE)
+
+
+def rewrite_any_array_constructor(sql: str) -> str:
+    """Rewrite `x = ANY (ARRAY[e1, e2])` into `x IN (e1, e2)`; `ARRAY[]` becomes `IN (NULL)`.
+
+    The element text is moved, not changed, so placeholders keep their positions.
+    """
+    upper = sql.upper()
+    if "ARRAY" not in upper or "ANY" not in upper:
+        return sql
+    result, pos = [], 0
+    for m in _ANY_ARRAY_CONSTRUCTOR.finditer(sql):
+        if m.start() < pos:
+            continue
+        depth, i = 1, m.end()
+        while i < len(sql) and depth:
+            depth += {"[": 1, "]": -1}.get(sql[i], 0)
+            i += 1
+        close = re.match(r"\s*\)", sql[i:])
+        if depth or close is None:
+            break  # not the shape this rewrites: leave the rest alone
+        elements = sql[m.end() : i - 1].strip()
+        result.append(sql[pos : m.start()].rstrip())
+        result.append(f" IN ({elements or 'NULL'})")
+        pos = i + close.end()
+    result.append(sql[pos:])
+    return "".join(result)
+
+
 def _sql_literal(value: Any) -> str:
     if value is None:
         return "NULL"
