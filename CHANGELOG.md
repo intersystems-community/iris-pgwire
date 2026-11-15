@@ -60,7 +60,7 @@ Read these before upgrading. Each one turns a silent wrong answer into PostgreSQ
 - **An extended-protocol read of a row another transaction holds waits twice** at READ COMMITTED (20 s by default) before `40001`: Describe runs the statement to learn its columns, and Execute runs it again.
 - **REPEATABLE READ and SERIALIZABLE are refused** with `0A000`, as in 2.0: IRIS gives neither guarantee. Advisory locks are not provided. `docs/POSTGRES_APP_COMPATIBILITY.md` lists the rest.
 
-## [2.0.1] - Unreleased
+## [2.0.1] - 2026-11-15
 
 Transaction fixes for the DBAPI backend, two of them critical, and the ADBC work done since 2.0.0. The first five `Fixed` entries were measured by the track 4 isolation suite (`make isolation`); see `docs/investigations/mvcc-apps-on-iris-pgwire.md` section 5.
 
