@@ -72,8 +72,9 @@ class TestGroupByAndCountDistinctUseExactValues:
         )
 
     def test_group_by_an_ordinal_is_left_alone(self, refiner):
-        # %EXACT(1) would group by the constant 1.
-        sql = "SELECT name, count(*) FROM t GROUP BY 1"
+        # %EXACT(1) would group by the constant 1. A resolvable ordinal becomes its column first
+        # (test_positional_group_by.py); one that cannot be resolved stays a bare number.
+        sql = "SELECT * FROM t GROUP BY 1"
         assert refiner.refine(sql) == sql
 
     def test_count_distinct_is_exact(self, refiner):
